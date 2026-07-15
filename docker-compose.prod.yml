@@ -1,0 +1,226 @@
+# Production single-stack overlay. This is not blue/green; see scripts/prod_deploy.py.
+# Use with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.production up -d --build
+services:
+  mysql:
+    restart: always
+    mem_limit: "${MYSQL_MEMORY_LIMIT_BYTES:?MYSQL_MEMORY_LIMIT_BYTES must be set}"
+    cpus: "${MYSQL_CPUS:?MYSQL_CPUS must be set}"
+    pids_limit: "${MYSQL_PIDS_LIMIT:?MYSQL_PIDS_LIMIT must be set}"
+    stop_grace_period: 2m
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
+      MYSQL_USER: ${MYSQL_APP_USER:?MYSQL_APP_USER must be set}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?MYSQL_APP_PASSWORD must be set}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-time-zone=+08:00 --sort-buffer-size=4194304 --tmp-table-size=67108864 --max-heap-table-size=67108864
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  redis:
+    restart: always
+    mem_limit: "${REDIS_MEMORY_LIMIT_BYTES:?REDIS_MEMORY_LIMIT_BYTES must be set}"
+    cpus: "${REDIS_CPUS:?REDIS_CPUS must be set}"
+    pids_limit: "${REDIS_PIDS_LIMIT:?REDIS_PIDS_LIMIT must be set}"
+    stop_grace_period: 1m
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  crawler-postgres:
+    restart: always
+    mem_limit: "${POSTGRES_MEMORY_LIMIT_BYTES:?POSTGRES_MEMORY_LIMIT_BYTES must be set}"
+    cpus: "${POSTGRES_CPUS:?POSTGRES_CPUS must be set}"
+    pids_limit: "${POSTGRES_PIDS_LIMIT:?POSTGRES_PIDS_LIMIT must be set}"
+    stop_grace_period: 2m
+    environment:
+      POSTGRES_DB: ${CRAWLER_DB:?CRAWLER_DB must be set}
+      POSTGRES_USER: ${CRAWLER_DB_USER:?CRAWLER_DB_USER must be set}
+      POSTGRES_PASSWORD: ${CRAWLER_DB_PASSWORD:?CRAWLER_DB_PASSWORD must be set}
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  backend:
+    restart: always
+    mem_limit: "${CORE_API_MEMORY_LIMIT_BYTES:?CORE_API_MEMORY_LIMIT_BYTES must be set}"
+    cpus: "${CORE_API_CPUS:?CORE_API_CPUS must be set}"
+    pids_limit: "${CORE_API_PIDS_LIMIT:?CORE_API_PIDS_LIMIT must be set}"
+    stop_grace_period: 1m
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_APP_USER:?MYSQL_APP_USER must be set}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_APP_PASSWORD:?MYSQL_APP_PASSWORD must be set}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET must be set}
+      COOKIE_CRYPTO_SECRET: ${COOKIE_CRYPTO_SECRET:?COOKIE_CRYPTO_SECRET must be set}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN must be set}
+      OPS_METRICS_TOKEN: ${OPS_METRICS_TOKEN:?OPS_METRICS_TOKEN must be set}
+      IMAGE_PROXY_ALLOWED_HOSTS: ${IMAGE_PROXY_ALLOWED_HOSTS:?IMAGE_PROXY_ALLOWED_HOSTS must be set}
+      AI_PROVIDER_ALLOWED_HOSTS: ${AI_PROVIDER_ALLOWED_HOSTS:?AI_PROVIDER_ALLOWED_HOSTS must be set}
+      ADMIN_CORS_ALLOWED_ORIGINS: ${ADMIN_CORS_ALLOWED_ORIGINS:?ADMIN_CORS_ALLOWED_ORIGINS must be set}
+      USER_CORS_ALLOWED_ORIGINS: ${USER_CORS_ALLOWED_ORIGINS:?USER_CORS_ALLOWED_ORIGINS must be set}
+      JWT_ISSUER: ${JWT_ISSUER:?JWT_ISSUER must be set}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:?JWT_AUDIENCE must be set}
+      ADMIN_SEED_ENABLED: "false"
+      PAYMENT_SANDBOX_ENABLED: "false"
+      SCHEMA_RUNTIME_MUTATIONS_ENABLED: "false"
+      UPLOAD_GOVERNANCE_ENABLED: "true"
+      UPLOAD_TENANT_QUOTA_BYTES: ${UPLOAD_TENANT_QUOTA_BYTES:?UPLOAD_TENANT_QUOTA_BYTES must be set}
+      UPLOAD_GLOBAL_QUOTA_BYTES: ${UPLOAD_GLOBAL_QUOTA_BYTES:?UPLOAD_GLOBAL_QUOTA_BYTES must be set}
+      UPLOAD_RATE_LIMIT_REQUESTS: ${UPLOAD_RATE_LIMIT_REQUESTS:?UPLOAD_RATE_LIMIT_REQUESTS must be set}
+      UPLOAD_RATE_LIMIT_WINDOW_SECONDS: ${UPLOAD_RATE_LIMIT_WINDOW_SECONDS:?UPLOAD_RATE_LIMIT_WINDOW_SECONDS must be set}
+      UPLOAD_MAX_CONCURRENT_PER_TENANT: ${UPLOAD_MAX_CONCURRENT_PER_TENANT:?UPLOAD_MAX_CONCURRENT_PER_TENANT must be set}
+      UPLOAD_MAX_CONCURRENT_GLOBAL: ${UPLOAD_MAX_CONCURRENT_GLOBAL:?UPLOAD_MAX_CONCURRENT_GLOBAL must be set}
+      MEDIA_COOKIE_SECURE: "true"
+      MEDIA_SESSION_MAX_AGE_SECONDS: ${MEDIA_SESSION_MAX_AGE_SECONDS:?MEDIA_SESSION_MAX_AGE_SECONDS must be set}
+      OPEN_SOURCE_BRIDGE_TOKEN: ${OPEN_SOURCE_BRIDGE_TOKEN:-}
+      OPEN_SOURCE_BRIDGE_SITE_CODE: ${OPEN_SOURCE_BRIDGE_SITE_CODE:-open-source}
+      OPEN_SOURCE_BRIDGE_SITE_NAME: ${OPEN_SOURCE_BRIDGE_SITE_NAME:-开源版}
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --show-error http://127.0.0.1:18080/api/ops/readiness | grep -q '\"UP\"'"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
+  automation:
+    restart: always
+    mem_limit: "${AUTOMATION_API_MEMORY_LIMIT_BYTES:?AUTOMATION_API_MEMORY_LIMIT_BYTES must be set}"
+    cpus: "${AUTOMATION_API_CPUS:?AUTOMATION_API_CPUS must be set}"
+    pids_limit: "${AUTOMATION_API_PIDS_LIMIT:?AUTOMATION_API_PIDS_LIMIT must be set}"
+    stop_grace_period: 1m
+    environment:
+      APP_ENV: production
+      MYSQL_USER: ${MYSQL_APP_USER:?MYSQL_APP_USER must be set}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?MYSQL_APP_PASSWORD must be set}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN must be set}
+      COOKIE_CRYPTO_SECRET: ${COOKIE_CRYPTO_SECRET:?COOKIE_CRYPTO_SECRET must be set}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET must be set}
+      ADMIN_JWT_ISSUER: ${JWT_ISSUER:?JWT_ISSUER must be set}
+      ADMIN_JWT_AUDIENCE: ${JWT_AUDIENCE:?JWT_AUDIENCE must be set}
+      SCHEMA_RUNTIME_MUTATIONS_ENABLED: "false"
+      UPLOAD_GOVERNANCE_ENABLED: "true"
+      UPLOAD_TENANT_QUOTA_BYTES: ${UPLOAD_TENANT_QUOTA_BYTES:?UPLOAD_TENANT_QUOTA_BYTES must be set}
+      UPLOAD_GLOBAL_QUOTA_BYTES: ${UPLOAD_GLOBAL_QUOTA_BYTES:?UPLOAD_GLOBAL_QUOTA_BYTES must be set}
+      UPLOAD_RATE_LIMIT_REQUESTS: ${UPLOAD_RATE_LIMIT_REQUESTS:?UPLOAD_RATE_LIMIT_REQUESTS must be set}
+      UPLOAD_RATE_LIMIT_WINDOW_SECONDS: ${UPLOAD_RATE_LIMIT_WINDOW_SECONDS:?UPLOAD_RATE_LIMIT_WINDOW_SECONDS must be set}
+      UPLOAD_MAX_CONCURRENT_PER_TENANT: ${UPLOAD_MAX_CONCURRENT_PER_TENANT:?UPLOAD_MAX_CONCURRENT_PER_TENANT must be set}
+      UPLOAD_MAX_CONCURRENT_GLOBAL: ${UPLOAD_MAX_CONCURRENT_GLOBAL:?UPLOAD_MAX_CONCURRENT_GLOBAL must be set}
+      UPLOAD_RETENTION_DAYS: ${UPLOAD_RETENTION_DAYS:?UPLOAD_RETENTION_DAYS must be set}
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
+  automation-worker:
+    restart: always
+    mem_limit: "${AUTOMATION_WORKER_MEMORY_LIMIT_BYTES:?AUTOMATION_WORKER_MEMORY_LIMIT_BYTES must be set}"
+    cpus: "${AUTOMATION_WORKER_CPUS:?AUTOMATION_WORKER_CPUS must be set}"
+    pids_limit: "${AUTOMATION_WORKER_PIDS_LIMIT:?AUTOMATION_WORKER_PIDS_LIMIT must be set}"
+    stop_grace_period: 2m
+    environment:
+      APP_ENV: production
+      MYSQL_USER: ${MYSQL_APP_USER:?MYSQL_APP_USER must be set}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?MYSQL_APP_PASSWORD must be set}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN must be set}
+      COOKIE_CRYPTO_SECRET: ${COOKIE_CRYPTO_SECRET:?COOKIE_CRYPTO_SECRET must be set}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET must be set}
+      ADMIN_JWT_ISSUER: ${JWT_ISSUER:?JWT_ISSUER must be set}
+      ADMIN_JWT_AUDIENCE: ${JWT_AUDIENCE:?JWT_AUDIENCE must be set}
+      SCHEMA_RUNTIME_MUTATIONS_ENABLED: "false"
+      UPLOAD_GOVERNANCE_ENABLED: "true"
+      UPLOAD_TENANT_QUOTA_BYTES: ${UPLOAD_TENANT_QUOTA_BYTES:?UPLOAD_TENANT_QUOTA_BYTES must be set}
+      UPLOAD_GLOBAL_QUOTA_BYTES: ${UPLOAD_GLOBAL_QUOTA_BYTES:?UPLOAD_GLOBAL_QUOTA_BYTES must be set}
+      UPLOAD_RATE_LIMIT_REQUESTS: ${UPLOAD_RATE_LIMIT_REQUESTS:?UPLOAD_RATE_LIMIT_REQUESTS must be set}
+      UPLOAD_RATE_LIMIT_WINDOW_SECONDS: ${UPLOAD_RATE_LIMIT_WINDOW_SECONDS:?UPLOAD_RATE_LIMIT_WINDOW_SECONDS must be set}
+      UPLOAD_MAX_CONCURRENT_PER_TENANT: ${UPLOAD_MAX_CONCURRENT_PER_TENANT:?UPLOAD_MAX_CONCURRENT_PER_TENANT must be set}
+      UPLOAD_MAX_CONCURRENT_GLOBAL: ${UPLOAD_MAX_CONCURRENT_GLOBAL:?UPLOAD_MAX_CONCURRENT_GLOBAL must be set}
+      UPLOAD_RETENTION_DAYS: ${UPLOAD_RETENTION_DAYS:?UPLOAD_RETENTION_DAYS must be set}
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
+  crawler-service:
+    restart: always
+    mem_limit: "${CRAWLER_API_MEMORY_LIMIT_BYTES:?CRAWLER_API_MEMORY_LIMIT_BYTES must be set}"
+    cpus: "${CRAWLER_API_CPUS:?CRAWLER_API_CPUS must be set}"
+    pids_limit: "${CRAWLER_API_PIDS_LIMIT:?CRAWLER_API_PIDS_LIMIT must be set}"
+    stop_grace_period: 1m
+    environment:
+      NODE_ENV: production
+      CRAWLER_DB_USER: ${CRAWLER_DB_USER:?CRAWLER_DB_USER must be set}
+      CRAWLER_DB_PASSWORD: ${CRAWLER_DB_PASSWORD:?CRAWLER_DB_PASSWORD must be set}
+      CRAWLER_DB: ${CRAWLER_DB:?CRAWLER_DB must be set}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN must be set}
+      COOKIE_CRYPTO_SECRET: ${COOKIE_CRYPTO_SECRET:?COOKIE_CRYPTO_SECRET must be set}
+      CORS_ALLOWED_ORIGINS: ${CRAWLER_CORS_ALLOWED_ORIGINS:?CRAWLER_CORS_ALLOWED_ORIGINS must be set}
+      SCHEMA_RUNTIME_MUTATIONS_ENABLED: "false"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
+  crawler-worker:
+    restart: always
+    mem_limit: "${CRAWLER_WORKER_MEMORY_LIMIT_BYTES:?CRAWLER_WORKER_MEMORY_LIMIT_BYTES must be set}"
+    cpus: "${CRAWLER_WORKER_CPUS:?CRAWLER_WORKER_CPUS must be set}"
+    pids_limit: "${CRAWLER_WORKER_PIDS_LIMIT:?CRAWLER_WORKER_PIDS_LIMIT must be set}"
+    stop_grace_period: 2m
+    environment:
+      NODE_ENV: production
+      CRAWLER_DB_USER: ${CRAWLER_DB_USER:?CRAWLER_DB_USER must be set}
+      CRAWLER_DB_PASSWORD: ${CRAWLER_DB_PASSWORD:?CRAWLER_DB_PASSWORD must be set}
+      CRAWLER_DB: ${CRAWLER_DB:?CRAWLER_DB must be set}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN must be set}
+      COOKIE_CRYPTO_SECRET: ${COOKIE_CRYPTO_SECRET:?COOKIE_CRYPTO_SECRET must be set}
+      SCHEMA_RUNTIME_MUTATIONS_ENABLED: "false"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
+  user-web:
+    restart: always
+    mem_limit: "${USER_WEB_MEMORY_LIMIT_BYTES:?USER_WEB_MEMORY_LIMIT_BYTES must be set}"
+    cpus: "${USER_WEB_CPUS:?USER_WEB_CPUS must be set}"
+    pids_limit: "${USER_WEB_PIDS_LIMIT:?USER_WEB_PIDS_LIMIT must be set}"
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  admin-web:
+    restart: always
+    mem_limit: "${ADMIN_WEB_MEMORY_LIMIT_BYTES:?ADMIN_WEB_MEMORY_LIMIT_BYTES must be set}"
+    cpus: "${ADMIN_WEB_CPUS:?ADMIN_WEB_CPUS must be set}"
+    pids_limit: "${ADMIN_WEB_PIDS_LIMIT:?ADMIN_WEB_PIDS_LIMIT must be set}"
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

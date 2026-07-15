@@ -1,0 +1,39 @@
+{
+  "resources": {
+    "includes": [
+      {
+        "pattern": "\\QMETA-INF/gfprobe-provider.xml\\E"
+      },
+      {
+        "pattern": "\\QMETA-INF/javamail.charset.map\\E"
+      },
+      {
+        "pattern": "\\QMETA-INF/javamail.address.map\\E"
+      },
+      {
+        "pattern": "\\QMETA-INF/javamail.default.address.map\\E"
+      },
+      {
+        "pattern": "\\QMETA-INF/javamail.default.providers\\E"
+      },
+      {
+        "pattern": "\\QMETA-INF/javamail.providers\\E"
+      },
+      {
+        "pattern": "\\QMETA-INF/jakarta.charset.map\\E"
+      },
+      {
+        "pattern": "\\QMETA-INF/jakarta.address.map\\E"
+      },
+      {
+        "pattern": "\\QMETA-INF/jakarta.default.address.map\\E"
+      },
+      {
+        "pattern": "\\QMETA-INF/jakarta.default.providers\\E"
+      },
+      {
+        "pattern": "\\QMETA-INF/jakarta.providers\\E"
+      }
+    ]
+  }
+}

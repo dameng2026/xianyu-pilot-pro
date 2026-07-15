@@ -1,0 +1,17 @@
+import request from '../utils/request.js'
+
+export const startWebSocket = (accountId, options = {}) => request.post('/websocket/start', { accountId, ...options })
+export const stopWebSocket = accountId => request.post('/websocket/stop', { accountId })
+export const websocketStatus = accountId => request.post('/websocket/status', { accountId })
+export const sendMessage = data => request.post('/websocket/sendMessage', data)
+export const sendImageMessage = data => request.post('/websocket/sendImageMessage', data)
+export const updateCookie = data => request.post('/websocket/updateCookie', data)
+export const updateToken = data => request.post('/websocket/updateToken', data)
+export const refreshToken = accountId => request.post('/websocket/refreshToken', { accountId })
+export const refreshCookie = accountId => request.post('/websocket/refreshCookie', { accountId })
+export const passwordLogin = accountId => request.post('/websocket/passwordLogin', { accountId }, { timeout: 300000 })
+export const clearCaptchaWait = accountId => request.post('/websocket/clearCaptchaWait', { accountId })
+export const retryAutoCaptcha = accountId => request.post('/websocket/retryAutoCaptcha', { accountId })
+export const confirmManualVerification = accountId => request.post('/websocket/confirmManualVerification', { accountId })
+export const pendingManualVerification = () => request.get('/websocket/pendingManualVerification')
+export const checkLogin = accountId => request.post('/websocket/checkLogin', { accountId })

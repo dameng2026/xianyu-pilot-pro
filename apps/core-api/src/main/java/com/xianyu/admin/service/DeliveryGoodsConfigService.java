@@ -1,0 +1,426 @@
+package com.xianyu.admin.service;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.xianyu.admin.common.BizException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * Deep module for tenant-safe, fail-closed per-goods delivery configuration.
+ * Both single-item and batch controllers cross this seam so validation,
+ * reference ownership, JSON recovery and transaction semantics stay local.
+ */
+@Service
+public class DeliveryGoodsConfigService {
+    private static final Logger log = LoggerFactory.getLogger(DeliveryGoodsConfigService.class);
+    private static final Set<String> SUPPORTED_TIMINGS = Set.of("payDelivery", "confirmDelivery", "reviewDelivery");
+    private static final Set<String> SUPPORTED_MODES = Set.of("text", "card");
+    private static final int MAX_EXPLICIT_BATCH = 500;
+
+    private final JdbcTemplate jdbcTemplate;
+    private final ObjectMapper objectMapper;
+
+    public DeliveryGoodsConfigService(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.objectMapper = objectMapper;
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> read(Long tenantId, Long goodsId) {
+        requireTenantAndGoodsId(tenantId, goodsId);
+        requireGoods(tenantId, List.of(goodsId), false);
+        StoredConfig stored = loadStoredConfig(tenantId, goodsId, false);
+        return stored == null ? new LinkedHashMap<>() : new LinkedHashMap<>(stored.config());
+    }
+
+    @Transactional
+    public int apply(Long tenantId, Collection<Long> goodsIds, Map<String, Object> rawPatch) {
+        requireTenant(tenantId);
+        List<Long> ids = normalizeGoodsIds(goodsIds);
+        if (ids.isEmpty()) throw new BizException(422, "请选择需要配置的商品");
+        if (ids.size() > MAX_EXPLICIT_BATCH) {
+            throw new BizException(422, "单次最多配置 500 个商品，请分批操作");
+        }
+        ConfigPatch patch = parsePatch(rawPatch);
+        Map<Long, GoodsOwner> goods = requireGoods(tenantId, ids, true);
+        for (Long goodsId : ids) {
+            GoodsOwner owner = goods.get(goodsId);
+            StoredConfig stored = loadStoredConfig(tenantId, goodsId, true);
+            Map<String, Object> config = stored == null
+                    ? new LinkedHashMap<>()
+                    : new LinkedHashMap<>(stored.config());
+            mergePatch(tenantId, config, patch);
+            config.put("accountId", owner.accountId());
+            persist(tenantId, goodsId, stored, config);
+        }
+        return ids.size();
+    }
+
+    @Transactional
+    public int applyAll(Long tenantId, Map<String, Object> rawPatch) {
+        requireTenant(tenantId);
+        List<Long> ids;
+        try {
+            ids = jdbcTemplate.queryForList(
+                    "SELECT id FROM xianyu_goods WHERE tenant_id=? AND deleted=0 ORDER BY id",
+                    Long.class,
+                    tenantId
+            );
+        } catch (Exception error) {
+            log.error("加载待配置商品失败 tenantId={}, errorType={}", tenantId, error.getClass().getSimpleName());
+            throw new BizException(503, "商品列表暂时不可用，未执行批量配置");
+        }
+        if (ids.isEmpty()) return 0;
+
+        int applied = 0;
+        for (int start = 0; start < ids.size(); start += MAX_EXPLICIT_BATCH) {
+            int end = Math.min(start + MAX_EXPLICIT_BATCH, ids.size());
+            applied += apply(tenantId, ids.subList(start, end), rawPatch);
+        }
+        return applied;
+    }
+
+    @Transactional
+    public int delete(Long tenantId, Collection<Long> goodsIds) {
+        requireTenant(tenantId);
+        List<Long> ids = normalizeGoodsIds(goodsIds);
+        if (ids.isEmpty()) throw new BizException(422, "请选择需要删除配置的商品");
+        if (ids.size() > MAX_EXPLICIT_BATCH) {
+            throw new BizException(422, "单次最多删除 500 个商品配置，请分批操作");
+        }
+        requireGoods(tenantId, ids, true);
+        String placeholders = ids.stream().map(ignored -> "?").collect(Collectors.joining(","));
+        List<Object> args = new ArrayList<>();
+        args.add(tenantId);
+        args.addAll(ids);
+        try {
+            return jdbcTemplate.update(
+                    "UPDATE delivery_goods_config SET deleted=1, updated_time=NOW() "
+                            + "WHERE tenant_id=? AND goods_id IN (" + placeholders + ") AND deleted=0",
+                    args.toArray()
+            );
+        } catch (Exception error) {
+            log.error("批量删除商品发货配置失败 tenantId={}, count={}, errorType={}",
+                    tenantId, ids.size(), error.getClass().getSimpleName());
+            throw new BizException(503, "商品发货配置暂时无法删除，请稍后重试");
+        }
+    }
+
+    @Transactional
+    public void setEnabled(Long tenantId, Long goodsId, String timing, Object enabled) {
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("timing", timing);
+        patch.put("enabled", enabled);
+        apply(tenantId, List.of(goodsId), patch);
+    }
+
+    @Transactional
+    public void removeSourceBinding(Long tenantId, Long goodsId, Long sourceId) {
+        requireTenantAndGoodsId(tenantId, goodsId);
+        if (sourceId == null || sourceId <= 0) throw new BizException(422, "货源编号无效");
+        requireGoods(tenantId, List.of(goodsId), true);
+        StoredConfig stored = loadStoredConfig(tenantId, goodsId, true);
+        if (stored == null) return;
+        Map<String, Object> config = new LinkedHashMap<>(stored.config());
+        boolean changed = false;
+        for (String timing : SUPPORTED_TIMINGS) {
+            Object timingObj = config.get(timing);
+            if (!(timingObj instanceof Map<?, ?> raw)) continue;
+            Long boundSourceId = parseNullableLong(raw.get("sourceId"));
+            if (sourceId.equals(boundSourceId)) {
+                Map<String, Object> updated = new LinkedHashMap<>();
+                raw.forEach((k, v) -> updated.put(String.valueOf(k), v));
+                updated.put("sourceId", null);
+                updated.put("sourceTitle", "");
+                updated.put("content", "");
+                updated.put("enabled", 0);
+                config.put(timing, updated);
+                changed = true;
+            }
+        }
+        if (changed) {
+            persist(tenantId, goodsId, stored, config);
+        }
+    }
+
+    private Long parseNullableLong(Object value) {
+        if (value == null) return null;
+        String s = text(value);
+        if (s.isBlank()) return null;
+        try {
+            long parsed = value instanceof Number number ? number.longValue() : Long.parseLong(s);
+            return parsed <= 0 ? null : parsed;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private void mergePatch(Long tenantId, Map<String, Object> config, ConfigPatch patch) {
+        Map<String, Object> timingConfig = mapValue(config.get(patch.timing()));
+        timingConfig.putAll(patch.values());
+        String mode = text(timingConfig.get("mode"));
+        if (mode.isBlank()) {
+            mode = "text";
+            timingConfig.put("mode", mode);
+        }
+        if (!SUPPORTED_MODES.contains(mode)) {
+            throw new BizException(422, "API 发货模式暂不可用，请改用文本或卡密发货");
+        }
+
+        int enabled = intFlag(timingConfig.get("enabled"), 0);
+        timingConfig.put("enabled", enabled);
+        if (enabled == 1) {
+            if ("card".equals(mode)) {
+                Long cardGroupId = positiveLong(timingConfig.get("cardGroupId"), "请选择有效的卡密组");
+                requireOwnedReference("card_group", tenantId, cardGroupId, "卡密组不存在或不可用");
+            } else {
+                Long sourceId = nullablePositiveLong(timingConfig.get("sourceId"), "发货正文来源无效");
+                String content = text(timingConfig.get("content"));
+                if (sourceId == null && content.isBlank()) {
+                    throw new BizException(422, "启用文本发货前请填写发货正文或选择正文来源");
+                }
+                if (sourceId != null) {
+                    requireOwnedReference("delivery_text_source", tenantId, sourceId, "发货正文来源不存在或不可用");
+                }
+            }
+        }
+        config.put(patch.timing(), timingConfig);
+    }
+
+    private ConfigPatch parsePatch(Map<String, Object> raw) {
+        if (raw == null) throw new BizException(400, "发货配置不能为空");
+        String timing = text(raw.getOrDefault("timing", "payDelivery"));
+        if (!SUPPORTED_TIMINGS.contains(timing)) {
+            throw new BizException(422, "暂不支持该发货时机");
+        }
+        if (raw.containsKey("apiUrl") || raw.containsKey("apiMethod") || raw.containsKey("apiHeaders")) {
+            throw new BizException(422, "API 发货模式暂不可用，请改用文本或卡密发货");
+        }
+
+        Map<String, Object> values = new LinkedHashMap<>();
+        if (raw.containsKey("enabled")) values.put("enabled", intFlag(raw.get("enabled"), 0));
+        if (raw.containsKey("mode")) {
+            String mode = text(raw.get("mode"));
+            if (!SUPPORTED_MODES.contains(mode)) {
+                throw new BizException(422, "API 发货模式暂不可用，请改用文本或卡密发货");
+            }
+            values.put("mode", mode);
+        }
+        putOptionalLong(values, raw, "sourceId", "发货正文来源无效");
+        putOptionalLong(values, raw, "cardGroupId", "卡密组无效");
+        putString(values, raw, "sourceTitle", 300);
+        putString(values, raw, "cardTemplate", 20_000);
+        putString(values, raw, "header", 2_000);
+        putString(values, raw, "content", 20_000);
+        putString(values, raw, "footer", 2_000);
+        if (raw.containsKey("segmentSend")) values.put("segmentSend", intFlag(raw.get("segmentSend"), 0));
+        if (raw.containsKey("autoDisableOnLowStock")) {
+            values.put("autoDisableOnLowStock", intFlag(raw.get("autoDisableOnLowStock"), 0));
+        }
+        if (raw.containsKey("retryCount")) values.put("retryCount", rangedInt(raw.get("retryCount"), 0, 5, "重试次数需为 0-5"));
+        if (raw.containsKey("alertThreshold")) {
+            values.put("alertThreshold", rangedInt(raw.get("alertThreshold"), 0, 1_000_000, "库存提醒阈值无效"));
+        }
+        return new ConfigPatch(timing, values);
+    }
+
+    private Map<Long, GoodsOwner> requireGoods(Long tenantId, List<Long> ids, boolean lock) {
+        String placeholders = ids.stream().map(ignored -> "?").collect(Collectors.joining(","));
+        List<Object> args = new ArrayList<>();
+        args.add(tenantId);
+        args.addAll(ids);
+        try {
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                    "SELECT id, account_id FROM xianyu_goods WHERE tenant_id=? AND deleted=0 AND id IN ("
+                            + placeholders + ")" + (lock ? " FOR UPDATE" : ""),
+                    args.toArray()
+            );
+            Map<Long, GoodsOwner> result = new LinkedHashMap<>();
+            for (Map<String, Object> row : rows) {
+                Long id = nullablePositiveLong(row.get("id"), "商品数据异常");
+                Long accountId = positiveLong(row.get("account_id"), "商品账号归属异常");
+                result.put(id, new GoodsOwner(id, accountId));
+            }
+            if (result.size() != ids.size()) {
+                throw new BizException(404, "部分商品不存在或不属于当前租户，未执行配置变更");
+            }
+            return result;
+        } catch (BizException error) {
+            throw error;
+        } catch (Exception error) {
+            log.error("校验商品归属失败 tenantId={}, count={}, errorType={}",
+                    tenantId, ids.size(), error.getClass().getSimpleName());
+            throw new BizException(503, "商品状态暂时无法校验，未执行配置变更");
+        }
+    }
+
+    private StoredConfig loadStoredConfig(Long tenantId, Long goodsId, boolean lock) {
+        try {
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                    "SELECT id, config_json FROM delivery_goods_config "
+                            + "WHERE tenant_id=? AND goods_id=? AND deleted=0 ORDER BY id" + (lock ? " FOR UPDATE" : ""),
+                    tenantId,
+                    goodsId
+            );
+            if (rows.isEmpty()) return null;
+            if (rows.size() > 1) {
+                throw new BizException(409, "检测到重复的商品发货配置，已阻止覆盖，请联系管理员修复");
+            }
+            Map<String, Object> row = rows.get(0);
+            Long id = positiveLong(row.get("id"), "商品发货配置数据异常");
+            String json = text(row.get("config_json"));
+            Map<String, Object> config;
+            try {
+                config = json.isBlank()
+                        ? new LinkedHashMap<>()
+                        : objectMapper.readValue(json, new TypeReference<LinkedHashMap<String, Object>>() {});
+            } catch (Exception error) {
+                log.error("解析商品发货配置失败 configId={}, errorType={}", id, error.getClass().getSimpleName());
+                throw new BizException(409, "现有商品发货配置已损坏，已阻止覆盖，请联系管理员修复");
+            }
+            return new StoredConfig(id, config);
+        } catch (BizException error) {
+            throw error;
+        } catch (Exception error) {
+            log.error("读取商品发货配置失败 goodsId={}, errorType={}", goodsId, error.getClass().getSimpleName());
+            throw new BizException(503, "商品发货配置暂时不可用，请稍后重试");
+        }
+    }
+
+    private void persist(Long tenantId, Long goodsId, StoredConfig stored, Map<String, Object> config) {
+        try {
+            String json = objectMapper.writeValueAsString(config);
+            if (json.length() > 100_000) throw new BizException(422, "商品发货配置内容过大，请精简后重试");
+            if (stored == null) {
+                jdbcTemplate.update(
+                        "INSERT INTO delivery_goods_config(tenant_id, goods_id, config_json, created_time, updated_time, deleted) "
+                                + "VALUES(?,?,?,NOW(),NOW(),0)",
+                        tenantId, goodsId, json
+                );
+            } else {
+                int updated = jdbcTemplate.update(
+                        "UPDATE delivery_goods_config SET config_json=?, updated_time=NOW() "
+                                + "WHERE tenant_id=? AND goods_id=? AND id=? AND deleted=0",
+                        json, tenantId, goodsId, stored.id()
+                );
+                if (updated != 1) throw new BizException(409, "商品发货配置已被其他操作修改，请刷新后重试");
+            }
+        } catch (BizException error) {
+            throw error;
+        } catch (Exception error) {
+            log.error("保存商品发货配置失败 goodsId={}, errorType={}", goodsId, error.getClass().getSimpleName());
+            throw new BizException(503, "商品发货配置保存失败，所有变更均未确认，请稍后重试");
+        }
+    }
+
+    private void requireOwnedReference(String table, Long tenantId, Long id, String publicMessage) {
+        // Table names are fixed internal constants, never request input.
+        try {
+            Integer count = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM " + table + " WHERE tenant_id=? AND id=? AND deleted=0",
+                    Integer.class,
+                    tenantId,
+                    id
+            );
+            if (count == null || count != 1) throw new BizException(422, publicMessage);
+        } catch (BizException error) {
+            throw error;
+        } catch (Exception error) {
+            log.error("校验发货配置引用失败 table={}, id={}, errorType={}", table, id, error.getClass().getSimpleName());
+            throw new BizException(503, "发货配置引用暂时无法校验，未执行配置变更");
+        }
+    }
+
+    private List<Long> normalizeGoodsIds(Collection<Long> raw) {
+        if (raw == null) return List.of();
+        LinkedHashSet<Long> ids = new LinkedHashSet<>();
+        for (Long value : raw) {
+            if (value == null || value <= 0) throw new BizException(422, "商品编号无效");
+            ids.add(value);
+        }
+        return new ArrayList<>(ids);
+    }
+
+    private Map<String, Object> mapValue(Object value) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (value instanceof Map<?, ?> raw) raw.forEach((key, item) -> result.put(String.valueOf(key), item));
+        return result;
+    }
+
+    private void putOptionalLong(Map<String, Object> target, Map<String, Object> source, String key, String message) {
+        if (!source.containsKey(key)) return;
+        Object value = source.get(key);
+        target.put(key, value == null || text(value).isBlank() ? null : positiveLong(value, message));
+    }
+
+    private void putString(Map<String, Object> target, Map<String, Object> source, String key, int maxLength) {
+        if (!source.containsKey(key)) return;
+        String value = text(source.get(key));
+        if (value.length() > maxLength) throw new BizException(422, key + " 内容过长，请精简后重试");
+        target.put(key, value);
+    }
+
+    private int rangedInt(Object value, int min, int max, String message) {
+        try {
+            int parsed = value instanceof Number number ? number.intValue() : Integer.parseInt(text(value));
+            if (parsed < min || parsed > max) throw new NumberFormatException();
+            return parsed;
+        } catch (Exception ignored) {
+            throw new BizException(422, message);
+        }
+    }
+
+    private int intFlag(Object value, int fallback) {
+        if (value == null) return fallback;
+        if (value instanceof Boolean bool) return bool ? 1 : 0;
+        String text = text(value);
+        if ("1".equals(text) || "true".equalsIgnoreCase(text)) return 1;
+        if ("0".equals(text) || "false".equalsIgnoreCase(text)) return 0;
+        throw new BizException(422, "启用状态必须为 true/false 或 1/0");
+    }
+
+    private Long nullablePositiveLong(Object value, String message) {
+        if (value == null || text(value).isBlank()) return null;
+        return positiveLong(value, message);
+    }
+
+    private Long positiveLong(Object value, String message) {
+        try {
+            long parsed = value instanceof Number number ? number.longValue() : Long.parseLong(text(value));
+            if (parsed <= 0) throw new NumberFormatException();
+            return parsed;
+        } catch (Exception ignored) {
+            throw new BizException(422, message);
+        }
+    }
+
+    private void requireTenantAndGoodsId(Long tenantId, Long goodsId) {
+        requireTenant(tenantId);
+        if (goodsId == null || goodsId <= 0) throw new BizException(422, "商品编号无效");
+    }
+
+    private void requireTenant(Long tenantId) {
+        if (tenantId == null || tenantId <= 0) throw new BizException(401, "登录状态已失效，请重新登录");
+    }
+
+    private String text(Object value) {
+        return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    private record ConfigPatch(String timing, Map<String, Object> values) {}
+    private record GoodsOwner(Long id, Long accountId) {}
+    private record StoredConfig(Long id, Map<String, Object> config) {}
+}

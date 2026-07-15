@@ -1,0 +1,56 @@
+version: '3.8'
+
+# ============================================================
+# 开发环境基础设施 - 仅启动数据库和中间件
+# 服务本身将在本地以开发模式（热重载）运行
+# 使用方式: docker compose -f docker-compose.infrastructure.yml up -d
+# ============================================================
+
+services:
+  mysql:
+    image: mysql:8.4.10
+    container_name: xianyu-admin-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: xianyu_assistant_admin
+      TZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD-SHELL", 'mysqladmin ping -uroot --password="$${MYSQL_ROOT_PASSWORD}" --silent']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.4.9-alpine
+    container_name: xianyu-crawler-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+
+  crawler-postgres:
+    image: postgres:16.14-alpine
+    container_name: xianyu-crawler-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${CRAWLER_DB:-xianyu_crawler}
+      POSTGRES_USER: ${CRAWLER_DB_USER:-crawler}
+      POSTGRES_PASSWORD: ${CRAWLER_DB_PASSWORD:-crawler_pass}
+    ports:
+      - "127.0.0.1:${CRAWLER_DB_PORT:-5432}:5432"
+    volumes:
+      - crawler_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  mysql_data:
+  crawler_pg_data:

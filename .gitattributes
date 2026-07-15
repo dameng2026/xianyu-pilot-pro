@@ -1,0 +1,4 @@
+# Migration checksums are byte-for-byte release controls; force stable checkout bytes.
+*.sql text eol=lf
+db/migrations-manifest.json text eol=lf
+apps/core-api/src/main/resources/db/migration-quarantine/*.disabled text eol=lf

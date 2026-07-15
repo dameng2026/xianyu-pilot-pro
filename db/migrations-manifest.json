@@ -1,0 +1,234 @@
+{
+  "formatVersion": 1,
+  "policy": {
+    "immutableAfterRelease": true,
+    "execution": "reviewed-maintenance-window-only",
+    "productionRuntimeSchemaMutation": false,
+    "rollback": "restore-or-forward-fix-only"
+  },
+  "databases": [
+    {
+      "id": "core_mysql",
+      "engine": "mysql",
+      "owner": "core-api",
+      "baselineVersion": "1.1",
+      "directory": "apps/core-api/src/main/resources/db/migration",
+      "requireContiguousVersions": true,
+      "migrations": [
+        {
+          "version": "1.1",
+          "description": "add goods synchronization fields for MySQL",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.1__add_goods_sync_fields_mysql.sql",
+          "sha256": "db3ec225ac1ee8c54d61a5cb7fc0fe42263bb74dd5c76746481606d04a0c364a",
+          "risk": "contract",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.2",
+          "description": "phase 2 reliability indexes",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.2__phase2_reliability_indexes.sql",
+          "sha256": "eae67f387c176cc70c86bda8642022fb9a83661ae992c504c71a5b2a84848f7a",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.3",
+          "description": "client error log",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.3__client_error_log.sql",
+          "sha256": "36f5ef83a4ff441a0f27a29e5fb94815dd47c896e48087fdff92a4202dcc08a1",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.4",
+          "description": "notification delivery log",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.4__notification_delivery_log.sql",
+          "sha256": "a6faa912cf20d8a80fb8c6099a37456c4ba9802ca33dd3c13ba03a48113060cb",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.5",
+          "description": "notification delivery detail fields",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.5__notification_delivery_log_detail.sql",
+          "sha256": "cc2780bb74473063e2c3bf03b44072daa4f08641856ded1282a2c171a37d3c93",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.6",
+          "description": "hot goods statistics",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.6__hot_goods_stat.sql",
+          "sha256": "0ad6a3de3dc8c268a6480cebb18bb57c68770957743b93c23fc38261287b6665",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.7",
+          "description": "auto delivery tables",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.7__auto_delivery_tables.sql",
+          "sha256": "2ab62d6e7a95d7984254763fe08cdf629a827c52fb954c5ae1be49f3bfd6d011",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.8",
+          "description": "opportunity image history",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.8__add_opportunity_image_history.sql",
+          "sha256": "3abcf41e3188f0aeea9111204731f4ae6fe4a53f7a195561d571cddad45ac109",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.9",
+          "description": "user publish address",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.9__add_user_publish_address.sql",
+          "sha256": "fb7f5b725532bfe856231d6705b67ca8db4149b51f2e8061bf7e96e710da2335",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.10",
+          "description": "open source bridge tables",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.10__open_source_bridge_tables.sql",
+          "sha256": "b2cef0b4e55db909a183d8c0786fa6e49ac3c52ce6e89bae1a4864cba481635c",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.11",
+          "description": "user frontend performance indexes",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.11__user_frontend_performance_indexes.sql",
+          "sha256": "28392a4995a2d743677fd72f368571dc63c8ef591eba7223d5bba93d154d108c",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.12",
+          "description": "China address dictionary",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.12__add_china_address_dict.sql",
+          "sha256": "7e5ec8cd20ca41ab6bd7536e34eac92f54dffaff25418686e53f60cccebc94f1",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.13",
+          "description": "immediate JWT revocation security versions",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.13__add_auth_security_versions.sql",
+          "sha256": "7fe79e235ed777cac7f1727f824f7dc34584822c84db94967998e11a175d7485",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.14",
+          "description": "tenant storage quota and cleanup audit tables",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.14__add_tenant_storage_governance.sql",
+          "sha256": "82d4f92a29e2601f941973120ca0503f6fe9a3f68d055158ffe9c742b0a9107f",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.15",
+          "description": "explicit media visibility and ownership metadata",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.15__add_media_asset_visibility.sql",
+          "sha256": "35799d7f62e9dbb86b849ca34c4add9df9fd7c9e8c307694d7b8af53e06b1b78",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.16",
+          "description": "scheduled task execution leases and bounded failure state",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.16__add_scheduled_task_execution_leases.sql",
+          "sha256": "52ef2ae308997ad141c2ace671b1e9f2ad2798476d66bac1f363fa671d1f1203",
+          "risk": "expand",
+          "rollback": "restore"
+        }
+      ],
+      "quarantined": [
+        {
+          "path": "apps/core-api/src/main/resources/db/migration-quarantine/LEGACY_V1.1__add_goods_sync_fields.sql.disabled",
+          "sha256": "efcb7cdbba01221e2a1840f1c0c023363667035906e45bd135ba42d055b897c8",
+          "reason": "Historical duplicate V1.1 used non-portable IF NOT EXISTS ALTER syntax; retained as audit evidence and never executable."
+        }
+      ]
+    },
+    {
+      "id": "automation_mysql",
+      "engine": "mysql",
+      "owner": "automation-service",
+      "baselineVersion": "1.2",
+      "directory": "apps/automation-service/migrations",
+      "requireContiguousVersions": true,
+      "migrations": [
+        {
+          "version": "1.2",
+          "description": "chat message lookup index",
+          "path": "apps/automation-service/migrations/V1.2__add_chat_message_index.sql",
+          "sha256": "55fe004cab2fc93f0dedda540fd5aba006fe91eb7c3e5dc0cdc2142d0f3d23aa",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.3",
+          "description": "stable chat message identity fields",
+          "path": "apps/automation-service/migrations/V1.3__add_chat_message_fields.sql",
+          "sha256": "4b13728bd6dafaecff67b49853bd2108dc19008d2031ba1618ef775ede573c69",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.4",
+          "description": "stable conversation identity fields",
+          "path": "apps/automation-service/migrations/V1.4__add_conversation_fields.sql",
+          "sha256": "448d082278eafc0ffbd7ce548fb056560ec523e5b27bc9c2447985bb50b18ba4",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.5",
+          "description": "rebuild conversations from cleaned messages",
+          "path": "apps/automation-service/migrations/V1.5__rebuild_conversation.sql",
+          "sha256": "8ac0a542fc53c8052202c9869bfb509bece36423fef2b3ab8b5aed5c106cfe04",
+          "risk": "rebuild",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.6",
+          "description": "normalize chat collations",
+          "path": "apps/automation-service/migrations/V1.6__fix_collation_consistency.sql",
+          "sha256": "381e3252ec83b905d20049487b4672921f1698bfba034880852065aacd2f60c4",
+          "risk": "contract",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.7",
+          "description": "quick reply templates and seed data",
+          "path": "apps/automation-service/migrations/V1.7__add_quick_reply_template.sql",
+          "sha256": "2c96305878df1cda02edab8d1cd638311e906969d9bfc0720393ac890dccc38d",
+          "risk": "backfill",
+          "rollback": "restore"
+        }
+      ],
+      "quarantined": []
+    },
+    {
+      "id": "crawler_postgres",
+      "engine": "postgresql",
+      "owner": "crawler-service",
+      "baselineVersion": "1.1",
+      "directory": "apps/crawler-service/migrations",
+      "requireContiguousVersions": true,
+      "migrations": [
+        {
+          "version": "1.1",
+          "description": "crawler schema baseline and legacy data normalization",
+          "path": "apps/crawler-service/migrations/V1.1__baseline_crawler_schema.sql",
+          "sha256": "f7161ae2ac98f866f448c361f0acccf6009161d08db7cd0642dc324eb7028993",
+          "risk": "rebuild",
+          "rollback": "restore"
+        }
+      ],
+      "quarantined": []
+    }
+  ]
+}

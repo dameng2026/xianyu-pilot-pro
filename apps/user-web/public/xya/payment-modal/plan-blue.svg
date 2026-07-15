@@ -1,0 +1,22 @@
+<svg width="80" height="80" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="blueBoxFace" x1="17" y1="17" x2="52" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3D8DFF"/>
+      <stop offset="1" stop-color="#1D67FF"/>
+    </linearGradient>
+    <linearGradient id="blueBoxTop" x1="22" y1="13" x2="40" y2="30" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A7D3FF"/>
+      <stop offset="1" stop-color="#5DA9FF"/>
+    </linearGradient>
+    <linearGradient id="blueBoxSide" x1="40" y1="27" x2="58" y2="49" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6AB2FF"/>
+      <stop offset="1" stop-color="#2A76FF"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="64" height="64" rx="18" fill="#EEF5FF"/>
+  <path d="M24 28.2L40 18L56 28.2L40 38.4L24 28.2Z" fill="url(#blueBoxTop)"/>
+  <path d="M24 28.2V47.8L40 58V38.4L24 28.2Z" fill="url(#blueBoxFace)"/>
+  <path d="M56 28.2V47.8L40 58V38.4L56 28.2Z" fill="url(#blueBoxSide)"/>
+  <path d="M32.2 23.28L48.2 33.48" stroke="white" stroke-opacity="0.7" stroke-width="2"/>
+  <path d="M40 18V38.4" stroke="white" stroke-opacity="0.6" stroke-width="2"/>
+</svg>

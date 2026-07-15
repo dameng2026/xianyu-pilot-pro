@@ -1,0 +1,42 @@
+{
+  "name": "xianyu-crawler-service",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "npm@11.16.0",
+  "engines": {
+    "node": ">=24.18.0 <27",
+    "npm": ">=11.16.0 <12"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "dev:worker": "tsx watch src/worker.ts",
+    "build": "tsc",
+    "test": "tsx --test tests/*.test.ts",
+    "start": "node dist/server.js",
+    "start:worker": "node dist/worker.js",
+    "migrate:maintenance": "node dist/migrate.js",
+    "test:store-crawl": "tsx scripts/test-store-crawl.ts"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "fsevents": false,
+    "msgpackr-extract": false
+  },
+  "dependencies": {
+    "bullmq": "^5.34.10",
+    "cors": "^2.8.5",
+    "express": "^4.21.1",
+    "ioredis": "5.10.1",
+    "pg": "^8.13.1",
+    "playwright": "1.61.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

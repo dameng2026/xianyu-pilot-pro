@@ -1,0 +1,145 @@
+groups:
+  - name: xianyu-production-alerts
+    rules:
+      - alert: XianyuWatchdog
+        expr: vector(1)
+        labels:
+          severity: heartbeat
+        annotations:
+          summary: XianyuPilot alerting heartbeat
+          description: The incident receiver must alert if this heartbeat is absent for more than 10 minutes.
+
+      - alert: CoreApiDown
+        expr: xianyu_core_up == 0 or absent(xianyu_core_up)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Core API is not being scraped
+          description: Prometheus cannot scrape the core API metrics endpoint.
+
+      - alert: DatabaseDown
+        expr: xianyu_core_database_up == 0 or absent(xianyu_core_database_up)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Core API database readiness failed
+          description: Core API cannot validate its primary database connection.
+
+      - alert: RedisDown
+        expr: xianyu_core_redis_up == 0 or absent(xianyu_core_redis_up)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Core API Redis readiness failed
+          description: Core API cannot validate its Redis connection.
+
+      - alert: CriticalServiceNotReady
+        expr: probe_success{job="service-readiness"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Critical service readiness failed
+          description: '{{ $labels.service }} has failed its dependency-aware readiness probe for two minutes.'
+
+      - alert: CriticalServiceProbeMissing
+        expr: absent(probe_success{job="service-readiness",service="core-api"}) or absent(probe_success{job="service-readiness",service="automation-service"}) or absent(probe_success{job="service-readiness",service="crawler-service"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Critical service readiness probe is missing
+          description: The readiness probe series for {{ $labels.service }} is absent; verify Prometheus and blackbox_exporter target configuration.
+
+      - alert: BlackboxExporterDown
+        expr: up{job="blackbox-exporter"} == 0 or absent(up{job="blackbox-exporter"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Readiness probe exporter is unavailable
+          description: Prometheus cannot reach blackbox_exporter, so service readiness cannot be trusted.
+
+      - alert: PublicEndpointDown
+        expr: probe_success{job="public-availability"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Public customer endpoint is unavailable
+          description: '{{ $labels.endpoint }} failed its end-to-end HTTPS probe for two minutes.'
+
+      - alert: PublicEndpointProbeMissing
+        expr: absent(probe_success{job="public-availability",endpoint="user-web"}) or absent(probe_success{job="public-availability",endpoint="user-api"}) or absent(probe_success{job="public-availability",endpoint="admin-web"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: A public availability probe is missing
+          description: One or more required user-web, user-api, or admin-web probe series are absent.
+
+      - alert: PublicTlsCertificateExpiresSoon
+        expr: probe_ssl_earliest_cert_expiry{job="public-availability"} - time() < 14 * 24 * 60 * 60
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Public TLS certificate expires within 14 days
+          description: '{{ $labels.endpoint }} has less than 14 days of certificate validity remaining.'
+
+      - alert: WebhookDeliveryFailures
+        expr: increase(xianyu_notification_delivery_total{success="0"}[10m]) >= 5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Webhook delivery failures increased
+          description: At least 5 webhook delivery failures were recorded in 10 minutes.
+
+      - alert: ClientErrorsSpike
+        expr: sum(increase(xianyu_client_errors_total[10m])) >= 20
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Client error spike detected
+          description: Frontend client error logs increased rapidly in the last 10 minutes.
+
+      - alert: AlertmanagerDown
+        expr: up{job="alertmanager"} == 0 or absent(up{job="alertmanager"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Alertmanager is unavailable
+          description: Prometheus cannot reach Alertmanager. The external watchdog receiver must page on heartbeat loss.
+
+      - alert: PrometheusAlertDeliveryFailures
+        expr: sum(increase(prometheus_notifications_errors_total[10m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Prometheus failed to deliver alerts
+          description: One or more alert batches could not be sent to Alertmanager during the last 10 minutes.
+
+      - alert: AlertmanagerReceiverFailures
+        expr: sum(increase(alertmanager_notifications_failed_total[10m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Alertmanager receiver delivery failed
+          description: Alertmanager could not deliver one or more notifications to the configured incident receiver.
+
+      - alert: PrometheusNotificationQueueNearCapacity
+        expr: max(prometheus_notifications_queue_length) / clamp_min(max(prometheus_notifications_queue_capacity), 1) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Prometheus notification queue is near capacity
+          description: More than 80 percent of the alert notification queue has remained occupied for five minutes.

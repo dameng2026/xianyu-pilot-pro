@@ -1,0 +1,37 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: primary-webhook
+  group_by: [alertname, severity, job]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - receiver: primary-webhook
+      matchers:
+        - alertname="XianyuWatchdog"
+      group_wait: 0s
+      group_interval: 5m
+      repeat_interval: 5m
+    - receiver: primary-webhook
+      matchers:
+        - severity="critical"
+      group_wait: 10s
+      group_interval: 2m
+      repeat_interval: 30m
+
+receivers:
+  - name: primary-webhook
+    webhook_configs:
+      - url_file: /run/secrets/alertmanager_webhook_url
+        send_resolved: true
+        max_alerts: 50
+        timeout: 10s
+
+inhibit_rules:
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: [alertname, job, instance]

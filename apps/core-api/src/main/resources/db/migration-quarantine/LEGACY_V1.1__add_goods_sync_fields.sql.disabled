@@ -1,0 +1,57 @@
+-- QUARANTINED: never execute automatically. See db/migrations-manifest.json.
+-- This historical duplicate used ADD COLUMN/INDEX IF NOT EXISTS syntax that is
+-- not portable to the supported MySQL release and shared version V1.1 with the
+-- reviewed MySQL-specific script. It is retained only as audit evidence.
+-- ============================================================
+-- 商品表字段补全迁移脚本
+-- 说明：为 xianyu_goods 表添加商品同步所需的新字段
+-- 执行前请备份数据库
+-- ============================================================
+
+-- 1. 新增售价字段（与 price 区分，price 可能为原价）
+ALTER TABLE xianyu_goods
+    ADD COLUMN IF NOT EXISTS sold_price VARCHAR(50) NULL COMMENT '售价' AFTER price;
+
+-- 2. 新增封面图字段
+ALTER TABLE xianyu_goods
+    ADD COLUMN IF NOT EXISTS cover_pic TEXT NULL COMMENT '封面图URL' AFTER sold_price;
+
+-- 3. 新增库存数量字段（整数类型，与 stock 字符串区分）
+ALTER TABLE xianyu_goods
+    ADD COLUMN IF NOT EXISTS quantity INT DEFAULT 0 COMMENT '库存数量' AFTER stock;
+
+-- 4. 新增曝光次数
+ALTER TABLE xianyu_goods
+    ADD COLUMN IF NOT EXISTS exposure_count INT DEFAULT 0 COMMENT '曝光次数' AFTER quantity;
+
+-- 5. 新增浏览次数
+ALTER TABLE xianyu_goods
+    ADD COLUMN IF NOT EXISTS view_count INT DEFAULT 0 COMMENT '浏览次数' AFTER exposure_count;
+
+-- 6. 新增想要人数
+ALTER TABLE xianyu_goods
+    ADD COLUMN IF NOT EXISTS want_count INT DEFAULT 0 COMMENT '想要人数' AFTER view_count;
+
+-- 7. 新增详情页URL
+ALTER TABLE xianyu_goods
+    ADD COLUMN IF NOT EXISTS detail_url TEXT NULL COMMENT '详情页URL' AFTER want_count;
+
+-- 8. 新增详情描述文字
+ALTER TABLE xianyu_goods
+    ADD COLUMN IF NOT EXISTS detail_info TEXT NULL COMMENT '详情描述文字' AFTER detail_url;
+
+-- 9. 新增排序序号
+ALTER TABLE xianyu_goods
+    ADD COLUMN IF NOT EXISTS sort_order INT DEFAULT 0 COMMENT '排序序号' AFTER status;
+
+-- 10. 修改 price 字段类型为 VARCHAR（如果之前是 DECIMAL）
+ALTER TABLE xianyu_goods
+    MODIFY COLUMN price VARCHAR(50) NULL COMMENT '价格';
+
+-- 11. 添加索引：按账号+外部商品ID查询
+ALTER TABLE xianyu_goods
+    ADD INDEX IF NOT EXISTS idx_account_external_goods (account_id, external_goods_id);
+
+-- 12. 添加索引：按租户+状态查询
+ALTER TABLE xianyu_goods
+    ADD INDEX IF NOT EXISTS idx_tenant_status (tenant_id, status, deleted);

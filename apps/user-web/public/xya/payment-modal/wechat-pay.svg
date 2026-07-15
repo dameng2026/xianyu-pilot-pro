@@ -1,0 +1,19 @@
+<svg width="80" height="80" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="wechatBg" x1="16" y1="14" x2="58" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#31D45E"/>
+      <stop offset="1" stop-color="#17B749"/>
+    </linearGradient>
+    <linearGradient id="wechatGlow" x1="24" y1="24" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E9FFF0"/>
+      <stop offset="1" stop-color="#B9F4CB"/>
+    </linearGradient>
+  </defs>
+  <circle cx="39" cy="39" r="33" fill="url(#wechatGlow)" opacity="0.18"/>
+  <path d="M31.7 24C22.36 24 14.8 30.38 14.8 38.24C14.8 42.54 17.08 46.38 20.66 48.98L18.96 54.9C18.77 55.56 19.44 56.11 20.03 55.84L27.08 52.58C28.57 52.88 30.12 53.04 31.7 53.04C41.04 53.04 48.6 46.67 48.6 38.8C48.6 30.38 41.04 24 31.7 24Z" fill="url(#wechatBg)"/>
+  <path d="M32.24 51.03C33.05 58.15 39.89 63.6 48.16 63.6C49.93 63.6 51.62 63.35 53.2 62.89L59.18 65.8C59.77 66.09 60.45 65.53 60.27 64.87L58.97 60.33C62.15 57.93 64.18 54.52 64.18 50.66C64.18 43.31 57.03 37.32 48.16 37.32C41.87 37.32 36.39 40.34 33.73 44.82" fill="#1CBE4B"/>
+  <circle cx="25.92" cy="37.58" r="2.54" fill="white"/>
+  <circle cx="37.58" cy="37.58" r="2.54" fill="white"/>
+  <circle cx="43.64" cy="50.08" r="2.08" fill="white"/>
+  <circle cx="53.04" cy="50.08" r="2.08" fill="white"/>
+</svg>

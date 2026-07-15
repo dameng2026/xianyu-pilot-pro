@@ -1,0 +1,371 @@
+# Single-stack development/production topology.
+# Fixed container names and published host ports mean this file is not blue/green capable.
+# Use scripts/prod_deploy.py for the supported, health-gated production release path.
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.4.10
+    container_name: xianyu-admin-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: xianyu_assistant_admin
+      MYSQL_USER: ${MYSQL_APP_USER:-xianyu_app}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:-dev-only-mysql-app-password-change-me}
+      TZ: Asia/Shanghai
+    expose:
+      - "3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD-SHELL", 'mysqladmin ping -uroot --password="$${MYSQL_ROOT_PASSWORD}" --silent']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - data
+
+  redis:
+    image: redis:7.4.9-alpine
+    container_name: xianyu-crawler-redis
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-dev-only-redis-password-change-me}
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-dev-only-redis-password-change-me}"]
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$${REDIS_PASSWORD} redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - data
+
+  crawler-postgres:
+    image: postgres:16.14-alpine
+    container_name: xianyu-crawler-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${CRAWLER_DB:-xianyu_crawler}
+      POSTGRES_USER: ${CRAWLER_DB_USER:-crawler}
+      POSTGRES_PASSWORD: ${CRAWLER_DB_PASSWORD:-crawler_pass}
+    expose:
+      - "5432"
+    volumes:
+      - crawler_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - data
+
+  automation:
+    build: ./apps/automation-service
+    container_name: xianyu-automation-service
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_APP_USER:-xianyu_app}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:-dev-only-mysql-app-password-change-me}
+      MYSQL_DATABASE: xianyu_assistant_admin
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN must be set}
+      COOKIE_CRYPTO_SECRET: ${COOKIE_CRYPTO_SECRET:?COOKIE_CRYPTO_SECRET must be set}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET must be set}
+      ADMIN_JWT_ISSUER: ${JWT_ISSUER:-xianyu-core-api}
+      ADMIN_JWT_AUDIENCE: ${JWT_AUDIENCE:-xianyu-user-api}
+      NOTIFICATION_WEBHOOK_ALLOWED_HOSTS: ${NOTIFICATION_WEBHOOK_ALLOWED_HOSTS:-}
+      NOTIFICATION_SMTP_ALLOWED_HOSTS: ${NOTIFICATION_SMTP_ALLOWED_HOSTS:-}
+      CORE_API_BASE_URL: http://backend:18080
+      CRAWLER_SERVICE_URL: http://crawler-service:3001
+    expose:
+      - "12401"
+    volumes:
+      - uploads_data:/app/uploads
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:12401/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    networks:
+      - app
+      - data
+
+  automation-worker:
+    build: ./apps/automation-service
+    container_name: xianyu-automation-worker
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_APP_USER:-xianyu_app}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:-dev-only-mysql-app-password-change-me}
+      MYSQL_DATABASE: xianyu_assistant_admin
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN must be set}
+      COOKIE_CRYPTO_SECRET: ${COOKIE_CRYPTO_SECRET:?COOKIE_CRYPTO_SECRET must be set}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET must be set}
+      ADMIN_JWT_ISSUER: ${JWT_ISSUER:-xianyu-core-api}
+      ADMIN_JWT_AUDIENCE: ${JWT_AUDIENCE:-xianyu-user-api}
+      NOTIFICATION_WEBHOOK_ALLOWED_HOSTS: ${NOTIFICATION_WEBHOOK_ALLOWED_HOSTS:-}
+      NOTIFICATION_SMTP_ALLOWED_HOSTS: ${NOTIFICATION_SMTP_ALLOWED_HOSTS:-}
+      CORE_API_BASE_URL: http://backend:18080
+      CRAWLER_SERVICE_URL: http://crawler-service:3001
+      WORKER_INTERVAL_SECONDS: ${WORKER_INTERVAL_SECONDS:-60}
+      WORKER_HEARTBEAT_FILE: /tmp/automation-worker-heartbeat
+    command: ["python", "run-worker.py"]
+    volumes:
+      - uploads_data:/app/uploads
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.worker_healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - app
+      - data
+
+  crawler-service:
+    build: ./apps/crawler-service
+    container_name: xianyu-crawler-service
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
+      - /home/pwuser:rw,noexec,nosuid,size=64m
+    shm_size: "1gb"
+    depends_on:
+      redis:
+        condition: service_healthy
+      crawler-postgres:
+        condition: service_healthy
+    environment:
+      CRAWLER_DB_HOST: crawler-postgres
+      CRAWLER_DB_PORT: 5432
+      CRAWLER_DB_USER: ${CRAWLER_DB_USER:-crawler}
+      CRAWLER_DB_PASSWORD: ${CRAWLER_DB_PASSWORD:-crawler_pass}
+      CRAWLER_DB: ${CRAWLER_DB:-xianyu_crawler}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-dev-only-redis-password-change-me}
+      PORT: 3001
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN must be set}
+      COOKIE_CRYPTO_SECRET: ${COOKIE_CRYPTO_SECRET:?COOKIE_CRYPTO_SECRET must be set}
+      CORS_ALLOWED_ORIGINS: ${CRAWLER_CORS_ALLOWED_ORIGINS:-}
+      CRAWLER_BROWSER_CONCURRENCY: ${CRAWLER_BROWSER_CONCURRENCY:-4}
+      CRAWLER_BROWSER_CONCURRENCY_PER_TENANT: ${CRAWLER_BROWSER_CONCURRENCY_PER_TENANT:-2}
+      CRAWLER_QR_SESSION_TTL_MS: ${CRAWLER_QR_SESSION_TTL_MS:-180000}
+      HEADLESS: "true"
+    expose:
+      - "3001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    networks:
+      - app
+      - data
+
+  crawler-worker:
+    build: ./apps/crawler-service
+    container_name: xianyu-crawler-worker
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
+      - /home/pwuser:rw,noexec,nosuid,size=64m
+    shm_size: "1gb"
+    depends_on:
+      redis:
+        condition: service_healthy
+      crawler-postgres:
+        condition: service_healthy
+    environment:
+      CRAWLER_DB_HOST: crawler-postgres
+      CRAWLER_DB_PORT: 5432
+      CRAWLER_DB_USER: ${CRAWLER_DB_USER:-crawler}
+      CRAWLER_DB_PASSWORD: ${CRAWLER_DB_PASSWORD:-crawler_pass}
+      CRAWLER_DB: ${CRAWLER_DB:-xianyu_crawler}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-dev-only-redis-password-change-me}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN must be set}
+      COOKIE_CRYPTO_SECRET: ${COOKIE_CRYPTO_SECRET:?COOKIE_CRYPTO_SECRET must be set}
+      HEADLESS: "true"
+    command: ["node", "dist/worker.js"]
+    healthcheck:
+      test: ["CMD", "node", "dist/healthcheck.js"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - app
+      - data
+
+  backend:
+    build: ./apps/core-api
+    container_name: xianyu-admin-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      automation:
+        condition: service_healthy
+      crawler-service:
+        condition: service_healthy
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/xianyu_assistant_admin?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_APP_USER:-xianyu_app}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_APP_PASSWORD:-dev-only-mysql-app-password-change-me}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET must be set}
+      COOKIE_CRYPTO_SECRET: ${COOKIE_CRYPTO_SECRET:?COOKIE_CRYPTO_SECRET must be set}
+      ADMIN_SEED_ENABLED: ${ADMIN_SEED_ENABLED:-false}
+      ADMIN_CORS_ALLOWED_ORIGINS: ${ADMIN_CORS_ALLOWED_ORIGINS:-}
+      ADMIN_CORS_ALLOWED_ORIGIN_PATTERNS: ${ADMIN_CORS_ALLOWED_ORIGIN_PATTERNS:-}
+      USER_CORS_ALLOWED_ORIGINS: ${USER_CORS_ALLOWED_ORIGINS:-}
+      USER_CORS_ALLOWED_ORIGIN_PATTERNS: ${USER_CORS_ALLOWED_ORIGIN_PATTERNS:-}
+      AUTOMATION_BASE_URL: http://automation:12401
+      CRAWLER_BASE_URL: http://crawler-service:3001
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-dev-only-redis-password-change-me}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN must be set}
+      OPS_METRICS_TOKEN: ${OPS_METRICS_TOKEN:-}
+      IMAGE_PROXY_ALLOWED_HOSTS: ${IMAGE_PROXY_ALLOWED_HOSTS:-}
+      AI_PROVIDER_ALLOWED_HOSTS: ${AI_PROVIDER_ALLOWED_HOSTS:-}
+      NOTIFICATION_WEBHOOK_ALLOWED_HOSTS: ${NOTIFICATION_WEBHOOK_ALLOWED_HOSTS:-}
+      NOTIFICATION_SMTP_ALLOWED_HOSTS: ${NOTIFICATION_SMTP_ALLOWED_HOSTS:-}
+      JWT_EXPIRE_SECONDS: ${JWT_EXPIRE_SECONDS:-3600}
+      MEDIA_COOKIE_SECURE: ${MEDIA_COOKIE_SECURE:-false}
+      MEDIA_SESSION_MAX_AGE_SECONDS: ${MEDIA_SESSION_MAX_AGE_SECONDS:-1200}
+      JWT_ISSUER: ${JWT_ISSUER:-xianyu-core-api}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-xianyu-user-api}
+      PAYMENT_SANDBOX_ENABLED: ${PAYMENT_SANDBOX_ENABLED:-false}
+      OPEN_SOURCE_BRIDGE_TOKEN: ${OPEN_SOURCE_BRIDGE_TOKEN:-}
+      OPEN_SOURCE_BRIDGE_SITE_CODE: ${OPEN_SOURCE_BRIDGE_SITE_CODE:-open-source}
+      OPEN_SOURCE_BRIDGE_SITE_NAME: ${OPEN_SOURCE_BRIDGE_SITE_NAME:-开源版}
+      XIANYU_UPLOAD_ROOT_DIR: /app/uploads
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-18080}:18080"
+    volumes:
+      - uploads_data:/app/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --show-error http://127.0.0.1:18080/api/health | grep -q '\"UP\"'"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    networks:
+      - app
+      - data
+
+  admin-web:
+    build: ./apps/admin-web
+    container_name: xianyu-admin-web
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${ADMIN_WEB_PORT:-3006}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --spider http://127.0.0.1:8080/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app
+
+  user-web:
+    build: ./apps/user-web
+    container_name: xianyu-user-web
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    depends_on:
+      backend:
+        condition: service_healthy
+      automation:
+        condition: service_started
+    ports:
+      - "127.0.0.1:${USER_WEB_PORT:-5174}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --spider http://127.0.0.1:8080/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app
+
+volumes:
+  mysql_data:
+  redis_data:
+  crawler_pg_data:
+  uploads_data:
+
+networks:
+  app:
+  data:
+    internal: true

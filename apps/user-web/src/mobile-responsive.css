@@ -1,0 +1,606 @@
+/*
+ * Responsive fallback for pages that do not have a dedicated MobileLite view.
+ * Keep this file separate from styles.css so page-level work can continue
+ * independently of the shared mobile shell.
+ */
+
+@media (max-width: 900px) {
+  :root {
+    --sidebar: 0px;
+  }
+
+  .app-shell {
+    display: block;
+    min-width: 0;
+    overflow: visible;
+  }
+
+  /* Turn the desktop sidebar into a horizontally scrollable mobile navigator. */
+  .app-shell .sidebar {
+    position: sticky !important;
+    top: 0 !important;
+    right: auto !important;
+    bottom: auto !important;
+    left: 0 !important;
+    z-index: 80;
+    display: block !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 6px 10px 8px !important;
+    overflow: visible !important;
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.96);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+
+  .app-shell .sidebar .brand,
+  .app-shell .sidebar .side-user,
+  .app-shell .sidebar .version {
+    display: none !important;
+  }
+
+  .app-shell .sidebar .nav-scroll {
+    display: flex !important;
+    width: 100%;
+    min-width: 0;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    gap: 8px;
+    padding: 0 2px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .app-shell .sidebar .nav-scroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  .app-shell .sidebar .nav-group {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 4px;
+    margin: 0;
+  }
+
+  .app-shell .sidebar .nav-title {
+    display: none;
+  }
+
+  .app-shell .sidebar .nav-item,
+  .app-shell .sidebar .nav-item.child {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: max-content;
+    height: 40px;
+    margin: 0;
+    padding: 0 11px;
+    gap: 7px;
+    border-radius: 10px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .app-shell .sidebar .nav-icon {
+    width: 16px;
+  }
+
+  .app-shell .main {
+    width: 100% !important;
+    min-width: 0;
+    margin-left: 0 !important;
+    padding: 12px 12px calc(102px + env(safe-area-inset-bottom)) !important;
+    overflow: visible;
+  }
+
+  .mobile-home-button {
+    display: none !important;
+  }
+
+  .mobile-home-button.is-desktop-override {
+    position: fixed;
+    top: max(8px, env(safe-area-inset-top));
+    right: 12px;
+    left: auto !important;
+    z-index: 90;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    min-width: 112px;
+    height: 40px;
+    padding: 0 12px;
+    border: 1px solid #d8e5f7;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, .98);
+    color: #1768d8;
+    box-shadow: 0 10px 24px rgba(31, 53, 94, .12);
+    font-weight: 700;
+  }
+
+  .app-shell.mobile-desktop-override .sidebar {
+    display: none !important;
+  }
+
+  .app-shell.mobile-desktop-override .main {
+    padding-top: 64px !important;
+  }
+
+  .app-shell .main .topbar {
+    position: static !important;
+    top: auto !important;
+    right: auto !important;
+    display: flex;
+    justify-content: flex-end;
+    width: 100%;
+    height: auto;
+    margin: 0 0 12px;
+  }
+
+  .app-shell .main .top-user {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .app-shell .main .page-head {
+    width: 100%;
+    min-height: 0;
+    height: auto;
+    padding-right: 0;
+    margin-bottom: 14px;
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .app-shell .main .page-head h1 {
+    font-size: 25px;
+    line-height: 1.2;
+  }
+
+  .app-shell .main .page-head p {
+    margin-top: 6px;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  .app-shell .main .page-head-actions,
+  .app-shell .main .head-actions,
+  .app-shell .main .toolbar,
+  .app-shell .main .bottom-actions,
+  .app-shell .main .inline-actions {
+    width: 100%;
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .app-shell .main .head-actions .app-btn,
+  .app-shell .main .toolbar > .app-btn,
+  .app-shell .main .bottom-actions .app-btn {
+    flex: 1 1 132px;
+    min-width: 0;
+  }
+
+  .app-shell .main .toolbar > :is(.input, .select, select, input, textarea) {
+    flex: 1 1 150px;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .app-shell .main :is(input, select, textarea, .input, .select) {
+    max-width: 100%;
+  }
+
+  .app-shell .main .input.large {
+    width: 100%;
+  }
+
+  /* Common desktop grids collapse before their columns start to collide. */
+  .app-shell .main :is(
+    .layout-grid,
+    .wide-right,
+    .publish-layout,
+    .two-col,
+    .three-col,
+    .form-grid,
+    .settings-layout,
+    .settings-shell,
+    .chat-shell,
+    .workflow-canvas-wrap,
+    .vip-shell,
+    .detail-grid.cols-2,
+    .scan-main
+  ) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .app-shell .main .opportunity-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .app-shell .main .logs-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .app-shell .main :is(.stat-grid, .quick-grid, .feature-grid, .vip-plan-grid, .vip-feature-grid) {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .app-shell .main :is(.metric-row, .stat-row, .exec-summary, .onboarding-steps) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .app-shell .main :is(.right-drawer, .card-panel, .notify-settings-shell, .vip-side) {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .app-shell .main .vip-side {
+    position: static !important;
+    top: auto !important;
+  }
+
+  /* Wide data retains its columns and becomes touch-scrollable instead of clipped. */
+  .app-shell .main :is(.base-table-scroll, .table-wrap, .table-scroll-wrap, .vip-compare-wrap) {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto !important;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .app-shell .main .base-table-scroll > .base-table {
+    width: max-content;
+    min-width: 640px;
+  }
+
+  .app-shell .main .card-panel:has(.sku-table) {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .app-shell .main .sku-table {
+    min-width: 620px;
+  }
+
+  .app-shell .main .cascader-levels {
+    overflow-x: auto !important;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .app-shell .main .cascader-col {
+    flex: 0 0 120px;
+    min-width: 120px !important;
+  }
+
+  .app-shell .main .mock-json {
+    max-width: 100%;
+    overflow: auto;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .app-shell .main :is(.tabs, .pagination) {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .app-shell .main .tabs {
+    flex-wrap: nowrap;
+  }
+
+  .app-shell .main .tab {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .app-shell .main :is(.flow-canvas, .workflow-canvas) {
+    max-width: 100%;
+    overflow: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .app-shell .main .flow-canvas {
+    height: 360px;
+    padding: 42px 18px;
+  }
+
+  .app-shell .main .flow-row {
+    min-width: max-content;
+  }
+
+  .app-shell .main .bottom-actions {
+    right: 0;
+    left: 0;
+    height: auto;
+    min-height: 60px;
+    padding: 10px 12px max(10px, env(safe-area-inset-bottom));
+  }
+
+  .modal-mask .scan-main,
+  .order-modal .detail-grid.cols-2 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  /* Modals and drawers should scroll internally rather than extend beyond the viewport. */
+  :is(
+    .modal-mask,
+    .order-modal-mask,
+    .xya-msg-modal-mask,
+    .announcement-modal-mask,
+    .global-confirm-mask,
+    .pay-mask,
+    .wf-addr-mask,
+    .modal-overlay
+  ) {
+    align-items: flex-start !important;
+    overflow-y: auto !important;
+    padding: 12px !important;
+  }
+
+  :is(.xya-msg-modal-mask, .xya-msg-image-preview-mask) {
+    z-index: 1000 !important;
+  }
+
+  :is(
+    .xy-modal,
+    .order-modal,
+    .xya-msg-modal,
+    .announcement-modal
+  ) {
+    box-sizing: border-box;
+    width: min(100%, 680px) !important;
+    max-width: calc(100vw - 24px) !important;
+    max-height: calc(100dvh - 24px) !important;
+    margin: auto;
+    overflow: auto !important;
+  }
+
+  :is(
+    .global-confirm-modal,
+    .pay-dialog,
+    .token-modal-card,
+    .wf-addr-dialog,
+    .modal-content
+  ) {
+    box-sizing: border-box;
+    max-width: calc(100vw - 24px) !important;
+    max-height: calc(100dvh - 24px) !important;
+    margin: auto;
+    overflow: auto !important;
+  }
+
+  .xy-modal {
+    padding: 20px 16px 16px;
+  }
+
+  .pay-dialog {
+    width: min(100%, 544px) !important;
+    min-width: 0;
+  }
+
+  :is(.order-modal, .xya-msg-modal) {
+    overflow: hidden !important;
+  }
+
+  .global-confirm-modal {
+    width: min(100%, 420px) !important;
+  }
+
+  .wf-addr-dialog {
+    width: min(100%, 540px) !important;
+  }
+
+  .modal-content {
+    width: min(100%, 560px) !important;
+  }
+
+  .scan-steps {
+    grid-template-columns: 1fr 28px 1fr 28px 1fr;
+    padding: 0 10px;
+  }
+
+  .scan-main {
+    gap: 16px;
+  }
+
+  .qr-box {
+    width: min(224px, 100%);
+    height: auto;
+    aspect-ratio: 1;
+    margin: 0 auto;
+  }
+
+  .app-shell .main :is(img, video, canvas) {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 560px) {
+  .app-shell .main :is(
+    .stat-grid,
+    .quick-grid,
+    .feature-grid,
+    .vip-plan-grid,
+    .vip-feature-grid,
+    .metric-row,
+    .stat-row,
+    .exec-summary,
+    .onboarding-steps,
+    .stock-stats,
+    .source-summary,
+    .delivery-record-detail-grid,
+    .notify-form-grid.three
+  ) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .app-shell .main .top-user-copy em {
+    display: none;
+  }
+
+  .app-shell .main .page-head h1 {
+    font-size: 23px;
+  }
+
+  .app-shell .main .head-actions .app-btn,
+  .app-shell .main .toolbar > .app-btn,
+  .app-shell .main .bottom-actions .app-btn {
+    flex-basis: 100%;
+  }
+
+  .app-shell .main .scan-step,
+  .modal-mask .scan-step {
+    font-size: 11px !important;
+  }
+
+  .global-confirm-modal {
+    padding: 30px 20px 20px !important;
+  }
+
+  .global-confirm-actions,
+  .wf-addr-dialog .actions {
+    flex-direction: column !important;
+  }
+
+  .global-confirm-actions .app-btn,
+  .wf-addr-dialog .actions button {
+    width: 100% !important;
+  }
+
+  .wf-addr-dialog,
+  .modal-content {
+    padding: 18px 14px !important;
+  }
+
+  .app-shell .main :is(.rewrite-style-row, .category-config-row, .price-config-row, .stock-config-row) {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+
+  .app-shell .main :is(.rewrite-style-row, .category-config-row, .price-config-row, .stock-config-row) > :is(.input, .app-btn) {
+    flex: 1 1 100%;
+    max-width: 100% !important;
+  }
+
+  .app-shell .main .workflow-task-layout .step-line {
+    grid-template-columns: 18px minmax(0, 1fr) 58px;
+  }
+
+  .app-shell .main .workflow-task-layout .step-line > div {
+    min-width: 0;
+  }
+
+  .app-shell .main .workflow-task-layout .step-line :is(b, small) {
+    overflow-wrap: anywhere;
+  }
+
+  .app-shell .main :is(.recent-run-header, .recent-run-meta) {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .app-shell .main :is(.recent-run-name, .recent-run-meta span) {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .app-shell .main .donut-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .app-shell .main .health-summary-card {
+    width: 100% !important;
+    max-width: 100%;
+  }
+
+  .app-shell .main .notify-health-foot,
+  .app-shell .main .notify-config-actions {
+    flex-wrap: wrap;
+  }
+
+  .app-shell .main .notify-health-foot > span,
+  .app-shell .main .notify-config-actions .app-btn {
+    flex: 1 1 100%;
+  }
+
+  .app-shell .main .aics-time-pair {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .app-shell .main .aics-time-pair .aics-input {
+    min-width: 0;
+  }
+
+  .app-shell .main .aics-time-pair > span {
+    align-self: center;
+  }
+
+  .announcement-modal-actions {
+    flex-direction: column !important;
+  }
+
+  .announcement-modal-actions .modal-btn {
+    width: 100% !important;
+  }
+
+  .modal-mask .session-box div {
+    flex-wrap: wrap;
+  }
+
+  .modal-mask .session-box b {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 760px) {
+  /* The desktop message workspace becomes a vertical, scrollable workspace. */
+  .app-shell .main .xya-msg-page {
+    height: auto !important;
+    min-height: 0;
+    padding-top: 0;
+    overflow: visible !important;
+  }
+
+  .app-shell .main .xya-msg-layout {
+    display: flex !important;
+    flex-direction: column;
+    height: auto !important;
+    gap: 12px;
+  }
+
+  .app-shell .main :is(.xya-msg-sidebar, .xya-msg-chat-panel, .xya-msg-detail-panel) {
+    height: auto !important;
+    min-height: 0;
+  }
+
+  .app-shell .main .xya-msg-sidebar {
+    max-height: 440px;
+  }
+
+  .app-shell .main .xya-msg-conversation-list {
+    flex: 0 1 auto;
+    max-height: 300px;
+  }
+
+  .app-shell .main .xya-msg-chat-panel {
+    min-height: 540px;
+  }
+
+  .app-shell .main .xya-msg-chat-stream {
+    min-height: 240px;
+    max-height: 460px;
+  }
+}

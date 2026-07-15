@@ -1,0 +1,4 @@
+interface:
+  display_name: "Update Production Servers"
+  short_description: "Sync local changes to the China backend and US frontends, then verify production."
+  default_prompt: "Use $update-production-servers to deploy the latest local changes to production, verify the official user and admin services, and diagnose any post-deploy failures."

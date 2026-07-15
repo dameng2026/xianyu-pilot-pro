@@ -1,0 +1,51 @@
+import request from '../utils/request.js'
+import { pageParams } from '../utils/apiData.js'
+
+export const workflowOverview = () => request.get('/workflow/overview')
+export const listWorkflows = params => request.get('/workflow/definitions', { params: pageParams(params) })
+export const getWorkflow = id => request.get(`/workflow/definitions/${id}`)
+export const createWorkflowDefinition = data => request.post('/workflow/definitions', data)
+export const updateWorkflowDefinition = (id, data) => request.put(`/workflow/definitions/${id}`, data)
+export const deleteWorkflowDefinition = id => request.delete(`/workflow/definitions/${id}`)
+export const publishWorkflow = id => request.post(`/workflow/definitions/${id}/publish`, {})
+export const executeWorkflowDefinition = (id, data) => request.post(`/workflow/definitions/${id}/execute`, data || {}, { timeout: 180000 })
+export const listWorkflowExecutions = params => request.get('/workflow/executions', { params: pageParams(params) })
+export const getWorkflowExecution = id => request.get(`/workflow/executions/${id}`)
+export const terminateWorkflowExecution = (id, data) => request.post(`/workflow/executions/${id}/terminate`, data || {})
+export const retryWorkflowFailedNode = (id, data) => request.post(`/workflow/executions/${id}/retry-failed-node`, data || {})
+export const continueWorkflowExecution = (id) => request.post(`/workflow/executions/${id}/continue`, {})
+export const listWorkflowVersions = (id, params) => request.get(`/workflow/definitions/${id}/versions`, { params: pageParams(params) })
+export const rollbackWorkflowVersion = (id, version) => request.post(`/workflow/definitions/${id}/rollback`, { version })
+export const getRecentRuns = params => request.get('/workflow/recent-runs', { params: pageParams(params) })
+export const getExecutionLogs = (id, params) => request.get(`/workflow/executions/${id}/logs`, { params: pageParams(params) })
+export const aiScreenGoods = data => request.post('/workflow/ai/screen', data)
+export const aiRewriteGoods = data => request.post('/workflow/ai/rewrite', data)
+export const aiGenerateImages = data => request.post('/workflow/ai/generate-images', data)
+export const aiExtractKeywords = data => request.post('/workflow/ai/extract-keywords', data)
+export const workflowPublish = data => request.post('/workflow/publish', data)
+
+// 兼容旧页面/旧调用名，避免其他页面未同步时直接报错。
+export const listWorkflowConfigs = () => listWorkflows({ current: 1, size: 100 })
+export const getWorkflowConfig = id => getWorkflow(id)
+export const saveWorkflowConfig = data => data?.id ? updateWorkflowDefinition(data.id, data) : createWorkflowDefinition(data)
+export const deleteWorkflowConfig = id => deleteWorkflowDefinition(id)
+export const toggleWorkflowConfig = (id, enabled) => updateWorkflowDefinition(id, { enabled })
+export const executeWorkflow = configId => executeWorkflowDefinition(configId, { triggerMode: 'manual' })
+export const listWorkflowTasks = data => listWorkflowExecutions(data || {})
+export const workflowTaskDetail = taskId => getWorkflowExecution(taskId)
+export const workflowTaskItems = taskId => getWorkflowExecution(taskId)
+export const workflowTaskSteps = taskId => getWorkflowExecution(taskId)
+function unavailableWorkflowCapability(capability) {
+  const error = new Error(`${capability}当前不可用，服务端尚未提供持久化接口`)
+  error.code = 'FEATURE_UNAVAILABLE'
+  return Promise.reject(error)
+}
+
+export const cancelWorkflowTask = () => unavailableWorkflowCapability('取消同步执行任务')
+export const exportWorkflowTask = taskId => getWorkflowExecution(taskId)
+export const listWorkflowKeywords = () => unavailableWorkflowCapability('工作流关键词列表')
+export const saveWorkflowKeyword = () => unavailableWorkflowCapability('保存工作流关键词')
+export const deleteWorkflowKeyword = () => unavailableWorkflowCapability('删除工作流关键词')
+export const toggleWorkflowKeyword = () => unavailableWorkflowCapability('切换工作流关键词')
+export const sortWorkflowKeyword = () => unavailableWorkflowCapability('排序工作流关键词')
+export const generateWorkflowKeywords = () => unavailableWorkflowCapability('本地关键词生成')

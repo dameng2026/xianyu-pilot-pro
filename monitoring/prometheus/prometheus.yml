@@ -1,0 +1,82 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alert.rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+scrape_configs:
+  - job_name: core-api
+    metrics_path: /api/ops/prometheus
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/ops_metrics_token
+    static_configs:
+      - targets: ['backend:18080']
+
+  # Readiness endpoints return JSON rather than Prometheus exposition text, so
+  # probe them through blackbox_exporter. Scraping them directly would make the
+  # target look down because Prometheus cannot parse the JSON response.
+  - job_name: service-readiness
+    metrics_path: /probe
+    params:
+      module: [internal_readiness]
+    static_configs:
+      - targets: ['http://backend:18080/api/ops/readiness']
+        labels:
+          service: core-api
+      - targets: ['http://automation:12401/ready']
+        labels:
+          service: automation-service
+      - targets: ['http://crawler-service:3001/api/ready']
+        labels:
+          service: crawler-service
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # Probe the customer-visible TLS path, not only the container network. This
+  # covers DNS, certificate validation, the US edge, the origin tunnel and the
+  # public health route as one observable commercial path.
+  - job_name: public-availability
+    metrics_path: /probe
+    params:
+      module: [public_https]
+    static_configs:
+      - targets: ['https://www.xianyupilot.com/']
+        labels:
+          endpoint: user-web
+      - targets: ['https://www.xianyupilot.com/api/health']
+        labels:
+          endpoint: user-api
+      - targets: ['https://admin.xianyupilot.com/']
+        labels:
+          endpoint: admin-web
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  - job_name: blackbox-exporter
+    static_configs:
+      - targets: ['blackbox-exporter:9115']
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ['alertmanager:9093']

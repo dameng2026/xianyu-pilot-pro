@@ -1,0 +1,83 @@
+{
+  "name": "自动发布测试工作流",
+  "description": "商品获取→筛选→AI润色→生成图片→发布",
+  "triggerType": "manual",
+  "nodes": [
+    {
+      "nodeKey": "trigger_1",
+      "nodeName": "触发器",
+      "nodeType": "TRIGGER",
+      "config": {
+        "selectedAccountId": 1,
+        "executeCount": 1
+      },
+      "x": 100,
+      "y": 100
+    },
+    {
+      "nodeKey": "fetch_1",
+      "nodeName": "商品获取",
+      "nodeType": "PRODUCT_FETCH",
+      "config": {
+        "keywords": ["steam"],
+        "targetCount": 3,
+        "accountId": 1
+      },
+      "x": 300,
+      "y": 100
+    },
+    {
+      "nodeKey": "filter_1",
+      "nodeName": "商品筛选",
+      "nodeType": "PRODUCT_FILTER",
+      "config": {
+        "minPrice": 0,
+        "userPrompt": ""
+      },
+      "x": 500,
+      "y": 100
+    },
+    {
+      "nodeKey": "polish_1",
+      "nodeName": "AI润色",
+      "nodeType": "PRODUCT_POLISH",
+      "config": {
+        "tone": "闲鱼爆款",
+        "userPrompt": ""
+      },
+      "x": 700,
+      "y": 100
+    },
+    {
+      "nodeKey": "image_1",
+      "nodeName": "生成图片",
+      "nodeType": "IMAGE_GENERATE",
+      "config": {
+        "imageCount": 3,
+        "firstPrompt": "根据商品标题和文案生成适合闲鱼平台的商品主图",
+        "nextPrompt": "参考上一张图片生成下一张商品图"
+      },
+      "x": 900,
+      "y": 100
+    },
+    {
+      "nodeKey": "publish_1",
+      "nodeName": "发布商品",
+      "nodeType": "PUBLISH",
+      "config": {
+        "dryRun": false,
+        "platform": "xianyu",
+        "publishIntervalSeconds": 10
+      },
+      "x": 1100,
+      "y": 100
+    }
+  ],
+  "edges": [
+    {"sourceNodeKey": "trigger_1", "targetNodeKey": "fetch_1"},
+    {"sourceNodeKey": "fetch_1", "targetNodeKey": "filter_1"},
+    {"sourceNodeKey": "filter_1", "targetNodeKey": "polish_1"},
+    {"sourceNodeKey": "polish_1", "targetNodeKey": "image_1"},
+    {"sourceNodeKey": "image_1", "targetNodeKey": "publish_1"}
+  ]
+}

@@ -1,0 +1,80 @@
+{
+  "uid": "xianyu-prod-overview",
+  "title": "Xianyu Assistant Production Overview",
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "15s",
+  "tags": ["xianyu", "production"],
+  "timezone": "browser",
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Core API Up",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "targets": [{"expr": "xianyu_core_up", "refId": "A"}],
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}, "type": "value"}], "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}}
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Database Up",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "targets": [{"expr": "xianyu_core_database_up", "refId": "A"}],
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}, "type": "value"}]}}
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Redis Up",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "targets": [{"expr": "xianyu_core_redis_up", "refId": "A"}],
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}, "type": "value"}]}}
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Payment Orders by Status",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "targets": [{"expr": "xianyu_payment_orders_total", "legendFormat": "status={{value}}", "refId": "A"}]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Notification Deliveries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "targets": [{"expr": "increase(xianyu_notification_delivery_total[5m])", "legendFormat": "success={{success}}", "refId": "A"}]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Client Errors by Type",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 12},
+      "targets": [{"expr": "xianyu_client_errors_total", "legendFormat": "{{value}}", "refId": "A"}]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Critical Service Readiness",
+      "gridPos": {"h": 5, "w": 24, "x": 0, "y": 20},
+      "targets": [{"expr": "min by (service) (probe_success{job=\"service-readiness\"})", "legendFormat": "{{service}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"text": "NOT READY", "color": "red"}, "1": {"text": "READY", "color": "green"}}, "type": "value"}], "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}}
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Public HTTPS Availability",
+      "gridPos": {"h": 5, "w": 24, "x": 0, "y": 25},
+      "targets": [{"expr": "min by (endpoint) (probe_success{job=\"public-availability\"})", "legendFormat": "{{endpoint}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}, "type": "value"}], "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}}
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Public TLS Certificate Days Remaining",
+      "gridPos": {"h": 5, "w": 24, "x": 0, "y": 30},
+      "targets": [{"expr": "(probe_ssl_earliest_cert_expiry{job=\"public-availability\"} - time()) / 86400", "legendFormat": "{{endpoint}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 1, "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 14}, {"color": "green", "value": 30}]}}}
+    }
+  ]
+}

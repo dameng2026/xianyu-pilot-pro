@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Payment Modal Preview</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at top left, rgba(100, 138, 255, 0.24), transparent 22%),
+          linear-gradient(180deg, #f3f7ff 0%, #e9eef8 100%);
+      }
+
+      .preview-scene {
+        min-height: 100vh;
+      }
+
+      .preview-shell {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 190px 1fr;
+      }
+
+      .preview-sidebar {
+        padding: 20px 16px;
+        border-right: 1px solid rgba(220, 228, 242, 0.8);
+        background: rgba(255, 255, 255, 0.34);
+        backdrop-filter: blur(14px);
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+      }
+
+      .preview-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 700;
+        color: rgba(28, 44, 82, 0.88);
+      }
+
+      .preview-brand-mark {
+        width: 20px;
+        height: 20px;
+        border-radius: 6px;
+        background: linear-gradient(135deg, #236bff 0%, #6ca4ff 100%);
+      }
+
+      .preview-nav {
+        display: grid;
+        gap: 16px;
+      }
+
+      .preview-nav .line {
+        display: block;
+        height: 12px;
+        width: 110px;
+        border-radius: 999px;
+        background: rgba(118, 138, 177, 0.18);
+      }
+
+      .preview-nav .line.wide {
+        width: 138px;
+      }
+
+      .preview-nav .line.active {
+        width: 94px;
+        background: rgba(35, 107, 255, 0.55);
+      }
+
+      .preview-avatar {
+        margin-top: auto;
+        width: 42px;
+        height: 42px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #d6deec 0%, #f0f4fb 100%);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+      }
+
+      .preview-main {
+        padding: 20px 22px 24px;
+      }
+
+      .preview-topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+      }
+
+      .preview-topbar-title,
+      .preview-topbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .preview-topbar .crumb,
+      .preview-topbar .mini,
+      .preview-topbar .pill,
+      .preview-topbar .primary-btn,
+      .preview-topbar .avatar-mini {
+        display: inline-block;
+        border-radius: 999px;
+        background: rgba(129, 148, 183, 0.18);
+      }
+
+      .preview-topbar .crumb {
+        width: 72px;
+        height: 10px;
+      }
+
+      .preview-topbar .pill {
+        width: 120px;
+        height: 30px;
+      }
+
+      .preview-topbar .mini {
+        width: 18px;
+        height: 18px;
+      }
+
+      .preview-topbar .primary-btn {
+        width: 96px;
+        height: 34px;
+        background: linear-gradient(135deg, rgba(35, 107, 255, 0.96) 0%, rgba(73, 136, 255, 0.96) 100%);
+      }
+
+      .preview-topbar .avatar-mini {
+        width: 32px;
+        height: 32px;
+      }
+
+      .preview-hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 340px;
+        gap: 18px;
+        margin-top: 22px;
+      }
+
+      .preview-hero-card,
+      .preview-card {
+        border-radius: 24px;
+        background: rgba(255, 255, 255, 0.56);
+        border: 1px solid rgba(228, 236, 248, 0.82);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+      }
+
+      .preview-hero-card.large {
+        height: 164px;
+      }
+
+      .preview-hero-card.side {
+        height: 164px;
+        background:
+          radial-gradient(circle at 60% 36%, rgba(82, 126, 255, 0.18), transparent 28%),
+          rgba(255, 255, 255, 0.56);
+      }
+
+      .preview-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 18px;
+        margin-top: 20px;
+      }
+
+      .preview-card.stat {
+        height: 148px;
+      }
+
+      .preview-card.stat.wide {
+        grid-column: span 2;
+        height: 206px;
+        background:
+          radial-gradient(circle at 78% 30%, rgba(151, 102, 255, 0.12), transparent 22%),
+          rgba(255, 255, 255, 0.56);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/payment-modal-preview.js"></script>
+  </body>
+ </html>

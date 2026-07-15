@@ -1,0 +1,202 @@
+# Optional monitoring overlay. Use with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.monitoring.yml --profile monitoring --env-file .env.production up -d
+services:
+  blackbox-exporter:
+    image: quay.io/prometheus/blackbox-exporter:v0.28.0
+    container_name: xianyu-blackbox-exporter
+    restart: always
+    mem_limit: "${BLACKBOX_MEMORY_LIMIT_BYTES:?BLACKBOX_MEMORY_LIMIT_BYTES must be set}"
+    cpus: "${BLACKBOX_CPUS:?BLACKBOX_CPUS must be set}"
+    pids_limit: "${BLACKBOX_PIDS_LIMIT:?BLACKBOX_PIDS_LIMIT must be set}"
+    stop_grace_period: 30s
+    profiles: ["monitoring"]
+    user: "65534:65534"
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    command:
+      - --config.file=/etc/blackbox_exporter/config.yml
+    volumes:
+      - ./monitoring/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:9115/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  alertmanager:
+    image: prom/alertmanager:v0.32.1
+    container_name: xianyu-alertmanager
+    restart: always
+    mem_limit: "${ALERTMANAGER_MEMORY_LIMIT_BYTES:?ALERTMANAGER_MEMORY_LIMIT_BYTES must be set}"
+    cpus: "${ALERTMANAGER_CPUS:?ALERTMANAGER_CPUS must be set}"
+    pids_limit: "${ALERTMANAGER_PIDS_LIMIT:?ALERTMANAGER_PIDS_LIMIT must be set}"
+    stop_grace_period: 1m
+    profiles: ["monitoring"]
+    user: "65534:${MONITORING_SECRET_GID:?MONITORING_SECRET_GID must be the dedicated monitoring-secrets group}"
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --cluster.listen-address=
+      - --web.external-url=${ALERTMANAGER_ROOT_URL:-http://localhost:9093}
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    secrets:
+      - alertmanager_webhook_url
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+    healthcheck:
+      test: ["CMD", "/bin/amtool", "--alertmanager.url=http://127.0.0.1:9093", "config", "show"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  prometheus:
+    image: prom/prometheus:v3.5.3
+    container_name: xianyu-prometheus
+    restart: always
+    mem_limit: "${PROMETHEUS_MEMORY_LIMIT_BYTES:?PROMETHEUS_MEMORY_LIMIT_BYTES must be set}"
+    cpus: "${PROMETHEUS_CPUS:?PROMETHEUS_CPUS must be set}"
+    pids_limit: "${PROMETHEUS_PIDS_LIMIT:?PROMETHEUS_PIDS_LIMIT must be set}"
+    stop_grace_period: 2m
+    profiles: ["monitoring"]
+    user: "65534:${MONITORING_SECRET_GID:?MONITORING_SECRET_GID must be the dedicated monitoring-secrets group}"
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+      - --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:?PROMETHEUS_RETENTION_SIZE must be set}
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+      - prometheus_data:/prometheus
+    secrets:
+      - ops_metrics_token
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      backend:
+        condition: service_healthy
+      alertmanager:
+        condition: service_healthy
+      blackbox-exporter:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:9090/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  grafana:
+    image: grafana/grafana:12.4.5
+    container_name: xianyu-grafana
+    restart: always
+    mem_limit: "${GRAFANA_MEMORY_LIMIT_BYTES:?GRAFANA_MEMORY_LIMIT_BYTES must be set}"
+    cpus: "${GRAFANA_CPUS:?GRAFANA_CPUS must be set}"
+    pids_limit: "${GRAFANA_PIDS_LIMIT:?GRAFANA_PIDS_LIMIT must be set}"
+    stop_grace_period: 1m
+    profiles: ["monitoring"]
+    user: "472:0"
+    group_add:
+      - "${MONITORING_SECRET_GID:?MONITORING_SECRET_GID must be the dedicated monitoring-secrets group}"
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_ALLOW_ORG_CREATE: "false"
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_COOKIE_SAMESITE: strict
+      GF_SECURITY_STRICT_TRANSPORT_SECURITY: "true"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    secrets:
+      - grafana_admin_password
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+volumes:
+  alertmanager_data:
+  prometheus_data:
+  grafana_data:
+
+secrets:
+  alertmanager_webhook_url:
+    file: ${ALERTMANAGER_WEBHOOK_URL_FILE:?ALERTMANAGER_WEBHOOK_URL_FILE must point to an HTTPS webhook URL file}
+  ops_metrics_token:
+    file: ${OPS_METRICS_TOKEN_FILE:?OPS_METRICS_TOKEN_FILE must point to the metrics token file}
+  grafana_admin_password:
+    file: ${GRAFANA_ADMIN_PASSWORD_FILE:?GRAFANA_ADMIN_PASSWORD_FILE must point to the Grafana admin password file}

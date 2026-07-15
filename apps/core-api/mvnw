@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+MAVEN_VERSION="3.9.16"
+MAVEN_HOME_DIR="$BASE_DIR/.mvn/apache-maven-$MAVEN_VERSION"
+MAVEN_SHA512="831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6"
+
+verify_archive() {
+  local archive="$1"
+  local expected="$2"
+  local actual
+  if command -v sha512sum >/dev/null 2>&1; then
+    actual="$(sha512sum "$archive" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 512 "$archive" | awk '{print $1}')"
+  else
+    echo "sha512sum or shasum is required to verify the Maven distribution." >&2
+    exit 1
+  fi
+  if [[ "$actual" != "$expected" ]]; then
+    echo "Maven distribution checksum verification failed." >&2
+    exit 1
+  fi
+}
+
+if [[ ! -x "$MAVEN_HOME_DIR/bin/mvn" ]]; then
+  mkdir -p "$BASE_DIR/.mvn"
+  ARCHIVE="$BASE_DIR/.mvn/apache-maven-$MAVEN_VERSION-bin.tar.gz"
+  URL="https://archive.apache.org/dist/maven/maven-3/$MAVEN_VERSION/binaries/apache-maven-$MAVEN_VERSION-bin.tar.gz"
+  if [[ ! -f "$ARCHIVE" ]]; then
+    echo "System Maven not found. Downloading Apache Maven $MAVEN_VERSION..." >&2
+    TMP_ARCHIVE="$ARCHIVE.tmp"
+    trap 'rm -f "$TMP_ARCHIVE"' EXIT
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL "$URL" -o "$TMP_ARCHIVE"
+    elif command -v wget >/dev/null 2>&1; then
+      wget -q "$URL" -O "$TMP_ARCHIVE"
+    else
+      echo "Neither mvn nor curl/wget is available. Install Maven 3.9+ or provide curl/wget for automatic bootstrap." >&2
+      exit 127
+    fi
+    verify_archive "$TMP_ARCHIVE" "$MAVEN_SHA512"
+    mv "$TMP_ARCHIVE" "$ARCHIVE"
+    trap - EXIT
+  fi
+  verify_archive "$ARCHIVE" "$MAVEN_SHA512"
+  tar -xzf "$ARCHIVE" -C "$BASE_DIR/.mvn"
+fi
+
+exec "$MAVEN_HOME_DIR/bin/mvn" "$@"

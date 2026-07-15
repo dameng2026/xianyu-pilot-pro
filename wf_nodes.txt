@@ -1,0 +1,1 @@
+﻿config_json: {"address": {"gps": "113.3244,23.1065", "area": "Haizhu", "city": "Guangzhou", "prov": "Guangdong", "poiId": "", "poiName": "Guangzhou Tower", "divisionId": 440105}, "enabled": true, "category": "", "addressText": "Guangzhou Tower", "priceStrategy": "keep", "publishAccountId": 1, "publishIntervalSeconds": 30}

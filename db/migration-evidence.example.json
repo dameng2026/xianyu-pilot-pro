@@ -1,0 +1,54 @@
+{
+  "formatVersion": 2,
+  "releaseId": "release-YYYYMMDD-sequence",
+  "releaseRevision": "replace-with-lowercase-git-commit-sha",
+  "manifestSha256": "replace-with-output-from-validate-migrations",
+  "createdAt": "YYYY-MM-DDTHH:MM:SSZ",
+  "expiresAt": "YYYY-MM-DDTHH:MM:SSZ",
+  "approvedBy": "release-manager-identity",
+  "changeTicket": "CHG-reference",
+  "databases": {
+    "core_mysql": {
+      "backup": {
+        "status": "verified",
+        "artifactId": "immutable-backup-id",
+        "sha256": "replace-with-lowercase-sha256",
+        "completedAt": "YYYY-MM-DDTHH:MM:SSZ"
+      },
+      "restore": {
+        "status": "passed",
+        "drillId": "restore-drill-id",
+        "verifiedAt": "YYYY-MM-DDTHH:MM:SSZ",
+        "target": "isolated-rehearsal-core-db"
+      }
+    },
+    "automation_mysql": {
+      "backup": {
+        "status": "verified",
+        "artifactId": "immutable-backup-id",
+        "sha256": "replace-with-lowercase-sha256",
+        "completedAt": "YYYY-MM-DDTHH:MM:SSZ"
+      },
+      "restore": {
+        "status": "passed",
+        "drillId": "restore-drill-id",
+        "verifiedAt": "YYYY-MM-DDTHH:MM:SSZ",
+        "target": "isolated-rehearsal-automation-db"
+      }
+    },
+    "crawler_postgres": {
+      "backup": {
+        "status": "verified",
+        "artifactId": "immutable-backup-id",
+        "sha256": "replace-with-lowercase-sha256",
+        "completedAt": "YYYY-MM-DDTHH:MM:SSZ"
+      },
+      "restore": {
+        "status": "passed",
+        "drillId": "restore-drill-id",
+        "verifiedAt": "YYYY-MM-DDTHH:MM:SSZ",
+        "target": "isolated-rehearsal-crawler-db"
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+org.eclipse.angus.mail.imap.IMAPProvider
+org.eclipse.angus.mail.imap.IMAPSSLProvider
+org.eclipse.angus.mail.smtp.SMTPProvider
+org.eclipse.angus.mail.smtp.SMTPSSLProvider
+org.eclipse.angus.mail.pop3.POP3Provider
+org.eclipse.angus.mail.pop3.POP3SSLProvider

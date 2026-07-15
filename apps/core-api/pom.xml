@@ -1,0 +1,235 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.15</version>
+        <relativePath/>
+    </parent>
+    <groupId>com.xianyu</groupId>
+    <artifactId>xianyu-assistant-admin-backend</artifactId>
+    <version>1.0.0</version>
+    <name>xianyu-assistant-admin-backend</name>
+    <properties>
+        <java.version>17</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <project.build.outputTimestamp>2026-07-10T00:00:00Z</project.build.outputTimestamp>
+
+        <!--
+            Same-line security floors verified against upstream advisories:
+            Tomcat 10.1.56 fixes the constraints/replay issues affecting 10.1.55;
+            Logback 1.5.37 is the definitive CVE-2026-13006 fix; and Netty
+            4.1.135.Final contains the June 2026 4.1.x security rollup.
+            Keep the Jackson family aligned through its BOM.
+        -->
+        <tomcat.version>10.1.56</tomcat.version>
+        <logback.version>1.5.37</logback.version>
+        <netty.version>4.1.135.Final</netty.version>
+        <jackson-bom.version>2.21.4</jackson-bom.version>
+
+        <!-- Pinned audit tooling keeps generated evidence reproducible. -->
+        <cyclonedx-maven-plugin.version>2.9.2</cyclonedx-maven-plugin.version>
+        <dependency-check-maven.version>12.2.2</dependency-check-maven.version>
+        <twelvemonkeys-imageio.version>3.13.1</twelvemonkeys-imageio.version>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- 开发热重载（仅在 dev 环境生效） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-devtools</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.mybatis.spring.boot</groupId>
+            <artifactId>mybatis-spring-boot-starter</artifactId>
+            <version>3.0.3</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
+        </dependency>
+        <!-- Java 8 时间类型（LocalDateTime 等）序列化支持 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- ZXing 二维码生成 -->
+        <dependency>
+            <groupId>com.google.zxing</groupId>
+            <artifactId>core</artifactId>
+            <version>3.5.3</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.zxing</groupId>
+            <artifactId>javase</artifactId>
+            <version>3.5.3</version>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.angus</groupId>
+            <artifactId>jakarta.mail</artifactId>
+            <version>2.0.3</version>
+        </dependency>
+        <dependency>
+            <groupId>com.twelvemonkeys.imageio</groupId>
+            <artifactId>imageio-webp</artifactId>
+            <version>${twelvemonkeys-imageio.version}</version>
+        </dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.xianyu.admin.XianyuAdminApplication</mainClass>
+                    <!-- devtools 不要被打包进 JAR -->
+                    <excludes>
+                        <exclude>
+                            <groupId>org.springframework.boot</groupId>
+                            <artifactId>spring-boot-devtools</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <source>17</source>
+                    <target>17</target>
+                    <parameters>true</parameters>
+                    <encoding>UTF-8</encoding>
+                    <compilerArgs>
+                        <arg>-parameters</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+    <profiles>
+        <!--
+            Run with NVD_API_KEY set in the environment:
+            mvn -Psupply-chain-audit verify
+            An NVD API key (or an internally mirrored NVD feed) is required for
+            reliable CI execution; anonymous cold starts are heavily rate-limited.
+            Do not pass the key through -DnvdApiKey because Maven debug output can
+            expose that value.
+        -->
+        <profile>
+            <id>supply-chain-audit</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.cyclonedx</groupId>
+                        <artifactId>cyclonedx-maven-plugin</artifactId>
+                        <version>${cyclonedx-maven-plugin.version}</version>
+                        <executions>
+                            <execution>
+                                <id>generate-sbom</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>makeAggregateBom</goal>
+                                </goals>
+                                <configuration>
+                                    <!--
+                                        Spring Boot 3.5 already embeds a JSON SBOM with the
+                                        default "cyclonedx" classifier. Keep the audit evidence
+                                        separate so this execution never replaces that artifact.
+                                    -->
+                                    <classifier>supply-chain</classifier>
+                                    <projectType>application</projectType>
+                                    <schemaVersion>1.6</schemaVersion>
+                                    <includeBomSerialNumber>true</includeBomSerialNumber>
+                                    <includeCompileScope>true</includeCompileScope>
+                                    <includeRuntimeScope>true</includeRuntimeScope>
+                                    <includeProvidedScope>false</includeProvidedScope>
+                                    <includeSystemScope>false</includeSystemScope>
+                                    <includeTestScope>false</includeTestScope>
+                                    <includeLicenseText>false</includeLicenseText>
+                                    <outputFormat>all</outputFormat>
+                                    <outputName>sbom</outputName>
+                                    <outputDirectory>${project.build.directory}/supply-chain</outputDirectory>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.owasp</groupId>
+                        <artifactId>dependency-check-maven</artifactId>
+                        <version>${dependency-check-maven.version}</version>
+                        <executions>
+                            <execution>
+                                <id>dependency-vulnerability-gate</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <nvdApiKeyEnvironmentVariable>NVD_API_KEY</nvdApiKeyEnvironmentVariable>
+                            <skipTestScope>true</skipTestScope>
+                            <skipProvidedScope>true</skipProvidedScope>
+                            <!-- This module contains no JavaScript; JS is audited in the npm jobs. -->
+                            <retireJsAnalyzerEnabled>false</retireJsAnalyzerEnabled>
+                            <knownExploitedEnabled>true</knownExploitedEnabled>
+                            <formats>
+                                <format>HTML</format>
+                                <format>JSON</format>
+                                <format>SARIF</format>
+                            </formats>
+                            <outputDirectory>${project.build.directory}/supply-chain/dependency-check</outputDirectory>
+                            <failOnError>true</failOnError>
+                            <!-- Zero-unaccepted-vulnerability release policy: any scored finding fails. -->
+                            <failBuildOnCVSS>0.0</failBuildOnCVSS>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

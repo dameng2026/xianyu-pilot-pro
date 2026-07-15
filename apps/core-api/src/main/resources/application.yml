@@ -1,0 +1,160 @@
+server:
+  port: 18080
+
+spring:
+  application:
+    name: xianyu-assistant-admin-backend
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 50MB
+  main:
+    lazy-initialization: true
+    banner-mode: off
+    cloud-platform: none
+    allow-bean-definition-overriding: false
+  jmx:
+    enabled: false
+  devtools:
+    restart:
+      trigger-file: .trigger
+      exclude: static/**,public/**
+    livereload:
+      enabled: true
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/xianyu_assistant_admin?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: root
+    password: 123456
+    hikari:
+      minimum-idle: 2
+      maximum-pool-size: 10
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2s
+  sql:
+    init:
+      mode: never
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{requestId:-no-trace}] %logger{36} - %msg%n"
+  level:
+    root: WARN
+    com.xianyu: INFO
+    org.springframework: WARN
+    org.hibernate: WARN
+    com.zaxxer.hikari: WARN
+
+ops:
+  metrics:
+    token: ${OPS_METRICS_TOKEN:}
+
+client-errors:
+  ingress:
+    max-requests-per-window: ${CLIENT_ERROR_MAX_REQUESTS_PER_WINDOW:60}
+    window-millis: ${CLIENT_ERROR_RATE_WINDOW_MILLIS:60000}
+    max-body-bytes: ${CLIENT_ERROR_MAX_BODY_BYTES:65536}
+
+image:
+  proxy:
+    allowed-hosts: ${IMAGE_PROXY_ALLOWED_HOSTS:}
+    max-bytes: ${IMAGE_PROXY_MAX_BYTES:10485760}
+    max-redirects: ${IMAGE_PROXY_MAX_REDIRECTS:3}
+
+notification:
+  webhook:
+    allowed-hosts: ${NOTIFICATION_WEBHOOK_ALLOWED_HOSTS:}
+  smtp:
+    allowed-hosts: ${NOTIFICATION_SMTP_ALLOWED_HOSTS:}
+
+payment:
+  sandbox:
+    enabled: ${PAYMENT_SANDBOX_ENABLED:false}
+
+# 开源版桥接配置：开源版通过 HTTP 头 X-Open-Source-Token 访问
+# /admin-api/open-source-bridge/* 系列接口。token 为空时拒绝所有桥接请求（fail-closed）。
+# 部署时 OPEN_SOURCE_BRIDGE_TOKEN 必须与开源版 .env 的 COMMERCIAL_BACKEND_ACCESS_TOKEN 完全一致。
+open:
+  source:
+    bridge:
+      token: ${OPEN_SOURCE_BRIDGE_TOKEN:}
+      site-code: ${OPEN_SOURCE_BRIDGE_SITE_CODE:open-source}
+      site-name: ${OPEN_SOURCE_BRIDGE_SITE_NAME:开源版}
+
+# 商业版后端连接配置：开源版部署后，反馈数据会转发到商业版后端。
+# 未配置时反馈降级到本地数据库存储。
+commercial:
+  backend:
+    url: ${COMMERCIAL_BACKEND_URL:}
+    access-token: ${COMMERCIAL_BACKEND_ACCESS_TOKEN:}
+    site-code: ${COMMERCIAL_BACKEND_SITE_CODE:open-source}
+    site-name: ${COMMERCIAL_BACKEND_SITE_NAME:开源版}
+    frontend-url: ${COMMERCIAL_BACKEND_FRONTEND_URL:}
+    admin-url: ${COMMERCIAL_BACKEND_ADMIN_URL:}
+
+admin:
+  seed:
+    enabled: ${ADMIN_SEED_ENABLED:false}
+  jwt:
+    secret: ${ADMIN_JWT_SECRET:please-change-this-admin-jwt-secret-at-least-32-chars}
+    expire-seconds: ${JWT_EXPIRE_SECONDS:3600}
+    issuer: ${JWT_ISSUER:xianyu-core-api}
+    audience: ${JWT_AUDIENCE:xianyu-user-api}
+  cors:
+    allowed-origins: ${ADMIN_CORS_ALLOWED_ORIGINS:http://localhost:3006,http://127.0.0.1:3006}
+    allowed-origin-patterns: ${ADMIN_CORS_ALLOWED_ORIGIN_PATTERNS:}
+    user-allowed-origins: ${USER_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:5175,http://127.0.0.1:5175}
+    user-allowed-origin-patterns: ${USER_CORS_ALLOWED_ORIGIN_PATTERNS:}
+
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true
+
+xianyu:
+  upload:
+    root-dir: ${XIANYU_UPLOAD_ROOT_DIR:../automation-service/uploads}
+  media:
+    cookie-secure: ${MEDIA_COOKIE_SECURE:false}
+    session-max-age-seconds: ${MEDIA_SESSION_MAX_AGE_SECONDS:1200}
+  schema:
+    runtime-mutations-enabled: ${SCHEMA_RUNTIME_MUTATIONS_ENABLED:true}
+  security-guard:
+    enabled: ${XIANYU_SECURITY_GUARD_ENABLED:false}
+  cookie:
+    crypto-secret: ${COOKIE_CRYPTO_SECRET:dev-only-cookie-crypto-secret-change-me-32-chars}
+  automation:
+    base-url: ${AUTOMATION_BASE_URL:http://localhost:12401}
+    crawler-base-url: ${CRAWLER_BASE_URL:http://localhost:3001}
+    internal-token: ${INTERNAL_API_TOKEN:dev-only-internal-api-token-change-me-32-chars}
+  ai:
+    provider:
+      enabled: ${AI_PROVIDER_ENABLED:false}
+      base-url: ${AI_PROVIDER_BASE_URL:}
+      api-key: ${AI_PROVIDER_API_KEY:}
+      model: ${AI_PROVIDER_MODEL:gpt-4o-mini}
+      timeout-seconds: ${AI_PROVIDER_TIMEOUT_SECONDS:30}
+      allowed-hosts: ${AI_PROVIDER_ALLOWED_HOSTS:}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+  main:
+    lazy-initialization: false
+    banner-mode: console
+  jmx:
+    enabled: true
+
+admin:
+  seed:
+    enabled: ${ADMIN_SEED_ENABLED:false}
