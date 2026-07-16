@@ -18,8 +18,54 @@ from app.services.xianyu_goods_sync import (
     _merge_detail_info,
     _build_goods_insert_values,
     _build_goods_update_values,
+    _explain_publish_rejection,
     APP_KEY,
 )
+
+
+class TestExplainPublishRejection:
+    """发布被拒原因翻译测试"""
+
+    def test_known_code_with_desc(self):
+        msg = _explain_publish_rejection(
+            "FAIL_BIZ_ITEM_PICTURE_VIOLATION::图片涉嫌违规",
+            None,
+        )
+        assert "商品图片涉嫌违规" in msg
+        assert "FAIL_BIZ_ITEM_PICTURE_VIOLATION" in msg
+
+    def test_known_code_without_desc(self):
+        msg = _explain_publish_rejection("FAIL_BIZ_USER_BAN_PUBLISH", None)
+        assert "账号被限制发布" in msg
+        assert "FAIL_BIZ_USER_BAN_PUBLISH" in msg
+
+    def test_unknown_code_with_chinese_desc(self):
+        msg = _explain_publish_rejection(
+            "FAIL_BIZ_NEW_VIOLATION::这是一条新的违规描述",
+            None,
+        )
+        assert "这是一条新的违规描述" in msg
+        assert "FAIL_BIZ_NEW_VIOLATION" in msg
+
+    def test_unknown_code_without_desc_falls_back_to_data_message(self):
+        msg = _explain_publish_rejection(
+            "FAIL_BIZ_UNKNOWN",
+            {"subMsg": "data 字段提供的补充原因"},
+        )
+        assert "data 字段提供的补充原因" in msg
+        assert "FAIL_BIZ_UNKNOWN" in msg
+
+    def test_empty_ret_msg_falls_back_to_generic(self):
+        msg = _explain_publish_rejection("", None)
+        assert "平台暂未接受该商品" in msg
+
+    def test_bracketed_code_is_parsed(self):
+        msg = _explain_publish_rejection(
+            "FAIL_BIZ_ITEM_PICTURE_VIOLATION[xxx]::图片违规",
+            None,
+        )
+        assert "商品图片涉嫌违规" in msg
+        assert "FAIL_BIZ_ITEM_PICTURE_VIOLATION" in msg
 
 
 class TestBuildSign:

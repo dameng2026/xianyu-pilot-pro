@@ -136,6 +136,9 @@ async def update_solve_record(
     result: str = "",
     error_message: str = "",
     retry_count: Optional[int] = None,
+    duration_ms: Optional[int] = None,
+    screenshot_path: str = "",
+    engine: str = "",
 ) -> None:
     """更新滑块求解记录。
 
@@ -145,6 +148,9 @@ async def update_solve_record(
         result: 处理结果 (slider_success/slider_fail)
         error_message: 错误详情
         retry_count: 重试次数
+        duration_ms: 耗时（毫秒），写入 error_message 前缀元数据时使用
+        screenshot_path: 调试截图路径
+        engine: 验证引擎
     """
     if not record_id:
         return
@@ -158,12 +164,25 @@ async def update_solve_record(
     if result:
         sets.append("result = :result")
         params["result"] = result
-    if error_message:
+    # 将耗时/截图附加到 error_message，避免强制 DB 迁移；成功时也保留诊断信息
+    meta_bits: list[str] = []
+    if duration_ms is not None and duration_ms >= 0:
+        meta_bits.append(f"durationMs={duration_ms}")
+    if screenshot_path:
+        meta_bits.append(f"screenshot={screenshot_path}")
+    if error_message or meta_bits:
+        msg = error_message or ""
+        if meta_bits:
+            prefix = "[" + ", ".join(meta_bits) + "]"
+            msg = f"{prefix} {msg}".strip()
         sets.append("error_message = :emsg")
-        params["emsg"] = error_message
+        params["emsg"] = msg[:2000]
     if retry_count is not None:
         sets.append("retry_count = :rc")
         params["rc"] = retry_count
+    if engine:
+        sets.append("engine = :engine")
+        params["engine"] = engine[:64]
 
     try:
         async with async_session() as db:

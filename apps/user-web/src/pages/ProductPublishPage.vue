@@ -513,14 +513,22 @@ async function triggerAutoCategory() {
         autoSelectedCatId.value = selected.catId || selected.catName || ''
         autoCategoryMessage.value = '已根据封面图自动识别分类'
         autoCategoryMsgType.value = 'success'
-      } else if (candidates.length) {
-        // 未匹配到本地分类树，展示候选分类让用户手动点选
-        autoCategoryMessage.value = '已识别候选分类，请点击选择'
-        autoCategoryMsgType.value = 'info'
-        autoSelectedCatId.value = selected.catId || ''
       } else {
-        autoCategoryMessage.value = '自动分类返回了候选结果，但当前分类树无法应用，请手动选择分类'
-        autoCategoryMsgType.value = 'warn'
+        // 未匹配到本地分类树：平台已选定分类，直接采用，避免校验空值导致无法发布
+        // 候选列表仍然展示，用户可点击切换
+        const matchName = String(selected.catName || selected.name || '').trim()
+        if (matchName) {
+          selectedCategoryName.value = matchName
+          selectedCategoryPath.value = matchName
+          autoSelectedCatId.value = selected.catId || selected.catName || ''
+          autoCategoryMessage.value = candidates.length
+            ? '已根据封面图自动识别分类，可点击下方候选切换'
+            : '已根据封面图自动识别分类'
+          autoCategoryMsgType.value = 'success'
+        } else {
+          autoCategoryMessage.value = '自动分类返回了候选结果，但当前分类树无法应用，请手动选择分类'
+          autoCategoryMsgType.value = 'warn'
+        }
       }
     } else if (candidates.length) {
       autoCategoryMessage.value = '已识别候选分类，请点击选择'

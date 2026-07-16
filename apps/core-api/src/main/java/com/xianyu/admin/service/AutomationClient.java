@@ -586,7 +586,15 @@ public class AutomationClient {
         else if (status >= 500) status = 503;
         else if (status < 400 || status > 499) status = 502;
         String baseMsg = downstreamMessage(status);
-        String fullMsg = downstreamMsg.isEmpty() ? baseMsg : baseMsg + ": " + downstreamMsg;
+        // 业务拒绝（422）下游已经返回面向用户的中文原因（如"商品发布被平台拒绝：xxx"），
+        // 直接透传避免被"依赖服务暂时不可用"误导成服务故障；
+        // 仅当下游没有给出可读消息时才退回到通用 baseMsg。
+        String fullMsg;
+        if (status == 422 && !downstreamMsg.isEmpty()) {
+            fullMsg = downstreamMsg;
+        } else {
+            fullMsg = downstreamMsg.isEmpty() ? baseMsg : baseMsg + ": " + downstreamMsg;
+        }
         log.warn("下游服务返回业务错误, code={}, status={}, downstreamMsg={}", code, status, downstreamMsg);
         throw new BizException(status, fullMsg);
     }

@@ -630,6 +630,10 @@ async def handle_captcha_for_account(
                 await update_solve_record(
                     solve_record_id, status="fail", result="slider_success",
                     error_message="Cookie Session 已过期，需重新扫码登录",
+                    retry_count=int(auto_solve_result.get("attempts") or 0),
+                    duration_ms=int(auto_solve_result.get("durationMs") or 0),
+                    screenshot_path=str(auto_solve_result.get("screenshotPath") or ""),
+                    engine="Playwright",
                 )
                 await broadcast_captcha_solve(
                     tenant_id, account_id, account_name,
@@ -670,8 +674,14 @@ async def handle_captcha_for_account(
                     )
 
                 # 更新求解记录为成功 + 广播成功事件
+                # 成功时不把 duration/screenshot 写入 error_message，避免前端误判为失败信息
                 await update_solve_record(
                     solve_record_id, status="success", result="slider_success",
+                    retry_count=int(auto_solve_result.get("attempts") or 0),
+                    engine="Playwright",
+                    error_message=(
+                        f"[durationMs={int(auto_solve_result.get('durationMs') or 0)}] 滑块求解成功"
+                    ),
                 )
                 await broadcast_captcha_solve(
                     tenant_id, account_id, account_name,
@@ -693,6 +703,10 @@ async def handle_captcha_for_account(
             await update_solve_record(
                 solve_record_id, status="fail", result="slider_fail",
                 error_message=error_msg,
+                retry_count=int(auto_solve_result.get("attempts") or 0),
+                duration_ms=int(auto_solve_result.get("durationMs") or 0),
+                screenshot_path=str(auto_solve_result.get("screenshotPath") or ""),
+                engine="Playwright",
             )
             await broadcast_captcha_solve(
                 tenant_id, account_id, account_name,

@@ -233,6 +233,86 @@ POLISH_ALREADY_DONE = "FAIL_BIZ_IDLEITEM_POLISH_AGAIN"
 # 擦亮接口其他可视为软成功的业务码（如冷却中）
 POLISH_SOFT_SUCCESS_MARKERS = (POLISH_ALREADY_DONE,)
 
+# 闲鱼发布 API 常见业务错误码 → 中文友好提示
+# 用于把 ret_msg 中的 FAIL_XXX::描述 翻译成用户能看懂的原因
+PUBLISH_REJECT_CODE_MAP = {
+    "FAIL_BIZ_ITEM_PICTURE_VIOLATION": "商品图片涉嫌违规（涉黄/涉暴/涉政/水印等）",
+    "FAIL_BIZ_ITEM_TITLE_VIOLATION": "商品标题含有违禁词或敏感词",
+    "FAIL_BIZ_ITEM_DESC_VIOLATION": "商品描述含有违禁词或敏感词",
+    "FAIL_BIZ_ITEM_TITLE_REQUIRED": "商品标题不能为空",
+    "FAIL_BIZ_ITEM_DESC_REQUIRED": "商品描述不能为空",
+    "FAIL_BIZ_ITEM_PRICE_REQUIRED": "商品价格不能为空",
+    "FAIL_BIZ_ITEM_PRICE_INVALID": "商品价格异常，请检查价格区间",
+    "FAIL_BIZ_ITEM_IMAGE_REQUIRED": "请至少上传一张商品图片",
+    "FAIL_BIZ_ITEM_EDIT_INVALID_MAP_LOCATION": "发布地址信息不完整，请补全省市区、GPS 和 POI 信息",
+    "FAIL_BIZ_ITEM_CATEGORY_NOT_MATCH": "商品分类与内容不匹配，请重新选择分类",
+    "FAIL_BIZ_ITEM_CATEGORY_INVALID": "商品分类无效，请重新选择",
+    "FAIL_BIZ_ITEM_QUANTITY_INVALID": "商品库存数量异常",
+    "FAIL_BIZ_USER_NOT_LOGIN": "闲鱼登录已失效，请重新扫码登录",
+    "FAIL_BIZ_USER_BAN_PUBLISH": "账号被限制发布，请到闲鱼 App 查看账号状态",
+    "FAIL_BIZ_USER_PUBLISH_LIMIT": "今日发布数量已达上限，请明天再试",
+    "FAIL_BIZ_ITEM_DUPLICATE": "检测到重复发布相同商品，请修改后重试",
+    "FAIL_BIZ_ITEM_RISK_CONTENT": "商品内容被风控判定为风险内容",
+    "FAIL_BIZ_ITEM_BRAND_VIOLATION": "商品涉嫌品牌侵权，请修改后重试",
+    "FAIL_BIZ_ITEM_FAKE_VIOLATION": "商品涉嫌售假，请修改后重试",
+    "FAIL_SYS_USER_VALIDATE": "触发了闲鱼安全验证，请稍后重试或在闲鱼 App 中完成验证",
+    "FAIL_SYS_PARAM_ERROR": "请求参数有误，请检查商品信息后重试",
+    "FAIL_SYS_ILLEGAL_ACCESS": "访问被拒绝，请稍后重试",
+    "FAIL_SYS_API_NOT_FOUNDED": "闲鱼接口已下线，请联系管理员",
+}
+
+
+def _explain_publish_rejection(ret_msg: str, data: object) -> str:
+    """把闲鱼发布接口返回的 ret_msg 翻译成用户能看懂的中文原因。
+
+    ret 格式通常为 ``"FAIL_XXX::中文描述"``，也可能仅为 ``"FAIL_XXX"``。
+    当无法识别错误码时，至少把原始描述透传出来，避免前端只看到"平台暂未接受该商品"。
+
+    Args:
+        ret_msg: 闲鱼 ret 数组首项
+        data: 闲鱼 data 字段，可能携带额外 subMsg / message
+
+    Returns:
+        用户可读的中文错误说明
+    """
+    raw = str(ret_msg or "").strip()
+    # 提取错误码与平台描述：FAIL_XXX::desc 或 FAIL_XXX[]::desc
+    code_part = raw
+    desc_part = ""
+    if "::" in raw:
+        code_part, _, desc_part = raw.partition("::")
+        code_part = code_part.strip()
+        desc_part = desc_part.strip()
+    # 兼容形如 "FAIL_XXX[xxx]" 的带参错误码
+    code_key = code_part.split("[", 1)[0].strip()
+
+    # data 里偶尔会带更具体的 subMsg / message / msg
+    extra_desc = ""
+    if isinstance(data, dict):
+        for k in ("subMsg", "message", "msg", "errorMessage"):
+            v = data.get(k)
+            if isinstance(v, str) and v.strip():
+                extra_desc = v.strip()
+                break
+
+    friendly = PUBLISH_REJECT_CODE_MAP.get(code_key)
+    parts = ["商品发布被平台拒绝"]
+    if friendly:
+        parts.append(friendly)
+    elif desc_part:
+        parts.append(desc_part)
+    elif extra_desc:
+        parts.append(extra_desc)
+    else:
+        parts.append("平台暂未接受该商品，请检查内容后重试")
+    msg = "：".join(parts[:2])
+
+    # 末尾附原始错误码便于排查（仅当代码能识别时）
+    if code_key and code_key not in ("None", "", "[]"):
+        msg = f"{msg}（错误码：{code_key}）"
+    return msg
+
+
 # 搜索 API 常量（用于商品获取节点和商机发掘页面）
 SEARCH_MTOP_API = "mtop.taobao.idlemtopsearch.pc.search"
 
@@ -2783,9 +2863,14 @@ class XianyuItemPublisher:
             level=logging.WARNING,
             error_type="ProviderRejected",
         )
+        # 闲鱼返回的 ret 格式通常为 "FAIL_XXX::中文描述"，把真实原因带给上层
+        # 避免前端只看到"平台暂未接受该商品"而不知具体违规点
+        friendly = _explain_publish_rejection(ret_msg, result.get("data"))
+        logger.warning("商品发布被平台拒绝 ret=%s data=%s", ret_msg, result.get("data"))
         return {
             "success": False,
             "itemId": "",
             "errorCode": "PUBLISH_PROVIDER_REJECTED",
-            "message": "平台暂未接受该商品，请检查内容后重试",
+            "message": friendly,
+            "retMsg": ret_msg,
         }

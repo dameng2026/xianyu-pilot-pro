@@ -784,7 +784,8 @@ async def publish_item(
                 "商品发布失败: account_id=%s, title=%s, error=%s",
                 account_id, title, result.get("message", "")
             )
-            return ResultObject.failed(result.get("message", "发布失败"))
+            # 业务拒绝用 422 与服务故障 500 区分，便于 Java 网关给出精准提示
+            return ResultObject.failed(result.get("message", "发布失败"), code=422)
 
     except RuntimeError as e:
         return safe_route_failure(logger, e, operation="publish goods runtime", user_message="商品发布失败，请稍后重试")

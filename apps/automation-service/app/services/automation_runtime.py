@@ -202,7 +202,7 @@ _PUBLIC_RUNTIME_ERRORS: dict[str, str] = {
     "PUBLISH_CONTENT_INVALID": "商品标题或描述不完整，已阻止发布",
     "PUBLISH_ACCOUNT_UNAVAILABLE": "发布账号登录状态不可用，请重新登录",
     "PUBLISH_DUPLICATE": "该商品已发布过，已跳过重复发布",
-    "PUBLISH_PROVIDER_REJECTED": "平台暂未接受该商品，请检查内容后重试",
+    "PUBLISH_PROVIDER_REJECTED": "商品发布被平台拒绝，请根据具体原因修改后重试",
     "PUBLISH_RUNTIME_ERROR": "商品发布异常，请稍后重试",
     "IMAGE_ADDRESS_REQUIRED": "请先选择完整的商品发布地址",
     "IMAGE_PROVIDER_FAILED": "AI 封面图生成失败，请稍后重试",
@@ -6943,6 +6943,8 @@ async def _publish_single_item(
             }
         else:
             logger.warning("runtimeFailure operation=publish_single_item errorType=ProviderRejected requestId=%s", get_request_id() or "-")
+            # 透传 publisher 返回的真实原因（已包含 ret_msg 翻译），避免丢失排障信息
+            reject_msg = result.get("message") or "平台暂未接受该商品，请检查内容后重试"
             return {
                 "goods_id": "",
                 "title": title,
@@ -6950,7 +6952,7 @@ async def _publish_single_item(
                 "platform": platform,
                 "status": "failed",
                 "errorCode": "PUBLISH_PROVIDER_REJECTED",
-                "error": "平台暂未接受该商品，请检查内容后重试",
+                "error": reject_msg,
                 "account_id": acct_id,
                 "category": category,
                 "source_item_id": source_item_id,
@@ -9153,12 +9155,14 @@ async def _execute_workflow_node(
                         except Exception as exc:
                             _log_runtime_failure("persist_publish_timing", exc)
                     else:
+                        # 透传 publisher 返回的真实原因（已包含 ret_msg 翻译）
+                        reject_msg = result.get("message") or "平台暂未接受该商品，请检查内容后重试"
                         publish_results.append({
                             "goods_id": "",
                             "title": title, "image_url": img_url,
                             "platform": platform,
                             "status": "failed", "errorCode": "PUBLISH_PROVIDER_REJECTED",
-                            "error": "平台暂未接受该商品，请检查内容后重试",
+                            "error": reject_msg,
                             "account_id": acct_id, "category": category,
                             "source_item_id": source_item_id,
                         })

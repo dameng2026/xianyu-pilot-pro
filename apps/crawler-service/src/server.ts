@@ -721,8 +721,8 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
           cookieStr,
           targetUrl: safeTargetUrl,
           headless: resolvedHeadless,
-          maxRetries: Math.max(1, Math.min(Number(maxRetries) || 3, 5)),
-          timeoutMs: Math.max(5000, Math.min(Number(timeoutMs) || 30000, 120000)),
+          maxRetries: Math.max(1, Math.min(Number(maxRetries) || 5, 8)),
+          timeoutMs: Math.max(5000, Math.min(Number(timeoutMs) || 90000, 180000)),
         });
       } finally {
         releaseBrowser();

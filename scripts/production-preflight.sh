@@ -117,12 +117,6 @@ required=(
   ADMIN_JWT_SECRET
   COOKIE_CRYPTO_SECRET
   INTERNAL_API_TOKEN
-  OPS_METRICS_TOKEN
-  OPS_METRICS_TOKEN_FILE
-  ALERTMANAGER_WEBHOOK_URL_FILE
-  MONITORING_SECRET_GID
-  GRAFANA_ADMIN_PASSWORD_FILE
-  GRAFANA_ROOT_URL
   IMAGE_PROXY_ALLOWED_HOSTS
   AI_PROVIDER_ALLOWED_HOSTS
   JWT_EXPIRE_SECONDS
@@ -143,6 +137,7 @@ required=(
   BACKEND_PORT
   USER_WEB_PORT
   ADMIN_WEB_PORT
+  MONITORING_ENABLED
   MYSQL_MEMORY_LIMIT_BYTES
   MYSQL_CPUS
   MYSQL_PIDS_LIMIT
@@ -173,6 +168,16 @@ required=(
   ADMIN_WEB_MEMORY_LIMIT_BYTES
   ADMIN_WEB_CPUS
   ADMIN_WEB_PIDS_LIMIT
+)
+
+# Monitoring-specific keys are only required when MONITORING_ENABLED=true.
+required_monitoring=(
+  OPS_METRICS_TOKEN
+  OPS_METRICS_TOKEN_FILE
+  ALERTMANAGER_WEBHOOK_URL_FILE
+  MONITORING_SECRET_GID
+  GRAFANA_ADMIN_PASSWORD_FILE
+  GRAFANA_ROOT_URL
   BLACKBOX_MEMORY_LIMIT_BYTES
   BLACKBOX_CPUS
   BLACKBOX_PIDS_LIMIT
@@ -197,6 +202,22 @@ for required_key in "${required[@]}"; do
   export "$required_key"
   ok "$required_key is present"
 done
+
+# Validate MONITORING_ENABLED and conditionally enforce monitoring requirements.
+if [[ "$MONITORING_ENABLED" != "true" && "$MONITORING_ENABLED" != "false" ]]; then
+  fail "MONITORING_ENABLED must be 'true' or 'false'"
+fi
+if [[ "$MONITORING_ENABLED" == "true" ]]; then
+  for required_key in "${required_monitoring[@]}"; do
+    value="${loaded_env_values[$required_key]:-}"
+    [[ -n "$value" ]] || fail "Required variable $required_key is empty (MONITORING_ENABLED=true)"
+    printf -v "$required_key" '%s' "$value"
+    export "$required_key"
+    ok "$required_key is present"
+  done
+else
+  ok "Monitoring disabled (MONITORING_ENABLED=false); skipping monitoring keys"
+fi
 
 for identity_key in MYSQL_APP_USER CRAWLER_DB_USER CRAWLER_DB; do
   identity_value="${!identity_key}"
@@ -274,27 +295,31 @@ read_monitoring_secret_file() {
   printf -v "$output_name" '%s' "$value"
 }
 
-[[ "$MONITORING_SECRET_GID" =~ ^[1-9][0-9]{2,4}$ ]] \
-  || fail "MONITORING_SECRET_GID must be a canonical numeric dedicated group between 100 and 65533"
-if (( MONITORING_SECRET_GID < 100 || MONITORING_SECRET_GID > 65533 )); then
-  fail "MONITORING_SECRET_GID must be a canonical numeric dedicated group between 100 and 65533"
-fi
 metrics_token_file_value=""
 incident_webhook_url=""
 grafana_admin_password=""
-read_monitoring_secret_file "OPS_METRICS_TOKEN_FILE" "$OPS_METRICS_TOKEN_FILE" metrics_token_file_value
-read_monitoring_secret_file "ALERTMANAGER_WEBHOOK_URL_FILE" "$ALERTMANAGER_WEBHOOK_URL_FILE" incident_webhook_url
-read_monitoring_secret_file "GRAFANA_ADMIN_PASSWORD_FILE" "$GRAFANA_ADMIN_PASSWORD_FILE" grafana_admin_password
-[[ "$metrics_token_file_value" == "$OPS_METRICS_TOKEN" ]] || fail "OPS_METRICS_TOKEN_FILE does not match OPS_METRICS_TOKEN"
-[[ "$incident_webhook_url" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[^[:space:]]*)?$ ]] \
-  || fail "ALERTMANAGER_WEBHOOK_URL_FILE must contain one credential-free HTTPS URL"
-[[ "$grafana_admin_password" =~ ^[A-Za-z0-9._~+/=-]{32,}$ ]] \
-  || fail "GRAFANA_ADMIN_PASSWORD_FILE must contain at least 32 URL-safe ASCII characters"
-[[ "$grafana_admin_password" != "$metrics_token_file_value" ]] \
-  || fail "Grafana and metrics credentials must be distinct"
-[[ "$GRAFANA_ROOT_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[^[:space:]]*)?$ ]] \
-  || fail "GRAFANA_ROOT_URL must be an explicit HTTPS URL"
-ok "Monitoring secret files and public Grafana URL passed"
+if [[ "$MONITORING_ENABLED" == "true" ]]; then
+  [[ "$MONITORING_SECRET_GID" =~ ^[1-9][0-9]{2,4}$ ]] \
+    || fail "MONITORING_SECRET_GID must be a canonical numeric dedicated group between 100 and 65533"
+  if (( MONITORING_SECRET_GID < 100 || MONITORING_SECRET_GID > 65533 )); then
+    fail "MONITORING_SECRET_GID must be a canonical numeric dedicated group between 100 and 65533"
+  fi
+  read_monitoring_secret_file "OPS_METRICS_TOKEN_FILE" "$OPS_METRICS_TOKEN_FILE" metrics_token_file_value
+  read_monitoring_secret_file "ALERTMANAGER_WEBHOOK_URL_FILE" "$ALERTMANAGER_WEBHOOK_URL_FILE" incident_webhook_url
+  read_monitoring_secret_file "GRAFANA_ADMIN_PASSWORD_FILE" "$GRAFANA_ADMIN_PASSWORD_FILE" grafana_admin_password
+  [[ "$metrics_token_file_value" == "$OPS_METRICS_TOKEN" ]] || fail "OPS_METRICS_TOKEN_FILE does not match OPS_METRICS_TOKEN"
+  [[ "$incident_webhook_url" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[^[:space:]]*)?$ ]] \
+    || fail "ALERTMANAGER_WEBHOOK_URL_FILE must contain one credential-free HTTPS URL"
+  [[ "$grafana_admin_password" =~ ^[A-Za-z0-9._~+/=-]{32,}$ ]] \
+    || fail "GRAFANA_ADMIN_PASSWORD_FILE must contain at least 32 URL-safe ASCII characters"
+  [[ "$grafana_admin_password" != "$metrics_token_file_value" ]] \
+    || fail "Grafana and metrics credentials must be distinct"
+  [[ "$GRAFANA_ROOT_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[^[:space:]]*)?$ ]] \
+    || fail "GRAFANA_ROOT_URL must be an explicit HTTPS URL"
+  ok "Monitoring secret files and public Grafana URL passed"
+else
+  ok "Monitoring disabled; skipping monitoring secret file checks"
+fi
 
 [[ "$DATABASE_MIGRATION_EVIDENCE_FILE" = /* ]] || fail "DATABASE_MIGRATION_EVIDENCE_FILE must be an absolute operator-owned path"
 if [[ -n "$EXPECTED_MIGRATION_EVIDENCE_SHA256" ]]; then
@@ -328,15 +353,21 @@ ok "Migration manifest and recovery evidence passed"
 declare -A seen_production_credentials=()
 for credential_key in \
   MYSQL_ROOT_PASSWORD MYSQL_APP_PASSWORD CRAWLER_DB_PASSWORD REDIS_PASSWORD \
-  ADMIN_JWT_SECRET COOKIE_CRYPTO_SECRET INTERNAL_API_TOKEN OPS_METRICS_TOKEN; do
+  ADMIN_JWT_SECRET COOKIE_CRYPTO_SECRET INTERNAL_API_TOKEN; do
   credential_value="${!credential_key}"
   [[ -z "${seen_production_credentials[$credential_value]+x}" ]] \
     || fail "Production credentials must be distinct"
   seen_production_credentials[$credential_value]=1
 done
-[[ -z "${seen_production_credentials[$grafana_admin_password]+x}" ]] \
-  || fail "Production credentials must be distinct"
-seen_production_credentials[$grafana_admin_password]=1
+if [[ "$MONITORING_ENABLED" == "true" ]]; then
+  credential_value="${OPS_METRICS_TOKEN}"
+  [[ -z "${seen_production_credentials[$credential_value]+x}" ]] \
+    || fail "Production credentials must be distinct"
+  seen_production_credentials[$credential_value]=1
+  [[ -z "${seen_production_credentials[$grafana_admin_password]+x}" ]] \
+    || fail "Production credentials must be distinct"
+  seen_production_credentials[$grafana_admin_password]=1
+fi
 ok "Production credential separation passed"
 
 for key in ADMIN_CORS_ALLOWED_ORIGINS USER_CORS_ALLOWED_ORIGINS CRAWLER_CORS_ALLOWED_ORIGINS; do

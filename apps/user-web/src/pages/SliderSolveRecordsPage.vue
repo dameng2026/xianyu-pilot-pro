@@ -72,6 +72,7 @@
         <div class="option-line"><span>记录时间</span><b>{{ formatDateTime(detail.createdAt) }}</b></div>
         <div class="option-line"><span>更新时间</span><b>{{ formatDateTime(detail.updatedAt) }}</b></div>
         <div class="option-line"><span>事件描述</span><b>{{ detail.eventDesc || '-' }}</b></div>
+        <div class="option-line"><span>耗时</span><b>{{ formatDuration(detail.errorMessage) }}</b></div>
         <div class="option-line option-line-block">
           <span>开启原因</span>
           <div class="option-content">{{ detail.openReason || '-' }}</div>
@@ -80,9 +81,17 @@
           <span>求解原因</span>
           <div class="option-content">{{ detail.solveReason || '-' }}</div>
         </div>
+        <div v-if="extractScreenshot(detail.errorMessage)" class="option-line option-line-block">
+          <span>调试截图</span>
+          <div class="option-content mono">{{ extractScreenshot(detail.errorMessage) }}</div>
+        </div>
         <div v-if="detail.status === 'fail'" class="error-message">
           <div class="error-message-head">失败原因</div>
-          <pre class="error-message-body">{{ detail.errorMessage || (detail.result === 'slider_success' ? '滑块已通过但 Cookie Session 已过期，需重新扫码登录' : '滑块验证未通过') }}</pre>
+          <pre class="error-message-body">{{ stripMeta(detail.errorMessage) || (detail.result === 'slider_success' ? '滑块已通过但 Cookie Session 已过期，需重新扫码登录' : '滑块验证未通过') }}</pre>
+        </div>
+        <div v-else-if="detail.status === 'success' && stripMeta(detail.errorMessage)" class="option-line option-line-block">
+          <span>备注</span>
+          <div class="option-content">{{ stripMeta(detail.errorMessage) }}</div>
         </div>
       </template>
       <EmptyState v-else icon="🧩" title="选择记录查看详情" description="点击左侧列表中的任意一行，这里会展示该滑块求解记录的完整信息。" />
@@ -162,6 +171,26 @@ function triggerSceneText(scene) {
 function formatDateTime(value) {
   if (!value) return '-'
   return String(value).replace('T', ' ').replace(/\.\d+$/, '').slice(0, 19)
+}
+
+/** 从 error_message 元数据前缀解析 durationMs */
+function formatDuration(errorMessage) {
+  const m = String(errorMessage || '').match(/durationMs=(\d+)/i)
+  if (!m) return '-'
+  const ms = Number(m[1])
+  if (!Number.isFinite(ms) || ms < 0) return '-'
+  if (ms < 1000) return `${ms} ms`
+  return `${(ms / 1000).toFixed(1)} s`
+}
+
+function extractScreenshot(errorMessage) {
+  const m = String(errorMessage || '').match(/screenshot=([^\s\]]+)/i)
+  return m ? m[1] : ''
+}
+
+function stripMeta(errorMessage) {
+  if (!errorMessage) return ''
+  return String(errorMessage).replace(/^\[[^\]]*\]\s*/, '').trim()
 }
 
 async function load() {

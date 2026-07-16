@@ -238,6 +238,7 @@ function resolveHeadlessMode(headless?: boolean): boolean {
 export function parseCookieString(cookieStr: string, domain: string = '.goofish.com'): Cookie[] {
   if (!cookieStr) return [];
   const cookies: Cookie[] = [];
+  const expires = Math.floor(Date.now() / 1000) + 30 * 24 * 3600;
   for (const part of cookieStr.split(';')) {
     const trimmed = part.trim();
     if (!trimmed) continue;
@@ -245,19 +246,51 @@ export function parseCookieString(cookieStr: string, domain: string = '.goofish.
     if (eqIdx <= 0) continue;
     const name = trimmed.substring(0, eqIdx).trim();
     const value = trimmed.substring(eqIdx + 1).trim();
-    if (!name || !value) continue;
+    if (!name) continue;
     cookies.push({
       name,
       value,
       domain,
       path: '/',
-      expires: -1,
+      expires,
       httpOnly: false,
       secure: true,
       sameSite: 'Lax',
     } as Cookie);
   }
   return cookies;
+}
+
+async function exportContextCookies(context: any): Promise<string | undefined> {
+  try {
+    const cookies: Cookie[] = await context.cookies();
+    if (!cookies?.length) return undefined;
+    // 仅导出 goofish 相关域，避免把 Cookie 复制到无关域
+    const goofishCookies = cookies.filter((c) => {
+      const d = (c.domain || '').replace(/^\./, '');
+      return d === 'goofish.com' || d.endsWith('.goofish.com') || d === 'www.goofish.com';
+    });
+    const list = goofishCookies.length ? goofishCookies : cookies;
+    return list
+      .filter((c) => c.name)
+      .map((c) => `${c.name}=${c.value ?? ''}`)
+      .join('; ');
+  } catch {
+    return undefined;
+  }
+}
+
+async function saveDebugScreenshot(page: Page, label: string): Promise<string | undefined> {
+  try {
+    const debugDir = path.join(process.cwd(), 'screenshots');
+    await fs.mkdir(debugDir, { recursive: true });
+    const file = path.join(debugDir, `${label}-${Date.now()}.png`);
+    await page.screenshot({ path: file, fullPage: false });
+    console.log(`[SliderSolver] 截图: ${file}`);
+    return file;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -355,7 +388,8 @@ async function getSliderInfo(frame: any): Promise<{ button: any; trackWidth: num
       if (track) {
         const trackBox = await track.boundingBox();
         if (trackBox && trackBox.width > 0) {
-          trackWidth = trackBox.width - box.width;
+          // 可拖动距离 = 轨道宽 - 按钮宽；钳制到常见区间，避免过冲不足/过度
+          trackWidth = Math.max(180, Math.min(360, trackBox.width - box.width));
           break;
         }
       }
@@ -440,9 +474,27 @@ async function humanLikeDrag(
   const totalEstMs = steps * ((stepDelayMin + stepDelayMax) / 2) + pausePoints.length * pauseDurationMs;
   console.log(`[SliderSolver] 拖动策略: attempt=${attempt}, steps=${steps}, delay=${stepDelayMin}-${stepDelayMax}ms, pauses=${pausePoints.length}, 预计总时长≈${totalEstMs}ms`);
 
-  // 1. 先把鼠标移动到滑块按钮位置（真人会先把鼠标移到按钮上）
-  // 使用 page.mouse.move 生成真实鼠标事件（isTrusted=true）
-  await page.mouse.move(startX, startY, { steps: 5 });
+  // 起点在按钮中心附近随机偏移，避免永远点死几何中心
+  const actualStartX = startX + (Math.random() - 0.5) * 8;
+  const actualStartY = startY + (Math.random() - 0.5) * 6;
+
+  // 1. 接近轨迹：从按钮附近随机点移入（非瞬移到按钮中心）
+  const approachAngle = Math.random() * Math.PI * 2;
+  const approachDist = 40 + Math.random() * 80;
+  const approachX = actualStartX + Math.cos(approachAngle) * approachDist;
+  const approachY = actualStartY + Math.sin(approachAngle) * approachDist;
+  await page.mouse.move(approachX, approachY);
+  await page.waitForTimeout(80 + Math.random() * 120);
+  const approachSteps = 8 + Math.floor(Math.random() * 8);
+  for (let i = 1; i <= approachSteps; i++) {
+    const t = i / approachSteps;
+    const eased = t * t * (3 - 2 * t);
+    await page.mouse.move(
+      approachX + (actualStartX - approachX) * eased,
+      approachY + (actualStartY - approachY) * eased,
+    );
+    await page.waitForTimeout(12 + Math.random() * 25);
+  }
   // 移动到按钮后的"思考"停顿（100-250ms）
   await page.waitForTimeout(100 + Math.random() * 150);
 
@@ -452,15 +504,15 @@ async function humanLikeDrag(
   await page.waitForTimeout(80 + Math.random() * 100);
   // 按下后微小漂移（真人按下到开始拖动之间鼠标常有 1-2px 漂移，非完美静止）
   // 机器人特征：按下后完全静止直到开始拖动
-  await page.mouse.move(startX + (Math.random() - 0.5) * 3, startY + (Math.random() - 0.5) * 3, { steps: 1 });
+  await page.mouse.move(actualStartX + (Math.random() - 0.5) * 3, actualStartY + (Math.random() - 0.5) * 3, { steps: 1 });
   await page.waitForTimeout(30 + Math.random() * 50);
 
   // 3. 分多步拖动，使用不对称三阶段速度曲线（真人加速段短、匀速段长、减速段居中）
   let pauseIdx = 0;
-  let lastX = startX;
+  let lastX = actualStartX;
   // Y 惯性：保留上一步 Y 值，本步在其基础上小幅偏移，模拟手部运动的连续性
   // 真人相邻 Y 坐标有自相关性，而非每步独立随机
-  let lastY = startY;
+  let lastY = actualStartY;
   // 弧形 Y 基线方向（随机向上或向下），幅度 3-8px
   const arcDirection = Math.random() < 0.5 ? -1 : 1;
   const arcAmplitude = 3 + Math.random() * 5;
@@ -482,7 +534,7 @@ async function humanLikeDrag(
     }
     // 位移使用 ease-in-out 变体：起步更慢（progress^2.5），更接近真人初始犹豫
     const eased = Math.pow(progress, 2.5) / (Math.pow(progress, 2.5) + Math.pow(1 - progress, 2.5));
-    let targetX = startX + distance * eased;
+    let targetX = actualStartX + distance * eased;
 
     // 偶尔轻微回退（5%概率，模拟真人手抖回退，仅在滑动中段）
     if (Math.random() < 0.05 && i > 3 && i < steps - 3) {
@@ -495,8 +547,8 @@ async function humanLikeDrag(
     // 惯性：本步 Y 在上一步基础上小幅偏移（±3px），模拟手部连续运动
     const yDrift = (Math.random() - 0.5) * 6;
     let currentY = lastY + yDrift;
-    // 向弧形基线 + startY 拉回（避免 Y 漂移过大）
-    const targetY = startY + arcOffset;
+    // 向弧形基线 + actualStartY 拉回（避免 Y 漂移过大）
+    const targetY = actualStartY + arcOffset;
     currentY = currentY * 0.6 + targetY * 0.4;
     lastY = currentY;
 
@@ -531,9 +583,9 @@ async function humanLikeDrag(
   // 4. 终点过冲后回退（人类拖动常见行为：滑过头再退回来）
   await page.waitForTimeout(30 + Math.random() * 70);
   const overshoot = 5 + Math.random() * 8;  // 过冲 5-13px
-  await page.mouse.move(startX + distance + overshoot, startY + (Math.random() - 0.5) * 10, { steps: 2 });
+  await page.mouse.move(actualStartX + distance + overshoot, actualStartY + (Math.random() - 0.5) * 10, { steps: 2 });
   await page.waitForTimeout(50 + Math.random() * 80);
-  await page.mouse.move(startX + distance, startY + (Math.random() - 0.5) * 6, { steps: 2 });
+  await page.mouse.move(actualStartX + distance, actualStartY + (Math.random() - 0.5) * 6, { steps: 2 });
 
   // 5. 释放前微调（真人释放前常有 1-2 次微小位置修正，非完美静止释放）
   // 机器人特征：到达终点后立即释放；真人会有微小调整后再释放
@@ -543,7 +595,7 @@ async function humanLikeDrag(
     // 微小位置修正（±2px，模拟手指/手腕的微调）
     const adjustX = (Math.random() - 0.5) * 4;
     const adjustY = (Math.random() - 0.5) * 4;
-    await page.mouse.move(startX + distance + adjustX, startY + adjustY, { steps: 1 });
+    await page.mouse.move(actualStartX + distance + adjustX, actualStartY + adjustY, { steps: 1 });
   }
   // 释放前短暂停顿（50-120ms）
   await page.waitForTimeout(50 + Math.random() * 70);
@@ -1466,7 +1518,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
   try {
     const contextOptions: BrowserContextOptions = {
       viewport: { width: 1280, height: 800 },
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
       locale: 'zh-CN',
     };
 
@@ -1520,7 +1572,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
         const contexts = browser.contexts();
         context = contexts.length > 0 ? contexts[0] : await browser.newContext();
 
-        // 注入 Cookie
+        // 注入 Cookie（仅 goofish 域，符合安全契约）
         if (options.cookieStr) {
           const cookies = parseCookieString(options.cookieStr);
           await context.addCookies(cookies);
@@ -1745,13 +1797,17 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
             };
           }
           console.log('[SliderSolver] 确认无滑块，可能已通过验证或不需要验证');
-          return {
-            ok: true,
-            solved: true,
-            captchaDetected: false,
-            attempts,
-            durationMs: Date.now() - startTime,
-          };
+          {
+            const cookies = await exportContextCookies(context);
+            return {
+              ok: true,
+              solved: true,
+              captchaDetected: false,
+              attempts,
+              durationMs: Date.now() - startTime,
+              cookies,
+            };
+          }
         }
         console.log('[SliderSolver] 二次确认检测到弹窗，继续处理');
       }
@@ -1759,13 +1815,17 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       // 获取最终检测结果
       const detected = stable.detected ? stable : await detectCaptcha(page);
       if (!detected.detected) {
-        return {
-          ok: true,
-          solved: true,
-          captchaDetected: false,
-          attempts,
-          durationMs: Date.now() - startTime,
-        };
+        {
+          const cookies = await exportContextCookies(context);
+          return {
+            ok: true,
+            solved: true,
+            captchaDetected: false,
+            attempts,
+            durationMs: Date.now() - startTime,
+            cookies,
+          };
+        }
       }
 
       console.log(`[SliderSolver] 检测到滑块: selector=${detected.selector}`);
@@ -1863,6 +1923,10 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       const startY = buttonBox.y + buttonBox.height / 2;
 
       console.log(`[SliderSolver] 开始拖动滑块: startX=${startX}, distance=${trackWidth}, attempt=${attempt}`);
+      // 拖动前截图（视觉复盘）
+      await saveDebugScreenshot(page, `slider-pre-${attempt}`);
+      // 阅读弹窗的短暂停顿
+      await page.waitForTimeout(400 + Math.random() * 700);
       try {
         // 使用 page.mouse API 生成真实鼠标事件（isTrusted=true），对抗 Baxia 风控的合成事件检测
         // 传入 attempt 让每次重试使用不同的滑动速度和停顿策略，模拟真人滑动
@@ -1880,11 +1944,17 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       } catch (e: any) {
         lastError = '拖动滑块异常，请稍后重试';
         console.error(`[SliderSolver] operation=drag errorType=${safeErrorType(e)}`);
+        // 拖动异常同样重置会话，避免惩罚态残留
+        needReloadForRefresh = true;
+        needCooldownAfterHumanAction = true;
         continue;
       }
 
       // 等待验证结果
-      await page.waitForTimeout(2500);
+      await page.waitForTimeout(2000 + Math.random() * 1200);
+      // 拖动后截图
+      const postShot = await saveDebugScreenshot(page, `slider-post-${attempt}`);
+      if (postShot) screenshotPath = postShot;
 
       // 场景5/场景6：拖动后也检测"刷新/连接中断"弹窗（可能在滑动过程中弹出）
       if (await checkRefreshDialog(page)) {
@@ -1918,13 +1988,17 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
         }
 
         console.log('[SliderSolver] 滑块验证通过！');
-        return {
-          ok: true,
-          solved: true,
-          captchaDetected: true,
-          attempts,
-          durationMs: Date.now() - startTime,
-        };
+        {
+          const cookies = await exportContextCookies(context);
+          return {
+            ok: true,
+            solved: true,
+            captchaDetected: true,
+            attempts,
+            durationMs: Date.now() - startTime,
+            cookies,
+          };
+        }
       }
 
       // 场景2：滑动失败后检测"验证失败，点击框体重试"
@@ -1937,76 +2011,52 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
         await page.waitForTimeout(2500);
 
         // 场景5：点击重试后检测"刷新页面"小弹窗（多次失败后会出现）
-        // 检测到刷新弹窗后直接刷新页面，下一轮重新尝试滑块验证
         if (await checkRefreshDialog(page)) {
           if (refreshRetryCount < MAX_REFRESH_RETRIES) {
             refreshRetryCount++;
             console.log(
               `[SliderSolver] 检测到"刷新页面"小弹窗，将刷新页面重试 (${refreshRetryCount}/${MAX_REFRESH_RETRIES})`
             );
-            needReloadForRefresh = true;
-            // 刷新重试不消耗滑动配额，回退 attempt 计数
-            attempt--;
-            continue;
-          } else {
-            console.warn(`[SliderSolver] 刷新弹窗重试已达上限 (${MAX_REFRESH_RETRIES})`);
           }
         }
-
-        // 继续下一轮，waitForCaptchaStable 会处理新滑块的加载转圈
-        continue;
       }
 
-      // === 真人行动模拟：连续失败 N 次后，模拟真人"关闭弹窗→刷新页面→冷静期→重新尝试" ===
-      // 用户反馈：连续滑动失败后，真人会点击叉号关闭弹窗→刷新页面→等待页面加载完成不操作→再次滑动，成功率大幅提升
-      // 关键修复：真人行动必须优先于场景5的纯刷新，否则会被"刷新/连接中断"弹窗检测抢先触发，
-      //          导致只刷新不点叉号，且 attempt-- 回退使阈值永远无法达成
+      // === 失败后策略：同页连续失败会累积 Baxia 惩罚态 ===
+      // 关键：每次拖动失败后都彻底重置（关弹窗/清会话 + 从首页重开消息页），
+      // 而不是只在同页点"框体重试"。视觉复盘显示同页连续拖动几乎全是 error:xxx。
+      lastError = `第 ${attempt} 次拖动后未通过验证`;
+      console.warn(`[SliderSolver] ${lastError}，将重置页面会话后重试`);
+
       if (attempt >= HUMAN_ACTION_THRESHOLD && humanActionCount < MAX_HUMAN_ACTIONS) {
         humanActionCount++;
         console.log(
-          `[SliderSolver] 连续 ${attempt} 次失败，触发真人行动：关闭弹窗→刷新页面→冷静期→重新尝试 ` +
+          `[SliderSolver] 连续 ${attempt} 次失败，触发真人行动：关闭弹窗→刷新页面→冷静期 ` +
           `(${humanActionCount}/${MAX_HUMAN_ACTIONS})`
         );
-
-        // 步骤1：点击弹窗叉号关闭弹窗（模拟真人点击关闭按钮）
         const closed = await closeCaptchaDialog(page);
         if (closed) {
-          console.log(`[SliderSolver] 已关闭弹窗，等待页面变化（可能变空白）...`);
+          console.log(`[SliderSolver] 已关闭弹窗，等待页面变化...`);
           await page.waitForTimeout(1500);
         } else {
           console.log(`[SliderSolver] 未找到关闭按钮，直接刷新页面`);
         }
-
-        // 步骤2：刷新页面（复用 needReloadForRefresh 机制，从首页重新打开消息页）
-        // 步骤3：刷新完成后进入冷静期（在下一轮循环开头执行，不进行任何操作）
-        // 步骤4：冷静期结束后再重新尝试滑动
-        needReloadForRefresh = true;
-        needCooldownAfterHumanAction = true;  // 标记下一轮刷新后需要冷静期
-        // 真人行动不消耗滑动配额，回退 attempt 计数，给后续滑动留配额
-        attempt--;
-        continue;
+        needCooldownAfterHumanAction = true;
+      } else {
+        // 常规失败：尽量关弹窗后重置
+        await closeCaptchaDialog(page).catch(() => false);
+        await page.waitForTimeout(400 + Math.random() * 600);
       }
 
-      // 场景5：滑动失败后也检测"刷新页面"小弹窗（可能不经过点击重试直接出现）
-      // 注意：此场景在真人行动之后，仅当未触发真人行动时才走纯刷新路径
-      if (await checkRefreshDialog(page)) {
-        if (refreshRetryCount < MAX_REFRESH_RETRIES) {
-          refreshRetryCount++;
-          console.log(
-            `[SliderSolver] 检测到"刷新页面"小弹窗，将刷新页面重试 (${refreshRetryCount}/${MAX_REFRESH_RETRIES})`
-          );
-          needReloadForRefresh = true;
-          // 刷新重试不消耗滑动配额，回退 attempt 计数
-          attempt--;
-          continue;
-        } else {
-          console.warn(`[SliderSolver] 刷新弹窗重试已达上限 (${MAX_REFRESH_RETRIES})`);
-        }
-      }
+      // 清理可能残留的本地失败计数（部分 Baxia 状态写在 storage）
+      try {
+        await page.evaluate(() => {
+          try { localStorage.clear(); } catch { /* ignore */ }
+          try { sessionStorage.clear(); } catch { /* ignore */ }
+        });
+      } catch { /* ignore */ }
 
-      lastError = `第 ${attempt} 次拖动后未通过验证`;
-      console.warn(`[SliderSolver] ${lastError}`);
-      await page.waitForTimeout(1500);
+      needReloadForRefresh = true;
+      await page.waitForTimeout(800 + Math.random() * 700);
     }
 
     // 所有重试都失败，截图保存
