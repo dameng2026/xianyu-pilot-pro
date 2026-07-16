@@ -55,29 +55,29 @@
           </ElTableColumn>
           <ElTableColumn label="普通用户" width="110" align="center">
             <template #default="{ row }">
-              <ElSwitch v-model="row.normal" :active-value="true" :inactive-value="false" inline-prompt active-text="开" inactive-text="关" @change="onLevelChange(row)" />
+              <ElSwitch v-model="row.normal" :active-value="true" :inactive-value="false" inline-prompt active-text="开" inactive-text="关" @change="onLevelChange(row as FeatureSwitchItem)" />
             </template>
           </ElTableColumn>
           <ElTableColumn label="VIP" width="110" align="center">
             <template #default="{ row }">
-              <ElSwitch v-model="row.vip" :active-value="true" :inactive-value="false" inline-prompt active-text="开" inactive-text="关" @change="onLevelChange(row)" />
+              <ElSwitch v-model="row.vip" :active-value="true" :inactive-value="false" inline-prompt active-text="开" inactive-text="关" @change="onLevelChange(row as FeatureSwitchItem)" />
             </template>
           </ElTableColumn>
           <ElTableColumn label="SVP" width="110" align="center">
             <template #default="{ row }">
-              <ElSwitch v-model="row.svp" :active-value="true" :inactive-value="false" inline-prompt active-text="开" inactive-text="关" @change="onLevelChange(row)" />
+              <ElSwitch v-model="row.svp" :active-value="true" :inactive-value="false" inline-prompt active-text="开" inactive-text="关" @change="onLevelChange(row as FeatureSwitchItem)" />
             </template>
           </ElTableColumn>
           <ElTableColumn label="全部" width="110" align="center">
             <template #default="{ row }">
               <ElSwitch
-                :model-value="isAllOn(row)"
+                :model-value="isAllOn(row as FeatureSwitchItem)"
                 :active-value="true"
                 :inactive-value="false"
                 inline-prompt
                 active-text="开"
                 inactive-text="关"
-                @change="(val: boolean) => onAllChange(row, val)"
+                @change="(val: boolean) => onAllChange(row as FeatureSwitchItem, val)"
               />
             </template>
           </ElTableColumn>
