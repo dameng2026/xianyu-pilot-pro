@@ -30,10 +30,180 @@ except ImportError:
     print("ERROR: playwright is not installed. Run: pip install playwright", file=sys.stderr)
     sys.exit(2)
 
-WINDOW_WIDTH = 1280
-WINDOW_HEIGHT = 800
+WINDOW_WIDTH = 1366
+WINDOW_HEIGHT = 768
 DEFAULT_TARGET_URL = "https://www.goofish.com/im"
 DEFAULT_MAX_RETRIES = 5
+
+# 人工在「自动化窗口」里拖也失败的根因：环境被标为机器人（非轨迹）。
+# 反检测脚本覆盖常见 CDP / webdriver / 指纹探针。
+STEALTH_INIT_SCRIPT = r"""
+(() => {
+  try {
+    // webdriver: 删除属性比返回 undefined 更难被 'in' 检测识破
+    try {
+      delete Object.getPrototypeOf(navigator).webdriver;
+    } catch (e) {}
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => undefined,
+      configurable: true,
+    });
+
+    // chrome 运行时
+    window.chrome = window.chrome || {};
+    window.chrome.runtime = window.chrome.runtime || {
+      OnInstalledReason: { INSTALL: 'install', UPDATE: 'update', CHROME_UPDATE: 'chrome_update', SHARED_MODULE_UPDATE: 'shared_module_update' },
+      PlatformOs: { WIN: 'win', MAC: 'mac', LINUX: 'linux', ANDROID: 'android' },
+      PlatformArch: { X86_64: 'x86-64', X86_32: 'x86-32', ARM: 'arm' },
+    };
+    window.chrome.csi = window.chrome.csi || (() => ({ startE: Date.now(), onloadT: Date.now(), pageT: Math.random() * 1000, tran: 15 }));
+    window.chrome.loadTimes = window.chrome.loadTimes || (() => ({
+      commitLoadTime: Date.now() / 1000 - 4,
+      connectionInfo: 'h2',
+      finishDocumentLoadTime: Date.now() / 1000 - 2,
+      finishLoadTime: Date.now() / 1000 - 1.5,
+      firstPaintAfterLoadTime: 0,
+      firstPaintTime: Date.now() / 1000 - 3,
+      navigationType: 'Other',
+      npnNegotiatedProtocol: 'h2',
+      requestTime: Date.now() / 1000 - 5,
+      startLoadTime: Date.now() / 1000 - 5,
+      wasAlternateProtocolAvailable: false,
+      wasFetchedViaSpdy: true,
+      wasNpnNegotiated: true,
+    }));
+
+    // plugins / mimeTypes 真实结构
+    const mkPlugin = (name, filename, description) => {
+      const p = { name, filename, description, length: 1 };
+      p[0] = { type: 'application/pdf', suffixes: 'pdf', description };
+      p.item = (i) => p[i] || null;
+      p.namedItem = (n) => (n === name ? p : null);
+      return p;
+    };
+    const pluginData = [
+      mkPlugin('PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format'),
+      mkPlugin('Chrome PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format'),
+      mkPlugin('Chromium PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format'),
+    ];
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => {
+        const arr = pluginData.slice();
+        arr.item = (i) => arr[i] || null;
+        arr.namedItem = (n) => arr.find(x => x.name === n) || null;
+        arr.refresh = () => {};
+        return arr;
+      },
+      configurable: true,
+    });
+
+    Object.defineProperty(navigator, 'languages', {
+      get: () => ['zh-CN', 'zh', 'en-US', 'en'],
+      configurable: true,
+    });
+    Object.defineProperty(navigator, 'language', {
+      get: () => 'zh-CN',
+      configurable: true,
+    });
+    Object.defineProperty(navigator, 'platform', {
+      get: () => 'Win32',
+      configurable: true,
+    });
+    Object.defineProperty(navigator, 'hardwareConcurrency', {
+      get: () => 8,
+      configurable: true,
+    });
+    Object.defineProperty(navigator, 'deviceMemory', {
+      get: () => 8,
+      configurable: true,
+    });
+    Object.defineProperty(navigator, 'maxTouchPoints', {
+      get: () => 0,
+      configurable: true,
+    });
+
+    // permissions 与 Notification 一致性
+    if (navigator.permissions && navigator.permissions.query) {
+      const orig = navigator.permissions.query.bind(navigator.permissions);
+      navigator.permissions.query = (params) => {
+        if (params && params.name === 'notifications') {
+          const state = (typeof Notification !== 'undefined' && Notification.permission) || 'default';
+          return Promise.resolve({ state, onchange: null });
+        }
+        return orig(params);
+      };
+    }
+
+    // WebGL vendor（避免 SwiftShader）
+    const patchWebGL = (proto) => {
+      if (!proto || !proto.getParameter) return;
+      const orig = proto.getParameter;
+      proto.getParameter = function(param) {
+        if (param === 37445) return 'Google Inc. (NVIDIA)';
+        if (param === 37446) return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER Direct3D11 vs_5_0 ps_5_0)';
+        return orig.call(this, param);
+      };
+    };
+    patchWebGL(WebGLRenderingContext && WebGLRenderingContext.prototype);
+    if (typeof WebGL2RenderingContext !== 'undefined') {
+      patchWebGL(WebGL2RenderingContext.prototype);
+    }
+
+    // 隐藏 cdc_ / $cdc_ / __playwright / __pw
+    const kill = (obj) => {
+      try {
+        Object.keys(obj).forEach((k) => {
+          if (/^cdc_|\$cdc_|__playwright|__pw_/.test(k)) {
+            try { delete obj[k]; } catch (e) {}
+          }
+        });
+      } catch (e) {}
+    };
+    kill(window);
+    kill(document);
+
+    // iframe 内容也尽量补 webdriver（同源）
+    const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver');
+    if (desc) {
+      Object.defineProperty(Navigator.prototype, 'webdriver', {
+        get: () => undefined,
+        configurable: true,
+      });
+    }
+  } catch (e) {}
+})();
+"""
+
+
+def get_chrome_user_agent(chrome_path: str) -> str:
+    """UA 主版本尽量匹配本机 Chrome，避免 Client Hints 与 UA 不一致。"""
+    ver = "131.0.0.0"
+    try:
+        # Windows: 从 chrome.exe 旁 Version 目录推断，或用 --version
+        import re as _re
+        out = subprocess.run(
+            [chrome_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        m = _re.search(r"(\d+)\.(\d+)\.(\d+)\.(\d+)", (out.stdout or "") + (out.stderr or ""))
+        if m:
+            ver = m.group(0)
+        else:
+            # File version style 146.0.7680.76
+            parent = os.path.dirname(chrome_path)
+            for name in os.listdir(parent):
+                if _re.match(r"^\d+\.\d+\.\d+\.\d+$", name):
+                    ver = name
+                    break
+    except Exception:
+        pass
+    return (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        f"(KHTML, like Gecko) Chrome/{ver} Safari/537.36"
+    )
 
 BAXIA_CONTAINER_SELECTORS = [
     "#nc_1",
@@ -94,6 +264,141 @@ def find_chrome_path() -> Optional[str]:
     return None
 
 
+# ---------- 全自动：全局单飞锁（防止多账号同时开浏览器互相踩风控）----------
+_SOLVE_LOCK_PATH = os.path.join(os.environ.get("TEMP") or "/tmp", "xya-slider-solve.lock")
+_SEED_PROFILE_DIR = os.path.join(os.environ.get("TEMP") or "/tmp", "xya-slider-seed-v2")
+
+
+class _FileLock:
+    """跨进程文件锁，保证全自动滑块同一时刻只跑 1 个浏览器。"""
+
+    def __init__(self, path: str, timeout: float = 300.0):
+        self.path = path
+        self.timeout = timeout
+        self._fh = None
+
+    def __enter__(self):
+        import msvcrt  # Windows
+
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        self._fh = open(self.path, "a+b")
+        start = time.time()
+        while True:
+            try:
+                msvcrt.locking(self._fh.fileno(), msvcrt.LK_NBLCK, 1)
+                return self
+            except OSError:
+                if time.time() - start > self.timeout:
+                    raise TimeoutError(f"等待滑块全局锁超时: {self.path}")
+                time.sleep(0.5)
+
+    def __exit__(self, *args):
+        try:
+            import msvcrt
+
+            if self._fh:
+                try:
+                    self._fh.seek(0)
+                    msvcrt.locking(self._fh.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+                self._fh.close()
+        except Exception:
+            pass
+
+
+def _ignore_chrome_lock_files(dirpath: str, names: list[str]) -> list[str]:
+    ignore = set()
+    for n in names:
+        ln = n.lower()
+        if ln in {
+            "singletonlock",
+            "singletoncookie",
+            "singletonsocket",
+            "lockfile",
+            "runningchromeversion",
+        } or ln.endswith(".lock"):
+            ignore.add(n)
+        # 体积大且无助于指纹的缓存可跳过
+        if ln in {"cache", "code cache", "gpu cache", "service worker", "shadercache"}:
+            ignore.add(n)
+    return list(ignore)
+
+
+def prepare_profile_dir(dest: str) -> str:
+    """准备浏览器配置目录：优先克隆预热 seed，避免空 profile 被秒杀。"""
+    if os.path.exists(dest):
+        shutil.rmtree(dest, ignore_errors=True)
+    os.makedirs(dest, exist_ok=True)
+
+    seed = _SEED_PROFILE_DIR
+    seed_default = os.path.join(seed, "Default")
+    if os.path.isdir(seed_default):
+        try:
+            shutil.copytree(seed, dest, dirs_exist_ok=True, ignore=_ignore_chrome_lock_files)
+            log(f"已克隆预热 profile: {seed} -> {dest}")
+            return dest
+        except Exception as e:
+            log(f"克隆 seed profile 失败，使用空目录: {e}")
+            shutil.rmtree(dest, ignore_errors=True)
+            os.makedirs(dest, exist_ok=True)
+    return dest
+
+
+async def ensure_seed_profile(playwright, chrome_path: str, ua: str) -> None:
+    """首次全自动运行时预热 seed：访问闲鱼首页生成真实 LocalStorage/站点数据。"""
+    seed = _SEED_PROFILE_DIR
+    marker = os.path.join(seed, ".xya_seed_ready")
+    if os.path.isfile(marker):
+        return
+    log(f"=== 预热 seed Chrome 配置（全自动，仅首次）: {seed} ===")
+    if os.path.exists(seed):
+        shutil.rmtree(seed, ignore_errors=True)
+    os.makedirs(seed, exist_ok=True)
+    ctx = None
+    try:
+        ctx = await playwright.chromium.launch_persistent_context(
+            seed,
+            headless=False,
+            executable_path=chrome_path,
+            viewport={"width": WINDOW_WIDTH, "height": WINDOW_HEIGHT},
+            locale="zh-CN",
+            timezone_id="Asia/Shanghai",
+            user_agent=ua,
+            ignore_default_args=["--enable-automation"],
+            args=[
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-blink-features=AutomationControlled",
+                f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}",
+                "--lang=zh-CN",
+            ],
+        )
+        await ctx.add_init_script(STEALTH_INIT_SCRIPT)
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        await page.goto("https://www.goofish.com/", wait_until="domcontentloaded", timeout=45000)
+        await asyncio.sleep(2.5 + random.random() * 2)
+        try:
+            await page.mouse.wheel(0, 400)
+        except Exception:
+            pass
+        await asyncio.sleep(1.5)
+        await page.goto("https://www.goofish.com/im", wait_until="domcontentloaded", timeout=45000)
+        await asyncio.sleep(2.0)
+        await ctx.close()
+        ctx = None
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write(str(int(time.time())))
+        log("seed profile 预热完成")
+    except Exception as e:
+        log(f"seed profile 预热失败（可继续）: {e}")
+        try:
+            if ctx:
+                await ctx.close()
+        except Exception:
+            pass
+
+
 def parse_cookie_string(cookie_str: str, domain: str = ".goofish.com") -> list[dict]:
     """解析 Cookie；设置 30 天过期，便于持久化。"""
     expires_future = int(time.time()) + 30 * 24 * 3600
@@ -124,6 +429,226 @@ def parse_cookie_string(cookie_str: str, domain: str = ".goofish.com") -> list[d
     return cookies
 
 
+def _win_dpi_scale() -> float:
+    """CSS 像素 -> 物理像素比例（高 DPI 下 OS 鼠标坐标关键）。"""
+    if sys.platform != "win32":
+        return 1.0
+    try:
+        import ctypes
+
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+        try:
+            dpi = int(ctypes.windll.user32.GetDpiForSystem())
+            return max(1.0, dpi / 96.0)
+        except Exception:
+            return 1.0
+    except Exception:
+        return 1.0
+
+
+def _win_send_input_move_click(actions: list[tuple[str, int, int, int]]) -> None:
+    """Windows 系统级鼠标事件（SendInput），绕过部分 CDP 合成轨迹检测。
+
+    actions: list of (type, x, y, delay_ms) type in move/down/up
+    坐标为屏幕物理像素（已按 DPI 换算）。
+    """
+    if sys.platform != "win32":
+        raise RuntimeError("SendInput only on Windows")
+
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    INPUT_MOUSE = 0
+    MOUSEEVENTF_MOVE = 0x0001
+    MOUSEEVENTF_LEFTDOWN = 0x0002
+    MOUSEEVENTF_LEFTUP = 0x0004
+    MOUSEEVENTF_ABSOLUTE = 0x8000
+    SM_CXSCREEN = 0
+    SM_CYSCREEN = 1
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", wintypes.LONG),
+            ("dy", wintypes.LONG),
+            ("mouseData", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ]
+
+    class INPUT(ctypes.Structure):
+        class _I(ctypes.Union):
+            _fields_ = [("mi", MOUSEINPUT)]
+
+        _anonymous_ = ("i",)
+        _fields_ = [("type", wintypes.DWORD), ("i", _I)]
+
+    sw = user32.GetSystemMetrics(SM_CXSCREEN)
+    sh = user32.GetSystemMetrics(SM_CYSCREEN)
+
+    def to_abs(x: int, y: int) -> tuple[int, int]:
+        ax = int(max(0, min(sw - 1, x)) * 65535 / max(1, sw - 1))
+        ay = int(max(0, min(sh - 1, y)) * 65535 / max(1, sh - 1))
+        return ax, ay
+
+    def send_move(x: int, y: int) -> None:
+        ax, ay = to_abs(x, y)
+        inp = INPUT(type=INPUT_MOUSE)
+        inp.mi = MOUSEINPUT(ax, ay, 0, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, 0, None)
+        if user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT)) != 1:
+            raise OSError("SendInput move failed")
+
+    def send_btn(flags: int) -> None:
+        inp = INPUT(type=INPUT_MOUSE)
+        inp.mi = MOUSEINPUT(0, 0, 0, flags, 0, None)
+        if user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT)) != 1:
+            raise OSError("SendInput button failed")
+
+    for typ, x, y, delay_ms in actions:
+        if typ == "move":
+            send_move(x, y)
+        elif typ == "down":
+            send_move(x, y)
+            send_btn(MOUSEEVENTF_LEFTDOWN)
+        elif typ == "up":
+            send_move(x, y)
+            send_btn(MOUSEEVENTF_LEFTUP)
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000.0)
+
+
+async def os_level_human_drag(page, start_x: float, start_y: float, distance: float, attempt: int = 1) -> bool:
+    """把页面坐标映射到屏幕，用系统鼠标拖动（更像真人硬件输入）。"""
+    if sys.platform != "win32":
+        return False
+    try:
+        pos = await page.evaluate(
+            """([vx, vy]) => {
+              const borderX = Math.max(0, (window.outerWidth - window.innerWidth) / 2);
+              const borderY = Math.max(0, window.outerHeight - window.innerHeight - borderX);
+              const dpr = window.devicePixelRatio || 1;
+              const sx = window.screenX + borderX + vx;
+              const sy = window.screenY + borderY + vy;
+              return { sx, sy, borderX, borderY, dpr };
+            }""",
+            [start_x, start_y],
+        )
+        # CSS 像素 -> 物理像素（高 DPI）
+        scale = _win_dpi_scale()
+        # 优先用系统 DPI；若与页面 dpr 差很大，取较大值避免点偏
+        page_dpr = float(pos.get("dpr") or 1)
+        scale = max(scale, page_dpr if 0.9 < page_dpr < 4 else scale)
+
+        base_x = int(round(float(pos["sx"]) * scale))
+        base_y = int(round(float(pos["sy"]) * scale))
+        dist_px = float(distance) * scale
+        end_x = int(round(base_x + dist_px))
+        log(
+            f"  OS 坐标换算: page=({start_x:.1f},{start_y:.1f}) -> screen=({base_x},{base_y}) "
+            f"scale={scale:.2f} border=({pos.get('borderX')},{pos.get('borderY')})"
+        )
+
+        steps = 48 + random.randint(0, 20)
+        actions: list[tuple[str, int, int, int]] = []
+        ax0 = base_x - int(40 * scale) - random.randint(0, int(30 * scale))
+        ay0 = base_y + random.randint(int(-20 * scale), int(20 * scale))
+        actions.append(("move", ax0, ay0, 100 + random.randint(0, 100)))
+        actions.append(("move", base_x, base_y, 140 + random.randint(0, 120)))
+        actions.append(("down", base_x, base_y, 110 + random.randint(0, 90)))
+        for i in range(1, steps + 1):
+            p = i / steps
+            # 慢启动：前 25% 只完成约 12% 行程
+            if p < 0.25:
+                eased = 0.12 * (p / 0.25) ** 2.4
+            elif p < 0.75:
+                mid = (p - 0.25) / 0.5
+                eased = 0.12 + 0.70 * (mid * mid * (3 - 2 * mid))
+            else:
+                tail = (p - 0.75) / 0.25
+                eased = 0.82 + 0.18 * (1 - (1 - tail) ** 2)
+            x = int(base_x + dist_px * eased)
+            y = int(
+                base_y
+                + math.sin(math.pi * p) * (3 + random.random() * 6) * scale
+                * (1 if random.random() > 0.4 else -1)
+            )
+            delay = int(22 + random.random() * 50)
+            if p < 0.2 or p > 0.8:
+                delay = int(delay * 1.8)
+            actions.append(("move", x, y, delay))
+        # 终点：几乎不超轨（过冲过大易判失败）
+        actions.append(("move", end_x + random.randint(0, int(4 * scale)), base_y + random.randint(-2, 2), 80))
+        actions.append(("move", end_x, base_y, 100))
+        actions.append(("up", end_x, base_y, 60))
+        log(f"  OS 级拖动: screen=({base_x},{base_y}) -> +{dist_px:.0f}px steps={steps} attempt={attempt}")
+        await page.bring_to_front()
+        await asyncio.sleep(0.3)
+        try:
+            await page.mouse.move(start_x - 15, start_y, steps=6)
+        except Exception:
+            pass
+        await asyncio.to_thread(_win_send_input_move_click, actions)
+        return True
+    except Exception as e:
+        log(f"  OS 级拖动失败，回退 page.mouse: {e}")
+        return False
+
+
+async def element_hover_drag(page, button, distance: float, attempt: int = 1) -> None:
+    """基于元素 hover 的 page.mouse 拖动：先悬停按钮再按下，减少“点空”。"""
+    box = await button.bounding_box()
+    if not box:
+        raise RuntimeError("button box gone")
+    sx = box["x"] + box["width"] / 2
+    sy = box["y"] + box["height"] / 2
+    # attempt 调制终点：1 精确、2 略超、3 略欠再补
+    if attempt == 1:
+        dist = distance
+    elif attempt == 2:
+        dist = distance + 4 + random.random() * 6
+    else:
+        dist = max(180.0, distance - 3 + random.random() * 5)
+
+    log(f"  元素悬停拖动: start=({sx:.1f},{sy:.1f}) dist={dist:.1f} attempt={attempt}")
+    await button.hover(timeout=3000)
+    await asyncio.sleep(0.15 + random.random() * 0.25)
+    await page.mouse.move(sx, sy, steps=3)
+    await asyncio.sleep(0.08 + random.random() * 0.12)
+    await page.mouse.down()
+    await asyncio.sleep(0.1 + random.random() * 0.15)
+
+    steps = 36 + random.randint(0, 16)
+    for i in range(1, steps + 1):
+        p = i / steps
+        if p < 0.22:
+            eased = 0.1 * (p / 0.22) ** 2.2
+        elif p < 0.78:
+            mid = (p - 0.22) / 0.56
+            eased = 0.1 + 0.75 * (mid * mid * (3 - 2 * mid))
+        else:
+            tail = (p - 0.78) / 0.22
+            eased = 0.85 + 0.15 * math.sin(tail * math.pi / 2)
+        x = sx + dist * eased
+        y = sy + math.sin(math.pi * p) * (2 + random.random() * 4) * (1 if random.random() > 0.5 else -1)
+        await page.mouse.move(x, y, steps=1)
+        delay = 18 + random.random() * 42
+        if p < 0.2 or p > 0.85:
+            delay *= 1.7
+        await page.wait_for_timeout(delay)
+
+    await page.mouse.move(sx + dist, sy + random.uniform(-2, 2), steps=2)
+    await page.wait_for_timeout(60 + random.random() * 80)
+    await page.mouse.up()
+    await page.wait_for_timeout(40 + random.random() * 60)
+
+
 def close_proc_gracefully(proc: Optional[subprocess.Popen], timeout: float = 5.0) -> None:
     if not proc or proc.poll() is not None:
         return
@@ -146,7 +671,10 @@ def close_proc_gracefully(proc: Optional[subprocess.Popen], timeout: float = 5.0
 
 
 async def get_slider_info(page) -> Optional[dict]:
-    """遍历所有 frame 找滑块按钮与轨道宽度。"""
+    """遍历所有 frame 找滑块按钮与可拖距离。
+
+    距离优先用 JS 精测：轨道右缘 - 按钮右缘（更贴近 Baxia 判定的“到最右边”）。
+    """
     for frame in page.frames:
         for sel in SLIDER_BUTTON_SELECTORS:
             try:
@@ -156,20 +684,49 @@ async def get_slider_info(page) -> Optional[dict]:
                 box = await button.bounding_box()
                 if not box or box.get("width", 0) <= 0:
                     continue
-                track_width = 300.0
-                for tsel in SLIDER_TRACK_SELECTORS:
-                    try:
-                        track = await frame.query_selector(tsel)
-                        if not track:
-                            continue
-                        track_box = await track.bounding_box()
-                        if track_box and track_box.get("width", 0) > 0:
-                            track_width = float(track_box["width"] - box["width"])
-                            break
-                    except Exception:
-                        pass
-                # 距离过短/过长都不合理，钳制到常见区间
-                track_width = max(180.0, min(track_width, 360.0))
+
+                # JS 精测可拖距离
+                dist_js = None
+                try:
+                    dist_js = await frame.evaluate(
+                        """(btnSel) => {
+                          const btn = document.querySelector(btnSel)
+                            || document.querySelector('#nc_1_n1z')
+                            || document.querySelector('.btn_slide');
+                          if (!btn) return null;
+                          const track = document.querySelector('.nc_scale')
+                            || document.querySelector('#nc_1_n1t')
+                            || document.querySelector('.scale_text')
+                            || btn.parentElement;
+                          if (!track) return null;
+                          const br = btn.getBoundingClientRect();
+                          const tr = track.getBoundingClientRect();
+                          // 需要把按钮左边拖到轨道右边内侧
+                          const d = (tr.right - br.right);
+                          return d > 20 ? d : (tr.width - br.width);
+                        }""",
+                        sel,
+                    )
+                except Exception:
+                    dist_js = None
+
+                track_width = float(dist_js) if dist_js and float(dist_js) > 20 else None
+                if track_width is None:
+                    track_width = 260.0
+                    for tsel in SLIDER_TRACK_SELECTORS:
+                        try:
+                            track = await frame.query_selector(tsel)
+                            if not track:
+                                continue
+                            track_box = await track.bounding_box()
+                            if track_box and track_box.get("width", 0) > 0:
+                                track_width = float(track_box["width"] - box["width"])
+                                break
+                        except Exception:
+                            pass
+
+                # 常见轨道可拖区间约 200~320
+                track_width = max(200.0, min(float(track_width), 340.0))
                 return {
                     "button": button,
                     "frame": frame,
@@ -531,32 +1088,47 @@ async def close_captcha_dialog(page) -> bool:
     return False
 
 
-async def navigate_fresh(page, target_url: str) -> None:
-    """彻底重置：清 storage → 回首页 → 再进目标页（避免同会话惩罚累积）。"""
-    try:
-        await page.evaluate(
-            """() => {
-            try { localStorage.clear(); } catch(e) {}
-            try { sessionStorage.clear(); } catch(e) {}
-        }"""
-        )
-        log("已清理 localStorage/sessionStorage")
-    except Exception as e:
-        log(f"清理存储失败(可忽略): {e}")
+async def navigate_fresh(page, target_url: str, *, hard: bool = False) -> None:
+    """重置导航。
 
-    home_wait = 1.2 + random.random() * 1.5
+    hard=False（默认）：不清 localStorage/sessionStorage，避免把登录痕迹一并清掉加重风控。
+    hard=True：清 storage 后回首页再进目标页（仅在加载失败连跪时使用）。
+    """
+    if hard:
+        try:
+            await page.evaluate(
+                """() => {
+                try { localStorage.clear(); } catch(e) {}
+                try { sessionStorage.clear(); } catch(e) {}
+            }"""
+            )
+            log("已清理 localStorage/sessionStorage（hard）")
+        except Exception as e:
+            log(f"清理存储失败(可忽略): {e}")
+
+    home_wait = 1.5 + random.random() * 1.8
     try:
         await page.goto("https://www.goofish.com", wait_until="domcontentloaded", timeout=45000)
         log(f"已回到首页，等待 {home_wait:.1f}s 后重新导航到目标页")
         await asyncio.sleep(home_wait)
+        # 拟人轻微滚动
+        try:
+            await page.mouse.wheel(0, 150 + random.randint(0, 200))
+        except Exception:
+            pass
+        await asyncio.sleep(0.4 + random.random() * 0.6)
     except Exception as e:
         log(f"回首页失败: {e}")
 
-    target_wait = 1.8 + random.random() * 1.8
+    target_wait = 2.0 + random.random() * 1.8
     try:
-        await page.goto(target_url, wait_until="domcontentloaded", timeout=45000)
-        log(f"已导航到目标页，等待 {target_wait:.1f}s 让页面加载")
-        await asyncio.sleep(target_wait)
+        # 优先仍用拟人路径；失败再直开
+        try:
+            await human_warmup_and_enter_im(page, target_url or DEFAULT_TARGET_URL)
+        except Exception:
+            await page.goto(target_url or DEFAULT_TARGET_URL, wait_until="domcontentloaded", timeout=45000)
+            log(f"已导航到目标页，等待 {target_wait:.1f}s 让页面加载")
+            await asyncio.sleep(target_wait)
     except Exception as e:
         log(f"导航到目标页失败: {e}")
 
@@ -614,6 +1186,115 @@ async def click_retry_if_needed(page) -> bool:
     return False
 
 
+async def page_shows_load_failure(page) -> bool:
+    """检测消息页/会话页「加载失败」风控态（人工拖也过不了的典型表现）。"""
+    try:
+        text = await page.evaluate(
+            "() => document.body ? document.body.innerText.slice(0, 800) : ''"
+        )
+        if not text:
+            return False
+        return bool(
+            any(
+                k in text
+                for k in (
+                    "加载失败",
+                    "下载消息失败",
+                    "网络异常",
+                    "请刷新页面",
+                    "连接中断",
+                    "系统繁忙",
+                )
+            )
+        )
+    except Exception:
+        return False
+
+
+async def human_warmup_and_enter_im(page, target_url: str):
+    """拟人路径进入消息页：首页闲逛 → 点击消息（优先），避免直接 goto /im 触发反爬。
+
+    返回实际操作的 page（可能是 popup 消息窗）。
+    """
+    home = "https://www.goofish.com/"
+    log(f"拟人导航：先打开首页 {home}")
+    try:
+        await page.goto(home, wait_until="domcontentloaded", timeout=45000)
+    except Exception as e:
+        log(f"首页加载警告: {e}")
+
+    # 首页随机鼠标移动 + 轻微滚动（制造真实浏览痕迹）
+    for _ in range(3 + random.randint(0, 3)):
+        x = 120 + random.random() * (WINDOW_WIDTH - 240)
+        y = 100 + random.random() * (WINDOW_HEIGHT - 200)
+        await page.mouse.move(x, y, steps=random.randint(5, 14))
+        await asyncio.sleep(0.15 + random.random() * 0.35)
+    try:
+        await page.mouse.wheel(0, 200 + random.randint(0, 400))
+    except Exception:
+        pass
+    await asyncio.sleep(1.2 + random.random() * 1.8)
+
+    # 尝试点击「消息」入口（侧边栏）
+    async def _click_msg_eval() -> bool:
+        return bool(
+            await page.evaluate(
+                """() => {
+                const wraps = Array.from(document.querySelectorAll('[class*="sidebar-item-wrap"], [class*="sidebar"] a, aside a, [class*="side"] a'));
+                const t = wraps.find(w => ((w.textContent||'').trim().includes('消息')));
+                if (!t) return false;
+                t.scrollIntoView({block:'center'});
+                t.click();
+                return true;
+            }"""
+            )
+        )
+
+    async def _click_msg_locator() -> bool:
+        loc = page.locator('[class*="sidebar-item-wrap"]').filter(has_text="消息").first
+        if await loc.count() > 0:
+            await loc.click(timeout=3000, force=True)
+            return True
+        return False
+
+    for name, fn in (("eval-click", _click_msg_eval), ("locator-click", _click_msg_locator)):
+        try:
+            try:
+                async with page.expect_popup(timeout=5000) as popup_info:
+                    ok = await fn()
+                    if not ok:
+                        raise RuntimeError("no-msg-entry")
+                popup = await popup_info.value
+                await popup.wait_for_load_state("domcontentloaded", timeout=30000)
+                log(f"消息页新窗口已打开 via {name}: {popup.url}")
+                await asyncio.sleep(2.0 + random.random() * 1.5)
+                return popup
+            except Exception:
+                # 可能同页跳转或未弹出
+                ok = False
+                try:
+                    ok = await fn()
+                except Exception:
+                    ok = False
+                await asyncio.sleep(2.0)
+                if "/im" in (page.url or ""):
+                    log(f"消息页同窗口打开 via {name}: {page.url}")
+                    return page
+                if not ok:
+                    continue
+        except Exception as e:
+            log(f"点击消息失败 {name}: {e}")
+
+    # 回退：直接访问 /im（风险更高）
+    log("未点到消息入口，回退直接访问目标页（可能触发加载失败）")
+    try:
+        await page.goto(target_url or DEFAULT_TARGET_URL, wait_until="domcontentloaded", timeout=45000)
+    except Exception as e:
+        log(f"目标页加载警告: {e}")
+    await asyncio.sleep(2.0 + random.random() * 1.5)
+    return page
+
+
 async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
     """在已注入 Cookie 的 context 中求解。失败后刷新重置 Baxia。"""
     result: dict[str, Any] = {
@@ -627,16 +1308,19 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
     screenshot_dir = os.path.join(os.getcwd(), "screenshots")
     os.makedirs(screenshot_dir, exist_ok=True)
 
-    try:
-        log(f"访问目标页面: {target_url}")
-        await page.goto(target_url, wait_until="domcontentloaded", timeout=45000)
-    except Exception as e:
-        log(f"页面加载警告: {e}")
+    # 拟人路径进入消息页（避免直接 /im）
+    page = await human_warmup_and_enter_im(page, target_url or DEFAULT_TARGET_URL)
+    log(f"当前操作页 URL: {page.url}")
 
-    init_wait = 2.0 + random.random() * 1.5
-    log(f"等待 {init_wait:.1f} 秒让页面加载完成...")
-    await asyncio.sleep(init_wait)
-    log(f"当前页面 URL: {page.url}")
+    if await page_shows_load_failure(page):
+        log("⚠ 进入消息页即出现「加载失败」——浏览器环境很可能已被风控标记")
+        shot = os.path.join(screenshot_dir, f"load-fail-entry-{int(time.time())}.png")
+        try:
+            await page.screenshot(path=shot, full_page=False)
+            result["screenshotPath"] = shot
+        except Exception:
+            pass
+        # 仍继续尝试：有时滑块后刷新可恢复
 
     url_l = (page.url or "").lower()
     if any(x in url_l for x in ("login.taobao.com", "login.goofish.com", "/login", "/uilogin")):
@@ -649,12 +1333,54 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
     MAX_HUMAN_ACTIONS = 2
     last_error = ""
     last_screenshot = None
+    load_fail_streak = 0
 
     for attempt in range(1, max_retries + 1):
         result["attempts"] = attempt
         log("=" * 50)
         log(f"第 {attempt}/{max_retries} 次尝试")
         await diagnose_frames(page)
+
+        # 风险探针：记录关键环境信号（用于分析为何人工也失败）
+        try:
+            probe = await page.evaluate(
+                """() => ({
+                  webdriver: navigator.webdriver,
+                  languages: navigator.languages,
+                  plugins: navigator.plugins ? navigator.plugins.length : -1,
+                  chrome: !!window.chrome,
+                  hw: navigator.hardwareConcurrency,
+                  ua: navigator.userAgent.slice(0, 80),
+                  hasCdc: Object.keys(window).some(k => k.startsWith('cdc_') || k.startsWith('$cdc_')),
+                })"""
+            )
+            log(f"环境探针: {probe}")
+        except Exception:
+            pass
+
+        if await page_shows_load_failure(page):
+            load_fail_streak += 1
+            last_error = "页面显示加载失败（环境/会话被风控）"
+            log(f"⚠ {last_error} streak={load_fail_streak}")
+            shot = os.path.join(screenshot_dir, f"load-fail-{attempt}-{int(time.time())}.png")
+            try:
+                await page.screenshot(path=shot, full_page=False)
+                last_screenshot = shot
+                result["screenshotPath"] = shot
+            except Exception:
+                pass
+            # 加载失败：硬重置（清 storage）
+            await navigate_fresh(page, target_url or DEFAULT_TARGET_URL, hard=True)
+            page = await human_warmup_and_enter_im(page, target_url or DEFAULT_TARGET_URL)
+            if load_fail_streak >= 3:
+                result["error"] = (
+                    "连续出现「加载失败」：自动化浏览器环境被闲鱼风控标记，"
+                    "即使人工拖拽也难以通过。请换用本机日常 Chrome 配置/新 Cookie 后重试"
+                )
+                return result
+            continue
+        else:
+            load_fail_streak = 0
 
         url_l = (page.url or "").lower()
         if any(x in url_l for x in ("login.taobao.com", "login.goofish.com", "/login", "/uilogin")):
@@ -698,11 +1424,14 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
             except Exception:
                 pass
             log("刷新页面重试（彻底重置）...")
-            await navigate_fresh(page, target_url)
+            await navigate_fresh(page, target_url or DEFAULT_TARGET_URL)
+            page = await human_warmup_and_enter_im(page, target_url or DEFAULT_TARGET_URL)
             continue
 
         result["captchaDetected"] = True
-        sx, sy, dist = slider_info["x"], slider_info["y"], slider_info["distance"]
+        button_el = slider_info.get("button")
+        sx, sy, dist = slider_info["x"], slider_info["y"], float(slider_info["distance"])
+        # 不再默认大幅过冲；终点微调交给各拖拽策略
         log(f"找到滑块: x={sx:.1f}, y={sy:.1f}, distance={dist:.1f}")
 
         # 拖动前再次确认是否已通过
@@ -719,23 +1448,42 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
         except Exception:
             pass
 
-        # 拖动前短暂停顿（阅读弹窗）
-        await asyncio.sleep(0.4 + random.random() * 0.7)
+        # 拖动前：先“看”弹窗 0.8~2s，模拟真人阅读
+        await asyncio.sleep(0.8 + random.random() * 1.2)
+        for _ in range(2 + random.randint(0, 2)):
+            await page.mouse.move(
+                sx + random.uniform(-40, 20),
+                sy + random.uniform(-25, 25),
+                steps=random.randint(4, 10),
+            )
+            await asyncio.sleep(0.06 + random.random() * 0.15)
 
         try:
-            if attempt % 2 == 0:
-                log(f"  attempt={attempt} 使用【超出容器】拖动方法")
-                await human_like_drag_out_of_container(page, sx, sy, dist, attempt)
-            else:
-                log(f"  attempt={attempt} 使用【容器内】拖动方法")
+            # 轮换：1 元素悬停拖  2 OS  3 容器内  4 出容器  5+ 再 OS
+            if attempt == 1 and button_el is not None:
+                log(f"  attempt={attempt} 使用【元素悬停】page.mouse 拖动")
+                await element_hover_drag(page, button_el, dist, attempt)
+            elif attempt in (2, 5) and sys.platform == "win32":
+                log(f"  attempt={attempt} 使用【OS 系统鼠标 SendInput】拖动")
+                ok_os = await os_level_human_drag(page, sx, sy, dist, attempt)
+                if not ok_os:
+                    if button_el is not None:
+                        await element_hover_drag(page, button_el, dist, attempt)
+                    else:
+                        await human_like_drag(page, sx, sy, dist, attempt)
+            elif attempt == 3:
+                log(f"  attempt={attempt} 使用【容器内】page.mouse 拖动")
                 await human_like_drag(page, sx, sy, dist, attempt)
+            else:
+                log(f"  attempt={attempt} 使用【超出容器】page.mouse 拖动")
+                await human_like_drag_out_of_container(page, sx, sy, dist, attempt)
         except Exception as e:
             last_error = f"拖动异常: {e}"
             log(last_error)
-            await navigate_fresh(page, target_url)
+            await navigate_fresh(page, target_url or DEFAULT_TARGET_URL, hard=False)
             continue
 
-        result_wait = 2.0 + random.random() * 1.2
+        result_wait = 2.6 + random.random() * 1.8
         log(f"等待 {result_wait:.1f} 秒验证结果...")
         await asyncio.sleep(result_wait)
 
@@ -765,45 +1513,41 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
             return result
 
         last_error = f"第 {attempt} 次拖动未通过"
-        log(f"× {last_error}，将刷新页面重置 Baxia 状态后重试")
+        log(f"× {last_error}")
 
-        # 先点框体重试，再决定是否整页重置
-        await click_retry_if_needed(page)
-        await asyncio.sleep(1.0)
+        # 优先点「框体重试」并等待新滑块，而不是立刻清会话硬刷新
+        clicked = await click_retry_if_needed(page)
+        if clicked:
+            log("已点击框体重试，等待新滑块就绪...")
+            await asyncio.sleep(2.0 + random.random() * 1.5)
+            new_info = await wait_for_slider_ready(page, max_wait_ms=8000)
+            if new_info and not new_info.get("is_login_page") and not new_info.get("already_solved"):
+                log("新滑块已就绪，下一轮直接拖")
+                await asyncio.sleep(0.5 + random.random() * 0.8)
+                continue
 
-        # 连续失败触发“真人行动”：关弹窗 → 重置
+        # 连续失败：关弹窗 + 软重置（不清 storage）
         if attempt >= HUMAN_ACTION_THRESHOLD and human_action_count < MAX_HUMAN_ACTIONS:
             human_action_count += 1
             log(
-                f"=== 连续 {attempt} 次失败，触发真人行动 "
+                f"=== 连续 {attempt} 次失败，触发软重置 "
                 f"({human_action_count}/{MAX_HUMAN_ACTIONS}) ==="
             )
             closed = await close_captcha_dialog(page)
             if closed:
                 log("已关闭弹窗，等待页面变化...")
                 await asyncio.sleep(1.5)
-            else:
-                log("未找到关闭按钮，直接刷新页面")
-            await navigate_fresh(page, target_url)
-            cooldown = 3.5 + random.random() * 3.5
+            await navigate_fresh(page, target_url or DEFAULT_TARGET_URL, hard=False)
+            cooldown = 4.0 + random.random() * 4.0
             log(f"冷静期 {cooldown:.1f}s ...")
             await asyncio.sleep(cooldown)
         else:
-            # 关键：每次失败后彻底重置，避免同会话惩罚累积
-            await navigate_fresh(page, target_url)
-            await asyncio.sleep(1.0 + random.random() * 1.5)
+            # 轻量等待后再试同页新滑块，降低连续 punish 刷新
+            await asyncio.sleep(1.2 + random.random() * 1.5)
 
-    # 末尾给用户短窗口手动拖
-    log("=== 所有自动重试已用完，等待 12 秒让用户手动拖动滑块 ===")
-    for _ in range(6):
-        await asyncio.sleep(2)
-        if await check_solved(page):
-            detected, _ = await detect_captcha_container(page)
-            if not detected:
-                result.update({"ok": True, "solved": True, "captchaDetected": True})
-                return result
-
-    result["error"] = last_error or f"滑块验证未通过，已重试 {max_retries} 次（含手动等待）"
+    # 全自动：不再等待人工拖拽，直接失败返回
+    log("=== 全自动重试已用完，不再进入半自动人工等待 ===")
+    result["error"] = last_error or f"滑块验证未通过，已全自动重试 {max_retries} 次"
     if last_screenshot:
         result["screenshotPath"] = last_screenshot
     return result
@@ -825,7 +1569,110 @@ async def export_cookies(ctx) -> str:
         return ""
 
 
+async def _launch_solve_once(
+    playwright,
+    chrome_path: str,
+    ua: str,
+    cookie_str: str,
+    target_url: str,
+    max_retries: int,
+    proxy: Optional[dict] = None,
+) -> dict:
+    """启动一次浏览器并求解（内部复用）。"""
+    temp_root = os.environ.get("TEMP") or "/tmp"
+    user_data_dir = os.path.join(
+        temp_root, f"chrome-slider-warm-{int(time.time())}-{random.randint(1000, 9999)}"
+    )
+    prepare_profile_dir(user_data_dir)
+    ctx = None
+    try:
+        log(
+            "=== 启动真实 Chrome（seed 克隆 + 无 remote-debugging-port）"
+            f" hasProxy={bool(proxy and proxy.get('server'))} ==="
+        )
+        launch_kwargs = dict(
+            user_data_dir=user_data_dir,
+            headless=False,
+            executable_path=chrome_path,
+            viewport={"width": WINDOW_WIDTH, "height": WINDOW_HEIGHT},
+            locale="zh-CN",
+            timezone_id="Asia/Shanghai",
+            user_agent=ua,
+            color_scheme="light",
+            device_scale_factor=1,
+            is_mobile=False,
+            has_touch=False,
+            ignore_default_args=["--enable-automation"],
+            args=[
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-popup-blocking",
+                f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}",
+                "--disable-blink-features=AutomationControlled",
+                "--lang=zh-CN",
+            ],
+        )
+        if proxy and proxy.get("server"):
+            launch_kwargs["proxy"] = {
+                "server": str(proxy["server"]),
+                **({"username": str(proxy["username"])} if proxy.get("username") else {}),
+                **({"password": str(proxy["password"])} if proxy.get("password") else {}),
+            }
+        try:
+            ctx = await playwright.chromium.launch_persistent_context(**launch_kwargs)
+        except Exception as e:
+            log(f"launch_persistent_context 失败，重试精简参数: {e}")
+            launch_kwargs.pop("timezone_id", None)
+            launch_kwargs["args"] = [
+                "--no-first-run",
+                "--disable-blink-features=AutomationControlled",
+                f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}",
+            ]
+            ctx = await playwright.chromium.launch_persistent_context(**launch_kwargs)
+
+        await ctx.add_init_script(STEALTH_INIT_SCRIPT)
+        cookies = parse_cookie_string(cookie_str, ".goofish.com")
+        if cookies:
+            await ctx.add_cookies(cookies)
+            log(f"注入 {len(cookies)} 条 cookies")
+
+        page0 = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        try:
+            await page0.goto("about:blank")
+        except Exception:
+            pass
+        await asyncio.sleep(0.6 + random.random() * 0.9)
+
+        solve_result = await solve_in_context(ctx, target_url, max_retries)
+        if solve_result.get("solved"):
+            fresh = await export_cookies(ctx)
+            if fresh:
+                solve_result["cookies"] = fresh
+                solve_result["cookieCount"] = fresh.count("=")
+                log(f"导出 {solve_result['cookieCount']} 个最新 cookies（{len(fresh)} 字符）")
+        return solve_result
+    finally:
+        if ctx is not None:
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+        try:
+            shutil.rmtree(user_data_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
 async def main_async(args) -> dict:
+    """全自动求解入口（无半自动人工介入）。
+
+    策略：
+    1) 全局文件锁：同时只允许 1 个求解浏览器
+    2) seed profile 预热 + 克隆：降低空配置被秒杀概率
+    3) 真实 Chrome + 去 enable-automation + stealth
+    4) 拟人进消息页 + 多策略拖拽（OS 鼠标 / page.mouse）
+    5) 首轮全失败后，换新 profile 再全自动重开一轮（仍无人工）
+    """
     start_time = time.time()
     result: dict[str, Any] = {
         "ok": False,
@@ -854,117 +1701,69 @@ async def main_async(args) -> dict:
         result["durationMs"] = int((time.time() - start_time) * 1000)
         return result
 
+    ua = get_chrome_user_agent(chrome_path)
     log(f"Chrome 路径: {chrome_path}")
-    temp_root = os.environ.get("TEMP") or "/tmp"
-    user_data_dir = os.path.join(temp_root, f"chrome-slider-solve-{int(time.time())}")
-    chrome_proc = None
-    browser = None
+    log(f"UA: {ua}")
 
     try:
-        if os.path.exists(user_data_dir):
-            shutil.rmtree(user_data_dir, ignore_errors=True)
-        os.makedirs(user_data_dir, exist_ok=True)
+        # 跨进程单飞：避免多账号同时求解把 IP/设备画像打爆
+        with _FileLock(_SOLVE_LOCK_PATH, timeout=360.0):
+            log("已获取全自动滑块全局锁")
+            async with async_playwright() as p:
+                await ensure_seed_profile(p, chrome_path, ua)
 
-        async with async_playwright() as p:
-            # === 阶段1：持久化注入 Cookie ===
-            log("=== 阶段1：注入 Cookie 到持久化目录 ===")
-            ctx = await p.chromium.launch_persistent_context(
-                user_data_dir,
-                headless=False,
-                executable_path=chrome_path,
-                viewport={"width": WINDOW_WIDTH, "height": WINDOW_HEIGHT},
-                locale="zh-CN",
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-                ),
-                args=[
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                    "--disable-popup-blocking",
-                    f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}",
-                    "--disable-blink-features=AutomationControlled",
-                ],
-            )
-            # 仅写入 goofish 域，避免把登录 Cookie 复制到无关域
-            cookies = parse_cookie_string(cookie_str, ".goofish.com")
-            if cookies:
-                await ctx.add_cookies(cookies)
-                log(f"注入 {len(cookies)} 条 cookies")
-            page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-            try:
-                await page.goto("https://www.goofish.com", wait_until="domcontentloaded", timeout=45000)
-                log(f"首页加载完成: {page.url}")
-            except Exception as e:
-                log(f"首页加载警告: {e}")
-            await asyncio.sleep(1.5)
-            log("关闭上下文（持久化 Cookie）...")
-            await ctx.close()
+                proxy_cfg = None
+                if getattr(args, "proxy_server", None):
+                    proxy_cfg = {
+                        "server": args.proxy_server,
+                        "username": getattr(args, "proxy_username", None) or None,
+                        "password": getattr(args, "proxy_password", None) or None,
+                    }
+                    log(f"使用绑定代理 server={args.proxy_server}")
 
-            # 清理 SingletonLock 以免二次启动失败
-            lock_file = os.path.join(user_data_dir, "SingletonLock")
-            try:
-                if os.path.exists(lock_file):
-                    os.remove(lock_file)
-            except Exception:
-                pass
+                # 第一轮
+                r1 = await _launch_solve_once(
+                    p, chrome_path, ua, cookie_str, args.target_url, args.max_retries, proxy=proxy_cfg,
+                )
+                result.update(r1)
+                total_attempts = int(r1.get("attempts") or 0)
 
-            # === 阶段2：subprocess 启动干净 Chrome ===
-            log("=== 阶段2：用 subprocess 启动干净的 Chrome ===")
-            debug_port = 9222 + random.randint(0, 200)
-            chrome_args = [
-                chrome_path,
-                f"--user-data-dir={user_data_dir}",
-                f"--remote-debugging-port={debug_port}",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--disable-popup-blocking",
-                f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}",
-                "--disable-blink-features=AutomationControlled",
-            ]
-            log(f"Chrome 启动参数: port={debug_port}")
-            chrome_proc = subprocess.Popen(
-                chrome_args,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            log("等待 8 秒让 Chrome 启动和页面加载...")
-            await asyncio.sleep(8)
+                # 全自动第二轮：仅当检测到滑块且未通过时，换 profile 再来一次
+                if (
+                    not result.get("solved")
+                    and result.get("captchaDetected")
+                    and not result.get("isLoginPage")
+                ):
+                    log("=== 全自动第二轮：新 profile 重开浏览器再试 ===")
+                    await asyncio.sleep(2.0 + random.random() * 2.5)
+                    r2 = await _launch_solve_once(
+                        p,
+                        chrome_path,
+                        ua,
+                        cookie_str,
+                        args.target_url,
+                        max(2, min(3, int(args.max_retries or 3))),
+                        proxy=proxy_cfg,
+                    )
+                    total_attempts += int(r2.get("attempts") or 0)
+                    # 第二轮成功则覆盖；失败保留第一轮截图/错误
+                    if r2.get("solved"):
+                        result.update(r2)
+                    else:
+                        result["attempts"] = total_attempts
+                        if r2.get("error"):
+                            result["error"] = (
+                                f"{result.get('error') or ''} | 第二轮: {r2.get('error')}"
+                            ).strip(" |")
+                        if r2.get("screenshotPath"):
+                            result["screenshotPath"] = r2.get("screenshotPath")
+                result["attempts"] = total_attempts or result.get("attempts") or 0
 
-            # === 阶段3：CDP 连接 ===
-            log(f"=== 阶段3：CDP 连接到 Chrome（端口 {debug_port}）===")
-            browser = await p.chromium.connect_over_cdp(f"http://localhost:{debug_port}")
-            log("CDP 连接成功")
-            contexts = browser.contexts
-            if not contexts:
-                result["error"] = "CDP 连接成功但无 browser context"
-                return result
-            ctx2 = contexts[0]
-
-            solve_result = await solve_in_context(ctx2, args.target_url, args.max_retries)
-            result.update(solve_result)
-
-            if result.get("solved"):
-                fresh = await export_cookies(ctx2)
-                if fresh:
-                    result["cookies"] = fresh
-                    result["cookieCount"] = fresh.count("=")
-                    log(f"导出 {result['cookieCount']} 个最新 cookies（{len(fresh)} 字符）")
-
+    except TimeoutError as e:
+        result["error"] = str(e)
     except Exception as e:
         log(f"主流程异常: {e}")
         result["error"] = f"求解异常: {e}"
-    finally:
-        try:
-            if browser:
-                await browser.close()
-        except Exception:
-            pass
-        close_proc_gracefully(chrome_proc)
-        try:
-            shutil.rmtree(user_data_dir, ignore_errors=True)
-        except Exception:
-            pass
 
     result["durationMs"] = int((time.time() - start_time) * 1000)
     return result
@@ -975,6 +1774,9 @@ def main() -> None:
     parser.add_argument("--cookie-file", required=True, help="Cookie 字符串文件路径")
     parser.add_argument("--target-url", default=DEFAULT_TARGET_URL, help="目标页面 URL")
     parser.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES, help="最大拖动重试次数")
+    parser.add_argument("--proxy-server", default="", help="账号绑定代理 server，如 http://host:port")
+    parser.add_argument("--proxy-username", default="", help="代理用户名")
+    parser.add_argument("--proxy-password", default="", help="代理密码")
     args = parser.parse_args()
     result = asyncio.run(main_async(args))
     output_result(result)

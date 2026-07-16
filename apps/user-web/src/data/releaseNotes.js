@@ -66,13 +66,36 @@ export const VERSION_BUMP_RULES = [
  */
 
 /** 当前最新版本号（应与 package.json 的 version 字段保持一致） */
-export const CURRENT_VERSION = '1.2.0'
+export const CURRENT_VERSION = '1.3.0'
 
 /**
  * 更新日志数据，最新在前。
  * @type {ReleaseNote[]}
  */
 export const releaseNotes = [
+  {
+    version: '1.3.0',
+    date: '2026-07-16',
+    type: RELEASE_TYPES.MINOR,
+    title: '滑块求解稳定性与发布流程优化',
+    summary: '滑块求解新增指数退避与账号代理绑定提升成功率，自动分类与求解记录详情体验优化。',
+    changes: [
+      {
+        label: '新增',
+        items: [
+          '滑块求解指数退避策略：连续失败自动暂停自动求解，避免频繁触发风控',
+          '账号级代理绑定：按账号固定出口 IP，降低设备/IP 画像串扰'
+        ]
+      },
+      {
+        label: '优化',
+        items: [
+          '滑块求解记录详情新增「耗时」「调试截图」「备注」字段，失败原因展示更清晰',
+          '自动分类未匹配本地分类树时直接采用平台已选分类，避免校验空值导致无法发布'
+        ]
+      }
+    ]
+  },
   {
     version: '1.2.0',
     date: '2026-07-16',

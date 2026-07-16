@@ -202,6 +202,8 @@ async def try_auto_solve(
     target_url: Optional[str] = None,
     headless: Optional[bool] = None,
     max_retries: int = 5,
+    *,
+    force: bool = False,
 ) -> dict:
     """调用 crawler-service 的 Playwright 滑块求解接口。
 
@@ -210,6 +212,7 @@ async def try_auto_solve(
         target_url: 目标页面 URL（默认闲鱼首页）
         headless: 是否无头模式（默认 false，滑块识别有头更稳定）
         max_retries: 最大重试次数
+        force: 是否跳过指数退避（默认 False，全自动遵守退避）
 
     Returns:
         {
@@ -221,6 +224,18 @@ async def try_auto_solve(
             "durationMs": int,
         }
     """
+    # 全自动指数退避：冷却期内直接拒绝，避免 punish 加码
+    from .captcha_backoff import assert_auto_solve_allowed, record_solve_failure, record_solve_success
+    from .account_proxy import load_account_proxy, proxy_to_playwright, proxy_public_label
+
+    blocked = await assert_auto_solve_allowed(account_id, tenant_id, force=force)
+    if blocked:
+        logger.warning(
+            "滑块求解被指数退避拦截 accountId=%d error=%s",
+            account_id, blocked.get("error"),
+        )
+        return blocked
+
     # 读取账号 Cookie
     try:
         async with async_session() as db:
@@ -267,6 +282,15 @@ async def try_auto_solve(
             "durationMs": 0,
         }
 
+    # 按账号绑定代理（可选）
+    proxy = await load_account_proxy(account_id, tenant_id)
+    proxy_payload = proxy_to_playwright(proxy)
+    if proxy_payload:
+        logger.info(
+            "滑块求解使用账号绑定代理 accountId=%d proxy=%s",
+            account_id, proxy_public_label(proxy),
+        )
+
     # 调用 crawler-service
     crawler_url = getattr(settings, "crawler_service_url", None) or os.environ.get(
         "CRAWLER_SERVICE_URL", "http://localhost:3001"
@@ -288,8 +312,10 @@ async def try_auto_solve(
         "targetUrl": target_url,
         "headless": resolved_headless,
         "maxRetries": max_retries,
-        "timeoutMs": 60000,
+        "timeoutMs": 90000,
     }
+    if proxy_payload:
+        payload["proxy"] = proxy_payload
 
     headers = {
         "Content-Type": "application/json",
@@ -307,13 +333,16 @@ async def try_auto_solve(
             logger, e, operation="solve_captcha",
             tenant_id=tenant_id, account_id=account_id,
         )
+        await record_solve_failure(
+            account_id, tenant_id, error="滑块求解服务暂时不可用",
+        )
         return {
             "success": False,
             "solved": False,
             "captchaDetected": False,
             "attempts": 0,
             "errorCode": "CAPTCHA_SOLVER_UNAVAILABLE",
-            "error": "滑块求解服务暂时不可用，请改用人工验证",
+            "error": "滑块求解服务暂时不可用，请稍后重试",
             "durationMs": int((time.time() - started) * 1000),
         }
 
@@ -323,6 +352,15 @@ async def try_auto_solve(
 
     # 读取求解成功后的最新 cookies（Baxia 验证通过后服务器下发新 token，如 _m_h5_tk）
     fresh_cookies = data.get("cookies") or ""
+
+    # 退避状态：成功清零 / 失败累加（含 captchaDetected 但未通过）
+    if solve_ok and bool(data.get("solved")):
+        await record_solve_success(account_id, tenant_id)
+    else:
+        await record_solve_failure(
+            account_id, tenant_id,
+            error=crawler_error or "滑块验证未通过",
+        )
 
     # 如果求解成功且有最新 cookies，立即更新数据库中的 cookie
     # 关键：Baxia 验证通过后浏览器中的 cookie 已更新，必须持久化到数据库，
@@ -565,12 +603,46 @@ async def handle_captcha_for_account(
     if auto_solve and (detected or response is None):
         logger.info("开始为账号 %d 自动求解滑块 (scene=%s)", account_id, trigger_scene)
 
+        # 先查指数退避：冷却中则直接落库失败记录，不启动浏览器
+        from .captcha_backoff import assert_auto_solve_allowed
+        account_name = await _lookup_account_name(tenant_id, account_id)
+        blocked = await assert_auto_solve_allowed(account_id, tenant_id, force=False)
+        if blocked:
+            solve_record_id = await create_solve_record(
+                account_id, tenant_id, trigger_scene=trigger_scene,
+                open_reason=open_reason or "全自动冷却拦截",
+                solve_reason=solve_reason or blocked.get("error") or "指数退避冷却中",
+            )
+            await update_solve_record(
+                solve_record_id, status="fail", result="slider_fail",
+                error_message=blocked.get("error") or "全自动滑块冷却中",
+                engine="Backoff",
+            )
+            await broadcast_captcha_solve(
+                tenant_id, account_id, account_name,
+                status="fail", result="slider_fail",
+                reason=blocked.get("error") or "全自动滑块冷却中",
+                record_id=solve_record_id,
+            )
+            return {
+                "detected": detected,
+                "captchaUrl": captcha_url,
+                "instructions": {
+                    "title": instructions.title,
+                    "steps": instructions.steps,
+                    "message": instructions.message,
+                    "autoSolveAvailable": instructions.auto_solve_available,
+                    "manualFallbackUrl": instructions.manual_fallback_url,
+                },
+                "autoSolveResult": blocked,
+                "recovered": False,
+            }
+
         # 创建求解记录 + 广播"求解中"状态
         solve_record_id = await create_solve_record(
             account_id, tenant_id, trigger_scene=trigger_scene,
             open_reason=open_reason, solve_reason=solve_reason,
         )
-        account_name = await _lookup_account_name(tenant_id, account_id)
         await broadcast_captcha_solve(
             tenant_id, account_id, account_name,
             status="retrying", reason=f"正在求解滑块（{trigger_scene}）",

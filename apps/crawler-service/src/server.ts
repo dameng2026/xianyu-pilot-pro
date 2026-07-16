@@ -696,7 +696,7 @@ app.get('/api/goofish/stores/:userId/items', async (req, res) => {
 app.post('/api/goofish/slide-solve', async (req, res) => {
   try {
     const tenantId = tenantIdFrom(req);
-    const { cookie, targetUrl, headless, maxRetries, timeoutMs } = req.body || {};
+    const { cookie, targetUrl, headless, maxRetries, timeoutMs, proxy } = req.body || {};
     let cookieStr: string;
     try {
       cookieStr = normalizeCookieInput(cookie);
@@ -711,7 +711,24 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
       return res.status(400).json({ ok: false, error: e?.message || '目标 URL 无效' });
     }
 
-    console.log(`[SliderSolver] requestId=${(req as RequestWithTrace).requestId} tenantId=${tenantId} hasCookie=${!!cookieStr} targetHost=${safeTargetUrl ? new URL(safeTargetUrl).hostname : 'default'}`);
+    // 账号绑定代理（全自动固定出口）：仅允许 http(s)/socks5 主机端口，不落日志密码
+    let safeProxy: { server: string; username?: string; password?: string } | undefined;
+    if (proxy && typeof proxy === 'object' && typeof proxy.server === 'string') {
+      const server = String(proxy.server).trim();
+      if (/^(https?|socks5?):\/\//i.test(server) && server.length <= 256) {
+        safeProxy = { server };
+        if (typeof proxy.username === 'string' && proxy.username.trim()) {
+          safeProxy.username = proxy.username.trim().slice(0, 128);
+        }
+        if (typeof proxy.password === 'string' && proxy.password) {
+          safeProxy.password = String(proxy.password).slice(0, 256);
+        }
+      }
+    }
+
+    console.log(
+      `[SliderSolver] requestId=${(req as RequestWithTrace).requestId} tenantId=${tenantId} hasCookie=${!!cookieStr} hasProxy=${!!safeProxy} targetHost=${safeTargetUrl ? new URL(safeTargetUrl).hostname : 'default'}`,
+    );
 
     const releaseBrowser = tryAcquireBrowserSlot(tenantId);
     if (!releaseBrowser) return browserCapacityUnavailable(res);
@@ -723,6 +740,7 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
           headless: resolvedHeadless,
           maxRetries: Math.max(1, Math.min(Number(maxRetries) || 5, 8)),
           timeoutMs: Math.max(5000, Math.min(Number(timeoutMs) || 90000, 180000)),
+          proxy: safeProxy,
         });
       } finally {
         releaseBrowser();

@@ -241,6 +241,14 @@
           "sha256": "0d58ca582f96659059968df70030ff5b214c81ee246447efc9b79f5bf35b61af",
           "risk": "expand",
           "rollback": "restore"
+        },
+        {
+          "version": "1.10",
+          "description": "captcha backoff state and account proxy binding",
+          "path": "apps/automation-service/migrations/V1.10__captcha_backoff_and_account_proxy.sql",
+          "sha256": "e36bc92ae9b28a7e04a8e5d177e199cf890a53a3a0bd4895d55fb412d2bc25fd",
+          "risk": "expand",
+          "rollback": "restore"
         }
       ],
       "quarantined": []

@@ -31,6 +31,8 @@ export interface SlideSolveOptions {
   headless?: boolean;     // 默认 false（滑块识别需有头模式更稳定）
   maxRetries?: number;    // 单次会话最多重试次数，默认 3
   timeoutMs?: number;     // 单次操作超时，默认 30000
+  /** 账号绑定代理（全自动固定出口） */
+  proxy?: { server: string; username?: string; password?: string };
 }
 
 export interface SlideSolveResult {
@@ -58,11 +60,18 @@ const DEFAULT_TARGET_URL = 'https://www.goofish.com/im';
 const ANTI_DETECT_SCRIPT = `
 (() => {
   try {
-    // 1. 屏蔽 navigator.webdriver（最基础的检测点）
+    // 1. 屏蔽 navigator.webdriver（删除原型属性，降低 'webdriver' in navigator 命中率）
+    try { delete Object.getPrototypeOf(navigator).webdriver; } catch (e) {}
     Object.defineProperty(navigator, 'webdriver', {
       get: () => undefined,
       configurable: true,
     });
+    try {
+      Object.defineProperty(Navigator.prototype, 'webdriver', {
+        get: () => undefined,
+        configurable: true,
+      });
+    } catch (e) {}
 
     // 2. 伪造 window.chrome 完整对象（真实 Chrome 有 runtime/app/csi/loadTimes）
     if (!window.chrome) {
@@ -1385,7 +1394,9 @@ async function solveSliderViaPythonScript(
   const maxRetries = Number(options.maxRetries ?? 5);
 
   console.log(`[SliderSolver] 调用 Python 脚本求解滑块: ${pythonPath} ${scriptPath}`);
-  console.log(`[SliderSolver]   target=${targetUrl}, maxRetries=${maxRetries}, timeout=${timeoutMs}ms`);
+  console.log(
+    `[SliderSolver]   target=${targetUrl}, maxRetries=${maxRetries}, timeout=${timeoutMs}ms, hasProxy=${!!options.proxy?.server}`,
+  );
 
   return new Promise<SlideSolveResult | null>((resolve) => {
     const args = [
@@ -1394,6 +1405,11 @@ async function solveSliderViaPythonScript(
       '--target-url', targetUrl,
       '--max-retries', String(maxRetries),
     ];
+    if (options.proxy?.server) {
+      args.push('--proxy-server', options.proxy.server);
+      if (options.proxy.username) args.push('--proxy-username', options.proxy.username);
+      if (options.proxy.password) args.push('--proxy-password', options.proxy.password);
+    }
     const child = spawn(pythonPath!, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: false,
@@ -1513,6 +1529,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
   }
 
   let browser: Browser | null = null;
+  let context: any = null;
   let screenshotPath: string | undefined;
 
   try {
@@ -1527,13 +1544,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       contextOptions.storageState = { cookies, origins: [] };
     }
 
-    // === 方案A：使用 connectOverCDP 连接到真实 Chrome（绕过 Baxia 自动化检测）===
-    // 关键根因：Baxia 在 API 层面检测到 Playwright 的 CDP 痕迹和浏览器指纹，
-    // 返回 punish（惩罚）页面触发滑块验证。即使隐藏了 webdriver 标识，
-    // Baxia 仍能通过其他特征检测到自动化。
-    // 解决方案：启动用户已安装的真实 Chrome，用 connectOverCDP 连接，
-    // 这样 Baxia 完全无法检测到自动化。
-    let context: any;
+    // === 方案A：真实 Chrome 持久化上下文（优先），避免 remote-debugging-port 二次挂载 ===
     let usingCDP = false;
     const chromePaths = [
       'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -1544,49 +1555,52 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       try { return fsSync.existsSync(p); } catch { return false; }
     });
 
+    // 优先：真实 Chrome + 持久化配置，且不二次 remote-debugging-port 挂载
+    // （remote-debugging-port 是「自动化窗口」被闲鱼标记、人工拖也加载失败的强信号之一）
     if (chromePath && !headless) {
       try {
-        // 启动 Chrome 并启用远程调试端口
-        const debugPort = 9222 + Math.floor(Math.random() * 100);
-        const userDataDir = path.join(process.env.TEMP || '/tmp', `chrome-slider-${Date.now()}`);
-        const chromeArgs = [
-          `--remote-debugging-port=${debugPort}`,
-          `--user-data-dir=${userDataDir}`,
-          '--no-first-run',
-          '--no-default-browser-check',
-          '--disable-popup-blocking',
-          '--window-size=1280,800',
-        ];
-        console.log(`[SliderSolver] 启动真实 Chrome: ${chromePath} (端口 ${debugPort})`);
-        const { exec } = await import('child_process');
-        const chromeProc = exec(`"${chromePath}" ${chromeArgs.join(' ')}`);
-
-        // 等待 Chrome 启动并监听调试端口
-        await new Promise(resolve => setTimeout(resolve, 3000));
-
-        // 连接到 Chrome
-        browser = await chromium.connectOverCDP(`http://localhost:${debugPort}`);
-        console.log(`[SliderSolver] 已通过 CDP 连接到真实 Chrome`);
-
-        // 获取默认上下文
-        const contexts = browser.contexts();
-        context = contexts.length > 0 ? contexts[0] : await browser.newContext();
-
-        // 注入 Cookie（仅 goofish 域，符合安全契约）
+        const userDataDir = path.join(process.env.TEMP || '/tmp', `chrome-slider-warm-${Date.now()}`);
+        await fs.mkdir(userDataDir, { recursive: true });
+        console.log(`[SliderSolver] launchPersistentContext 真实 Chrome: ${chromePath} hasProxy=${!!options.proxy?.server}`);
+        context = await chromium.launchPersistentContext(userDataDir, {
+          headless: false,
+          executablePath: chromePath,
+          viewport: { width: 1366, height: 768 },
+          locale: 'zh-CN',
+          timezoneId: 'Asia/Shanghai',
+          userAgent:
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
+          ignoreDefaultArgs: ['--enable-automation'],
+          ...(options.proxy?.server
+            ? {
+                proxy: {
+                  server: options.proxy.server,
+                  ...(options.proxy.username ? { username: options.proxy.username } : {}),
+                  ...(options.proxy.password ? { password: options.proxy.password } : {}),
+                },
+              }
+            : {}),
+          args: [
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-popup-blocking',
+            '--window-size=1366,768',
+            '--disable-blink-features=AutomationControlled',
+            '--lang=zh-CN',
+          ],
+        });
+        // launchPersistentContext 返回 BrowserContext，其 browser() 可用于关闭
+        browser = context.browser();
         if (options.cookieStr) {
-          const cookies = parseCookieString(options.cookieStr);
-          await context.addCookies(cookies);
+          await context.addCookies(parseCookieString(options.cookieStr));
         }
-
-        // 反检测：注入完整反检测脚本（CDP 路径原本裸奔，是 5% 成功率的根因之一）
-        // 必须在页面导航前注入，否则反检测脚本不生效
         await context.addInitScript(ANTI_DETECT_SCRIPT);
-        console.log('[SliderSolver] 已注入反检测脚本（webdriver/chrome/plugins/WebGL/Canvas）');
-
         usingCDP = true;
+        console.log('[SliderSolver] 已启动持久化 Chrome 并注入反检测脚本');
       } catch (e: any) {
-        console.warn(`[SliderSolver] CDP 连接失败，回退到 Playwright 启动: ${safeErrorType(e)}`);
+        console.warn(`[SliderSolver] 持久化 Chrome 启动失败，回退: ${safeErrorType(e)}`);
         if (browser) { await browser.close().catch(() => {}); browser = null; }
+        context = null;
       }
     }
 
@@ -1595,11 +1609,31 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       browser = await chromium.launch({
         headless,
         chromiumSandbox: true,
+        // 去掉 Playwright 默认 --enable-automation，显著降低「自动化窗口」被标记概率
+        ignoreDefaultArgs: ['--enable-automation'],
+        ...(options.proxy?.server
+          ? {
+              proxy: {
+                server: options.proxy.server,
+                ...(options.proxy.username ? { username: options.proxy.username } : {}),
+                ...(options.proxy.password ? { password: options.proxy.password } : {}),
+              },
+            }
+          : {}),
         args: [
           '--disable-blink-features=AutomationControlled',
+          '--no-first-run',
+          '--no-default-browser-check',
         ],
       });
-      context = await browser.newContext(contextOptions);
+      context = await browser.newContext({
+        ...contextOptions,
+        userAgent:
+          contextOptions.userAgent ||
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
+        locale: 'zh-CN',
+        timezoneId: 'Asia/Shanghai',
+      });
       await context.route('**/*', async (route: any) => {
         const request = route.request();
         if (!isSafeBrowserResourceUrl(request.url())) {
@@ -2092,12 +2126,15 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       durationMs: Date.now() - startTime,
     };
   } finally {
-    if (browser) {
-      try {
-        await browser.close();
-      } catch {
-        // ignore
+    try {
+      // launchPersistentContext 时优先关 context；否则关 browser
+      if (context && typeof (context as any).close === 'function') {
+        await (context as any).close().catch(() => {});
+      } else if (browser) {
+        await browser.close().catch(() => {});
       }
+    } catch {
+      // ignore
     }
   }
 }
