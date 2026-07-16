@@ -483,12 +483,17 @@ validate_resource_ceiling() {
 
 for resource_prefix in \
   MYSQL REDIS POSTGRES CORE_API AUTOMATION_API AUTOMATION_WORKER \
-  CRAWLER_API CRAWLER_WORKER USER_WEB ADMIN_WEB BLACKBOX ALERTMANAGER \
-  PROMETHEUS GRAFANA; do
+  CRAWLER_API CRAWLER_WORKER USER_WEB ADMIN_WEB; do
   validate_resource_ceiling "$resource_prefix"
 done
-[[ "$PROMETHEUS_RETENTION_SIZE" =~ ^[1-9][0-9]{0,5}(MB|GB|TB)$ ]] \
-  || fail "PROMETHEUS_RETENTION_SIZE must be an explicit MB, GB, or TB ceiling"
+if [[ "$MONITORING_ENABLED" == "true" ]]; then
+  for resource_prefix in \
+    BLACKBOX ALERTMANAGER PROMETHEUS GRAFANA; do
+    validate_resource_ceiling "$resource_prefix"
+  done
+  [[ "$PROMETHEUS_RETENTION_SIZE" =~ ^[1-9][0-9]{0,5}(MB|GB|TB)$ ]] \
+    || fail "PROMETHEUS_RETENTION_SIZE must be an explicit MB, GB, or TB ceiling"
+fi
 ok "Production resource ceilings passed"
 
 if [[ "${ADMIN_SEED_ENABLED:-false}" == "true" ]]; then
