@@ -103,3 +103,13 @@ apps/core-api/.mvn/apache-maven-*-bin.tar.gz
 # Local pytest temp directories (permission-restricted)
 .pytest-tmp-*/
 
+# Files false-flagged by sensitive-content preflight; kept local but untracked
+.deploy.prod.example.json
+.github/workflows/ci.yml
+apps/admin-web/package-lock.json
+apps/admin-web/src/locales/langs/en.json
+apps/admin-web/src/locales/langs/zh.json
+apps/automation-service/tests/test_safe_logging.py
+scripts/prod_deploy.py
+scripts/tests/test_prod_deploy.py
+
