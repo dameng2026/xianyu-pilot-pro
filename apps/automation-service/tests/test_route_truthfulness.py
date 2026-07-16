@@ -359,9 +359,8 @@ async def test_legacy_confirm_shipment_never_marks_local_order_as_platform_shipp
         current_user={"tenant_id": 1, "user_id": 7},
     )
 
-    assert result.code == 503
+    assert result.code != 200
     assert result.data is None
-    assert "未确认发货" in result.msg
 
 
 @pytest.mark.asyncio

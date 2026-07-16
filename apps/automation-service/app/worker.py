@@ -17,8 +17,14 @@ from .services.automation_runtime import execute_scheduled_task, list_due_tasks
 from .services.upload_governance import probe_upload_storage, reconcile_storage_assets
 
 logger = logging.getLogger(__name__)
-DEFAULT_HEARTBEAT_FILE = Path("/tmp/automation-worker-heartbeat")
 UPLOAD_IMAGES_ROOT = (Path(__file__).resolve().parent.parent / "uploads" / "images").resolve()
+
+# 心跳文件路径：优先使用环境变量，否则使用系统临时目录（跨平台兼容）
+if os.name == "nt":
+    import tempfile
+    DEFAULT_HEARTBEAT_FILE = Path(tempfile.gettempdir()) / "automation-worker-heartbeat"
+else:
+    DEFAULT_HEARTBEAT_FILE = Path("/tmp/automation-worker-heartbeat")
 
 
 def record_heartbeat(path: Path | None = None) -> None:

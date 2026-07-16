@@ -72,6 +72,13 @@ public class XianyuGoods extends BaseEntity {
     @Column(name = "status")
     private Integer status;
 
+    /**
+     * 商品级自动回复开关（与 automation-service 的 auto-reply-scope 同源）。
+     * 1-已开启，0-已关闭，null-未设置（继承账号级/全局）。
+     */
+    @Column(name = "auto_reply_enabled")
+    private Integer autoReplyEnabled;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 
@@ -128,4 +135,7 @@ public class XianyuGoods extends BaseEntity {
 
     public Integer getStatus() { return status; }
     public void setStatus(Integer status) { this.status = status; }
+
+    public Integer getAutoReplyEnabled() { return autoReplyEnabled; }
+    public void setAutoReplyEnabled(Integer autoReplyEnabled) { this.autoReplyEnabled = autoReplyEnabled; }
 }

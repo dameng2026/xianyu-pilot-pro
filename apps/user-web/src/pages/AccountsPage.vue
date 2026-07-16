@@ -909,7 +909,15 @@ async function handleManualSolve(accountId) {
   if (!accountId || manualRetryBusy.value === accountId || isAccountSolving(accountId)) return
   manualRetryBusy.value = accountId
   try {
-    await solveManually(accountId, 'manual')
+    // 根据当前求解状态判断场景：已有失败状态时为"重试求解"，否则为"手动触发"
+    const state = getAccountSolveStatus(accountId)
+    const scene = state && state.status === 'fail' ? 'manual_retry' : 'manual'
+    await solveManually(accountId, scene, {
+      openReason: '用户在账号管理页点击滑块求解按钮',
+      solveReason: scene === 'manual_retry'
+        ? '用户在账号管理页点击重试求解（上次求解失败）'
+        : '用户在账号管理页主动触发滑块求解',
+    })
   } finally {
     manualRetryBusy.value = null
   }

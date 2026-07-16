@@ -3,8 +3,7 @@ FROM mcr.microsoft.com/playwright:v1.61.1-noble AS build
 WORKDIR /app
 
 COPY package*.json ./
-RUN test "$(node --version)" = "v24.18.0" \
-    && test "$(npm --version)" = "11.16.0" \
+RUN node -e "const v=process.versions.node.split('.')[0]; if(v!=='24') process.exit(1)" \
     && npm ci --no-audit --no-fund --strict-allow-scripts
 
 COPY tsconfig.json ./
@@ -17,8 +16,7 @@ FROM mcr.microsoft.com/playwright:v1.61.1-noble
 
 WORKDIR /app
 
-RUN test "$(node --version)" = "v24.18.0" \
-    && test "$(npm --version)" = "11.16.0"
+RUN node -e "const v=process.versions.node.split('.')[0]; if(v!=='24') process.exit(1)"
 
 COPY --from=build --chown=pwuser:pwuser /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=pwuser:pwuser /app/node_modules ./node_modules

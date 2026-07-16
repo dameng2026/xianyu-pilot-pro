@@ -157,10 +157,11 @@ public class DeliveryOpsController {
         Long tenantId = requireTenant();
 
         // 查询待发货的订单（状态为已付款待发货，且有商品配置）
+        // 注意：oi.goods_id 可能存储闲鱼 external_goods_id，JOIN 需同时匹配内部ID或external_goods_id
         String sql = "SELECT o.id AS order_id, MAX(oi.goods_id) AS goods_id, MAX(g.account_id) AS account_id " +
                 "FROM xianyu_trade_order o " +
                 "JOIN xianyu_trade_order_item oi ON oi.order_id=o.id AND oi.deleted=0 " +
-                "JOIN xianyu_goods g ON g.id=oi.goods_id AND g.deleted=0 " +
+                "JOIN xianyu_goods g ON g.deleted=0 AND (g.id=oi.goods_id OR g.external_goods_id=CAST(oi.goods_id AS CHAR)) " +
                 "JOIN delivery_goods_config dgc ON dgc.goods_id=g.id AND dgc.tenant_id=? AND dgc.deleted=0 " +
                 "WHERE o.tenant_id=? AND o.deleted=0 AND o.order_status IN (1,2) " +
                 "AND dgc.config_json LIKE '%\"payDelivery\"%' " +

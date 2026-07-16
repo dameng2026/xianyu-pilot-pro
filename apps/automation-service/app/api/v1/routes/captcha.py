@@ -144,7 +144,10 @@ async def handle_captcha(
         "accountId": 1,
         "tenantId": 1,
         "response": <dict 或 str>,    # 可选，用于检测
-        "autoSolve": true              # 是否自动求解
+        "autoSolve": true,              # 是否自动求解
+        "triggerScene": "manual",       # 触发场景
+        "openReason": "",               # 开启原因（为什么打开滑块求解流程）
+        "solveReason": ""               # 求解原因（为什么进行滑块求解）
     }
     """
     try:
@@ -153,6 +156,8 @@ async def handle_captcha(
         response = data.get("response")
         auto_solve = bool(data.get("autoSolve", False))
         trigger_scene = str(data.get("triggerScene") or "manual")
+        open_reason = str(data.get("openReason") or "")
+        solve_reason = str(data.get("solveReason") or "")
 
         if not account_id or not tenant_id:
             return ResultObject.validate_failed("accountId 和 tenantId 不能为空")
@@ -163,6 +168,8 @@ async def handle_captcha(
             response=response,
             auto_solve=auto_solve,
             trigger_scene=trigger_scene,
+            open_reason=open_reason,
+            solve_reason=solve_reason,
         )
         return ResultObject.success(result)
     except Exception as e:
@@ -175,6 +182,7 @@ async def list_captcha_records(
     pageSize: int = 20,
     accountId: int = 0,
     status: str = "",
+    triggerScene: str = "",
     current_user: dict = Depends(get_current_user),
 ):
     """分页查询滑块求解记录。
@@ -184,6 +192,7 @@ async def list_captcha_records(
         pageSize: 每页条数（默认20）
         accountId: 账号ID筛选（可选）
         status: 状态筛选（可选: retrying/success/fail）
+        triggerScene: 触发场景筛选（可选: manual/manual_retry/ws_connect/cookie_keepalive/token_refresh）
     """
     try:
         tenant_id = int(current_user.get("tenant_id") or 0)
@@ -195,6 +204,7 @@ async def list_captcha_records(
             tenant_id=tenant_id,
             account_id=accountId,
             status=status,
+            trigger_scene=triggerScene,
             page=max(1, page),
             page_size=min(100, max(1, pageSize)),
         )

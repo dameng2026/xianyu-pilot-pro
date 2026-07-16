@@ -266,6 +266,12 @@ function normalizeGoofishItem(raw: unknown): CrawledItem | null {
     //   cardData 内含干净的 title / id / priceInfo / picInfo / detailParams
     getPath(raw, ['cardData']),
     getPath(raw, ['cardData', 'detailParams']),
+    getPath(raw, ['cardData', 'picInfo']),
+    // ★ 当 raw 本身就是 cardData 时（extractItemsFromJson 直接传入 cardData），
+    //   picInfo 是对象 {picUrl, width, height, hasVideo}，detailParams 含 picUrl 字符串，
+    //   需要把它们加入候选，findValue 才能从中提取 picUrl 字符串
+    getPath(raw, ['picInfo']),
+    getPath(raw, ['detailParams']),
     getPath(raw, ['data', 'item', 'main', 'exContent']),
     getPath(raw, ['data', 'item', 'main']),
     getPath(raw, ['item', 'main', 'exContent']),
@@ -635,8 +641,12 @@ async function autoScrollUntilStable(
 }
 
 async function extractDomItems(page: Page): Promise<CrawledItem[]> {
+  // 注意：page.evaluate 回调内部必须使用箭头函数/匿名函数表达式，禁止使用命名 function 声明。
+  // 原因：tsx(esbuild keepNames)会对命名 function 声明注入 __name helper，
+  // 回调被序列化到浏览器执行时 __name 未定义会抛 ReferenceError，导致整个爬取崩溃。
+  // 箭头函数与 const 赋值的匿名函数表达式不会被注入 __name，可以安全序列化。
   const domItems = await page.evaluate<Array<{ title?: string; description?: string; price?: string; imageUrl?: string; itemUrl?: string; itemId?: string }>>(() => {
-    const normalize = (value?: string | null) => (value || '').replace(/\s+/g, ' ').trim();
+    const normalize = (value?: string | null): string => (value || '').replace(/\s+/g, ' ').trim();
     const results: Array<{ title?: string; description?: string; price?: string; imageUrl?: string; itemUrl?: string; itemId?: string }> = [];
     const anchors = Array.from(document.querySelectorAll('a[href]')) as HTMLAnchorElement[];
     for (const a of anchors) {
@@ -1034,7 +1044,14 @@ export async function crawlGoofishStoreDetailed(url: string, cookieHeader?: stri
     await Promise.allSettled(pendingParses);
     await page.waitForTimeout(1000);
 
-    const domItems = await extractDomItems(page);
+    // DOM 兜底提取：仅作为网络拦截的补充。即使失败（浏览器结构变更/序列化异常）也不应中断主流程，
+    // 因为 networkItems 通常已包含完整商品列表。
+    let domItems: CrawledItem[] = [];
+    try {
+      domItems = await extractDomItems(page);
+    } catch (domErr: any) {
+      console.warn(`[Crawler] DOM 兜底提取失败，跳过(不影响网络拦截结果): errorType=${safeErrorType(domErr)}`);
+    }
     diagnostics.networkCandidateCount = networkItems.length;
     diagnostics.domCandidateCount = domItems.length;
 
@@ -1059,22 +1076,27 @@ export async function crawlGoofishStoreDetailed(url: string, cookieHeader?: stri
     // ★ 为每个商品补充详情页描述（店铺列表 API 不含商品文案，需逐个访问详情页获取）
     //   使用 ?id= 格式打开 https://www.goofish.com/item?id={itemId}，
     //   拦截 mtop.taobao.idle.pc.detail 响应，提取 data.itemDO.desc
+    //   并行获取（有限并发 5），避免串行 30×8s=240s 接近前端 5 分钟轮询超时
     const itemsNeedingDesc = items.filter((it) => it.itemId && !it.description);
     const fetchCount = Math.min(itemsNeedingDesc.length, MAX_DETAIL_FETCHES);
     if (fetchCount > 0) {
-      console.log(`[Crawler] 开始获取商品描述: count=${fetchCount}/${itemsNeedingDesc.length}`);
+      console.log(`[Crawler] 开始并行获取商品描述: count=${fetchCount}/${itemsNeedingDesc.length}, concurrency=5`);
+      const DETAIL_CONCURRENCY = 5;
       let descOk = 0;
-      for (let i = 0; i < fetchCount; i++) {
-        const item = itemsNeedingDesc[i];
-        const desc = await fetchItemDescription(context, item.itemId!);
-        if (desc) {
-          item.description = desc;
-          descOk++;
-        }
-        // 日志：每 5 个输出一次进度
-        if ((i + 1) % 5 === 0 || i === fetchCount - 1) {
-          console.log(`[Crawler] 描述获取进度: ${i + 1}/${fetchCount}, 成功=${descOk}`);
-        }
+      let completed = 0;
+      for (let start = 0; start < fetchCount; start += DETAIL_CONCURRENCY) {
+        const batch = itemsNeedingDesc.slice(start, start + DETAIL_CONCURRENCY);
+        const results = await Promise.allSettled(
+          batch.map((item) => fetchItemDescription(context, item.itemId!))
+        );
+        results.forEach((res, idx) => {
+          completed += 1;
+          if (res.status === 'fulfilled' && res.value) {
+            batch[idx].description = res.value;
+            descOk += 1;
+          }
+        });
+        console.log(`[Crawler] 描述获取进度: ${completed}/${fetchCount}, 成功=${descOk}`);
       }
       console.log(`[Crawler] 商品描述获取完成: 成功=${descOk}/${fetchCount}`);
     }

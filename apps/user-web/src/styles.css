@@ -124,7 +124,13 @@ a {
 .nav-scroll {
   overflow: auto;
   padding-right: 2px;
-  flex: 1
+  flex: 1;
+  scrollbar-width: none;
+  -ms-overflow-style: none
+}
+
+.nav-scroll::-webkit-scrollbar {
+  display: none
 }
 
 .nav-group {

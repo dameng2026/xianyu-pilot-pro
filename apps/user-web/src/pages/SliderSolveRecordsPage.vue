@@ -16,17 +16,33 @@
             <option value="fail">失败</option>
             <option value="retrying">重试中</option>
           </select>
+          <select v-model="filters.triggerScene" class="input" @change="search">
+            <option value="">全部触发场景</option>
+            <option value="manual">手动触发</option>
+            <option value="manual_retry">手动重试</option>
+            <option value="ws_connect">WS 连接</option>
+            <option value="cookie_keepalive">Cookie 保活</option>
+            <option value="token_refresh">Token 刷新</option>
+          </select>
           <AppButton type="primary" :disabled="loading" @click="search">{{ loading ? '查询中...' : '查询' }}</AppButton>
         </div>
         <BaseTable :columns="cols" :rows="rows" @row-click="showDetail">
+          <template #createdAt="{row}">{{ formatDateTime(row.createdAt) }}</template>
           <template #accountId="{row}"><span :title="row.accountId">{{ row.accountId || '-' }}</span></template>
           <template #accountName="{row}"><span :title="row.accountName">{{ row.accountName || '-' }}</span></template>
-          <template #eventDesc="{row}"><span :title="row.eventDesc">{{ row.eventDesc || '-' }}</span></template>
-          <template #result="{row}"><Badge :type="resultBadge(row.result)">{{ resultText(row.result) }}</Badge></template>
+          <template #openReason="{row}"><span :title="row.openReason" class="cell-truncate">{{ row.openReason || '-' }}</span></template>
+          <template #solveReason="{row}"><span :title="row.solveReason" class="cell-truncate">{{ row.solveReason || '-' }}</span></template>
           <template #status="{row}"><Badge :type="statusBadge(row.status)">{{ statusText(row.status) }}</Badge></template>
-          <template #engine="{row}"><span :title="row.engine">{{ row.engine || '-' }}</span></template>
-          <template #createdAt="{row}">{{ formatDateTime(row.createdAt) }}</template>
-          <template #updatedAt="{row}">{{ formatDateTime(row.updatedAt) }}</template>
+          <template #failed="{row}">
+            <Badge v-if="row.status === 'fail'" type="red">失败</Badge>
+            <Badge v-else-if="row.status === 'success'" type="green">成功</Badge>
+            <Badge v-else type="orange">重试中</Badge>
+          </template>
+          <template #failReason="{row}">
+            <span v-if="row.status === 'fail' && row.errorMessage" :title="row.errorMessage" class="cell-truncate fail-text">{{ row.errorMessage }}</span>
+            <span v-else-if="row.status === 'fail'" class="cell-truncate fail-text">{{ row.result === 'slider_success' ? '滑块已通过但 Cookie Session 已过期' : '滑块验证未通过' }}</span>
+            <span v-else>-</span>
+          </template>
           <template #empty><EmptyState icon="🧩" title="暂无滑块求解记录" description="滑块验证记录将在此显示。" /></template>
         </BaseTable>
         <Pagination :total="total" :current="current" :page-size="size" @page-change="goPage" />
@@ -42,17 +58,31 @@
         <div class="grid" style="grid-template-columns:repeat(2,1fr);gap:10px">
           <div class="metric-tile"><span>账号ID</span><b :title="detail.accountId">{{ detail.accountId || '-' }}</b></div>
           <div class="metric-tile"><span>账号名称</span><b :title="detail.accountName">{{ detail.accountName || '-' }}</b></div>
-          <div class="metric-tile"><span>处理结果</span><Badge :type="resultBadge(detail.result)">{{ resultText(detail.result) }}</Badge></div>
           <div class="metric-tile"><span>处理状态</span><Badge :type="statusBadge(detail.status)">{{ statusText(detail.status) }}</Badge></div>
+          <div class="metric-tile"><span>是否失败</span>
+            <Badge v-if="detail.status === 'fail'" type="red">失败</Badge>
+            <Badge v-else-if="detail.status === 'success'" type="green">成功</Badge>
+            <Badge v-else type="orange">重试中</Badge>
+          </div>
+          <div class="metric-tile"><span>处理结果</span><Badge :type="resultBadge(detail.result)">{{ resultText(detail.result) }}</Badge></div>
           <div class="metric-tile"><span>验证引擎</span><b :title="detail.engine">{{ detail.engine || '-' }}</b></div>
-          <div class="metric-tile"><span>事件来源</span><b :title="detail.eventSource">{{ detail.eventSource || '-' }}</b></div>
+          <div class="metric-tile"><span>触发场景</span><b :title="detail.triggerScene">{{ triggerSceneText(detail.triggerScene) }}</b></div>
+          <div class="metric-tile"><span>重试次数</span><b>{{ detail.retryCount ?? 0 }}</b></div>
         </div>
-        <div class="option-line"><span>事件描述</span><b>{{ detail.eventDesc || '-' }}</b></div>
-        <div class="option-line"><span>创建时间</span><b>{{ formatDateTime(detail.createdAt) }}</b></div>
+        <div class="option-line"><span>记录时间</span><b>{{ formatDateTime(detail.createdAt) }}</b></div>
         <div class="option-line"><span>更新时间</span><b>{{ formatDateTime(detail.updatedAt) }}</b></div>
-        <div v-if="detail.errorMessage" class="error-message">
-          <div class="error-message-head">错误信息</div>
-          <pre class="error-message-body">{{ detail.errorMessage }}</pre>
+        <div class="option-line"><span>事件描述</span><b>{{ detail.eventDesc || '-' }}</b></div>
+        <div class="option-line option-line-block">
+          <span>开启原因</span>
+          <div class="option-content">{{ detail.openReason || '-' }}</div>
+        </div>
+        <div class="option-line option-line-block">
+          <span>求解原因</span>
+          <div class="option-content">{{ detail.solveReason || '-' }}</div>
+        </div>
+        <div v-if="detail.status === 'fail'" class="error-message">
+          <div class="error-message-head">失败原因</div>
+          <pre class="error-message-body">{{ detail.errorMessage || (detail.result === 'slider_success' ? '滑块已通过但 Cookie Session 已过期，需重新扫码登录' : '滑块验证未通过') }}</pre>
         </div>
       </template>
       <EmptyState v-else icon="🧩" title="选择记录查看详情" description="点击左侧列表中的任意一行，这里会展示该滑块求解记录的完整信息。" />
@@ -61,7 +91,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import StatCard from '../components/StatCard.vue'
 import CardPanel from '../components/CardPanel.vue'
 import BaseTable from '../components/BaseTable.vue'
@@ -79,17 +109,17 @@ const total = ref(0)
 const current = ref(1)
 const size = ref(20)
 const detail = ref(null)
-const filters = reactive({ status: '' })
+const filters = reactive({ status: '', triggerScene: '' })
 
 const cols = [
+  { key: 'createdAt', title: '记录时间' },
   { key: 'accountId', title: '账号ID' },
   { key: 'accountName', title: '账号名称' },
-  { key: 'eventDesc', title: '事件描述' },
-  { key: 'result', title: '处理结果' },
-  { key: 'status', title: '处理状态' },
-  { key: 'engine', title: '验证引擎' },
-  { key: 'createdAt', title: '创建时间' },
-  { key: 'updatedAt', title: '更新时间' }
+  { key: 'openReason', title: '开启原因' },
+  { key: 'solveReason', title: '求解原因' },
+  { key: 'status', title: '求解状态' },
+  { key: 'failed', title: '是否失败' },
+  { key: 'failReason', title: '失败原因' }
 ]
 
 const successCount = computed(() => rows.value.filter(r => r.status === 'success').length)
@@ -118,6 +148,16 @@ function statusBadge(status) {
   if (status === 'retrying') return 'orange'
   return 'gray'
 }
+function triggerSceneText(scene) {
+  const map = {
+    manual: '手动触发',
+    manual_retry: '手动重试',
+    ws_connect: 'WS 连接',
+    cookie_keepalive: 'Cookie 保活',
+    token_refresh: 'Token 刷新',
+  }
+  return map[scene] || scene || '-'
+}
 
 function formatDateTime(value) {
   if (!value) return '-'
@@ -131,11 +171,13 @@ async function load() {
   total.value = 0
   detail.value = null
   try {
-    const res = await getCaptchaRecords({
+    const params = {
       page: current.value,
       pageSize: size.value,
-      status: filters.status
-    })
+      status: filters.status,
+    }
+    if (filters.triggerScene) params.triggerScene = filters.triggerScene
+    const res = await getCaptchaRecords(params)
     // 兼容两种响应：Java 网关拆包后 { list, total, ... } 或未拆包 { code, data: { list, total, ... } }
     const payload = res && res.data && (Array.isArray(res.data.list) || res.data.total != null) ? res.data : (res || {})
     const list = Array.isArray(payload.list) ? payload.list : []
@@ -160,8 +202,42 @@ function search() {
 
 function showDetail(row) { detail.value = row }
 
+// ============================================================
+// SSE 事件监听：收到 captcha_solve 事件时自动刷新记录列表
+// ============================================================
+// 用户反馈：手动点击滑块求解后，本页未显示新增记录。
+// 原因：页面仅在 onMounted 时加载一次，不感知后端写入的新记录。
+// 修复：监听全局 SSE 事件 captcha_solve（与 useCaptchaSolver.js 一致的事件源），
+//       收到事件后刷新列表。为避免 retrying→success/fail 两次事件导致重复请求，加 800ms 防抖。
+let refreshTimer = null
+function scheduleRefresh() {
+  if (refreshTimer) clearTimeout(refreshTimer)
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null
+    // 仅当用户未离开本页且非查询中时刷新，避免与手动查询冲突
+    if (!loading.value) load()
+  }, 800)
+}
+
+function onSseCaptchaSolve(event) {
+  const evtDetail = event?.detail
+  const data = evtDetail?.payload || evtDetail || {}
+  const eventType = evtDetail?.type || data.type || ''
+  if (eventType !== 'captcha_solve') return
+  scheduleRefresh()
+}
+
 onMounted(() => {
   load()
+  window.addEventListener('xya-sse-event', onSseCaptchaSolve)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('xya-sse-event', onSseCaptchaSolve)
+  if (refreshTimer) {
+    clearTimeout(refreshTimer)
+    refreshTimer = null
+  }
 })
 </script>
 
@@ -180,6 +256,33 @@ onMounted(() => {
 }
 .slider-layout :deep(.base-table tbody tr:hover) {
   background: #f3f8ff;
+}
+.cell-truncate {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.fail-text {
+  color: #ef4444;
+}
+.option-line-block {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.option-line-block .option-content {
+  width: 100%;
+  padding: 8px 12px;
+  background: #f6f8fa;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #475569;
+  word-break: break-word;
+  white-space: pre-wrap;
 }
 .error-message {
   margin-top: 14px;

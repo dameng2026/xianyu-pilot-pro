@@ -95,14 +95,8 @@ public class XianyuGoodsService {
         List<XianyuGoods> list = goodsMapper.list(tenantId, accountId, keyword, dbStatus, dbExcludeStatus, deleted, offset, limit);
 
         List<Long> goodsIds = list.stream().map(XianyuGoods::getId).collect(Collectors.toList());
-        List<Long> accountIds = list.stream()
-                .map(XianyuGoods::getAccountId)
-                .filter(Objects::nonNull)
-                .distinct()
-                .collect(Collectors.toList());
 
         Map<Long, Map<String, Object>> deliveryRuleMap = new HashMap<>();
-        Set<Long> autoReplyAccountSet = new HashSet<>();
 
         if (!goodsIds.isEmpty()) {
             List<Map<String, Object>> deliveryRules = goodsMapper.findDeliveryRulesForGoods(tenantId, goodsIds);
@@ -114,13 +108,6 @@ public class XianyuGoodsService {
                 }
             }
             deliveryRuleMap.putAll(latestRulePerGoods);
-        }
-
-        if (!accountIds.isEmpty()) {
-            List<Long> replyAccounts = goodsMapper.findAccountsWithAutoReply(tenantId, accountIds);
-            if (replyAccounts != null) {
-                autoReplyAccountSet.addAll(replyAccounts);
-            }
         }
 
         List<XianyuGoodsVO> records = new ArrayList<>();
@@ -139,11 +126,10 @@ public class XianyuGoodsService {
                 vo.setXianyuAutoDeliveryOn(0);
             }
 
-            if (g.getAccountId() != null && autoReplyAccountSet.contains(g.getAccountId())) {
-                vo.setXianyuAutoReplyOn(1);
-            } else {
-                vo.setXianyuAutoReplyOn(0);
-            }
+            // 自动回复开关直接读取 xianyu_goods.auto_reply_enabled 列，
+            // 与「自动回复」页面（automation-service auto-reply-scope）保持同源同步：
+            // 1-已开启，0-已关闭，null-未设置（继承账号级/全局）。
+            vo.setXianyuAutoReplyOn(g.getAutoReplyEnabled());
 
             vo.setSkuCount(0);
             records.add(vo);
@@ -161,7 +147,8 @@ public class XianyuGoodsService {
         int onSale = toInt(statusStats != null ? statusStats.get("onSale") : null);
         int offShelfOrDraft = toInt(statusStats != null ? statusStats.get("offShelfOrDraft") : null);
         int autoDeliveryOn = goodsMapper.countAutoDeliveryOn(tenantId, accountId);
-        int autoReplyAccounts = goodsMapper.countAutoReplyAccounts(tenantId, accountId);
+        // 自动回复账号数与「自动回复」页面同源，统计 xianyu_goods.auto_reply_enabled=1 的账号数
+        int autoReplyAccounts = goodsMapper.countAutoReplyEnabledAccounts(tenantId, accountId);
 
         Map<String, Object> result = new HashMap<>();
         result.put("total", total);
@@ -201,8 +188,7 @@ public class XianyuGoodsService {
         }
 
         if (goods.getAccountId() != null) {
-            List<Long> replyAccounts = goodsMapper.findAccountsWithAutoReply(tenantId, Collections.singletonList(goods.getAccountId()));
-            vo.setXianyuAutoReplyOn(replyAccounts != null && replyAccounts.contains(goods.getAccountId()) ? 1 : 0);
+            vo.setXianyuAutoReplyOn(goods.getAutoReplyEnabled());
         } else {
             vo.setXianyuAutoReplyOn(0);
         }

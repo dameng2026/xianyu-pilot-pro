@@ -181,4 +181,19 @@ public interface XianyuGoodsMapper {
             "AND EXISTS (SELECT 1 FROM xianyu_account_auth auth WHERE auth.tenant_id = auto_reply_rule.tenant_id AND auth.account_id = auto_reply_rule.account_id AND auth.deleted = 0 AND auth.cookie_status = 1) " +
             "</script>")
     int countAutoReplyAccounts(@Param("tenantId") Long tenantId, @Param("accountId") Long accountId);
+
+    /**
+     * 统计存在商品级自动回复开启（xianyu_goods.auto_reply_enabled=1）的账号数，
+     * 与「自动回复」页面（automation-service auto-reply-scope）同源。
+     */
+    @Select("<script>" +
+            "SELECT COUNT(DISTINCT account_id) " +
+            "FROM xianyu_goods " +
+            "WHERE tenant_id = #{tenantId} AND deleted = 0 AND auto_reply_enabled = 1 AND account_id IS NOT NULL " +
+            "<if test='accountId != null'>" +
+            "  AND account_id = #{accountId} " +
+            "</if>" +
+            "AND NOT EXISTS (SELECT 1 FROM xianyu_account acc WHERE acc.tenant_id = xianyu_goods.tenant_id AND acc.id = xianyu_goods.account_id AND acc.deleted = 1) " +
+            "</script>")
+    int countAutoReplyEnabledAccounts(@Param("tenantId") Long tenantId, @Param("accountId") Long accountId);
 }

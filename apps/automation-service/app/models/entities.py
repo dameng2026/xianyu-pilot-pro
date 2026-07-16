@@ -22,6 +22,9 @@ class XianyuAccount(Base):
     account_level = Column(String(50), nullable=True)
     remark = Column(Text, nullable=True)
     status = Column(SmallInteger, default=1, comment="1正常 0禁用")
+    # 鱼小铺标识字段（与 Java XianyuAccount.fishShopUser 对齐，数据库列名 fish_shop_user）
+    # 由 Java 端从闲鱼接口 superShow 字段解析后写入。Python 端只读，用于发布时区分账号类型
+    fish_shop_user = Column(SmallInteger, default=0, comment="1鱼小铺账号 0普通账号")
     deleted = Column(SmallInteger, default=0)
     created_time = Column(DateTime, default=func.now())
     updated_time = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -734,6 +737,8 @@ class XianyuCaptchaSolveRecord(Base):
     account_id = Column(BigInteger, nullable=False, comment="账号ID")
     account_name = Column(String(128), default="", comment="账号名称")
     event_desc = Column(String(255), nullable=False, comment="事件描述")
+    open_reason = Column(String(255), default="", comment="开启原因：为什么打开滑块求解流程（手动/自动 等）")
+    solve_reason = Column(String(255), default="", comment="求解原因：为什么进行滑块求解（具体业务原因）")
     trigger_scene = Column(String(64), default="", comment="触发场景: ws_connect/cookie_keepalive/token_refresh/manual")
     result = Column(String(32), default="", comment="处理结果: slider_success/slider_fail")
     status = Column(String(32), nullable=False, default="retrying", comment="处理状态: retrying/success/fail")

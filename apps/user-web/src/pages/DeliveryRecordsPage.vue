@@ -54,6 +54,20 @@
         <template #status="{ row }">
           <Badge :type="row.deliveryBadge">{{ row.deliveryStatusText }}</Badge>
         </template>
+        <template #goods="{ row }">
+          <div class="goods-cell">
+            <img
+              v-if="row.goodsCoverPic"
+              :src="row.goodsCoverPic"
+              :alt="row.goodsTitleText"
+              class="goods-thumb"
+              loading="lazy"
+              referrerpolicy="no-referrer"
+              @error="onGoodsThumbError"
+            />
+            <span class="goods-name" :title="row.goodsTitleText">{{ row.goodsTitleText }}</span>
+          </div>
+        </template>
         <template #timing="{ row }">
           {{ row.timingText }}
         </template>
@@ -69,7 +83,7 @@
         <template #op="{ row }">
           <div class="inline-actions">
             <button class="link" @click.stop="showDetail(row)">详情</button>
-            <button v-if="row.canRetry" class="link" @click.stop="retry(row.id)">重试</button>
+            <button v-if="row.canRedeliver" class="link" @click.stop="redeliver(row.id)">重新发货</button>
             <button v-if="row.canScheduleRedelivery" class="link" @click.stop="openSchedule(row)">安排重新发货</button>
           </div>
         </template>
@@ -81,8 +95,25 @@
       <div class="detail-grid delivery-record-detail-grid">
         <div><b>记录 ID：</b> {{ detailView.id || '-' }}</div>
         <div><b>订单号：</b> {{ detailView.orderId || '-' }}</div>
-        <div><b>商品：</b> {{ detailView.goodsTitleText }}</div>
-        <div><b>买家：</b> {{ detailView.buyerNameText }}</div>
+        <div><b>外部订单号：</b> {{ detailView.externalOrderIdText }}</div>
+        <div><b>商品 ID：</b> {{ detailView.goodsIdText }}</div>
+        <div><b>商品名称：</b> {{ detailView.goodsNameText }}</div>
+        <div class="detail-goods-row"><b>商品：</b>
+          <div class="goods-cell">
+            <img
+              v-if="detailView.goodsCoverPic"
+              :src="detailView.goodsCoverPic"
+              :alt="detailView.goodsTitleText"
+              class="goods-thumb"
+              referrerpolicy="no-referrer"
+              @error="onGoodsThumbError"
+            />
+            <span>{{ detailView.goodsTitleText }}</span>
+          </div>
+        </div>
+        <div><b>买家用户：</b> {{ detailView.buyerNameText }} <span v-if="detailView.buyerIdText && detailView.buyerIdText !== '-'" class="muted">（{{ detailView.buyerIdText }}）</span></div>
+        <div><b>卖家用户：</b> {{ detailView.sellerNameText }}</div>
+        <div><b>购买时间：</b> {{ detailView.purchaseTimeText }}</div>
         <div><b>状态：</b> {{ detailView.deliveryStatusText }}</div>
         <div><b>进度：</b> {{ detailView.deliveryProgressText }}</div>
         <div><b>时机：</b> {{ detailView.timingText }}</div>
@@ -104,7 +135,7 @@
       </div>
 
       <div class="inline-actions">
-        <AppButton v-if="detailView.canRetry" @click="retry(detailView.id)">重试当前记录</AppButton>
+        <AppButton v-if="detailView.canRedeliver" @click="redeliver(detailView.id)">重新发货</AppButton>
         <AppButton v-if="detailView.canScheduleRedelivery" @click="openSchedule(detailView)">安排重新发货</AppButton>
       </div>
     </CardPanel>
@@ -177,14 +208,15 @@ const redeliveryForm = reactive({
 const columns = [
   { key: 'id', title: 'ID' },
   { key: 'orderId', title: '订单号' },
-  { key: 'goodsTitleText', title: '商品' },
+  { key: 'goods', title: '商品' },
   { key: 'buyerNameText', title: '买家' },
+  { key: 'sellerNameText', title: '卖家' },
   { key: 'timing', title: '时机' },
   { key: 'mode', title: '方式' },
   { key: 'status', title: '状态' },
   { key: 'progress', title: '进度' },
   { key: 'errorMessage', title: '错误' },
-  { key: 'createdTimeText', title: '创建时间' },
+  { key: 'purchaseTimeText', title: '订单时间' },
   { key: 'op', title: '操作' }
 ]
 
@@ -194,6 +226,14 @@ const detailView = computed(() => (detail.value ? buildDeliveryRecordDetailViewM
 function clearNotice() {
   error.value = ''
   success.value = ''
+}
+
+/**
+ * 商品缩略图加载失败时隐藏 img，避免破图图标，仅保留文字名称。
+ */
+function onGoodsThumbError(event) {
+  const img = event?.target
+  if (img && img.style) img.style.display = 'none'
 }
 
 function buildQuery() {
@@ -271,6 +311,28 @@ async function retry(id) {
     }
   } catch (requestError) {
     error.value = requestError.message || '重试发货记录失败'
+  }
+}
+
+/**
+ * 重新发货：对所有状态的发货记录均可调用。
+ * 后端 retryDelivery 接口会重置 status=0 后重新执行发货流程。
+ */
+async function redeliver(id) {
+  if (!recordsAvailable.value) {
+    error.value = '发货记录列表不可用，无法确认要重新发货的记录'
+    return
+  }
+  clearNotice()
+  try {
+    await retryDeliveryRecord(id)
+    success.value = `已请求重新发货记录 #${id}`
+    await load()
+    if (detail.value?.id === id) {
+      await showDetail(detail.value)
+    }
+  } catch (requestError) {
+    error.value = requestError.message || '重新发货失败'
   }
 }
 
@@ -396,7 +458,7 @@ async function exportCsv() {
       return
     }
 
-    const headers = ['ID', '订单号', '商品', '买家', '时机', '方式', '状态', '进度', '错误', '创建时间']
+    const headers = ['ID', '订单号', '商品', '买家', '卖家', '时机', '方式', '状态', '进度', '错误', '订单时间']
     const lines = [
       headers.join(','),
       ...exportRows.map(row => ([
@@ -404,12 +466,13 @@ async function exportCsv() {
         row.orderId,
         row.goodsTitleText,
         row.buyerNameText,
+        row.sellerNameText,
         row.timingText,
         row.deliveryModeText,
         row.deliveryStatusText,
         row.deliveryProgressText,
         row.errorMessage || '',
-        row.createdTimeText
+        row.purchaseTimeText
       ]).map(escapeCsv).join(','))
     ]
 
@@ -490,6 +553,47 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.goods-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.goods-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid #e6ecf5;
+  background: #f5f7fa;
+  flex-shrink: 0;
+}
+
+.goods-name {
+  display: inline-block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.detail-goods-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.detail-goods-row b {
+  flex-shrink: 0;
+}
+
+.detail-goods-row .goods-name {
+  max-width: 240px;
 }
 
 .inline-actions {

@@ -169,7 +169,11 @@ public class DeliveryExecutionService {
 
             if (!isManualWithContent) {
                 // 3. 非手动发货：获取商品发货配置
-                Map<String, Object> goodsConfig = getGoodsDeliveryConfig(tenantId, firstItem.getGoodsId());
+                // 注意：xianyu_trade_order_item.goods_id 可能存储的是闲鱼 external_goods_id
+                // （Python sync_sold_orders 直接将 MTOP 返回的 itemId 写入 goods_id 字段）。
+                // 需要先尝试用 goods_id 查 xianyu_goods.id；若查不到，尝试用 external_goods_id 映射。
+                Long internalGoodsId = resolveInternalGoodsId(tenantId, firstItem);
+                Map<String, Object> goodsConfig = getGoodsDeliveryConfig(tenantId, internalGoodsId);
                 if (goodsConfig == null || goodsConfig.isEmpty()) {
                     throw new BizException(422, "商品未配置自动发货规则");
                 }
@@ -270,10 +274,44 @@ public class DeliveryExecutionService {
                 cardConsumed = true;
             }
 
-            // 9. 更新订单发货状态
+            // 9. 调用闲鱼确认发货 API，只有平台真正标记为已发货后才更新本地 order_status=3
+            // 避免本地标记 3 但闲鱼平台实际未发货的状态不一致问题
+            Map<String, Object> confirmPayload = new LinkedHashMap<>();
+            confirmPayload.put("tenantId", tenantId);
+            confirmPayload.put("accountId", accountId);
+            confirmPayload.put("externalOrderId", order.getExternalOrderId());
+            confirmPayload.put("isBargain", Boolean.TRUE.equals(order.getIsBargain()));
+            String itemId = firstItem.getExternalGoodsId() != null && !firstItem.getExternalGoodsId().isBlank()
+                    ? firstItem.getExternalGoodsId()
+                    : String.valueOf(firstItem.getGoodsId());
+            confirmPayload.put("itemId", itemId);
+            confirmPayload.put("buyerId", buyerId);
+
+            Map<String, Object> confirmResult;
+            try {
+                confirmResult = automationClient.postInternalForData(
+                        "/api/internal/orders/confirm-shipment", confirmPayload, 30, tenantId);
+            } catch (Exception e) {
+                log.warn("确认发货调用失败 orderId={}, errorType={}, message={}",
+                        orderId, e.getClass().getSimpleName(), e.getMessage());
+                throw new BizException(503, "确认发货服务暂时不可用，请稍后重试");
+            }
+
+            boolean confirmSuccess = confirmResult != null
+                    && (Boolean.TRUE.equals(confirmResult.get("success"))
+                        || "true".equals(String.valueOf(confirmResult.get("success"))));
+            if (!confirmSuccess) {
+                String confirmError = confirmResult != null
+                        ? String.valueOf(confirmResult.getOrDefault("message", "确认发货失败"))
+                        : "确认发货失败";
+                log.warn("确认发货失败 orderId={}, error={}", orderId, confirmError);
+                throw new BizException(503, "发货消息已发送，但确认发货失败：" + confirmError);
+            }
+
+            // 10. 确认发货成功，更新订单发货状态
             orderMapper.updateDeliveryStatus(tenantId, orderId, 1, 3);
 
-            // 10. 更新发货记录为成功
+            // 11. 更新发货记录为成功
             jdbcTemplate.update(
                     "UPDATE delivery_record SET account_id=?, status=2, delivery_status='success', delivery_type=?, delivery_mode=?, delivery_content=?, content=?, delivery_timing=?, " +
                             "delivery_time=NOW(), completed_time=NOW(), card_item_id=?, updated_time=NOW() WHERE id=? AND tenant_id=?",
@@ -571,6 +609,73 @@ public class DeliveryExecutionService {
      */
     private Map<String, Object> getGoodsDeliveryConfig(Long tenantId, Long goodsId) {
         return goodsConfigService.read(tenantId, goodsId);
+    }
+
+    /**
+     * 将订单项中的 goods_id 解析为 xianyu_goods 内部 ID。
+     *
+     * 背景：Python sync_sold_orders 将闲鱼 MTOP 返回的 itemId（external_goods_id）
+     * 直接写入 xianyu_trade_order_item.goods_id，而非 xianyu_goods.id。
+     * delivery_goods_config.goods_id 关联的是 xianyu_goods.id，因此需要映射。
+     *
+     * 解析策略：
+     * 1. 先用 firstItem.goods_id 查 xianyu_goods.id（正常场景，goods_id 已是内部 ID）
+     * 2. 若查不到，将 goods_id 视为 external_goods_id 再查一次
+     * 3. 若仍查不到，尝试 firstItem.externalGoodsId 字段
+     */
+    private Long resolveInternalGoodsId(Long tenantId, XianyuTradeOrderItem firstItem) {
+        Long rawGoodsId = firstItem.getGoodsId();
+        if (rawGoodsId == null || rawGoodsId <= 0) {
+            throw new BizException(409, "订单商品信息缺失，无法发货");
+        }
+
+        // 策略1：直接作为 xianyu_goods.id 查询
+        try {
+            Integer count = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM xianyu_goods WHERE tenant_id=? AND deleted=0 AND id=?",
+                    Integer.class, tenantId, rawGoodsId);
+            if (count != null && count > 0) {
+                return rawGoodsId;
+            }
+        } catch (Exception e) {
+            log.debug("按 xianyu_goods.id 查询失败 goodsId={}, errorType={}", rawGoodsId, e.getClass().getSimpleName());
+        }
+
+        // 策略2：将 goods_id 视为 external_goods_id 查询
+        String extId = String.valueOf(rawGoodsId);
+        try {
+            Long internalId = jdbcTemplate.queryForObject(
+                    "SELECT id FROM xianyu_goods WHERE tenant_id=? AND deleted=0 AND external_goods_id=? ORDER BY id DESC LIMIT 1",
+                    Long.class, tenantId, extId);
+            if (internalId != null && internalId > 0) {
+                log.info("goods_id 映射: rawGoodsId={} -> internalId={} (via external_goods_id)", rawGoodsId, internalId);
+                return internalId;
+            }
+        } catch (EmptyResultDataAccessException e) {
+            // 继续策略3
+        } catch (Exception e) {
+            log.debug("按 external_goods_id 查询失败 extId={}, errorType={}", extId, e.getClass().getSimpleName());
+        }
+
+        // 策略3：使用 firstItem.externalGoodsId 字段
+        String externalGoodsId = firstItem.getExternalGoodsId();
+        if (externalGoodsId != null && !externalGoodsId.isBlank()) {
+            try {
+                Long internalId = jdbcTemplate.queryForObject(
+                        "SELECT id FROM xianyu_goods WHERE tenant_id=? AND deleted=0 AND external_goods_id=? ORDER BY id DESC LIMIT 1",
+                        Long.class, tenantId, externalGoodsId);
+                if (internalId != null && internalId > 0) {
+                    log.info("goods_id 映射: externalGoodsId={} -> internalId={}", externalGoodsId, internalId);
+                    return internalId;
+                }
+            } catch (Exception e) {
+                log.debug("按 externalGoodsId 字段查询失败 externalGoodsId={}, errorType={}", externalGoodsId, e.getClass().getSimpleName());
+            }
+        }
+
+        log.warn("无法解析内部商品ID tenantId={} rawGoodsId={} externalGoodsId={}", tenantId, rawGoodsId, externalGoodsId);
+        // 返回 rawGoodsId 让上层 getGoodsDeliveryConfig → requireGoods 抛出明确错误
+        return rawGoodsId;
     }
 
     /**

@@ -20,7 +20,6 @@ export const navGroups = [
     { key: 'auto-delivery', label: '自动发货', icon: 'truck' },
     { key: 'delivery-source-library', label: '货源库', icon: 'document', child: true },
     { key: 'delivery-statement', label: '发货声明', icon: 'document', child: true },
-    { key: 'delivery-templates', label: '模板管理', icon: 'template', child: true },
     { key: 'card-warehouse', label: '卡密仓库', icon: 'key' },
     { key: 'delivery-records', label: '发货记录', icon: 'record' },
     { key: 'scheduled-tasks', label: '定时任务', icon: 'clock' },

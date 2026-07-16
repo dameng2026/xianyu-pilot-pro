@@ -182,6 +182,151 @@ def is_bargain_waiting_message(msg: dict) -> bool:
 
 
 # ============================================================
+# "待刀成"消息处理：标记小刀订单 + 调免拼接口（促成小刀成交）
+# ============================================================
+async def _handle_bargain_waiting_message(
+    tenant_id: int,
+    account_id: int,
+    msg: dict,
+) -> None:
+    """处理"我已小刀，待刀成"消息：标记小刀订单 + 调用免拼接口。
+
+    买家发起小刀后，系统自动调用免拼接口（mtop.idle.groupon.activity.seller.freeshipping）
+    促成小刀成交。此步骤不发送发货信息，完整发货由后续"小刀成功"消息触发。
+
+    流程：
+    1. 提取订单ID、商品ID、买家ID
+    2. 标记订单为小刀订单（is_bargain=1）
+    3. 商品归属检查（复用 _match_delivery_rule，未命中则跳过）
+    4. 调用免拼接口 confirm_freeshipping（已支持幂等）
+    """
+    s_id = str(msg.get("sId") or "")
+    reminder_url = str(msg.get("reminderUrl") or msg.get("reminder_url") or "")
+
+    # 提取订单ID、商品ID、买家ID
+    order_id = extract_order_id_from_url(reminder_url)
+    xy_goods_id = str(msg.get("xyGoodsId") or "")
+    if not xy_goods_id:
+        xy_goods_id = extract_goods_id_from_url(reminder_url) or ""
+    buyer_user_id = str(msg.get("senderUserId") or "")
+    if not buyer_user_id:
+        buyer_user_id = extract_peer_user_id_from_url(reminder_url) or ""
+
+    logger.info(
+        "检测到待刀成消息: accountId=%d orderId=%s xyGoodsId=%s buyer=%s sId=%s",
+        account_id, order_id, xy_goods_id, buyer_user_id, s_id,
+    )
+
+    if not xy_goods_id or not buyer_user_id:
+        logger.warning(
+            "待刀成消息缺少商品ID或买家ID，跳过免拼: accountId=%d xyGoodsId=%s buyer=%s",
+            account_id, xy_goods_id, buyer_user_id,
+        )
+        return
+
+    async with async_session() as db:
+        try:
+            # 1. 标记订单为小刀订单（即使订单未同步也尝试标记，失败不影响后续免拼）
+            if order_id:
+                await _mark_order_as_bargain(db, tenant_id, account_id, order_id, xy_goods_id)
+
+            # 2. 商品归属检查：复用现有 _match_delivery_rule
+            #    若商品不属于本账号或未配置发货规则，则跳过免拼接口调用
+            rule = await _match_delivery_rule(db, tenant_id, account_id, xy_goods_id)
+            if not rule:
+                logger.info(
+                    "待刀成消息：商品不属于本账号或未配置发货规则，跳过免拼: accountId=%d xyGoodsId=%s",
+                    account_id, xy_goods_id,
+                )
+                await db.commit()
+                return
+
+            # 3. 调用免拼接口（confirm_freeshipping 已支持幂等：ORDER_ALREADY_DELIVERY 视为成功）
+            from .xianyu_api_service import confirm_freeshipping
+            result = confirm_freeshipping(account_id, order_id or "", xy_goods_id, buyer_user_id)
+
+            if result and result.get("success"):
+                logger.info(
+                    "待刀成消息：免拼接口调用成功: accountId=%d orderId=%s itemId=%s buyerId=%s",
+                    account_id, order_id, xy_goods_id, buyer_user_id,
+                )
+            else:
+                logger.warning(
+                    "待刀成消息：免拼接口调用失败: accountId=%d orderId=%s error=%s message=%s",
+                    account_id, order_id,
+                    result.get("error", "") if result else "NONE",
+                    result.get("message", "") if result else "",
+                )
+
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            logger.error(
+                "待刀成消息处理失败: accountId=%d error=%s",
+                account_id, e, exc_info=True,
+            )
+
+
+async def _mark_order_as_bargain(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+    order_id: str,
+    xy_goods_id: str,
+) -> None:
+    """标记订单为小刀订单（is_bargain=1）。
+
+    优先按 external_order_id 精确匹配；若未命中（订单可能尚未同步），
+    按 account_id + external_goods_id 匹配最近一笔订单兜底。
+    """
+    # 1. 按 external_order_id 精确匹配
+    result = await db.execute(
+        text("""
+            UPDATE xianyu_trade_order
+            SET is_bargain = 1, updated_time = NOW()
+            WHERE tenant_id = :tenant_id
+              AND account_id = :account_id
+              AND external_order_id = :external_order_id
+              AND deleted = 0
+        """),
+        {
+            "tenant_id": tenant_id,
+            "account_id": account_id,
+            "external_order_id": order_id,
+        },
+    )
+
+    # 2. 若未命中，按 xy_goods_id 兜底（标记该账号下该商品的最近一笔订单）
+    if result.rowcount == 0 and xy_goods_id:
+        await db.execute(
+            text("""
+                UPDATE xianyu_trade_order
+                SET is_bargain = 1, updated_time = NOW()
+                WHERE tenant_id = :tenant_id
+                  AND account_id = :account_id
+                  AND external_goods_id = :xy_goods_id
+                  AND deleted = 0
+                  AND id = (
+                      SELECT id FROM (
+                          SELECT id FROM xianyu_trade_order
+                          WHERE tenant_id = :tenant_id
+                            AND account_id = :account_id
+                            AND external_goods_id = :xy_goods_id
+                            AND deleted = 0
+                          ORDER BY created_time DESC
+                          LIMIT 1
+                      ) AS t
+                  )
+            """),
+            {
+                "tenant_id": tenant_id,
+                "account_id": account_id,
+                "xy_goods_id": xy_goods_id,
+            },
+        )
+
+
+# ============================================================
 # 自动发货核心逻辑
 # ============================================================
 
@@ -200,6 +345,12 @@ async def handle_incoming_message_for_delivery(
         msg: 解析后的消息字典
     """
     # Step 1: 判断是否为需要触发自动发货的消息
+    # "待刀成"消息：标记小刀订单 + 调免拼接口（促成小刀成交），不触发完整发货
+    # "小刀成功"/"已付款"消息：触发完整自动发货（发信息 + 确认发货）
+    if is_bargain_waiting_message(msg):
+        await _handle_bargain_waiting_message(tenant_id, account_id, msg)
+        return
+
     if not is_payment_message(msg) and not is_bargain_success_message(msg):
         return
 
@@ -440,19 +591,47 @@ async def _execute_text_delivery(
     )
 
     if send_ok and order_id:
-        await db.execute(
-            text("""
-                UPDATE xianyu_trade_order
-                SET order_status = 3, ship_time = NOW(), updated_time = NOW()
-                WHERE tenant_id = :tenant_id
-                  AND external_order_id = :external_order_id
-                  AND deleted = 0
-            """),
-            {
-                "tenant_id": tenant_id,
-                "external_order_id": order_id,
-            }
+        # 先调用闲鱼确认发货 API，只有平台真正标记为已发货后才更新本地 order_status=3
+        # 避免本地标记 3 但闲鱼平台实际未发货的状态不一致问题
+        is_bargain = await _detect_bargain_from_message_or_db(
+            db, account_id, order_id, xy_goods_id, buyer_user_id, rule
         )
+        confirm_result = await _auto_confirm_shipment(
+            tenant_id, account_id, order_id,
+            is_bargain=is_bargain,
+            xy_goods_id=xy_goods_id,
+            buyer_user_id=buyer_user_id,
+        )
+        if confirm_result and confirm_result.get("success"):
+            await db.execute(
+                text("""
+                    UPDATE xianyu_trade_order
+                    SET order_status = 3, ship_time = NOW(), updated_time = NOW()
+                    WHERE tenant_id = :tenant_id
+                      AND external_order_id = :external_order_id
+                      AND deleted = 0
+                """),
+                {
+                    "tenant_id": tenant_id,
+                    "external_order_id": order_id,
+                }
+            )
+        else:
+            # 确认发货失败：发货消息已发送给买家，但闲鱼平台未标记为已发货
+            # 保持本地 order_status 不变（仍为待发货），等待下次同步或重试
+            logger.warning(
+                "确认发货失败，本地订单状态保持不变: tenantId=%d accountId=%d orderId=%s error=%s",
+                tenant_id, account_id, order_id,
+                confirm_result.get("error", "UNKNOWN") if confirm_result else "CAPABILITY_UNAVAILABLE",
+            )
+            await _notify_realtime_delivery_failure(
+                db=db,
+                tenant_id=tenant_id,
+                account_id=account_id,
+                order_id=order_id,
+                xy_goods_id=xy_goods_id,
+                fail_reason=f"发货消息已发送，但确认发货失败：{confirm_result.get('message', '未知错误') if confirm_result else '确认发货能力不可用'}",
+            )
     elif not send_ok:
         await _notify_realtime_delivery_failure(
             db=db,
@@ -521,7 +700,6 @@ async def _find_goods_for_delivery(
             SELECT id, tenant_id, account_id, external_goods_id, title
             FROM xianyu_goods
             WHERE tenant_id = :tenant_id
-              AND deleted = 0
               AND external_goods_id = :xy_goods_id
             ORDER BY CASE WHEN account_id = :account_id THEN 0 ELSE 1 END, id DESC
             LIMIT 1
@@ -532,7 +710,119 @@ async def _find_goods_for_delivery(
             "xy_goods_id": xy_goods_id,
         }
     )).mappings().first()
+
+    if not row:
+        # 商品不存在时，尝试从订单项表补全最小商品记录，确保发货配置可命中。
+        # 场景：WS 实时收到付款消息，但商品尚未同步到 xianyu_goods 表。
+        await _ensure_goods_from_order_items(db, tenant_id, account_id, xy_goods_id)
+        row = (await db.execute(
+            text("""
+                SELECT id, tenant_id, account_id, external_goods_id, title
+                FROM xianyu_goods
+                WHERE tenant_id = :tenant_id
+                  AND deleted = 0
+                  AND external_goods_id = :xy_goods_id
+                ORDER BY CASE WHEN account_id = :account_id THEN 0 ELSE 1 END, id DESC
+                LIMIT 1
+            """),
+            {
+                "tenant_id": tenant_id,
+                "account_id": account_id,
+                "xy_goods_id": xy_goods_id,
+            }
+        )).mappings().first()
+
     return dict(row) if row else None
+
+
+async def _ensure_goods_from_order_items(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+    external_goods_id: str,
+) -> bool:
+    """实时发货时发现商品不存在，从订单项表补全最小商品记录。
+
+    与 automation_runtime._ensure_goods_placeholder_from_order_items 逻辑一致，
+    确保实时路径和批量路径都能在商品未同步时补全占位记录。
+    """
+    if not external_goods_id:
+        return False
+
+    # 优先从付款消息中的商品信息创建（account_id 已知）
+    # 如果订单项表中也没有，则直接用 account_id 创建最简记录
+    item_row = (await db.execute(
+        text("""
+            SELECT oi.goods_title, oi.goods_image, oi.goods_price
+            FROM xianyu_trade_order_item oi
+            JOIN xianyu_trade_order o ON o.id = oi.order_id AND o.tenant_id = oi.tenant_id
+            WHERE oi.tenant_id = :tenant_id
+              AND oi.deleted = 0
+              AND oi.goods_id = :goods_id
+            ORDER BY oi.id DESC LIMIT 1
+        """),
+        {
+            "tenant_id": tenant_id,
+            "goods_id": int(external_goods_id) if external_goods_id.isdigit() else 0,
+        }
+    )).mappings().first()
+
+    title = ""
+    image_url = ""
+    price = "0"
+    if item_row:
+        title = str(item_row.get("goods_title") or "")
+        image_url = str(item_row.get("goods_image") or "")
+        price = str(item_row.get("goods_price") or "0")
+
+    # 防御性查重：INSERT 前确认该商品在任意 deleted 状态下都不存在，
+    # 避免对已被软删除（deleted=1）的商品创建 deleted=0 重复记录（幽灵商品根因之一）。
+    existing_row = (await db.execute(
+        text("""
+            SELECT id FROM xianyu_goods
+            WHERE tenant_id = :tenant_id AND account_id = :account_id
+              AND external_goods_id = :external_goods_id
+            LIMIT 1
+        """),
+        {
+            "tenant_id": tenant_id,
+            "account_id": account_id,
+            "external_goods_id": external_goods_id,
+        }
+    )).mappings().first()
+    if existing_row:
+        return False
+
+    try:
+        await db.execute(
+            text("""
+                INSERT INTO xianyu_goods (
+                    tenant_id, account_id, external_goods_id, goods_id, title,
+                    price, sold_price, cover_pic, image_url, status,
+                    deleted, created_time, updated_time
+                ) VALUES (
+                    :tenant_id, :account_id, :external_goods_id, :goods_id, :title,
+                    :price, :price, :image_url, :image_url, 1,
+                    0, NOW(), NOW()
+                )
+            """),
+            {
+                "tenant_id": tenant_id,
+                "account_id": account_id,
+                "external_goods_id": external_goods_id,
+                "goods_id": external_goods_id,
+                "title": (title or f"商品 {external_goods_id}")[:255],
+                "price": (price or "0")[:32],
+                "image_url": (image_url or None) if image_url else None,
+            }
+        )
+        logger.info(
+            "实时发货自动补全商品占位记录 tenantId=%d accountId=%d externalGoodsId=%s",
+            tenant_id, account_id, external_goods_id
+        )
+        return True
+    except Exception:
+        return False
 
 
 async def _load_goods_delivery_rule(
@@ -858,9 +1148,48 @@ async def _execute_kami_delivery(
         fail_reason=fail_reason, trigger_source=trigger_source
     )
     
-    # Step 8: 自动确认发货
-    if send_ok and rule.get("auto_confirm_shipment") == 1:
-        await _auto_confirm_shipment(tenant_id, account_id, order_id)
+    # Step 8: 确认发货（调用闲鱼API），只有平台真正标记为已发货后才更新本地 order_status=3
+    # 小刀订单走免拼发货接口，普通订单走虚拟发货接口
+    if send_ok and order_id:
+        is_bargain = await _detect_bargain_from_message_or_db(
+            db, account_id, order_id, xy_goods_id, buyer_user_id, rule
+        )
+        confirm_result = await _auto_confirm_shipment(
+            tenant_id, account_id, order_id,
+            is_bargain=is_bargain,
+            xy_goods_id=xy_goods_id,
+            buyer_user_id=buyer_user_id,
+        )
+        if confirm_result and confirm_result.get("success"):
+            await db.execute(
+                text("""
+                    UPDATE xianyu_trade_order
+                    SET order_status = 3, ship_time = NOW(), updated_time = NOW()
+                    WHERE tenant_id = :tenant_id
+                      AND external_order_id = :external_order_id
+                      AND deleted = 0
+                """),
+                {
+                    "tenant_id": tenant_id,
+                    "external_order_id": order_id,
+                }
+            )
+        else:
+            # 确认发货失败：卡密已发送给买家，但闲鱼平台未标记为已发货
+            # 保持本地 order_status 不变，等待下次同步或重试
+            logger.warning(
+                "卡密发货确认失败，本地订单状态保持不变: tenantId=%d accountId=%d orderId=%s error=%s",
+                tenant_id, account_id, order_id,
+                confirm_result.get("error", "UNKNOWN") if confirm_result else "CAPABILITY_UNAVAILABLE",
+            )
+            await _notify_realtime_delivery_failure(
+                db=db,
+                tenant_id=tenant_id,
+                account_id=account_id,
+                order_id=order_id,
+                xy_goods_id=xy_goods_id,
+                fail_reason=f"卡密已发送，但确认发货失败：{confirm_result.get('message', '未知错误') if confirm_result else '确认发货能力不可用'}",
+            )
 
 
 async def _execute_api_delivery(
@@ -979,24 +1308,83 @@ async def _send_delivery_message(
         return False
 
 
+async def _detect_bargain_from_message_or_db(
+    db: AsyncSession,
+    account_id: int,
+    order_id: Optional[str],
+    xy_goods_id: str,
+    buyer_user_id: str,
+    rule: Optional[dict] = None,
+) -> bool:
+    """判断订单是否为小刀订单。
+
+    优先从数据库 xianyu_trade_order.is_bargain 字段读取，
+    其次从发货规则中的 trigger_source 推断（bargain 触发的视为小刀订单）。
+    """
+    # 1. 从数据库查 is_bargain 字段
+    if order_id:
+        try:
+            row = (await db.execute(
+                text("""
+                    SELECT is_bargain FROM xianyu_trade_order
+                    WHERE account_id = :account_id
+                      AND external_order_id = :external_order_id
+                      AND deleted = 0
+                    LIMIT 1
+                """),
+                {"account_id": account_id, "external_order_id": order_id},
+            )).mappings().first()
+            if row and int(row.get("is_bargain") or 0) == 1:
+                return True
+        except Exception:
+            logger.debug("查询 is_bargain 失败 accountId=%d orderId=%s", account_id, order_id, exc_info=True)
+
+    # 2. 从规则中的 trigger_source 推断
+    if rule and isinstance(rule, dict):
+        trigger_source = str(rule.get("trigger_source") or "")
+        if trigger_source == "bargain":
+            return True
+
+    return False
+
+
 async def _auto_confirm_shipment(
     tenant_id: int,
     account_id: int,
     order_id: str,
+    is_bargain: bool = False,
+    xy_goods_id: Optional[str] = None,
+    buyer_user_id: Optional[str] = None,
 ):
-    """通过统一能力门禁请求确认发货；未验证的闲鱼接口始终 fail-closed。"""
-    try:
-        from .xianyu_api_service import confirm_shipment
+    """通过统一能力门禁请求确认发货。
 
-        result = confirm_shipment(account_id, order_id)
+    小刀订单（is_bargain=True）走免拼发货接口（mtop.idle.groupon.activity.seller.freeshipping），
+    普通订单走虚拟发货接口（mtop.taobao.idle.logistic.consign.dummy）。
+    小刀订单必须提供 xy_goods_id 和 buyer_user_id。
+    """
+    try:
+        from .xianyu_api_service import confirm_order_shipment
+
+        result = confirm_order_shipment(
+            account_id,
+            order_id,
+            is_bargain=is_bargain,
+            item_id=xy_goods_id,
+            buyer_id=buyer_user_id,
+        )
         if result and result.get("success"):
-            logger.info("确认发货成功: accountId=%d orderId=%s", account_id, order_id)
+            ship_method = result.get("ship_method", "freeshipping" if is_bargain else "consign")
+            logger.info(
+                "确认发货成功: accountId=%d orderId=%s isBargain=%s method=%s",
+                account_id, order_id, is_bargain, ship_method,
+            )
         else:
             logger.warning(
-                "确认发货能力不可用: tenantId=%d accountId=%d orderId=%s error=%s message=%s",
+                "确认发货能力不可用: tenantId=%d accountId=%d orderId=%s isBargain=%s error=%s message=%s",
                 tenant_id,
                 account_id,
                 order_id,
+                is_bargain,
                 result.get("error", "") if result else "CAPABILITY_UNAVAILABLE",
                 result.get("message", "") if result else "",
             )
@@ -1006,7 +1394,10 @@ async def _auto_confirm_shipment(
             "message": "闲鱼确认发货能力当前不可用",
         }
     except Exception as e:
-        logger.error("确认发货异常: accountId=%d orderId=%s error=%s", account_id, order_id, e)
+        logger.error(
+            "确认发货异常: accountId=%d orderId=%s isBargain=%s error=%s",
+            account_id, order_id, is_bargain, e,
+        )
         return {
             "success": False,
             "error": "CONFIRM_SHIPMENT_EXCEPTION",

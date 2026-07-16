@@ -294,6 +294,8 @@ def parse_sync_package(package: dict) -> Optional[dict]:
         }
     except Exception as e:
         logger.error("同步包解析异常: %s", e, exc_info=True)
+        import traceback
+        logger.error("同步包解析异常完整堆栈:\n%s", traceback.format_exc())
         return None
 
 
@@ -405,6 +407,68 @@ def parse_numbered_fields(data: dict) -> Optional[dict]:
         if only_control_fields and not any(k in data for k in ("sessionInfo", "content", "2", "3", "5", "6", "10", "msgType")):
             return None
 
+    # === 卡片更新消息（付款通知等）===
+    # 参考垃圾箱项目 parse_card_update_message：message["1"] 是字符串，
+    # message["4"] 是包含 reminderContent 的字典，message["2"] 是会话ID，
+    # message["5"] 是毫秒时间戳。这类消息用于通知付款状态变更（如"我已付款，等待你发货"），
+    # 是触发自动发货的关键消息源。若不处理，付款通知会被丢弃，自动发货无法触发。
+    if isinstance(data.get("1"), str) and isinstance(data.get("4"), dict) and "reminderContent" in data["4"]:
+        message_4 = data["4"]
+        reminder_content = str(message_4.get("reminderContent") or "")
+        reminder_url = str(message_4.get("reminderUrl") or "")
+        reminder_title = str(message_4.get("reminderTitle") or "")
+        sender_user_id = str(message_4.get("senderUserId") or message_4.get("sendUserId") or "")
+        # 会话ID：data["2"] 可能带 @goofish 后缀，取 @ 前的部分
+        chat_id_raw = str(data.get("2") or "")
+        s_id = chat_id_raw.split("@")[0] if "@" in chat_id_raw else chat_id_raw
+        # 时间戳：data["5"] 通常是毫秒
+        msg_time = data.get("5") or message_4.get("msgTime") or message_4.get("createTime") or 0
+        try:
+            msg_time = int(msg_time)
+        except (TypeError, ValueError):
+            msg_time = 0
+        # 提取商品ID：优先从 reminderUrl 的 itemId= 参数精确匹配
+        xy_goods_id = ""
+        match = None
+        if reminder_url:
+            match = re.search(r'[?&]itemId=(\d+)', reminder_url)
+            if not match:
+                match = re.search(r'[?&]id=(\d+)', reminder_url)
+            if match:
+                xy_goods_id = match.group(1)
+        # 兜底：从 extJson 提取
+        if not xy_goods_id:
+            ext_json = message_4.get("extJson") or ""
+            if ext_json and isinstance(ext_json, str):
+                try:
+                    ext_dict = json.loads(ext_json)
+                    if isinstance(ext_dict, dict) and ext_dict.get("itemId"):
+                        xy_goods_id = str(ext_dict["itemId"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        if reminder_content or s_id or sender_user_id or xy_goods_id:
+            logger.info(
+                "WS 卡片更新消息解析: sessionRefPresent=%s senderRefPresent=%s goodsRefPresent=%s "
+                "reminderContentLen=%d reminderUrlPresent=%s",
+                bool(s_id), bool(sender_user_id), bool(xy_goods_id),
+                len(reminder_content), bool(reminder_url),
+            )
+            return {
+                "sId": s_id,
+                "pnmId": str(data.get("3") or data.get("messageId") or data.get("pnmId") or ""),
+                "senderUserId": sender_user_id,
+                "senderUserName": reminder_title,
+                "messageTime": msg_time,
+                "msgContent": reminder_content,
+                "contentType": 26,
+                "msgType": 1,
+                "direction": "IN",
+                "reminderContent": reminder_content,
+                "reminderUrl": reminder_url,
+                "receiverUserId": "",
+                "xyGoodsId": xy_goods_id,
+            }
+
     # === 参考实现的快速消息判定 ===
     # 已读回执：data["2"] == 2
     msg_type_raw = data.get("2")
@@ -426,6 +490,83 @@ def parse_numbered_fields(data: dict) -> Optional[dict]:
         msg_info = None
         _skip_find = False
     # ================================
+
+    # === 轻量级内容消息格式 {"1": int, "3": {"1":"", "2":"内容", "3":"", "4":1, "5":"..."}} ===
+    # 这种格式中 data["1"] 是整数（消息子类型标识，如 101），data["3"] 是内容容器。
+    # content_container 的字段含义和标准 message_info 不同：
+    #   "1" = sId（通常为空，会话信息在同步包外层）
+    #   "2" = 消息文本内容（不是 sId）
+    #   "3" = pnmId（通常为空）
+    #   "4" = contentType (1=文本, 25=已拍下, 26=已付款等)
+    #   "5" = 扩展内容 JSON 字符串（含 contentType, text/dxCard 等）
+    # 若不在此处拦截，_find_nested_message_info 会误将 content_container 当作 message_info，
+    # 导致字段映射错乱（sId 被设为消息文本，然后在 validate 阶段被清空）。
+    if (
+        not _skip_find
+        and isinstance(data.get("1"), int)
+        and isinstance(data.get("3"), dict)
+        and not isinstance(data.get("1"), bool)
+    ):
+        content_container = data["3"]
+        raw_msg_content = str(content_container.get("2") or "")
+        content_type_val = content_container.get("4")
+        try:
+            content_type_int = int(content_type_val) if content_type_val is not None else 1
+        except (TypeError, ValueError):
+            content_type_int = 1
+
+        # 从扩展内容 JSON ("5") 中提取额外信息
+        ext_json_str = str(content_container.get("5") or "")
+        ext_data: dict = {}
+        if ext_json_str and ext_json_str.startswith("{"):
+            try:
+                parsed_ext = json.loads(ext_json_str)
+                if isinstance(parsed_ext, dict):
+                    ext_data = parsed_ext
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # 从 ext_data 提取消息内容（text.text 优先）
+        msg_content_from_ext = ""
+        text_obj = ext_data.get("text") if isinstance(ext_data.get("text"), dict) else None
+        if text_obj and isinstance(text_obj.get("text"), str):
+            msg_content_from_ext = text_obj["text"].strip()
+
+        final_msg_content = msg_content_from_ext or raw_msg_content
+        if not final_msg_content:
+            # 内容为空，可能是纯卡片消息，从 dxCard 提取摘要
+            dx_card = ext_data.get("dxCard") if isinstance(ext_data.get("dxCard"), dict) else None
+            if dx_card:
+                final_msg_content = raw_msg_content or "[卡片消息]"
+
+        s_id_val = str(content_container.get("1") or "").strip()
+        pnm_id_val = str(content_container.get("3") or "").strip()
+
+        if final_msg_content:
+            logger.info(
+                "WS 轻量级内容消息: subType=%s contentType=%d sessionRefPresent=%s "
+                "messageRefPresent=%s contentLen=%d",
+                data.get("1"),
+                content_type_int,
+                bool(s_id_val),
+                bool(pnm_id_val),
+                len(final_msg_content),
+            )
+            return {
+                "sId": s_id_val,
+                "pnmId": pnm_id_val,
+                "senderUserId": "",
+                "senderUserName": "",
+                "messageTime": 0,
+                "msgContent": final_msg_content,
+                "contentType": content_type_int,
+                "msgType": 1,
+                "direction": "IN",
+                "reminderContent": final_msg_content if content_type_int == 1 else "",
+                "reminderUrl": "",
+                "receiverUserId": "",
+                "xyGoodsId": "",
+            }
 
     content_root = data.get("content") if isinstance(data.get("content"), dict) else None
 
@@ -508,10 +649,10 @@ def parse_numbered_fields(data: dict) -> Optional[dict]:
         first_key = _get(obj, "1", default={})
         if isinstance(first_key, dict):
             inner = first_key
-            if "6" in inner or ("2" in inner and "5" in inner):
+            if "6" in inner or _is_valid_message_info_pattern(inner):
                 return inner
         # 扁平结构：obj 本身就是 message_info
-        if "6" in obj or ("2" in obj and "5" in obj):
+        if "6" in obj or _is_valid_message_info_pattern(obj):
             return obj
         # 递归搜索子节点
         for value in obj.values():
@@ -519,6 +660,26 @@ def parse_numbered_fields(data: dict) -> Optional[dict]:
             if found:
                 return found
         return {}
+
+    def _is_valid_message_info_pattern(obj: dict) -> bool:
+        """检查 dict 是否符合标准 message_info 的 "2"(sId) + "5"(messageTime) 模式。
+
+        防止将轻量级内容容器的 {"2":"消息内容", "5":"JSON字符串"} 误认为 message_info。
+        标准 message_info 中 "2" 是会话ID（纯数字），"5" 是毫秒时间戳（整数）。
+        """
+        if "2" not in obj or "5" not in obj:
+            return False
+        sid_candidate = obj["2"]
+        time_candidate = obj["5"]
+        # sId 不应包含中文（会话ID是数字或数字@goofish格式）
+        if isinstance(sid_candidate, str) and contains_chinese(sid_candidate):
+            return False
+        # messageTime 应该是数字或可转换为数字
+        try:
+            int(time_candidate)
+        except (TypeError, ValueError):
+            return False
+        return True
 
     if not _skip_find:
         msg_type = _get(data, "2", "msgType", default=1)
@@ -727,8 +888,8 @@ def parse_numbered_fields(data: dict) -> Optional[dict]:
     xy_goods_id = ""
     # 对齐参考实现：从 reminderUrl 中精确提取 itemId= 参数
     # 不限制域名，闲鱼可能使用 m.goofish.com / h5.m.goofish.com 等多种域名
+    match = None
     if reminder_url:
-        import re
         # 优先精确匹配 itemId=（参考实现的方式）
         match = re.search(r'[?&]itemId=(\d+)', reminder_url)
         if not match:

@@ -27,6 +27,7 @@ from sqlalchemy import text
 from .ai_billing import (
     AiBillingError,
     AiBillingPaymentRequired,
+    AiBillingUnavailable,
     build_request_id,
     build_stable_request_id,
     charge_image_usage,
@@ -921,25 +922,34 @@ async def _match_image_prompt_category_with_ai(
             0.1,
             request_id=billing_request_id,
         )
-    except AiBillingError:
-        raise
+    except AiBillingError as exc:
+        # ★ 计费预检查/调用失败时降级到关键词匹配，避免终止整个生图流程。
+        #   提示词选择是生图的增强环节，计费不可用时回退到非 AI 的关键词匹配
+        #   比直接失败整个工作流（导致 30 张图全部不生成）更合理。
+        _log_runtime_failure("select_image_prompt_category_billing", exc)
+        return None
     except Exception as exc:
         _log_runtime_failure("select_image_prompt_category", exc)
         return None
     if not ai_result or not ai_result.get("ok"):
         return None
     ai_content = _text(ai_result.get("content"))
-    await charge_text_usage(
-        tenant_id=tenant_id,
-        user_id=user_id,
-        scene=scene,
-        provider_name=_text(ai_result.get("provider")) or "default",
-        model_name=_text(ai_result.get("model")) or "default",
-        prompt=user_prompt,
-        completion=ai_content,
-        request_id=billing_request_id,
-        raw_usage=ai_result.get("usage") or {},
-    )
+    try:
+        await charge_text_usage(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            scene=scene,
+            provider_name=_text(ai_result.get("provider")) or "default",
+            model_name=_text(ai_result.get("model")) or "default",
+            prompt=user_prompt,
+            completion=ai_content,
+            request_id=billing_request_id,
+            raw_usage=ai_result.get("usage") or {},
+        )
+    except AiBillingError as exc:
+        # 扣费失败时也降级：AI 已调用但扣费失败，记录失败但继续工作流
+        _log_runtime_failure("charge_image_prompt_category", exc)
+        return None
     selected_key = _extract_image_prompt_category_key(ai_content, category_prompts)
     if not selected_key:
         return None
@@ -2939,7 +2949,7 @@ async def _run_redelivery_task(db: AsyncSession, tenant_id: int, task: dict[str,
     row = (await db.execute(text("""
         SELECT dr.id, dr.account_id, dr.order_id,
                COALESCE(dr.delivery_content, dr.content) AS delivery_content,
-               o.buyer_id, o.external_order_id
+               o.buyer_id, o.external_order_id, o.item_id, o.is_bargain
         FROM delivery_record dr
         JOIN xianyu_trade_order o ON o.id = dr.order_id AND o.tenant_id = dr.tenant_id
         WHERE dr.id = :record_id AND dr.tenant_id = :tenant_id AND dr.deleted = 0
@@ -2968,6 +2978,38 @@ async def _run_redelivery_task(db: AsyncSession, tenant_id: int, task: dict[str,
 
     send_ok = await _send_delivery_message_via_ws(db, tenant_id, account_id, buyer_id, content)
     if send_ok:
+        # 先调用闲鱼确认发货 API，只有平台真正标记为已发货后才更新本地 order_status=3
+        # 补发货场景下订单可能已标记为已发货（order_status=3），此时保持原状态
+        # 若订单尚未标记为已发货，则只有确认发货成功才标记
+        confirm_success = False
+        confirm_error_msg = "确认发货能力不可用"
+        external_order_id_for_confirm = _text(row.get("external_order_id"))
+        is_bargain_for_confirm = _safe_int(row.get("is_bargain")) == 1
+        try:
+            from .xianyu_api_service import confirm_order_shipment
+            confirm_result = confirm_order_shipment(
+                account_id,
+                external_order_id_for_confirm,
+                is_bargain=is_bargain_for_confirm,
+                item_id=_text(row.get("item_id")),
+                buyer_id=buyer_id,
+            )
+            if confirm_result and confirm_result.get("success"):
+                confirm_success = True
+                logger.info(
+                    "补发货确认发货成功: accountId=%d orderId=%s",
+                    account_id, external_order_id_for_confirm,
+                )
+            else:
+                confirm_error_msg = (confirm_result.get("message") if confirm_result else "确认发货失败") or "确认发货失败"
+                logger.warning(
+                    "补发货确认发货失败: accountId=%d orderId=%s error=%s",
+                    account_id, external_order_id_for_confirm, confirm_error_msg,
+                )
+        except Exception as e:
+            confirm_error_msg = f"确认发货异常: {e}"
+            _log_runtime_failure("redelivery_confirm", e)
+
         await db.execute(text("""
             UPDATE delivery_record
             SET status = 2,
@@ -2980,14 +3022,20 @@ async def _run_redelivery_task(db: AsyncSession, tenant_id: int, task: dict[str,
                 updated_time = NOW()
             WHERE id = :record_id AND tenant_id = :tenant_id
         """), {"record_id": record_id, "tenant_id": tenant_id})
-        await db.execute(text("""
-            UPDATE xianyu_trade_order
-            SET order_status = 3,
-                ship_time = COALESCE(ship_time, NOW()),
-                updated_time = NOW()
-            WHERE id = :order_id AND tenant_id = :tenant_id
-        """), {"order_id": row.get("order_id"), "tenant_id": tenant_id})
-        return {"ok": True, "message": "补发货成功", "processed": 1, "recordId": record_id}
+
+        if confirm_success:
+            await db.execute(text("""
+                UPDATE xianyu_trade_order
+                SET order_status = 3,
+                    ship_time = COALESCE(ship_time, NOW()),
+                    updated_time = NOW()
+                WHERE id = :order_id AND tenant_id = :tenant_id
+            """), {"order_id": row.get("order_id"), "tenant_id": tenant_id})
+            return {"ok": True, "message": "补发货成功", "processed": 1, "recordId": record_id}
+        else:
+            # 确认发货失败：发货消息已补发，但闲鱼平台未标记为已发货
+            # 不更新 order_status，等待下次同步或重试
+            return {"ok": True, "message": f"补发货消息已发送，但确认发货失败：{confirm_error_msg}", "processed": 1, "recordId": record_id, "confirmFailed": True}
 
     error_message = "WS发送失败"
     await db.execute(text("""
@@ -3258,24 +3306,132 @@ async def _replace_remote_order_items(
     """), {"tenant_id": tenant_id, "order_id": order_id})
 
     for item in items:
+        # 闲鱼 MTOP 返回的 goodsId 是 external_goods_id（如 1065651182579），
+        # 需同时填入 external_goods_id 字段，并尝试映射到 xianyu_goods.id 内部 ID。
+        ext_goods_id = _text(item.get("goodsId") or "").strip()
+        internal_goods_id = None
+        if ext_goods_id:
+            g_row = (await db.execute(
+                text("SELECT id FROM xianyu_goods WHERE tenant_id=:tid AND external_goods_id=:ext AND deleted=0 ORDER BY id DESC LIMIT 1"),
+                {"tid": tenant_id, "ext": ext_goods_id},
+            )).mappings().first()
+            if g_row:
+                internal_goods_id = _safe_int(g_row.get("id")) or None
+
         await db.execute(text("""
             INSERT INTO xianyu_trade_order_item(
-                order_id, tenant_id, goods_id, goods_title, goods_image,
+                order_id, tenant_id, goods_id, external_goods_id, goods_title, goods_image,
                 goods_price, goods_count, quantity, deleted, created_time, updated_time
             ) VALUES (
-                :order_id, :tenant_id, :goods_id, :goods_title, :goods_image,
+                :order_id, :tenant_id, :goods_id, :external_goods_id, :goods_title, :goods_image,
                 :goods_price, :goods_count, :quantity, 0, NOW(), NOW()
             )
         """), {
             "order_id": order_id,
             "tenant_id": tenant_id,
-            "goods_id": _safe_int(item.get("goodsId")) or None,
+            "goods_id": internal_goods_id,
+            "external_goods_id": ext_goods_id or None,
             "goods_title": _text(item.get("goodsTitle") or "").strip() or None,
             "goods_image": _text(item.get("goodsImage") or "").strip() or None,
             "goods_price": _text(item.get("goodsPrice") or "0").strip() or "0",
             "goods_count": max(_safe_int(item.get("goodsCount"), 1), 1),
             "quantity": max(_safe_int(item.get("quantity"), _safe_int(item.get("goodsCount"), 1)), 1),
         })
+
+
+async def _backfill_missing_goods_from_orders(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+    orders: list[dict[str, Any]],
+) -> int:
+    """订单同步后补全缺失的商品记录。
+
+    订单中的 item_id 是闲鱼外部商品 ID。如果 xianyu_goods 表中不存在该商品，
+    则用订单中已有的商品信息（itemId/title/image/price）创建最小商品记录。
+    这确保后续发货配置（delivery_goods_config）能通过 external_goods_id → xianyu_goods.id 链路命中。
+
+    不调用闲鱼详情 API，避免触发风控；商品信息会在下次商品同步时补全。
+    """
+    if not orders:
+        return 0
+
+    # 收集所有订单中的商品信息（去重）
+    goods_map: dict[str, dict[str, Any]] = {}
+    for order in orders:
+        item_id = _text(order.get("itemId") or "").strip()
+        if not item_id:
+            continue
+        if item_id in goods_map:
+            continue
+        items = order.get("items") or []
+        first_item = items[0] if items else {}
+        goods_map[item_id] = {
+            "external_goods_id": item_id,
+            "title": _text(first_item.get("goodsTitle") or order.get("itemTitle") or f"商品 {item_id}"),
+            "image_url": _text(first_item.get("goodsImage") or ""),
+            "price": _text(first_item.get("goodsPrice") or order.get("totalAmount") or ""),
+        }
+
+    if not goods_map:
+        return 0
+
+    # 批量查询哪些商品已存在
+    item_ids = list(goods_map.keys())
+    placeholders = ", ".join(f":id_{i}" for i in range(len(item_ids)))
+    params = {f"id_{i}": item_ids[i] for i in range(len(item_ids))}
+    params["tenant_id"] = tenant_id
+    params["account_id"] = account_id
+    # 注意：查询不再过滤 deleted=0。
+    # 如果只查未删除记录，被软删除（deleted=1）的商品会被误判为"不存在"，
+    # 然后下方 INSERT 会创建一条新的 deleted=0 重复记录，导致幽灵商品反复出现：
+    #   - 商品同步把远程不存在的商品标记 deleted=1
+    #   - 订单同步查 deleted=0 找不到 → INSERT 新的 deleted=0 记录
+    #   - 下次同步又把这条新记录标记 deleted=1，无限循环
+    # 修复后查询覆盖所有 deleted 状态，已存在记录（无论是否软删除）都跳过。
+    existing_rows = (await db.execute(text(f"""
+        SELECT external_goods_id FROM xianyu_goods
+        WHERE tenant_id = :tenant_id AND account_id = :account_id
+          AND external_goods_id IN ({placeholders})
+    """), params)).mappings().all()
+    existing_ids = {row.get("external_goods_id") for row in existing_rows}
+
+    # 对缺失的商品创建最小记录
+    backfilled = 0
+    for item_id, info in goods_map.items():
+        if item_id in existing_ids:
+            continue
+        try:
+            await db.execute(text("""
+                INSERT INTO xianyu_goods (
+                    tenant_id, account_id, external_goods_id, goods_id, title,
+                    price, sold_price, cover_pic, image_url, status,
+                    deleted, created_time, updated_time
+                ) VALUES (
+                    :tenant_id, :account_id, :external_goods_id, :goods_id, :title,
+                    :price, :price, :image_url, :image_url, 1,
+                    0, NOW(), NOW()
+                )
+            """), {
+                "tenant_id": tenant_id,
+                "account_id": account_id,
+                "external_goods_id": item_id,
+                "goods_id": item_id,
+                "title": info["title"][:255] if info["title"] else f"商品 {item_id}",
+                "price": info["price"][:32] if info["price"] else "0",
+                "image_url": info["image_url"][:500] if info["image_url"] else None,
+            })
+            backfilled += 1
+        except Exception:
+            # 唯一约束冲突等异常跳过，不影响其他商品
+            continue
+
+    if backfilled > 0:
+        logger.info(
+            "订单同步自动补全商品记录 tenantId=%d accountId=%d backfilled=%d/%d",
+            tenant_id, account_id, backfilled, len(goods_map)
+        )
+    return backfilled
 
 
 async def _upsert_remote_sold_order(
@@ -3324,7 +3480,13 @@ async def _upsert_remote_sold_order(
     if existing:
         await db.execute(text("""
             UPDATE xianyu_trade_order
-            SET order_status = :order_status,
+            SET order_status = CASE
+                    WHEN order_status = 3 AND :order_status IN (1, 2)
+                             AND ship_time IS NOT NULL
+                             AND ship_time > DATE_SUB(NOW(), INTERVAL 30 MINUTE)
+                        THEN order_status
+                    ELSE :order_status
+                END,
                 total_amount = :total_amount,
                 buyer_name = :buyer_name,
                 buyer_id = :buyer_id,
@@ -3369,6 +3531,34 @@ async def _run_sync_orders_task(db: AsyncSession, tenant_id: int, task: dict[str
     external_order_id = _text(config.get("externalOrderId") or "")
     result = await sync_sold_orders_for_account(db, tenant_id, account_id, external_order_id or None)
     result["taskType"] = task.get("task_type")
+
+    # 订单同步后，如果新增了待发货订单，立即触发自动发货（不等待 auto_delivery 定时任务）。
+    # 根因：闲鱼"已付款"通知不通过 WS 聊天消息推送，WS 实时路径无法触发；
+    # 仅靠 auto_delivery 定时兜底会有 1-5 分钟延迟。同步后立即发货可将延迟降到几乎为 0。
+    inserted = _safe_int(result.get("inserted"))
+    if inserted > 0:
+        try:
+            delivery_result = await process_pending_deliveries(
+                db, tenant_id, account_id=account_id, limit=20
+            )
+            result["autoDeliveryTriggered"] = True
+            result["autoDeliveryResult"] = {
+                "success": delivery_result.get("success", 0),
+                "skipped": delivery_result.get("skipped", 0),
+                "failed": delivery_result.get("failed", 0),
+            }
+            logger.info(
+                "订单同步后立即触发自动发货 tenantId=%d accountId=%d inserted=%d delivery=%s",
+                tenant_id, account_id, inserted, delivery_result.get("message", ""),
+            )
+        except Exception as exc:
+            logger.error(
+                "订单同步后触发自动发货失败 tenantId=%d accountId=%d: %s",
+                tenant_id, account_id, exc,
+            )
+            result["autoDeliveryTriggered"] = False
+            result["autoDeliveryError"] = str(exc)
+
     return result
 
 
@@ -3465,11 +3655,26 @@ async def sync_sold_orders_for_account(
     await mark_account_synced(db, tenant_id, account_id)
     await db.commit()
 
+    # 订单同步后自动补全缺失的商品记录，确保发货配置（delivery_goods_config）可命中。
+    # 仅用订单中已有的商品信息（itemId/title/image/price）创建最小商品记录，不调用详情 API，避免风控。
+    goods_backfilled = 0
+    try:
+        goods_backfilled = await _backfill_missing_goods_from_orders(
+            db, tenant_id, account_id, remote_orders
+        )
+        if goods_backfilled > 0:
+            await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        _log_runtime_failure("backfill_missing_goods_from_orders", exc)
+
     total_processed = len(remote_orders) + refund_processed
     total_inserted = inserted + refund_inserted
     total_updated = updated + refund_updated
     total_failed = failed + refund_failed
     message_parts = [f"订单同步完成，共处理 {total_processed} 条（已售 {len(remote_orders)} + 退款 {refund_processed}）"]
+    if goods_backfilled > 0:
+        message_parts.append(f"自动补全 {goods_backfilled} 个缺失商品")
     if refund_error:
         message_parts.append("退款订单暂未完成同步")
     return {
@@ -3485,6 +3690,7 @@ async def sync_sold_orders_for_account(
         "refundProcessed": refund_processed,
         "refundInserted": refund_inserted,
         "refundUpdated": refund_updated,
+        "goodsBackfilled": goods_backfilled,
         "refundFailed": refund_failed,
     }
 
@@ -3571,23 +3777,206 @@ async def process_pending_deliveries(
 
     success = 0
     failed = 0
+    skipped = 0
     details = []
     for row in rows:
         result = await execute_delivery_for_order(db, dict(row))
         details.append(result)
         if result.get("ok"):
             success += 1
+        elif result.get("errorCode") in ("DELIVERY_RULE_MISSING", "DELIVERY_RETRY_THROTTLED"):
+            # 未匹配发货规则或重试节流中的订单不算发货失败，避免连续失败导致定时任务被禁用
+            skipped += 1
         else:
             failed += 1
     await db.commit()
     return {
         "ok": failed == 0,
         "errorCode": "" if failed == 0 else "DELIVERY_BATCH_PARTIAL",
-        "message": f"处理待发货订单 {len(rows)} 个，成功 {success} 个，失败 {failed} 个",
+        "message": f"处理待发货订单 {len(rows)} 个，成功 {success} 个，跳过 {skipped} 个，失败 {failed} 个",
         "processed": len(rows),
         "success": success,
+        "skipped": skipped,
         "failed": failed,
         "details": details,
+    }
+
+
+async def _ensure_goods_placeholder_from_order_items(
+    db: AsyncSession,
+    tenant_id: int,
+    external_goods_id: str,
+) -> bool:
+    """发货时发现商品不存在，从 xianyu_trade_order_item 表补全最小商品记录。
+
+    场景：订单已入库（sync_sold_orders）但商品未同步（sync_goods_for_account），
+    用户在前端配置发货规则时商品列表为空。此函数用订单项中的商品信息创建占位记录，
+    让 delivery_goods_config 的 external_goods_id → xianyu_goods.id 映射能命中。
+    """
+    if not external_goods_id:
+        return False
+
+    # 从订单项表获取商品信息
+    item_row = (await db.execute(text("""
+        SELECT oi.goods_id, oi.goods_title, oi.goods_image, oi.goods_price,
+               o.account_id
+        FROM xianyu_trade_order_item oi
+        JOIN xianyu_trade_order o ON o.id = oi.order_id AND o.tenant_id = oi.tenant_id
+        WHERE oi.tenant_id = :tenant_id
+          AND oi.deleted = 0
+          AND oi.goods_id = :goods_id
+        ORDER BY oi.id DESC LIMIT 1
+    """), {"tenant_id": tenant_id, "goods_id": int(external_goods_id) if external_goods_id.isdigit() else 0})).mappings().first()
+
+    if not item_row:
+        return False
+
+    account_id = item_row.get("account_id") or 0
+    if not account_id:
+        return False
+
+    # 防御性查重：INSERT 前确认该商品在任意 deleted 状态下都不存在，
+    # 避免对已被软删除（deleted=1）的商品创建 deleted=0 重复记录（幽灵商品根因之一）。
+    existing_row = (await db.execute(text("""
+        SELECT id FROM xianyu_goods
+        WHERE tenant_id = :tenant_id AND account_id = :account_id
+          AND external_goods_id = :external_goods_id
+        LIMIT 1
+    """), {
+        "tenant_id": tenant_id,
+        "account_id": account_id,
+        "external_goods_id": external_goods_id,
+    })).mappings().first()
+    if existing_row:
+        return False
+
+    try:
+        await db.execute(text("""
+            INSERT INTO xianyu_goods (
+                tenant_id, account_id, external_goods_id, goods_id, title,
+                price, sold_price, cover_pic, image_url, status,
+                deleted, created_time, updated_time
+            ) VALUES (
+                :tenant_id, :account_id, :external_goods_id, :goods_id, :title,
+                :price, :price, :image_url, :image_url, 1,
+                0, NOW(), NOW()
+            )
+        """), {
+            "tenant_id": tenant_id,
+            "account_id": account_id,
+            "external_goods_id": external_goods_id,
+            "goods_id": external_goods_id,
+            "title": (_text(item_row.get("goods_title")) or f"商品 {external_goods_id}")[:255],
+            "price": (_text(item_row.get("goods_price")) or "0")[:32],
+            "image_url": (_text(item_row.get("goods_image")) or None),
+        })
+        logger.info(
+            "发货时自动补全商品占位记录 tenantId=%d accountId=%d externalGoodsId=%s",
+            tenant_id, account_id, external_goods_id
+        )
+        return True
+    except Exception:
+        return False
+
+
+async def _resolve_goods_level_rule(
+    db: AsyncSession,
+    tenant_id: int,
+    external_goods_id: str,
+) -> Optional[dict[str, Any]]:
+    """查商品级自动发货配置（delivery_goods_config）。
+
+    与实时路径 ws_delivery_handler._load_goods_delivery_rule 逻辑一致，
+    确保定时批量路径也能命中商品详情页配置的自动发货规则。
+    通过订单 item_id（闲鱼商品ID）映射到 xianyu_goods.id 再查配置。
+    """
+    if not external_goods_id:
+        return None
+
+    # 1. external_goods_id → xianyu_goods.id
+    # 注意：查询不再过滤 deleted=0。
+    # 若只查未删除记录，被软删除（deleted=1）的商品会被误判为"不存在"，
+    # 进而调用 _ensure_goods_placeholder_from_order_items 创建 deleted=0 重复记录，
+    # 导致幽灵商品反复出现（与 _backfill_missing_goods_from_orders 同类 bug）。
+    # 修复后覆盖所有 deleted 状态：软删除商品若有 delivery_goods_config 仍可命中发货配置。
+    goods_row = (await db.execute(text("""
+        SELECT id FROM xianyu_goods
+        WHERE tenant_id = :tenant_id AND external_goods_id = :xy_goods_id
+        ORDER BY id DESC LIMIT 1
+    """), {"tenant_id": tenant_id, "xy_goods_id": external_goods_id})).mappings().first()
+    if not goods_row:
+        # 商品不存在时，尝试从订单项表补全最小商品记录，确保发货配置可命中。
+        # 场景：订单同步入库但商品尚未同步（如新上架商品被购买），用户已在前端配置发货规则。
+        await _ensure_goods_placeholder_from_order_items(db, tenant_id, external_goods_id)
+        goods_row = (await db.execute(text("""
+            SELECT id FROM xianyu_goods
+            WHERE tenant_id = :tenant_id AND external_goods_id = :xy_goods_id
+            ORDER BY id DESC LIMIT 1
+        """), {"tenant_id": tenant_id, "xy_goods_id": external_goods_id})).mappings().first()
+        if not goods_row:
+            return None
+    internal_goods_id = goods_row.get("id")
+
+    # 2. 查 delivery_goods_config
+    cfg_row = (await db.execute(text("""
+        SELECT id, goods_id, config_json FROM delivery_goods_config
+        WHERE tenant_id = :tenant_id AND goods_id = :goods_id AND deleted = 0
+        LIMIT 1
+    """), {"tenant_id": tenant_id, "goods_id": internal_goods_id})).mappings().first()
+    if not cfg_row:
+        return None
+
+    config_json = cfg_row.get("config_json")
+    if isinstance(config_json, str):
+        try:
+            config = json.loads(config_json)
+        except json.JSONDecodeError:
+            return None
+    elif isinstance(config_json, dict):
+        config = config_json
+    else:
+        return None
+
+    timing_config = config.get("payDelivery")
+    if not isinstance(timing_config, dict):
+        return None
+
+    if timing_config.get("enabled") in (0, "0", False, "false", "False", None):
+        return None
+
+    mode = str(timing_config.get("mode") or "text").lower()
+    header = str(timing_config.get("header") or "")
+    content = str(timing_config.get("content") or "")
+    footer = str(timing_config.get("footer") or "")
+    source_id = timing_config.get("sourceId")
+
+    # 文本模式：尝试从货源库补全 content
+    if mode == "text" and source_id:
+        src = (await db.execute(text("""
+            SELECT content FROM delivery_text_source
+            WHERE tenant_id = :tenant_id AND id = :source_id AND deleted = 0
+            LIMIT 1
+        """), {"tenant_id": tenant_id, "source_id": source_id})).mappings().first()
+        if src and not content:
+            content = str(src.get("content") or "")
+
+    if mode == "text" and not any([header.strip(), content.strip(), footer.strip()]):
+        return None
+
+    delivery_content = "\n".join(
+        part for part in [header.strip(), content.strip(), footer.strip()] if part
+    )
+
+    return {
+        "id": cfg_row.get("id"),
+        "goods_id": internal_goods_id,
+        "delivery_mode": mode,
+        "delivery_content": delivery_content,
+        "content": delivery_content,
+        "card_group_id": timing_config.get("cardGroupId"),
+        "auto_confirm_shipment": timing_config.get("autoConfirmShipment")
+        or timing_config.get("auto_confirm_shipment")
+        or 0,
     }
 
 
@@ -3598,6 +3987,9 @@ async def execute_delivery_for_order(db: AsyncSession, order: dict[str, Any]) ->
     buyer_id = _text(order.get("buyer_id") or "")
     external_order_id = _text(order.get("external_order_id") or "")
     buyer_name = _text(order.get("buyer_name") or "买家")
+    # 提取商品ID（闲鱼 external_goods_id），用于按商品精确匹配会话 s_id，
+    # 避免发到该买家其他订单的旧会话（用户反馈过发货信息发错会话的问题）
+    xy_goods_id = _text(order.get("item_id") or "")
 
     existing_delivery = (await db.execute(text("""
         SELECT id, card_item_id FROM delivery_record
@@ -3607,16 +3999,40 @@ async def execute_delivery_for_order(db: AsyncSession, order: dict[str, Any]) ->
     if existing_delivery:
         return {"ok": True, "orderId": order_id, "deliveryRecordId": existing_delivery.get("id"), "cardItemId": existing_delivery.get("card_item_id"), "message": "订单已发货，跳过重复处理"}
 
-    rule = (await db.execute(text("""
-        SELECT * FROM delivery_rule
-        WHERE tenant_id = :tenant_id
-          AND deleted = 0
-          AND status = 1
-          AND (account_id IS NULL OR account_id = :account_id)
-          AND (goods_id IS NULL OR goods_id = 0)
-        ORDER BY CASE WHEN account_id = :account_id THEN 0 ELSE 1 END, id DESC
-        LIMIT 1
-    """), {"tenant_id": tenant_id, "account_id": account_id})).mappings().first()
+    # === 重试节流：检查最近一条失败记录的时间，避免每分钟都重试 ===
+    # 距离上次失败不足 RETRY_INTERVAL_SECONDS 秒的订单跳过重试，等待下一周期
+    RETRY_INTERVAL_SECONDS = 120  # 失败后至少等 2 分钟再重试
+    last_fail = (await db.execute(text("""
+        SELECT id, status, fail_reason, retry_count,
+               TIMESTAMPDIFF(SECOND, updated_time, NOW()) AS secs_since_update
+        FROM delivery_record
+        WHERE tenant_id = :tenant_id AND order_id = :order_id AND deleted = 0 AND status IN (0, 3)
+        ORDER BY id DESC LIMIT 1
+    """), {"tenant_id": tenant_id, "order_id": order_id})).mappings().first()
+    if last_fail:
+        secs = _safe_int(last_fail.get("secs_since_update"))
+        retry_count = _safe_int(last_fail.get("retry_count"))
+        if secs < RETRY_INTERVAL_SECONDS and retry_count >= 3:
+            # 重试次数已达上限且未到重试间隔，跳过
+            return {"ok": False, "errorCode": "DELIVERY_RETRY_THROTTLED", "orderId": order_id,
+                    "message": f"发货重试节流：距上次失败 {secs}s，重试 {retry_count} 次，等待 {RETRY_INTERVAL_SECONDS}s 后重试"}
+
+    # 优先查商品级自动发货配置（delivery_goods_config），与实时路径 ws_delivery_handler 保持一致。
+    # 订单的 item_id 是闲鱼商品ID（external_goods_id），需先映射到 xianyu_goods.id 再查配置。
+    rule = await _resolve_goods_level_rule(db, tenant_id, _text(order.get("item_id") or ""))
+
+    # 商品级配置未命中时，回退到账号级/通用规则（delivery_rule）
+    if not rule:
+        rule = (await db.execute(text("""
+            SELECT * FROM delivery_rule
+            WHERE tenant_id = :tenant_id
+              AND deleted = 0
+              AND status = 1
+              AND (account_id IS NULL OR account_id = :account_id)
+              AND (goods_id IS NULL OR goods_id = 0)
+            ORDER BY CASE WHEN account_id = :account_id THEN 0 ELSE 1 END, id DESC
+            LIMIT 1
+        """), {"tenant_id": tenant_id, "account_id": account_id})).mappings().first()
 
     if not rule:
         await _insert_delivery_record(db, tenant_id, account_id, order_id, None, "none", None, 0, "未配置自动发货规则")
@@ -3661,7 +4077,7 @@ async def execute_delivery_for_order(db: AsyncSession, order: dict[str, Any]) ->
         content = _text(card.get("card_content") or card.get("card_key") or card.get("card_value"))
 
         # 通过 WebSocket 将卡密内容发送给买家
-        send_ok = await _send_delivery_message_via_ws(db, tenant_id, account_id, buyer_id, content)
+        send_ok = await _send_delivery_message_via_ws(db, tenant_id, account_id, buyer_id, content, xy_goods_id)
 
         if send_ok:
             # 发送成功 → 标记为已使用（status=2）
@@ -3694,12 +4110,12 @@ async def execute_delivery_for_order(db: AsyncSession, order: dict[str, Any]) ->
         content = content.replace("{orderId}", external_order_id)
         content = content.replace("{goodsTitle}", "")
         content = content.replace("{deliveryTime}", time.strftime("%Y-%m-%d %H:%M:%S"))
-        send_ok = await _send_delivery_message_via_ws(db, tenant_id, account_id, buyer_id, content)
+        send_ok = await _send_delivery_message_via_ws(db, tenant_id, account_id, buyer_id, content, xy_goods_id)
 
     else:
         # 未知模式，尝试作为文本发送
         content = delivery_content
-        send_ok = await _send_delivery_message_via_ws(db, tenant_id, account_id, buyer_id, content)
+        send_ok = await _send_delivery_message_via_ws(db, tenant_id, account_id, buyer_id, content, xy_goods_id)
 
     # ---- 记录发货结果 ----
     record_status = 1 if send_ok else 0
@@ -3713,37 +4129,67 @@ async def execute_delivery_for_order(db: AsyncSession, order: dict[str, Any]) ->
     await _insert_delivery_record(db, tenant_id, account_id, order_id, rule.get("id"), delivery_mode, content, record_status, fail_reason, card_item_id)
 
     if send_ok:
-        # 更新订单状态为已发货
-        await db.execute(text("""
-            UPDATE xianyu_trade_order
-            SET order_status = 3, ship_time = NOW(), updated_time = NOW()
-            WHERE id = :order_id AND tenant_id = :tenant_id
-        """), {"order_id": order_id, "tenant_id": tenant_id})
-
-        # 自动确认发货（调用闲鱼API）
-        if _safe_int(rule.get("auto_confirm_shipment")) == 1:
-            try:
-                from .xianyu_api_service import confirm_shipment
-                confirm_result = confirm_shipment(account_id, external_order_id)
-                if confirm_result and confirm_result.get("success"):
-                    logger.info("确认发货成功: accountId=%d orderId=%s", account_id, external_order_id)
-                else:
-                    logger.warning(
-                        "runtimeFailure operation=confirm_delivery errorType=ProviderRejected requestId=%s",
-                        get_request_id() or "-",
-                    )
-            except Exception as e:
-                _log_runtime_failure("confirm_delivery", e)
-
-        await insert_notification(db, tenant_id, None, "自动发货成功",
-                                  f"订单 {external_order_id or order_id} 已通过WS发送发货内容",
-                                  "auto_delivery", "info")
+        # 先调用闲鱼确认发货 API，只有平台真正标记为已发货后才更新本地 order_status=3
+        # 避免本地标记 3 但闲鱼平台实际未发货的状态不一致问题
+        # 小刀订单走免拼发货接口（freeshipping），普通订单走虚拟发货接口（consign.dummy）
+        confirm_success = False
+        confirm_error_msg = "确认发货能力不可用"
         try:
-            from .notify_dispatcher import notify_auto_delivery
-            await notify_auto_delivery(tenant_id, account_id, True, external_order_id or order_id, "已通过WS发送发货内容")
-        except Exception as exc:
-            _log_runtime_failure("notify_delivery_success", exc)
-        return {"ok": True, "orderId": order_id, "ruleId": rule.get("id"), "cardItemId": card_item_id, "message": "已通过WS发送发货内容"}
+            from .xianyu_api_service import confirm_order_shipment
+            is_bargain = _safe_int(order.get("is_bargain")) == 1
+            confirm_result = confirm_order_shipment(
+                account_id,
+                external_order_id,
+                is_bargain=is_bargain,
+                item_id=xy_goods_id,
+                buyer_id=buyer_id,
+            )
+            if confirm_result and confirm_result.get("success"):
+                confirm_success = True
+                ship_method = confirm_result.get("ship_method", "freeshipping" if is_bargain else "consign")
+                logger.info(
+                    "确认发货成功: accountId=%d orderId=%s isBargain=%s method=%s",
+                    account_id, external_order_id, is_bargain, ship_method,
+                )
+            else:
+                confirm_error_msg = (confirm_result.get("message") if confirm_result else "确认发货失败") or "确认发货失败"
+                logger.warning(
+                    "runtimeFailure operation=confirm_delivery errorType=ProviderRejected requestId=%s msg=%s",
+                    get_request_id() or "-", confirm_error_msg,
+                )
+        except Exception as e:
+            confirm_error_msg = f"确认发货异常: {e}"
+            _log_runtime_failure("confirm_delivery", e)
+
+        if confirm_success:
+            # 确认发货成功，更新订单状态为已发货
+            await db.execute(text("""
+                UPDATE xianyu_trade_order
+                SET order_status = 3, ship_time = NOW(), updated_time = NOW()
+                WHERE id = :order_id AND tenant_id = :tenant_id
+            """), {"order_id": order_id, "tenant_id": tenant_id})
+
+            await insert_notification(db, tenant_id, None, "自动发货成功",
+                                      f"订单 {external_order_id or order_id} 已通过WS发送发货内容",
+                                      "auto_delivery", "info")
+            try:
+                from .notify_dispatcher import notify_auto_delivery
+                await notify_auto_delivery(tenant_id, account_id, True, external_order_id or order_id, "已通过WS发送发货内容")
+            except Exception as exc:
+                _log_runtime_failure("notify_delivery_success", exc)
+            return {"ok": True, "orderId": order_id, "ruleId": rule.get("id"), "cardItemId": card_item_id, "message": "已通过WS发送发货内容"}
+        else:
+            # 确认发货失败：发货消息已发送，但闲鱼平台未标记为已发货
+            # 保持本地 order_status 不变（仍为待发货），等待下次同步或重试
+            await insert_notification(db, tenant_id, None, "自动发货确认失败",
+                                      f"订单 {external_order_id or order_id} 发货消息已发送，但确认发货失败：{confirm_error_msg}",
+                                      "auto_delivery", "warning")
+            try:
+                from .notify_dispatcher import notify_auto_delivery
+                await notify_auto_delivery(tenant_id, account_id, False, external_order_id or order_id, f"发货消息已发送，但确认发货失败：{confirm_error_msg}")
+            except Exception as exc:
+                _log_runtime_failure("notify_delivery_failure", exc)
+            return {"ok": False, "errorCode": "CONFIRM_SHIPMENT_FAILED", "orderId": order_id, "ruleId": rule.get("id"), "cardItemId": card_item_id, "message": f"发货消息已发送，但确认发货失败：{confirm_error_msg}"}
     else:
         await insert_notification(db, tenant_id, None, "自动发货WS发送失败",
                                   f"订单 {external_order_id or order_id} {fail_reason or 'WS发送失败'}",
@@ -3769,6 +4215,45 @@ async def _insert_delivery_record(
     card_item_id: Optional[int] = None,
 ) -> None:
     delivery_status = "success" if status == 1 else "failed"
+
+    # 重试时复用已有失败记录：避免 delivery_record 表无限膨胀
+    # 查找该订单最近一条失败记录（status=0 或 3），若存在则更新而非插入新记录
+    existing = (await db.execute(text("""
+        SELECT id, retry_count FROM delivery_record
+        WHERE tenant_id = :tenant_id AND order_id = :order_id AND deleted = 0
+          AND status IN (0, 3)
+        ORDER BY id DESC LIMIT 1
+    """), {"tenant_id": tenant_id, "order_id": order_id})).mappings().first()
+
+    if existing:
+        # 更新已有失败记录：递增 retry_count，更新状态和内容
+        new_retry = _safe_int(existing.get("retry_count")) + 1
+        await db.execute(text("""
+            UPDATE delivery_record
+            SET account_id = :account_id, rule_id = :rule_id, delivery_type = :delivery_type,
+                content = :content, status = :status, fail_reason = :fail_reason,
+                delivery_status = :delivery_status, error_message = :error_message,
+                delivery_time = IF(:status = 1, NOW(), NULL),
+                card_item_id = :card_item_id, updated_time = NOW(),
+                retry_count = :retry_count
+            WHERE id = :id AND tenant_id = :tenant_id
+        """), {
+            "id": existing.get("id"),
+            "tenant_id": tenant_id,
+            "account_id": account_id,
+            "rule_id": rule_id,
+            "delivery_type": delivery_type,
+            "content": content,
+            "status": status,
+            "fail_reason": fail_reason,
+            "delivery_status": delivery_status,
+            "error_message": fail_reason,
+            "card_item_id": card_item_id,
+            "retry_count": new_retry,
+        })
+        return
+
+    # 无已有失败记录，插入新记录
     await db.execute(text("""
         INSERT INTO delivery_record(
             tenant_id, account_id, order_id, rule_id, delivery_type, content,
@@ -3800,11 +4285,16 @@ async def _send_delivery_message_via_ws(
     account_id: int,
     buyer_id: str,
     content: str,
+    xy_goods_id: Optional[str] = None,
 ) -> bool:
     """通过 WebSocket 发送发货消息给买家。
 
     从 xianyu_chat_message 表中查找会话 s_id，然后通过 WebSocket 发送。
     如果 WS 未连接或找不到会话，静默失败（不走异常，只返回 False）。
+
+    会话查找策略（严格按商品维度匹配，避免发到该买家的其他订单旧会话）：
+    1. 优先按 buyer_id + xy_goods_id 精确匹配（同一买家在同一商品上的会话）
+    2. 若 xy_goods_id 缺失或未命中，回退到仅按 buyer_id 匹配最新会话
 
     Returns:
         True 表示发送成功
@@ -3812,26 +4302,89 @@ async def _send_delivery_message_via_ws(
     if not buyer_id or not content:
         return False
 
-    # 查找会话 s_id
-    row = (await db.execute(
-        text("""
-            SELECT s_id, sender_user_id FROM xianyu_chat_message
-            WHERE tenant_id = :tenant_id
-              AND account_id = :account_id
-              AND sender_user_id = :buyer_id
-              AND s_id IS NOT NULL AND s_id != ''
-              AND deleted = 0
-            ORDER BY id DESC
-            LIMIT 1
-        """),
-        {"tenant_id": tenant_id, "account_id": account_id, "buyer_id": buyer_id}
-    )).mappings().first()
+    buyer_id_with_suffix = f"{buyer_id}@goofish" if not buyer_id.endswith("@goofish") else buyer_id
+    buyer_id_no_suffix = buyer_id.split("@", 1)[0] if "@" in buyer_id else buyer_id
+
+    # 优先按 buyer_id + xy_goods_id 精确匹配（防止发到该买家的其他订单会话）
+    row = None
+    match_strategy = ""
+    if xy_goods_id:
+        row = (await db.execute(
+            text("""
+                SELECT s_id, sender_user_id, xy_goods_id FROM xianyu_chat_message
+                WHERE tenant_id = :tenant_id
+                  AND account_id = :account_id
+                  AND (sender_user_id = :buyer_id
+                       OR sender_user_id = :buyer_id_with_suffix
+                       OR sender_user_id = :buyer_id_no_suffix)
+                  AND xy_goods_id = :xy_goods_id
+                  AND s_id IS NOT NULL AND s_id != ''
+                  AND deleted = 0
+                ORDER BY id DESC
+                LIMIT 1
+            """),
+            {
+                "tenant_id": tenant_id,
+                "account_id": account_id,
+                "buyer_id": buyer_id,
+                "buyer_id_with_suffix": buyer_id_with_suffix,
+                "buyer_id_no_suffix": buyer_id_no_suffix,
+                "xy_goods_id": xy_goods_id,
+            }
+        )).mappings().first()
+        match_strategy = "buyer+goods"
+
+    # 回退：仅按 buyer_id 匹配最新会话
     if not row:
-        logger.warning("未找到会话 s_id: accountId=%d buyerId=%s", account_id, buyer_id)
+        row = (await db.execute(
+            text("""
+                SELECT s_id, sender_user_id, xy_goods_id FROM xianyu_chat_message
+                WHERE tenant_id = :tenant_id
+                  AND account_id = :account_id
+                  AND (sender_user_id = :buyer_id
+                       OR sender_user_id = :buyer_id_with_suffix
+                       OR sender_user_id = :buyer_id_no_suffix)
+                  AND s_id IS NOT NULL AND s_id != ''
+                  AND deleted = 0
+                ORDER BY id DESC
+                LIMIT 1
+            """),
+            {
+                "tenant_id": tenant_id,
+                "account_id": account_id,
+                "buyer_id": buyer_id,
+                "buyer_id_with_suffix": buyer_id_with_suffix,
+                "buyer_id_no_suffix": buyer_id_no_suffix,
+            }
+        )).mappings().first()
+        match_strategy = "buyer-only"
+
+    if not row:
+        logger.warning(
+            "未找到会话 s_id: accountId=%d buyerId=%s xyGoodsId=%s",
+            account_id, buyer_id, xy_goods_id or "-",
+        )
         return False
 
     s_id = str(row["s_id"])
     sender_user_id = str(row["sender_user_id"] or "")
+    msg_xy_goods_id = str(row.get("xy_goods_id") or "")
+
+    # 安全检查：若指定了 xy_goods_id 但回退到 buyer-only 匹配的会话，
+    # 该会话的 xy_goods_id 与当前订单商品不一致 → 视为发到错误会话，拒绝发送。
+    # 这样可以避免把发货内容发到买家历史任意订单的旧会话（用户反馈过该问题）。
+    if xy_goods_id and match_strategy == "buyer-only" and msg_xy_goods_id and msg_xy_goods_id != xy_goods_id:
+        logger.warning(
+            "拒绝发送到错误会话: accountId=%d buyerId=%s orderGoodsId=%s sessionGoodsId=%s "
+            "(定时路径找不到当前商品的会话，需等待WS实时消息入库后再发送)",
+            account_id, buyer_id, xy_goods_id, msg_xy_goods_id,
+        )
+        return False
+
+    logger.info(
+        "发货会话匹配: accountId=%d buyerId=%s xyGoodsId=%s strategy=%s sId=%s",
+        account_id, buyer_id, xy_goods_id or "-", match_strategy, s_id,
+    )
 
     # 获取 WebSocket 客户端
     try:
@@ -4161,6 +4714,11 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
             await db.commit()
             return {"ok": False, "errorCode": "AI_BALANCE_INSUFFICIENT", "matched": True, "conversationId": conversation_db_id,
                     "messageId": trigger_message_id, "message": "AI Token 余额不足，请充值后重试"}
+        except AiBillingUnavailable as exc:
+            # 计费服务暂不可用（core-api 宕机/网络异常）时降级：不阻断自动回复，仅记录警告
+            _log_runtime_failure("precheck_ai_balance_degraded", exc)
+            logger.warning("[AI_REPLY] 计费服务暂不可用，降级跳过 precheck，继续执行自动回复 tenantId=%d accountId=%d",
+                           tenant_id, account_id)
         except AiBillingError as exc:
             _log_runtime_failure("precheck_ai_balance", exc)
             await _insert_auto_reply_failure(db, tenant_id, account_id, conversation_db_id, rule, content,
@@ -4236,6 +4794,11 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
             await _insert_auto_reply_failure(db, tenant_id, account_id, conversation_db_id, rule, content, "AI_BALANCE_INSUFFICIENT")
             await db.commit()
             return {"ok": False, "errorCode": "AI_BALANCE_INSUFFICIENT", "matched": True, "conversationId": conversation_db_id, "messageId": trigger_message_id, "message": "AI Token 余额不足，请充值后重试"}
+        except AiBillingUnavailable as exc:
+            # 计费服务暂不可用时降级：回复已生成，跳过扣费，继续发送回复
+            _log_runtime_failure("charge_auto_reply_usage_degraded", exc)
+            logger.warning("[AI_REPLY] 计费服务暂不可用，降级跳过扣费，继续发送自动回复 tenantId=%d accountId=%d",
+                           tenant_id, account_id)
         except AiBillingError as exc:
             _log_runtime_failure("charge_auto_reply_usage", exc)
             await _insert_auto_reply_failure(db, tenant_id, account_id, conversation_db_id, rule, content, "AI_BILLING_FAILED")
@@ -4663,12 +5226,21 @@ def _build_goods_context_text(goods: Optional[dict[str, Any]]) -> str:
     if not goods:
         return "当前还没有查到这条会话对应商品的本地资料。买家如果追问具体配置、成色、库存或价格细节，就自然说明这个细节我这边暂时确认不了，请买家查看商品页或等人工再帮他确认。"
 
+    # 库存显示：当本地库存为 0 或缺失时，显示"未知"而非"0"
+    # 原因：闲鱼列表 API 不返回库存字段，详情同步可能延迟或失败，
+    # 此时本地 stock=0 不代表真实库存为 0，避免 AI 据此告知买家"没库存"导致订单流失
+    quantity_val = _text(goods.get('quantity') or goods.get('stock'))
+    try:
+        stock_display = '未知' if (not quantity_val or int(quantity_val) <= 0) else quantity_val
+    except (ValueError, TypeError):
+        stock_display = '未知'
+
     lines = [
         f"商品ID：{_text(goods.get('external_goods_id') or goods.get('goods_id')) or '未知'}",
         f"商品标题：{_text(goods.get('title')) or '未知'}",
         f"商品价格：{_text(goods.get('price')) or '未知'}",
         f"商品售价：{_text(goods.get('sold_price')) or _text(goods.get('price')) or '未知'}",
-        f"库存：{_text(goods.get('quantity') or goods.get('stock')) or '未知'}",
+        f"库存：{stock_display}",
         f"商品分类：{_text(goods.get('category')) or '未知'}",
         f"商品状态：{_text(goods.get('status')) or '未知'}",
         f"商品文案：{_text(goods.get('description') or goods.get('detail_info')) or '暂无'}",
@@ -4694,6 +5266,7 @@ def _build_ai_cs_system_prompt(
         "【语气】像真人客服一样自然礼貌，回答短、准、直接，少说套话，避免客服腔和平台公告腔。",
         "【身份表达】不要主动说自己是AI、机器人或系统；正常接待时就像店里客服本人在回复。",
         "【硬性约束】只能依据商品资料、知识库和聊天规则回复；不要编造库存、价格、赠品、售后、物流、额外服务；不要与买家闲聊。",
+        "【库存红线】绝对不要主动告诉买家'没库存''售罄''缺货'。即使本地库存显示为 0 或未知，也要回复'有货的，可以直接下单'或引导买家下单；真实库存以商品页为准，不要因库存问题劝退买家或阻止下单。",
         "【信息不足时】如果当前资料里没有答案，就自然地说这个细节我这边暂时确认不了，或者我先帮您再核实一下，再引导买家看商品页或等待人工处理。",
         "【高风险场景】退款、投诉、赔偿、维权、平台规则、线下交易、加微信、改地址等问题，只能建议人工处理。",
         "",
@@ -4766,12 +5339,29 @@ async def _build_ai_customer_service_rule(
         return None
 
     # 2) 读取 ai-customer-service 配置
+    #    按账号归属 user_id 查询；查不到时 fallback 到 tenant_id 下任意 user_id 的同 key 配置，
+    #    适配单租户多用户场景（用户可能用某个子账号登录并配置，但闲鱼账号归属另一个用户）。
     cfg_row = (await db.execute(text("""
         SELECT config_json FROM user_business_setting
         WHERE tenant_id = :tenant_id AND user_id = :user_id
           AND setting_key = 'ai-customer-service' AND deleted = 0
         LIMIT 1
     """), {"tenant_id": tenant_id, "user_id": user_id})).mappings().first()
+    if cfg_row:
+        logger.debug("[AI_CS] 命中账号归属用户配置 tenantId=%d userId=%d", tenant_id, user_id)
+    else:
+        cfg_row = (await db.execute(text("""
+            SELECT config_json FROM user_business_setting
+            WHERE tenant_id = :tenant_id
+              AND setting_key = 'ai-customer-service' AND deleted = 0
+            ORDER BY updated_time DESC, id DESC
+            LIMIT 1
+        """), {"tenant_id": tenant_id})).mappings().first()
+        if cfg_row:
+            logger.info(
+                "[AI_CS] 账号归属用户未配置 AI 客服，已 fallback 到租户级配置 tenantId=%d accountId=%d userId=%d",
+                tenant_id, account_id, user_id,
+            )
     if not cfg_row:
         logger.debug("[AI_CS] 未配置 AI 客服 tenantId=%d userId=%d", tenant_id, user_id)
         return None
@@ -5971,7 +6561,7 @@ async def _prepare_account_publishers(
 ) -> dict:
     """
     预解析所有账号的 Cookie + XianyuItemPublisher 实例，避免循环内重复解析。
-    返回 {account_id: {"cookie_str", "token", "publisher"}}。
+    返回 {account_id: {"cookie_str", "token", "publisher", "is_fish_shop", "error"}}。
     若某账号 Cookie 解析失败，对应 entry 的 publisher 为 None，error 字段说明原因。
     """
     result: dict = {}
@@ -5981,7 +6571,7 @@ async def _prepare_account_publishers(
                 acct_id = int(acct_id)
             except (ValueError, TypeError):
                 continue
-            result[acct_id] = {"cookie_str": "", "token": "", "publisher": None, "error": ""}
+            result[acct_id] = {"cookie_str": "", "token": "", "publisher": None, "is_fish_shop": False, "error": ""}
         return result
 
     from app.services.xianyu_goods_sync import XianyuItemPublisher, extract_token_from_cookie
@@ -5996,17 +6586,26 @@ async def _prepare_account_publishers(
             cookie_str, cookie_err = await _resolve_account_cookie(db, tenant_id, acct_id, {})
             logger.info("[PREPARE-PUB] acct_id=%d auth_ok=%s", acct_id, not bool(cookie_err))
             if cookie_err:
-                result[acct_id] = {"cookie_str": "", "token": "", "publisher": None, "error": "账号登录状态不可用"}
+                result[acct_id] = {"cookie_str": "", "token": "", "publisher": None, "is_fish_shop": False, "error": "账号登录状态不可用"}
                 continue
             token = extract_token_from_cookie(cookie_str)
             if not token:
-                result[acct_id] = {"cookie_str": cookie_str, "token": "", "publisher": None, "error": "Cookie中缺少_m_h5_tk，请重新登录"}
+                result[acct_id] = {"cookie_str": cookie_str, "token": "", "publisher": None, "is_fish_shop": False, "error": "Cookie中缺少_m_h5_tk，请重新登录"}
                 continue
             publisher = XianyuItemPublisher(cookie_str, tenant_id)
-            result[acct_id] = {"cookie_str": cookie_str, "token": token, "publisher": publisher, "error": ""}
+            # 查询账号是否鱼小铺：鱼小铺账号可自定义库存，普通账号库存固定为 1
+            try:
+                _fs_row = (await db.execute(text(
+                    "SELECT fish_shop_user FROM xianyu_account WHERE id=:aid AND tenant_id=:tid AND deleted=0 LIMIT 1"
+                ), {"aid": acct_id, "tid": tenant_id})).first()
+                is_fish_shop = bool(_fs_row and _fs_row[0])
+            except Exception as _fs_err:
+                logger.warning("[PREPARE-PUB] acct_id=%d 查询鱼小铺标识失败，按普通账号处理: %s", acct_id, _fs_err)
+                is_fish_shop = False
+            result[acct_id] = {"cookie_str": cookie_str, "token": token, "publisher": publisher, "is_fish_shop": is_fish_shop, "error": ""}
         except Exception as e:
             _log_runtime_failure("prepare_account_publisher", e)
-            result[acct_id] = {"cookie_str": "", "token": "", "publisher": None, "error": "发布账号登录状态不可用"}
+            result[acct_id] = {"cookie_str": "", "token": "", "publisher": None, "is_fish_shop": False, "error": "发布账号登录状态不可用"}
     logger.info("[PREPARE-PUB] 完成 预解析结果 keys=%s", list(result.keys()))
     return result
 
@@ -6263,12 +6862,14 @@ async def _publish_single_item(
     # 真实发布
     try:
         _t_pub_start = __import__('time').perf_counter()
+        # 鱼小铺账号可自定义库存（默认 999），普通账号库存固定为 1
+        _pub_quantity = 999 if account_pub.get("is_fish_shop") else 1
         item_data = {
             "title": title,
             "desc": desc,
             "imageUrls": [img_url],
             "price": price,
-            "quantity": 999,
+            "quantity": _pub_quantity,
         }
         if category:
             item_data["category"] = {"catName": category}
@@ -6357,6 +6958,9 @@ async def _publish_single_item(
             }
     except Exception as e:
         _log_runtime_failure("publish_single_item", e)
+        # 保留真实异常类型与消息，便于排障（账号 token 失效、图片上传失败、风控等）
+        err_type = type(e).__name__
+        err_msg = str(e) or err_type
         return {
             "goods_id": "",
             "title": title,
@@ -6364,7 +6968,9 @@ async def _publish_single_item(
             "platform": platform,
             "status": "failed",
             "errorCode": "PUBLISH_RUNTIME_ERROR",
-            "error": "商品发布异常，请稍后重试",
+            "error": f"商品发布异常：{err_msg}",
+            "errorMessage": err_msg,
+            "errorType": err_type,
             "account_id": acct_id,
             "category": category,
             "source_item_id": source_item_id,
@@ -8382,6 +8988,15 @@ async def _execute_workflow_node(
                         })
                     continue
                 publisher = XianyuItemPublisher(cookie_str, tenant_id)
+                # 查询账号是否鱼小铺：鱼小铺账号可自定义库存，普通账号库存固定为 1
+                try:
+                    _fs_row = (await db.execute(text(
+                        "SELECT fish_shop_user FROM xianyu_account WHERE id=:aid AND tenant_id=:tid AND deleted=0 LIMIT 1"
+                    ), {"aid": acct_id, "tid": tenant_id})).first()
+                    acct_is_fish_shop = bool(_fs_row and _fs_row[0])
+                except Exception as _fs_err:
+                    logger.warning("[PUBLISH] 账号%d 查询鱼小铺标识失败，按普通账号处理: %s", acct_id, _fs_err)
+                    acct_is_fish_shop = False
 
             for idx, p in enumerate(polished):
                 # ★ 多账号：仅发布属于当前账号的版本
@@ -8472,12 +9087,14 @@ async def _execute_workflow_node(
                 # 真实发布到闲鱼
                 try:
                     _t_pub_start = __import__('time').perf_counter()
+                    # 鱼小铺账号可自定义库存（默认 999），普通账号库存固定为 1
+                    _pub_quantity = 999 if acct_is_fish_shop else 1
                     item_data = {
                         "title": title,
                         "desc": desc,
                         "imageUrls": image_urls,
                         "price": price,
-                        "quantity": 999,
+                        "quantity": _pub_quantity,
                     }
                     if category:
                         item_data["category"] = {"catName": category}

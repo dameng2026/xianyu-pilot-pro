@@ -34,7 +34,7 @@ import httpx
 from sqlalchemy import text
 
 from ..core.config import settings
-from ..core.cookie_crypto import decrypt_cookie_if_needed
+from ..core.cookie_crypto import decrypt_cookie_if_needed, encrypt_cookie_for_storage
 from ..core.database import async_session
 from ..core.failure_logging import log_service_failure
 
@@ -201,7 +201,7 @@ async def try_auto_solve(
     tenant_id: int,
     target_url: Optional[str] = None,
     headless: Optional[bool] = None,
-    max_retries: int = 3,
+    max_retries: int = 5,
 ) -> dict:
     """调用 crawler-service 的 Playwright 滑块求解接口。
 
@@ -288,7 +288,7 @@ async def try_auto_solve(
         "targetUrl": target_url,
         "headless": resolved_headless,
         "maxRetries": max_retries,
-        "timeoutMs": 30000,
+        "timeoutMs": 60000,
     }
 
     headers = {
@@ -299,7 +299,7 @@ async def try_auto_solve(
 
     started = time.time()
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=180.0) as client:
             resp = await client.post(endpoint, json=payload, headers=headers)
             data = resp.json()
     except Exception as e:
@@ -319,15 +319,58 @@ async def try_auto_solve(
 
     duration_ms = int((time.time() - started) * 1000)
     solve_ok = bool(data.get("ok"))
+    crawler_error = data.get("error") or ""
+
+    # 读取求解成功后的最新 cookies（Baxia 验证通过后服务器下发新 token，如 _m_h5_tk）
+    fresh_cookies = data.get("cookies") or ""
+
+    # 如果求解成功且有最新 cookies，立即更新数据库中的 cookie
+    # 关键：Baxia 验证通过后浏览器中的 cookie 已更新，必须持久化到数据库，
+    # 否则后续 _verify_cookie_via_token_api 和 API 调用仍用旧 cookie 会失败
+    if solve_ok and fresh_cookies:
+        try:
+            from .ws_token import extract_m_h5_tk_from_cookie
+            m_h5_tk = extract_m_h5_tk_from_cookie(fresh_cookies)
+            encrypted_cookie = encrypt_cookie_for_storage(fresh_cookies)
+            encrypted_token = encrypt_cookie_for_storage(m_h5_tk) if m_h5_tk else None
+            async with async_session() as db:
+                await db.execute(
+                    text("""
+                        UPDATE xianyu_account_auth
+                        SET encrypted_cookie = :cookie,
+                            encrypted_token = COALESCE(:token, encrypted_token),
+                            updated_time = NOW()
+                        WHERE account_id = :account_id AND tenant_id = :tenant_id
+                          AND COALESCE(deleted, 0) = 0
+                    """),
+                    {
+                        "cookie": encrypted_cookie,
+                        "token": encrypted_token,
+                        "account_id": account_id,
+                        "tenant_id": tenant_id,
+                    },
+                )
+                await db.commit()
+            logger.info(
+                "滑块求解成功，已更新数据库 Cookie accountId=%d cookieLen=%d hasToken=%s",
+                account_id, len(fresh_cookies), bool(m_h5_tk),
+            )
+        except Exception as e:
+            log_service_failure(
+                logger, e, operation="update_captcha_fresh_cookies",
+                tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
+            )
+
     return {
         "success": solve_ok,
         "solved": bool(data.get("solved")),
         "captchaDetected": bool(data.get("captchaDetected")),
         "attempts": int(data.get("attempts") or 0),
         "errorCode": "" if solve_ok else "CAPTCHA_SOLVE_FAILED",
-        "error": None if solve_ok else "滑块验证未通过，请改用人工验证",
+        "error": None if solve_ok else (crawler_error or "滑块验证未通过，请改用人工验证"),
         "screenshotPath": data.get("screenshotPath"),
         "durationMs": duration_ms,
+        "cookies": fresh_cookies if solve_ok else None,
     }
 
 
@@ -463,6 +506,8 @@ async def handle_captcha_for_account(
     response: dict | str | None = None,
     auto_solve: bool = False,
     trigger_scene: str = "manual",
+    open_reason: str = "",
+    solve_reason: str = "",
 ) -> dict:
     """综合处理账号的滑块验证场景。
 
@@ -474,6 +519,8 @@ async def handle_captcha_for_account(
     Args:
         trigger_scene: 触发场景 (ws_connect/cookie_keepalive/token_refresh/manual)，
                        用于写入求解记录和 SSE 广播
+        open_reason: 开启原因（为什么打开滑块求解流程）
+        solve_reason: 求解原因（为什么进行滑块求解，具体业务原因）
 
     Returns:
         {
@@ -521,6 +568,7 @@ async def handle_captcha_for_account(
         # 创建求解记录 + 广播"求解中"状态
         solve_record_id = await create_solve_record(
             account_id, tenant_id, trigger_scene=trigger_scene,
+            open_reason=open_reason, solve_reason=solve_reason,
         )
         account_name = await _lookup_account_name(tenant_id, account_id)
         await broadcast_captcha_solve(

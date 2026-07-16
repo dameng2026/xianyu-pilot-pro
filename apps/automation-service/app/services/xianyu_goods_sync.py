@@ -872,14 +872,18 @@ def _build_goods_insert_values(goods_dict: dict) -> dict:
         values["status"] = 1 if int(values["status"]) == 0 else 0 if int(values["status"]) == 1 else 2
     if "quantity" in values:
         try:
-            values["quantity"] = int(values["quantity"])
+            qty = int(values["quantity"])
+            # 列表 API 不返回库存：新增商品默认 999（闲鱼常见库存值），
+            # 详情同步成功后会覆盖为真实值；避免本地库存为 0 导致 AI 客服误报"没库存"
+            values["quantity"] = qty if qty > 0 else 999
         except (ValueError, TypeError):
-            values["quantity"] = 0
+            values["quantity"] = 999
     if "stock" in values:
         try:
-            values["stock"] = int(values["stock"])
+            st = int(values["stock"])
+            values["stock"] = st if st > 0 else 999
         except (ValueError, TypeError):
-            values["stock"] = 0
+            values["stock"] = 999
     if values.get("detail_info") and not values.get("description"):
         values["description"] = values["detail_info"]
     if values.get("description") and not values.get("detail_info"):
@@ -949,6 +953,11 @@ def _build_goods_update_values(existing, goods_dict: dict, *, partial: bool) -> 
     if "description" in values and "detail_info" not in values:
         values["detail_info"] = values["description"]
 
+    # 同步时确保商品 deleted=0：若商品仍在闲鱼上（在 synced_ids 中），
+    # 应恢复显示（复活之前被 Step 4 标记 deleted=1 的记录）。
+    # 幽灵商品反复出现的根因不在同步链路，而在订单补全链路
+    # （_backfill_missing_goods_from_orders 对软删除商品创建 deleted=0 重复记录），
+    # 那里已修复，本处保持 deleted=0 以支持商品重新上架后恢复显示。
     values["deleted"] = 0
     values["updated_time"] = datetime.now()
     return values
@@ -1176,6 +1185,15 @@ async def sync_goods_for_account(
                             update_values.pop("quantity", None)
                         if "stock" in update_values and int(update_values["stock"]) <= 0:
                             update_values.pop("stock", None)
+                        # 列表 API 不返回库存：若本地库存仍为 0 或缺失（详情同步尚未完成或失败），
+                        # 设为 999（闲鱼常见库存值）兜底，避免 AI 客服误报"没库存"。
+                        # 详情同步成功后会覆盖为真实值；若本地已有真实库存（>0）则保留。
+                        local_qty = int(getattr(existing, "quantity", 0) or 0)
+                        local_st = int(getattr(existing, "stock", 0) or 0)
+                        if local_qty <= 0 and "quantity" not in update_values:
+                            update_values["quantity"] = 999
+                        if local_st <= 0 and "stock" not in update_values:
+                            update_values["stock"] = 999
                         stmt = (
                             update(XianyuGoods)
                             .where(XianyuGoods.id == existing.id)
@@ -1246,15 +1264,21 @@ async def sync_goods_for_account(
         sync_result = await _do_sync()
 
         # Step 5: 异步获取详情（如果有变化的商品）
+        # 修复：只要有任何商品（新增或更新）就触发详情同步
+        # 原逻辑仅 updated > 0 触发，导致首次同步全是新商品时（updated=0）跳过详情同步，
+        # 新商品库存永远为 0（列表 API 不返回库存字段）
         detail_synced = 0
-        if async_fetch_detail and sync_result.get("updated", 0) > 0:
-            logger.info("创建详情同步任务: account_id=%d, items_count=%d", account_id, len(all_items))
+        total_changed = sync_result.get("updated", 0) + sync_result.get("new", 0)
+        if async_fetch_detail and total_changed > 0:
+            logger.info("创建详情同步任务: account_id=%d, items_count=%d, updated=%d, new=%d",
+                        account_id, len(all_items), sync_result.get("updated", 0), sync_result.get("new", 0))
             task = asyncio.create_task(_async_fetch_details(cookie_str, all_items, account_id, tenant_id, sync_id))
             _detail_sync_tasks.add(task)
             task.add_done_callback(_detail_sync_tasks.discard)
-            detail_synced = sync_result["updated"]
+            detail_synced = total_changed
         else:
-            logger.info("跳过详情同步: async_fetch_detail=%s, updated=%s", async_fetch_detail, sync_result.get("updated", 0))
+            logger.info("跳过详情同步: async_fetch_detail=%s, updated=%s, new=%s",
+                        async_fetch_detail, sync_result.get("updated", 0), sync_result.get("new", 0))
 
         duration = round(time.time() - start_time, 1)
 
@@ -1487,6 +1511,11 @@ async def upsert_goods_record(
 
     if existing:
         update_values = _build_goods_update_values(existing, goods_dict, partial=partial)
+        # upsert_goods_record 仅被 persist_published_goods 调用（发布商品场景）。
+        # 用户主动发布商品时应复活软删除记录：显式设置 deleted=0。
+        # _build_goods_update_values 不再无条件设 deleted=0（避免同步链路复活幽灵商品），
+        # 但发布是用户主动行为，应恢复商品显示。
+        update_values["deleted"] = 0
         for key, value in update_values.items():
             setattr(existing, key, value)
         return existing, False

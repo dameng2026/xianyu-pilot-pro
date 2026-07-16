@@ -216,7 +216,7 @@ async def test_execute_text_delivery_updates_local_state_without_calling_xianyu_
     db = _UpdateOrderDB()
     monkeypatch.setattr(ws_delivery_handler, "_send_delivery_message", AsyncMock(return_value=True))
     monkeypatch.setattr(ws_delivery_handler, "_insert_delivery_record", AsyncMock())
-    auto_confirm = AsyncMock()
+    auto_confirm = AsyncMock(return_value={"success": True})
     monkeypatch.setattr(ws_delivery_handler, "_auto_confirm_shipment", auto_confirm)
 
     await ws_delivery_handler._execute_text_delivery(
@@ -236,4 +236,4 @@ async def test_execute_text_delivery_updates_local_state_without_calling_xianyu_
     )
 
     assert any("UPDATE xianyu_trade_order" in sql for sql, _ in db.calls)
-    auto_confirm.assert_not_awaited()
+    auto_confirm.assert_awaited_once()

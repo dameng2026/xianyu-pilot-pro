@@ -1643,6 +1643,13 @@ onBeforeUnmount(() => {
   min-width: 130px;
 }
 
+/* 中等屏幕宽度下功能特性 4 列卡片文字过窄导致溢出，降到 3 列保证可读 */
+@media (max-width: 1640px) {
+  .feature-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 1500px) {
   .quick-start-grid,
   .feature-grid {

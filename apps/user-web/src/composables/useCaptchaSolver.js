@@ -48,17 +48,22 @@ function clearSolveStatus(accountId) {
  * 手动触发滑块求解
  * @param {number} accountId 账号ID
  * @param {string} triggerScene 触发场景，默认 'manual'
+ * @param {object} extra 额外参数 { openReason, solveReason }
+ *   - openReason: 开启原因（为什么打开滑块求解流程）
+ *   - solveReason: 求解原因（为什么进行滑块求解）
  * @returns {Promise<{success: boolean, recovered: boolean, message: string}>}
  */
-async function solveManually(accountId, triggerScene = 'manual') {
+async function solveManually(accountId, triggerScene = 'manual', extra = {}) {
   if (!accountId) return { success: false, recovered: false, message: '账号ID不能为空' }
   const key = String(accountId)
+  const openReason = extra.openReason || ''
+  const solveReason = extra.solveReason || ''
 
   // 标记为求解中
   solveStates[key] = {
     status: 'retrying',
     result: '',
-    reason: '手动触发滑块求解',
+    reason: solveReason || '手动触发滑块求解',
     accountName: solveStates[key]?.accountName || '',
     timestamp: Date.now(),
     recordId: null,
@@ -69,6 +74,8 @@ async function solveManually(accountId, triggerScene = 'manual') {
       accountId: Number(accountId),
       autoSolve: true,
       triggerScene,
+      openReason,
+      solveReason,
     })
     const data = res?.data || res || {}
     const recovered = Boolean(data.recovered)
@@ -131,7 +138,10 @@ async function autoSolveIfNeeded(accountId) {
   if (now - lastTs < AUTO_SOLVE_COOLDOWN_MS) return  // 冷却期内跳过
   autoSolveTimestamps[key] = now
   // 后端 handle API 会写记录 + SSE 广播，前端通过 SSE 更新状态
-  solveManually(accountId, 'ws_connect').catch(() => {})
+  solveManually(accountId, 'ws_connect', {
+    openReason: 'HTTP 接口返回需要滑块验证自动触发',
+    solveReason: 'API 响应 code=1001，需要滑块验证',
+  }).catch(() => {})
 }
 
 // ============================================================

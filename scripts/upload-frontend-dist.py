@@ -8,7 +8,7 @@ import paramiko
 
 HOST = '154.9.254.86'
 USER = 'root'
-PASS = 'Slfasd123'
+PASS = 'IkyuM1cakgilY5Vz'
 
 USER_WEB_LOCAL = r'g:\源码\xianyu-assistant-package-temp\apps\user-web\dist'
 ADMIN_WEB_LOCAL = r'g:\源码\xianyu-assistant-package-temp\apps\admin-web\dist'

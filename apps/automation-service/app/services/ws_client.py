@@ -961,9 +961,15 @@ class XianyuWebSocketClient:
         确保刷新页面或重载账号列表时仍显示"在线"。
         临时断开（_connect_loop 会自动重连）不调用此方法，保持 DB 在线状态，
         避免"保持在线，除非 Cookie 失效或弹窗"的预期被破坏。
+
+        同时自动恢复因 WS 断开导致连续失败被禁用的 auto_delivery 定时兜底任务。
+        根因：auto_delivery 任务依赖 WS 发送发货消息，WS 短暂断开时发货失败，
+        连续失败达到阈值后被 disabled_after_failures 自动禁用；WS 恢复后若不恢复任务，
+        后续所有自动发货都无法触发。
         """
         try:
             from ..core.database import async_session
+            from sqlalchemy import text
             from .automation_runtime import update_ws_heartbeat
             async with async_session() as db:
                 await update_ws_heartbeat(db, {
@@ -973,6 +979,25 @@ class XianyuWebSocketClient:
                     "wsStatus": 1,
                     "latency": 0,
                 })
+                # WS 恢复连接时，自动恢复因 WS 断开导致连续失败被禁用的自动发货定时任务
+                reenabled = await db.execute(text("""
+                    UPDATE scheduled_task
+                    SET enabled = 1,
+                        consecutive_failure_count = 0,
+                        last_status = 'pending',
+                        updated_time = NOW()
+                    WHERE tenant_id = :tenant_id
+                      AND deleted = 0
+                      AND task_type = 'auto_delivery'
+                      AND enabled = 0
+                      AND last_status = 'disabled_after_failures'
+                """), {"tenant_id": self.tenant_id})
+                if (reenabled.rowcount or 0) > 0:
+                    logger.info(
+                        "WS 恢复连接，已自动重新启用被禁用的自动发货定时任务: tenantId=%d accountId=%d count=%d",
+                        self.tenant_id, self.account_id, reenabled.rowcount,
+                    )
+                await db.commit()
             logger.info("已持久化 WS 在线状态: accountId=%d", self.account_id)
         except Exception as e:
             log_service_failure(
@@ -1217,6 +1242,11 @@ class XianyuWebSocketClient:
             "WS Token 失败后自动触发滑块求解 accountId=%d scene=%s",
             self.account_id, scene,
         )
+        # 根据场景确定具体的求解原因（写入滑块求解记录）
+        if scene == "expired":
+            solve_reason = "WS Token 获取失败：Cookie Session 已过期，尝试通过滑块求解恢复"
+        else:
+            solve_reason = "WS Token 获取遇到滑块验证（FAIL_SYS_USER_VALIDATE）"
         try:
             from .captcha_solver import handle_captcha_for_account
             result = await handle_captcha_for_account(
@@ -1225,6 +1255,8 @@ class XianyuWebSocketClient:
                 response=None,
                 auto_solve=True,
                 trigger_scene="token_refresh",
+                open_reason="WS Token 获取失败自动触发",
+                solve_reason=solve_reason,
             )
             recovered = bool(result.get("recovered"))
             auto_solve_result = result.get("autoSolveResult") or {}

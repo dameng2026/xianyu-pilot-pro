@@ -45,6 +45,9 @@ public class PaymentService {
     @Value("${payment.sandbox.enabled:false}")
     private boolean sandboxModeEnabled;
 
+    @Value("${payment.external-base-url:}")
+    private String externalBaseUrl;
+
     @Autowired
     public PaymentService(JdbcTemplate jdbcTemplate, CookieCryptoService cryptoService,
                           PaymentCallbackAuditService callbackAuditService) {
@@ -627,12 +630,13 @@ public class PaymentService {
         if ("yipay".equals(provider) && StringUtils.hasText(gateway)) {
             validateEnabledPaymentConfiguration(provider, 1, 0,
                     text(config.get("merchant_id")), text(config.get("api_key")), gateway, notifyUrl);
+            String resolvedNotifyUrl = resolveNotifyUrl(notifyUrl);
             Map<String, String> params = new LinkedHashMap<>();
             params.put("pid", text(config.get("merchant_id")));
             params.put("type", "wechat".equals(channel) ? "wxpay" : "alipay");
             params.put("out_trade_no", orderNo);
-            params.put("notify_url", notifyUrl);
-            params.put("return_url", notifyUrl);
+            params.put("notify_url", resolvedNotifyUrl);
+            params.put("return_url", resolvedNotifyUrl);
             params.put("name", title);
             params.put("money", BigDecimal.valueOf(amountCent).divide(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString());
             String sign = signYipay(params, text(config.get("api_key")));
@@ -707,8 +711,11 @@ public class PaymentService {
         if (!StringUtils.hasText(apiKey) || apiKey.length() < 16) {
             throw new BizException(400, "易支付 API Key 未配置或强度不足");
         }
-        if (!isSecureHttpsUrl(gatewayUrl) || !isSecureHttpsUrl(notifyUrl)) {
-            throw new BizException(400, "易支付生产网关和回调地址必须使用标准 HTTPS URL");
+        if (!isSecureHttpsUrl(gatewayUrl)) {
+            throw new BizException(400, "易支付生产网关地址必须使用标准 HTTPS URL");
+        }
+        if (!isRelativePath(notifyUrl) && !isSecureHttpsUrl(notifyUrl)) {
+            throw new BizException(400, "易支付回调地址必须使用标准 HTTPS URL 或以 / 开头的相对路径");
         }
     }
 
@@ -735,6 +742,22 @@ public class PaymentService {
         } catch (RuntimeException e) {
             return false;
         }
+    }
+
+    private boolean isRelativePath(String value) {
+        return StringUtils.hasText(value) && value.startsWith("/") && !value.startsWith("//");
+    }
+
+    private String resolveNotifyUrl(String notifyUrl) {
+        if (!isRelativePath(notifyUrl)) {
+            return notifyUrl;
+        }
+        String base = externalBaseUrl == null ? "" : externalBaseUrl.trim();
+        if (base.isEmpty()) {
+            throw new BizException(503, "支付回调地址为相对路径，但系统未配置 payment.external-base-url，请联系管理员设置外部访问地址");
+        }
+        if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+        return base + notifyUrl;
     }
 
     private String signYipay(Map<String, ?> params, String key) {

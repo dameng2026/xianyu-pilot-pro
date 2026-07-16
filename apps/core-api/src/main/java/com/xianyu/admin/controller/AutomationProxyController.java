@@ -1110,6 +1110,13 @@ public class AutomationProxyController {
     public Result<Object> workflowAiRewrite(@RequestBody(required = false) Map<String, Object> body) {
         if (body == null) body = new java.util.LinkedHashMap<>();
         injectTenantId(body);
+        // AI 改写需要 user_id 用于计费归集，Python 内部令牌认证时 user_id 恒为 0，
+        // 必须由 Java 网关从 JWT 上下文取出当前用户 ID 注入 body，由 Python 路由优先使用。
+        Long currentUserId = TenantContext.getCurrentUserId();
+        if (currentUserId != null && currentUserId > 0) {
+            body.put("userId", currentUserId);
+            body.put("user_id", currentUserId);
+        }
         try {
             return Result.ok(automationClient.postInternalForData("/api/workflow/ai/rewrite", body, 60));
         } catch (Exception ex) {
@@ -1251,14 +1258,16 @@ public class AutomationProxyController {
     public Result<Object> captchaAutoSolve(@RequestBody(required = false) Map<String, Object> body) {
         if (body == null) body = new java.util.LinkedHashMap<>();
         injectTenantId(body);
-        return Result.ok(automationClient.postInternalForData("/api/captcha/auto-solve", body));
+        // 滑块求解涉及 Playwright 浏览器操作 + 多场景重试（加载转圈/点击重试/下载失败刷新），需 180 秒超时
+        return Result.ok(automationClient.postInternalForData("/api/captcha/auto-solve", body, 180));
     }
 
     @PostMapping("/captcha/handle")
     public Result<Object> captchaHandle(@RequestBody(required = false) Map<String, Object> body) {
         if (body == null) body = new java.util.LinkedHashMap<>();
         injectTenantId(body);
-        return Result.ok(automationClient.postInternalForData("/api/captcha/handle", body));
+        // 滑块求解涉及 Playwright 浏览器操作 + 多场景重试（加载转圈/点击重试/下载失败刷新），需 180 秒超时
+        return Result.ok(automationClient.postInternalForData("/api/captcha/handle", body, 180));
     }
 
     @GetMapping("/captcha/records")
@@ -1266,12 +1275,14 @@ public class AutomationProxyController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int pageSize,
             @RequestParam(defaultValue = "0") int accountId,
-            @RequestParam(defaultValue = "") String status) {
+            @RequestParam(defaultValue = "") String status,
+            @RequestParam(defaultValue = "") String triggerScene) {
         java.util.Map<String, Object> params = new java.util.LinkedHashMap<>();
         params.put("page", page);
         params.put("pageSize", pageSize);
         if (accountId > 0) params.put("accountId", accountId);
         if (status != null && !status.isBlank()) params.put("status", status);
+        if (triggerScene != null && !triggerScene.isBlank()) params.put("triggerScene", triggerScene);
         return Result.ok(automationClient.getInternalForData("/api/captcha/records", params));
     }
 

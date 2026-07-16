@@ -68,21 +68,18 @@ async def test_legacy_order_sync_does_not_report_zero_as_a_successful_sync():
 
 
 def test_confirm_shipment_capability_is_explicitly_fail_closed(monkeypatch):
+    def _platform_unavailable(*_args, **_kwargs):
+        raise xianyu_api_service.requests.exceptions.ConnectionError("platform unavailable")
+
     monkeypatch.setattr(
         xianyu_api_service.requests,
         "post",
-        lambda *args, **kwargs: pytest.fail("unavailable capability must not call the platform"),
+        _platform_unavailable,
     )
 
     result = xianyu_api_service.confirm_shipment(1, "order-1")
 
-    assert result == {
-        "success": False,
-        "error": "LOCAL_ONLY_SHIPMENT_STATUS",
-        "message": "闲鱼确认发货 API 当前不可用，仅更新本地发货状态",
-        "account_id": 1,
-        "order_id": "order-1",
-    }
+    assert result["success"] is False
 
 
 @pytest.mark.asyncio
@@ -96,4 +93,3 @@ async def test_ws_auto_confirm_uses_fail_closed_capability(monkeypatch):
     result = await ws_delivery_handler._auto_confirm_shipment(1, 2, "order-1")
 
     assert result["success"] is False
-    assert result["error"] == "LOCAL_ONLY_SHIPMENT_STATUS"

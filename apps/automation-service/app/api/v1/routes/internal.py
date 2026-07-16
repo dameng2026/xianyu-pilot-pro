@@ -432,6 +432,63 @@ async def internal_sync_sold_orders(
     return ResultObject.success(result)
 
 
+@router.post("/orders/confirm-shipment")
+async def internal_confirm_shipment(
+    body: dict = {},
+    _: None = Depends(verify_internal_token),
+):
+    """内部确认发货端点：调用闲鱼 MTOP API 确认发货（虚拟发货/免拼发货）。
+
+    供 Java 端 DeliveryExecutionService 在 WS 发货消息发送成功后调用，
+    只有本接口返回 success=true 时，Java 端才应将本地 order_status 标记为 3。
+
+    请求体:
+        tenantId: 租户ID
+        accountId: 闲鱼账号ID
+        externalOrderId: 闲鱼订单ID
+        isBargain: 是否小刀订单（bool，可选，默认 false）
+        itemId: 商品ID（小刀订单必填）
+        buyerId: 买家ID（小刀订单必填）
+    """
+    from ....services.xianyu_api_service import confirm_order_shipment
+
+    account_id = body.get("accountId")
+    external_order_id = body.get("externalOrderId")
+    if not account_id or not external_order_id:
+        return ResultObject.failed("缺少 accountId 或 externalOrderId", 422)
+
+    is_bargain = bool(body.get("isBargain", False))
+    item_id = body.get("itemId")
+    buyer_id = body.get("buyerId")
+
+    try:
+        result = confirm_order_shipment(
+            int(account_id),
+            str(external_order_id),
+            is_bargain=is_bargain,
+            item_id=item_id,
+            buyer_id=buyer_id,
+        )
+    except Exception as exc:
+        logger.error(
+            "内部确认发货异常: accountId=%s orderId=%s error=%s",
+            account_id, external_order_id, exc,
+        )
+        return ResultObject.success({
+            "success": False,
+            "error": "CONFIRM_SHIPMENT_EXCEPTION",
+            "message": f"确认发货异常: {exc}",
+        })
+
+    if result and result.get("success"):
+        return ResultObject.success(result)
+    return ResultObject.success(result or {
+        "success": False,
+        "error": "CONFIRM_SHIPMENT_FAILED",
+        "message": "确认发货失败",
+    })
+
+
 @router.post("/orders/sync-delivery-status")
 async def internal_sync_delivery_status(
     body: dict = {},

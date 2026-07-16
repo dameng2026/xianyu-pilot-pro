@@ -1488,23 +1488,57 @@ async def save_chat_message(
     # 去重命中时：如果新消息带服务端时间戳（messageTime > 0），用服务端时间戳覆盖旧 message_time。
     # 这解决了 OUT 消息先入库时（messageTime=0 兜底为本地时间）后推送回环到来时（带服务端时间戳）
     # 的更新问题。服务端时间戳是权威的，应优先使用。
+    #
+    # 特殊处理 contentType=26（卡片更新消息/订单状态变更）：
+    # 闲鱼协议中，同一订单的状态变更消息（如"我已拍下，待付款"→"我已付款，等待你发货"）
+    # 可能携带相同的 pnm_id。如果仅凭 pnm_id 去重，付款消息会被拍下消息误去重跳过，
+    # 导致自动发货无法触发。因此对 contentType=26 的消息，pnm_id 去重需同时匹配 reminder_content。
+    content_type_raw = msg.get("contentType", 1)
+    try:
+        content_type_int = int(content_type_raw)
+    except (TypeError, ValueError):
+        content_type_int = 1
+    reminder_content_str = str(msg.get("reminderContent", "") or "")
+    is_card_update = content_type_int == 26
+
     if message_uid:
-        existing = await db.execute(
-            text("""
-                SELECT id, message_time, pnm_id FROM xianyu_chat_message
-                WHERE (message_uid = :muid
-                       OR (pnm_id = :muid AND pnm_id != '' AND pnm_id IS NOT NULL)
-                       OR (pnm_id = :pnm_id AND :pnm_id != '' AND pnm_id IS NOT NULL))
-                  AND tenant_id = :tenant_id AND account_id = :account_id
-                LIMIT 1
-            """),
-            {
-                "muid": message_uid,
-                "pnm_id": pnm_id,
-                "tenant_id": tenant_id,
-                "account_id": account_id,
-            }
-        )
+        if is_card_update:
+            # contentType=26：pnm_id 去重需同时匹配 reminder_content，避免同订单不同状态变更被误去重
+            existing = await db.execute(
+                text("""
+                    SELECT id, message_time, pnm_id FROM xianyu_chat_message
+                    WHERE (message_uid = :muid
+                           OR (pnm_id = :muid AND pnm_id != '' AND pnm_id IS NOT NULL)
+                           OR (pnm_id = :pnm_id AND :pnm_id != '' AND pnm_id IS NOT NULL
+                               AND reminder_content = :reminder_content))
+                      AND tenant_id = :tenant_id AND account_id = :account_id
+                    LIMIT 1
+                """),
+                {
+                    "muid": message_uid,
+                    "pnm_id": pnm_id,
+                    "reminder_content": reminder_content_str,
+                    "tenant_id": tenant_id,
+                    "account_id": account_id,
+                }
+            )
+        else:
+            existing = await db.execute(
+                text("""
+                    SELECT id, message_time, pnm_id FROM xianyu_chat_message
+                    WHERE (message_uid = :muid
+                           OR (pnm_id = :muid AND pnm_id != '' AND pnm_id IS NOT NULL)
+                           OR (pnm_id = :pnm_id AND :pnm_id != '' AND pnm_id IS NOT NULL))
+                      AND tenant_id = :tenant_id AND account_id = :account_id
+                    LIMIT 1
+                """),
+                {
+                    "muid": message_uid,
+                    "pnm_id": pnm_id,
+                    "tenant_id": tenant_id,
+                    "account_id": account_id,
+                }
+            )
         existing_row = existing.first()
         if existing_row:
             existing_id = existing_row[0]
@@ -1533,10 +1567,26 @@ async def save_chat_message(
                     pass
             return None
     elif pnm_id:
-        existing = await db.execute(
-            text("SELECT id, message_time FROM xianyu_chat_message WHERE pnm_id = :pnm_id AND tenant_id = :tenant_id AND account_id = :account_id LIMIT 1"),
-            {"pnm_id": pnm_id, "tenant_id": tenant_id, "account_id": account_id}
-        )
+        if is_card_update:
+            existing = await db.execute(
+                text("""
+                    SELECT id, message_time FROM xianyu_chat_message
+                    WHERE pnm_id = :pnm_id AND reminder_content = :reminder_content
+                      AND tenant_id = :tenant_id AND account_id = :account_id
+                    LIMIT 1
+                """),
+                {
+                    "pnm_id": pnm_id,
+                    "reminder_content": reminder_content_str,
+                    "tenant_id": tenant_id,
+                    "account_id": account_id,
+                }
+            )
+        else:
+            existing = await db.execute(
+                text("SELECT id, message_time FROM xianyu_chat_message WHERE pnm_id = :pnm_id AND tenant_id = :tenant_id AND account_id = :account_id LIMIT 1"),
+                {"pnm_id": pnm_id, "tenant_id": tenant_id, "account_id": account_id}
+            )
         existing_row = existing.first()
         if existing_row:
             existing_id = existing_row[0]

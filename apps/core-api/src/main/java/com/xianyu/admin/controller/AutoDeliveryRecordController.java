@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
+import org.springframework.dao.EmptyResultDataAccessException;
 
 /**
  * 自动发货记录控制器
@@ -40,7 +41,23 @@ public class AutoDeliveryRecordController {
         return " FROM delivery_record dr " +
                "LEFT JOIN xianyu_trade_order o ON o.id=dr.order_id " +
                "LEFT JOIN (SELECT order_id, MIN(goods_id) AS goods_id, MIN(goods_title) AS goods_title FROM xianyu_trade_order_item WHERE deleted=0 GROUP BY order_id) oi ON oi.order_id=o.id " +
-               "LEFT JOIN xianyu_goods g ON g.id=oi.goods_id ";
+               "LEFT JOIN xianyu_goods g ON g.id=oi.goods_id " +
+               "LEFT JOIN xianyu_account acc ON acc.id=dr.account_id ";
+    }
+
+    /**
+     * 构造详情/列表 SELECT 字段：包含订单购买时间、商品（含封面图）、买家、卖家等完整信息。
+     * 使用 COALESCE 容错 pay_time/create_time/created_time 三种可能的下单时间字段。
+     * goods_cover_pic 优先取商品的 cover_pic，回退到 image_url，便于前端展示商品缩略图。
+     */
+    private String buildSelectColumns() {
+        return "dr.*, o.external_order_id, o.buyer_name, o.buyer_id, o.total_amount, " +
+                "COALESCE(o.pay_time, o.create_time, o.created_time) AS purchase_time, " +
+                "COALESCE(oi.goods_id, g.id) AS goods_id, " +
+                "COALESCE(oi.goods_title, g.title) AS goods_title, " +
+                "g.title AS goods_name, " +
+                "COALESCE(g.cover_pic, g.image_url) AS goods_cover_pic, " +
+                "acc.nickname AS seller_name, acc.display_name AS seller_display_name ";
     }
 
     @GetMapping
@@ -86,28 +103,31 @@ public class AutoDeliveryRecordController {
         queryArgs.add(offset);
         queryArgs.add(safeSize);
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT dr.*, o.external_order_id, o.buyer_name, o.buyer_id, o.total_amount, " +
-                "COALESCE(oi.goods_id, g.id) AS goods_id, COALESCE(oi.goods_title, g.title) AS goods_title, g.title AS goods_name " +
-                buildJoinSql() + where +
+                "SELECT " + buildSelectColumns() + buildJoinSql() + where +
                 " ORDER BY dr.created_time DESC LIMIT ?, ?", queryArgs.toArray());
         return Result.ok(new PageResult<>(rows, safeCurrent, safeSize, total == null ? 0 : total));
     }
 
     /**
      * 获取发货记录详情
+     * 返回完整字段：商品、购买时间、商品 ID、商品名称、买家用户、卖家用户、发货内容等。
+     * 异常分类记录日志，便于排查"点击详情看不到信息"的问题。
      */
     @GetMapping("/{id}")
     public Result<Map<String, Object>> detail(@PathVariable Long id) {
         Long tenantId = TenantContext.getCurrentTenantId();
         try {
             Map<String, Object> row = jdbcTemplate.queryForMap(
-                    "SELECT dr.*, o.external_order_id, o.buyer_name, o.buyer_id, o.total_amount, " +
-                    "COALESCE(oi.goods_id, g.id) AS goods_id, COALESCE(oi.goods_title, g.title) AS goods_title, g.title AS goods_name " +
-                    buildJoinSql() +
+                    "SELECT " + buildSelectColumns() + buildJoinSql() +
                     " WHERE dr.id=? AND dr.tenant_id=? AND dr.deleted=0", id, tenantId);
             return Result.ok(row);
+        } catch (EmptyResultDataAccessException e) {
+            log.warn("发货记录详情查询返回空记录 recordId={}, tenantId={}", id, tenantId);
+            return Result.fail("发货记录不存在或已被删除");
         } catch (Exception e) {
-            return Result.fail("记录不存在");
+            log.error("发货记录详情查询异常 recordId={}, tenantId={}, errorType={}, message={}",
+                    id, tenantId, e.getClass().getSimpleName(), e.getMessage());
+            return Result.fail("加载发货记录详情失败：" + e.getClass().getSimpleName());
         }
     }
 

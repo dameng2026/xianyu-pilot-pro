@@ -20,6 +20,7 @@ export const DEFAULT_SCHEDULED_TASK_TYPES = [
   'sync_goods',
   'sync_orders',
   'sync_delivery_status',
+  'auto_delivery',
   'redelivery',
   'polish_goods',
   'workflow'

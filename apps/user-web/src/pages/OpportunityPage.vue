@@ -1150,8 +1150,8 @@ async function doCollectShop() {
       return
     }
 
-    // 2. 轮询任务状态
-    const maxRetries = 60 // 最多轮询 60 次（约 60 秒）
+    // 2. 轮询任务状态（最多 5 分钟，爬取含详情页获取可能需要数分钟）
+    const maxRetries = 150
     for (let i = 0; i < maxRetries; i++) {
       await new Promise(r => setTimeout(r, 2000))
       const rawStatus = await getCrawlJobStatus(importRes.jobId)
@@ -1173,7 +1173,9 @@ async function doCollectShop() {
       }
       // 继续等待
     }
-    error.value = '抓取超时，请稍后查看结果'
+    // 轮询超时：爬取仍在后台异步进行，提示用户稍后查看
+    error.value = '店铺抓取仍在后台进行中，请稍后在店铺商品列表中查看结果'
+    shopUserId.value = importRes.userId
   } catch (e) {
     error.value = e.message || '抓取请求失败，请检查后端服务是否正常运行'
     items.value = []

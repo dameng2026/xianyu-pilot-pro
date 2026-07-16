@@ -135,12 +135,78 @@
           </BaseTable>
           <Pagination :total="filteredGoods.length" :current="current" :page-size="pageSize" @page-change="goPage" />
         </CardPanel>
+      </div>
+    </div>
 
-        <CardPanel v-if="configTarget" :title="`配置：${configTarget.goods.title}`" style="margin-top:16px">
-          <div class="config-tabs">
-            <button v-for="timing in configTimings" :key="timing.key" :class="['config-tab', { active: configTiming === timing.key }]" @click="switchTiming(timing.key)">
-              {{ timing.label }}
-            </button>
+    <div v-if="showBatchDialog" class="modal-overlay" @click.self="showBatchDialog = false">
+      <div class="modal-content">
+        <h3>批量设置发货配置</h3>
+        <p class="subtle">将影响 <b>{{ filteredGoods.length }}</b> 个商品</p>
+        <div class="form-grid">
+          <div class="form-row">
+            <label>发货时机</label>
+            <select v-model="batchForm.action" class="input">
+              <option value="payDelivery">付款后发货</option>
+              <option value="confirmDelivery">确认收货后赠送</option>
+              <option value="reviewDelivery">好评后赠送</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>启用状态</label>
+            <select v-model.number="batchForm.enabled" class="input">
+              <option :value="1">启用</option>
+              <option :value="0">停用</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>发货模式</label>
+            <select v-model="batchForm.mode" class="input">
+              <option value="">保持不变</option>
+              <option value="text">文本发货</option>
+              <option value="card">卡密发货</option>
+            </select>
+          </div>
+          <div v-if="batchForm.mode === 'card'" class="form-row">
+            <label>卡密分组</label>
+            <select v-model="batchForm.cardGroupId" class="input" :disabled="!cardGroupsAvailable">
+              <option value="">请选择</option>
+              <option v-for="group in cardGroups" :key="group.id" :value="group.id">{{ group.groupName }}</option>
+            </select>
+          </div>
+          <div v-if="batchForm.mode === 'text'" class="form-row">
+            <label>货源库</label>
+            <select v-model="batchForm.sourceId" class="input" :disabled="!sourcesAvailable">
+              <option value="">不指定货源库</option>
+              <option v-for="source in textSources" :key="source.id" :value="source.id">{{ source.title }}</option>
+            </select>
+          </div>
+        </div>
+        <div class="toolbar" style="justify-content:flex-end">
+          <AppButton @click="showBatchDialog = false">取消</AppButton>
+          <AppButton type="primary" :loading="batchLoading" :disabled="batchSubmitDisabled" @click="submitBatch">确认执行</AppButton>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="configTarget" class="modal-overlay" @click.self="closeConfig">
+      <div class="modal-content config-modal-content">
+        <div class="config-modal-header">
+          <div class="config-modal-heading">
+            <div class="config-modal-title">配置自动发货</div>
+            <div class="config-modal-subtitle" :title="configTarget.goods.title">{{ configTarget.goods.title }}</div>
+          </div>
+          <button class="config-modal-close" type="button" aria-label="关闭" @click="closeConfig">×</button>
+        </div>
+
+        <div class="config-tabs config-modal-tabs">
+          <button v-for="timing in configTimings" :key="timing.key" type="button" :class="['config-tab', { active: configTiming === timing.key }]" @click="switchTiming(timing.key)">
+            {{ timing.label }}
+          </button>
+        </div>
+
+        <div class="config-modal-body">
+          <div class="config-modal-hint">
+            当前配置时机：<b>{{ currentTimingLabel }}</b>
           </div>
 
           <div class="form-grid">
@@ -235,61 +301,11 @@
               </label>
             </div>
           </div>
-
-          <div class="toolbar" style="justify-content:flex-start;margin-top:16px">
-            <AppButton type="primary" :loading="configSaving" :disabled="configSaveDisabled" @click="saveConfig">保存配置</AppButton>
-            <AppButton @click="closeConfig">取消</AppButton>
-          </div>
-        </CardPanel>
-      </div>
-    </div>
-
-    <div v-if="showBatchDialog" class="modal-overlay" @click.self="showBatchDialog = false">
-      <div class="modal-content">
-        <h3>批量设置发货配置</h3>
-        <p class="subtle">将影响 <b>{{ filteredGoods.length }}</b> 个商品</p>
-        <div class="form-grid">
-          <div class="form-row">
-            <label>发货时机</label>
-            <select v-model="batchForm.action" class="input">
-              <option value="payDelivery">付款后发货</option>
-              <option value="confirmDelivery">确认收货后赠送</option>
-              <option value="reviewDelivery">好评后赠送</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <label>启用状态</label>
-            <select v-model.number="batchForm.enabled" class="input">
-              <option :value="1">启用</option>
-              <option :value="0">停用</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <label>发货模式</label>
-            <select v-model="batchForm.mode" class="input">
-              <option value="">保持不变</option>
-              <option value="text">文本发货</option>
-              <option value="card">卡密发货</option>
-            </select>
-          </div>
-          <div v-if="batchForm.mode === 'card'" class="form-row">
-            <label>卡密分组</label>
-            <select v-model="batchForm.cardGroupId" class="input" :disabled="!cardGroupsAvailable">
-              <option value="">请选择</option>
-              <option v-for="group in cardGroups" :key="group.id" :value="group.id">{{ group.groupName }}</option>
-            </select>
-          </div>
-          <div v-if="batchForm.mode === 'text'" class="form-row">
-            <label>货源库</label>
-            <select v-model="batchForm.sourceId" class="input" :disabled="!sourcesAvailable">
-              <option value="">不指定货源库</option>
-              <option v-for="source in textSources" :key="source.id" :value="source.id">{{ source.title }}</option>
-            </select>
-          </div>
         </div>
-        <div class="toolbar" style="justify-content:flex-end">
-          <AppButton @click="showBatchDialog = false">取消</AppButton>
-          <AppButton type="primary" :loading="batchLoading" :disabled="batchSubmitDisabled" @click="submitBatch">确认执行</AppButton>
+
+        <div class="config-modal-footer">
+          <AppButton @click="closeConfig">取消</AppButton>
+          <AppButton type="primary" :loading="configSaving" :disabled="configSaveDisabled" @click="saveConfig">保存配置</AppButton>
         </div>
       </div>
     </div>
@@ -942,6 +958,14 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   background: transparent;
   cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: #667085;
+  transition: color .15s, background .15s, box-shadow .15s;
+}
+
+.config-tab:hover:not(.active) {
+  color: #2d5bff;
 }
 
 .config-tab.active {
@@ -967,6 +991,103 @@ onBeforeUnmount(() => {
   max-width: 560px;
   width: 90%;
   box-shadow: 0 20px 60px rgba(0, 0, 0, .2);
+}
+
+.config-modal-content {
+  max-width: 640px;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+  animation: config-modal-in .2s cubic-bezier(.16, .84, .44, 1);
+}
+
+@keyframes config-modal-in {
+  from { opacity: 0; transform: translateY(16px) scale(.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.config-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid #eef1f6;
+}
+
+.config-modal-heading {
+  min-width: 0;
+  flex: 1;
+}
+
+.config-modal-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: #1a2233;
+  line-height: 1.3;
+}
+
+.config-modal-subtitle {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #667491;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.config-modal-close {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: #f5f6fa;
+  color: #667085;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s, color .15s;
+}
+
+.config-modal-close:hover {
+  background: #eef1f6;
+  color: #1a2233;
+}
+
+.config-modal-tabs {
+  margin: 16px 24px 0;
+  margin-bottom: 0;
+}
+
+.config-modal-body {
+  padding: 16px 24px 20px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.config-modal-hint {
+  margin-bottom: 14px;
+  padding: 8px 12px;
+  background: linear-gradient(90deg, #f0f4ff, #f6f9ff);
+  border-radius: 10px;
+  font-size: 13px;
+  color: #2d5bff;
+}
+
+.config-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 24px;
+  border-top: 1px solid #eef1f6;
+  background: #fafbfd;
 }
 
 .form-grid {

@@ -37,6 +37,7 @@ public class XianyuTradeOrderController {
             @RequestParam(required = false) Long accountId,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Integer status,
+            @RequestParam(required = false) String buyerId,
             @RequestParam(defaultValue = "1") int current,
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(defaultValue = "false") boolean sync) {
@@ -44,7 +45,7 @@ public class XianyuTradeOrderController {
         if (sync) {
             throw new BizException(410, "GET 订单列表不再执行同步；请先调用 POST /api/orders/sync，再刷新列表");
         }
-        PageResult<XianyuTradeOrderVO> result = orderService.page(tenantId, accountId, keyword, status, current, size);
+        PageResult<XianyuTradeOrderVO> result = orderService.page(tenantId, accountId, keyword, status, buyerId, current, size);
         return Result.ok(result);
     }
 

@@ -62,26 +62,32 @@
         <div class="main-grid">
           <CardPanel title="更新日志" desc="版本迭代与功能演进记录">
             <div class="changelog">
-              <div v-for="(log, idx) in logs" :key="log.v" :class="['log-item', log.tone]">
+              <div
+                v-for="(log, idx) in releaseNotes"
+                :key="log.version"
+                :class="['log-item', `log-${log.type}`]"
+              >
                 <div class="log-rail">
                   <span class="log-dot"></span>
-                  <span v-if="idx < logs.length - 1" class="log-line"></span>
+                  <span v-if="idx < releaseNotes.length - 1" class="log-line"></span>
                 </div>
                 <div class="log-body">
                   <div class="log-head">
-                    <span class="log-ver">{{ log.v }}</span>
-                    <span class="log-date">{{ log.t }}</span>
+                    <span class="log-ver">v{{ log.version }}</span>
+                    <span :class="['log-type', `log-type-${log.type}`]">
+                      {{ typeMeta[log.type].label }}
+                    </span>
+                    <span class="log-date">{{ log.date }}</span>
                   </div>
-                  <p class="log-desc">{{ log.d }}</p>
-                  <ul class="log-sections">
-                    <li v-for="section in log.sections" :key="section.t">
-                      <span class="log-section-title">{{ section.t }}</span>
-                      <span class="log-section-desc">{{ section.d }}</span>
-                    </li>
-                  </ul>
-                  <div class="log-tags">
-                    <span v-for="tag in log.tags" :key="tag" class="log-tag">{{ tag }}</span>
+                  <h4 class="log-title">{{ log.title }}</h4>
+                  <p class="log-desc">{{ log.summary }}</p>
+                  <div v-for="group in log.changes" :key="group.label" class="log-change-group">
+                    <span class="log-change-label">{{ group.label }}</span>
+                    <ul class="log-change-list">
+                      <li v-for="item in group.items" :key="item">{{ item }}</li>
+                    </ul>
                   </div>
+                  <div v-if="log.remark" class="log-remark">{{ log.remark }}</div>
                 </div>
               </div>
             </div>
@@ -141,6 +147,7 @@ import Badge from '../../components/Badge.vue'
 import Icon from '../../components/Icon.vue'
 import { APP_BUILD_DATE, APP_VERSION, formatBuildDate, formatReleaseLabel } from '../../utils/appMeta.js'
 import { getLegalDocumentUrl, LEGAL_CONFIG } from '../../utils/legalConfig.js'
+import { releaseNotes, RELEASE_TYPE_META } from '../../data/releaseNotes.js'
 
 const heroImage = '/xya/illustrations/about-hero.svg'
 const buildDateText = formatBuildDate(APP_BUILD_DATE)
@@ -148,23 +155,7 @@ const releaseLabel = formatReleaseLabel(APP_BUILD_DATE)
 
 defineProps({ active: String })
 
-const logs = [
-  {
-    v: `v${APP_VERSION}`,
-    t: buildDateText,
-    tone: 'major',
-    d: '当前前端构建基于 Vue 3 + Vite，包含 PC 与移动端界面。各项能力是否可用取决于后台服务、账号状态与部署配置。',
-    sections: [
-      { t: '概览中心', d: '导航面板提供快速上手入口，数据面板实时呈现店铺运营数据与销售趋势。' },
-      { t: '账号与商品', d: '闲鱼账号管理、连接状态监控（WebSocket 心跳与重连）、商品管理（同步/上下架/库存）、商品发布（省市区地址与分类选择）、商机发掘（关键词搜索与店铺链接搜索，支持智能降级）。' },
-      { t: '在线消息', d: '聚合多账号买家咨询，并展示会话、未读与连接状态。' },
-      { t: '自动化引擎', d: '工作流可视化设计、工作流任务执行与监控、自动发货（付款/收货/好评触发）、发货声明、模板管理、卡密仓库、发货记录、定时任务与自动回复规则。' },
-      { t: '系统配置', d: 'AI 客服（角色人设、安全策略、上下文管理）、商品操作（库存/库容自动下架）、通知设置。' },
-      { t: '用户中心', d: 'VIP 会员中心与个人中心。' }
-    ],
-    tags: ['当前构建', '功能清单', '配置驱动']
-  }
-]
+const typeMeta = RELEASE_TYPE_META
 
 const supports = []
 
@@ -356,34 +347,59 @@ function exportDiagnostics() {
 .log-item { display: flex; gap: 14px; padding: 8px 0; }
 .log-rail { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; padding-top: 4px; }
 .log-dot { width: 12px; height: 12px; border-radius: 50%; background: #2563eb; box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18); }
+.log-major .log-dot { background: #ea580c; box-shadow: 0 0 0 2px rgba(234, 88, 12, 0.18); }
+.log-minor .log-dot { background: #2563eb; box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18); }
+.log-patch .log-dot { background: #16a34a; box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.18); }
 .log-line { flex: 1; width: 2px; background: #e2e8f3; margin-top: 4px; min-height: 18px; }
 .log-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.log-head { display: flex; align-items: center; gap: 10px; }
+.log-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .log-ver { font-size: 12px; font-weight: 800; padding: 3px 10px; border-radius: 999px; background: #eef4ff; color: #2563eb; }
+.log-major .log-ver { background: #fff0e6; color: #ea580c; }
+.log-minor .log-ver { background: #eef4ff; color: #2563eb; }
+.log-patch .log-ver { background: #ecfdf3; color: #16a34a; }
+.log-type { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; }
+.log-type-major { background: #fff0e6; color: #ea580c; border: 1px solid #ffd9b8; }
+.log-type-minor { background: #eef4ff; color: #2563eb; border: 1px solid #cfdefc; }
+.log-type-patch { background: #ecfdf3; color: #16a34a; border: 1px solid #c2f0d2; }
 .log-date { font-size: 11px; color: #99a4b4; font-weight: 600; }
+.log-title { margin: 0; font-size: 15px; font-weight: 800; color: #13213d; }
 .log-desc { margin: 0; font-size: 13px; color: #3a4a63; line-height: 1.72; }
-.log-sections { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.log-sections li { display: flex; gap: 8px; font-size: 13px; line-height: 1.72; color: #3a4a63; }
-.log-section-title {
-  flex-shrink: 0;
+.log-change-group { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }
+.log-change-label {
+  align-self: flex-start;
+  font-size: 11px;
   font-weight: 700;
   color: #2563eb;
-  padding: 1px 8px;
+  padding: 2px 8px;
   border-radius: 5px;
   background: #eef4ff;
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: nowrap;
 }
-.log-section-desc { flex: 1; min-width: 0; }
-.log-tags { display: flex; gap: 6px; flex-wrap: wrap; }
-.log-tag {
-  font-size: 10px;
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: #f3f7ff;
-  color: #6b7a90;
-  border: 1px solid #e2eaf5;
+.log-change-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.log-change-list li {
+  position: relative;
+  padding-left: 14px;
+  font-size: 13px;
+  line-height: 1.72;
+  color: #3a4a63;
+}
+.log-change-list li::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 10px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #94a3b8;
+}
+.log-remark {
+  font-size: 12px;
+  color: #65748b;
+  line-height: 1.6;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px dashed #d8e1ee;
 }
 .support-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .support-card {

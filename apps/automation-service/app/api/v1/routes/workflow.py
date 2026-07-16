@@ -1360,7 +1360,13 @@ async def ai_rewrite_goods(
     """
     try:
         tenant_id = _require_tenant(current_user)
-        user_id = _require_billing_user(current_user)
+        # 内部令牌认证（Java 网关转发）时 current_user.user_id 恒为 0，
+        # Java 网关已将 JWT 中的当前用户 ID 注入 body，这里优先使用 body 中的 user_id 用于计费归集。
+        user_id = _safe_int(current_user.get("user_id") or 0)
+        if user_id <= 0:
+            user_id = _safe_int(body.get("userId") or body.get("user_id") or 0)
+        if user_id <= 0:
+            raise ValueError("缺少用户上下文")
     except ValueError:
         return ResultObject.failed("缺少租户或用户上下文", 400)
 
@@ -1376,9 +1382,26 @@ async def ai_rewrite_goods(
         return ResultObject.validate_failed("商品标题和描述不能同时为空")
 
     # 确定最终使用的 Prompt
-    final_prompt = custom_prompt or prompt or "请根据商品的标题和正文，生成适合闲鱼平台的商品标题和描述。"
+    final_prompt = custom_prompt or prompt or (
+        "请基于原标题和正文，重新撰写适合闲鱼平台的标题和描述：\n"
+        "- 标题：保留核心关键词（品牌/型号/成色/规格），不要堆砌，不超过30字；\n"
+        "- 描述：按「商品介绍 → 成色与使用情况 → 转让原因 → 价格与交易方式」顺序撰写，"
+        "真实亲切、像朋友间转让闲置，80-220字之间，可换行分段。"
+    )
 
-    system_prompt = "你是闲鱼商品文案改写专家。请根据用户要求的风格和提示，改写商品标题和正文。返回严格JSON格式。"
+    system_prompt = (
+        "你是一名闲鱼商品文案专家，擅长为闲置/二手物品撰写真实、吸引人且高转化率的标题和描述。\n"
+        "请严格遵守以下原则：\n"
+        "1. 标题：突出品牌、型号、成色、核心卖点，包含搜索关键词，不超过30字；\n"
+        "2. 描述结构：先讲商品基本信息（品牌/型号/规格），再讲成色与使用情况，"
+        "然后讲转让原因与价格优势，最后说明交易方式（包邮/自提）与售后说明；\n"
+        "3. 语气真实亲切，像朋友之间转让闲置，避免夸张营销和商业腔；\n"
+        "4. 不得出现与实际不符的描述（如未确认是新品却写「全新未拆」），成色描述要客观；\n"
+        "5. 不得包含微信号、QQ、外部链接、违规词或平台禁用词；\n"
+        "6. 描述控制在80-220字之间，分段清晰，可使用换行；\n"
+        "7. 若原文未提供价格或图片，不要编造，可省略相关字段。\n"
+        "请严格返回JSON格式。"
+    )
     # 追加润色强限制（来自后台「通用模型配置」的润色关键词/禁止关键词，前台不可见、不可改）
     try:
         _polish_restriction = await get_polish_keywords_restriction()
@@ -1406,6 +1429,12 @@ async def ai_rewrite_goods(
 
 润色要求: {final_prompt}
 {style_prompt}
+
+请基于以上信息，按闲鱼平台闲置物品转让的文案规范输出。要求：
+- 标题不超过30字，含品牌/型号/成色等核心搜索词；
+- 描述80-220字，按「商品介绍 → 成色与使用情况 → 转让原因 → 价格与交易方式」分段，可换行；
+- 若价格或图片为空，描述中不要编造；
+- highlights 提炼3条最能打动买家的卖点（如成色、配件、性价比）。
 
 请严格按照 JSON 格式返回结果：
 {{"title": "改写后的商品标题(不超过30字)", "description": "改写后的商品正文", "highlights": ["卖点1", "卖点2", "卖点3"]}}
@@ -1750,6 +1779,20 @@ async def workflow_publish(
     token = extract_token_from_cookie(cookie_str)
     if not token:
         return ResultObject.failed("Cookie 中缺少 _m_h5_tk，请重新登录")
+
+    # 按账号类型决定库存：鱼小铺账号可自定义库存，普通账号库存固定为 1
+    try:
+        _fs_row = (await db.execute(text(
+            "SELECT fish_shop_user FROM xianyu_account WHERE id=:aid AND tenant_id=:tid AND deleted=0 LIMIT 1"
+        ), {"aid": account_id, "tid": tenant_id})).first()
+        is_fish_shop = bool(_fs_row and _fs_row[0])
+    except Exception as _fs_err:
+        logger.warning("工作流发布查询鱼小铺标识失败，按普通账号处理: account_id=%s err=%s", account_id, _fs_err)
+        is_fish_shop = False
+    if not is_fish_shop:
+        if stock != 1:
+            logger.info("普通账号发布强制库存为1: account_id=%s, 原stock=%s", account_id, stock)
+        stock = 1
 
     item_data = {
         "title": title,

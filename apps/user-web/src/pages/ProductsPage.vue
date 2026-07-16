@@ -100,16 +100,14 @@
             <template #info="{row}"><div class="product-cell"><img v-if="row.coverPic" :src="row.coverPic" class="product-thumb" alt=""><div v-else class="product-thumb product-thumb-placeholder"></div><div class="product-info-text"><strong :title="row.raw?.title || row.name">{{ row.name }}</strong><em>ID：{{ row.xyGoodId }}</em></div></div></template>
             <template #price="{row}"><div class="cell-price">{{ row.price }}</div></template>
             <template #stock="{row}"><div class="cell-center cell-muted">{{ row.stock }}</div></template>
-            <template #sku="{row}"><div class="cell-center cell-muted">{{ row.sku }}</div></template>
             <template #status="{row}"><div class="cell-center"><Badge :type="row.statusType">{{ row.status }}</Badge></div></template>
             <template #type="{row}">
-              <span v-if="row.type === '未配置'" class="delivery-type-configurable" @click.stop="goToAutoDelivery">
-                <Badge type="orange">未配置</Badge>
+              <span v-if="row.type === '暂未配置'" class="delivery-type-configurable" @click.stop="goToAutoDelivery">
+                <Badge type="orange">暂未配置</Badge>
                 <span class="config-hint">去配置</span>
               </span>
               <Badge v-else :type="row.deliveryTypeBadge">{{ row.type }}</Badge>
             </template>
-            <template #delivery="{row}"><div class="cell-center"><Badge v-if="row.deliveryOn === null" type="gray">未知</Badge><ToggleSwitch v-else :on="row.deliveryOn" @click.stop="toggleDelivery(row)" /></div></template>
             <template #reply="{row}"><div class="cell-center"><Badge v-if="row.replyOn === null" type="gray">未知</Badge><ToggleSwitch v-else :on="row.replyOn" @click.stop="toggleReply(row)" /></div></template>
             <template #onsale="{row}"><div class="cell-center"><AppButton v-if="row.isLocalDraft" type="primary" @click.stop="publishDraft(row)">发布</AppButton><Badge v-else-if="row.statusCode === null" type="gray">未知</Badge><ToggleSwitch v-else :on="row.statusCode===0" @click.stop="toggleOnShelf(row)" /></div></template>
             <template #op="{row}">
@@ -263,7 +261,7 @@ const selected = ref(null)
 const query = reactive({ xianyuAccountId: '', status: '', keyword: '', pageNum: 1, pageSize: 50 })
 // 每页条数可选项，默认 50
 const pageSizes = [50, 100, 200, 300, 500, 1000]
-const cols=[{key:'info',title:'商品信息'},{key:'price',title:'价格'},{key:'stock',title:'库存'},{key:'sku',title:'SKU'},{key:'status',title:'状态'},{key:'type',title:'发货类型'},{key:'delivery',title:'自动发货'},{key:'reply',title:'自动回复'},{key:'onsale',title:'在售'},{key:'time',title:'更新时间'},{key:'op',title:'操作'}]
+const cols=[{key:'info',title:'商品信息'},{key:'price',title:'价格'},{key:'stock',title:'库存'},{key:'status',title:'状态'},{key:'type',title:'发货类型'},{key:'reply',title:'自动回复'},{key:'onsale',title:'在售'},{key:'time',title:'更新时间'},{key:'op',title:'操作'}]
 const syncCols=[{key:'createdTime',title:'创建时间'},{key:'status',title:'状态'},{key:'progress',title:'进度'},{key:'summary',title:'统计'},{key:'durationSeconds',title:'耗时(s)'},{key:'error',title:'错误'}]
 let syncPollCanceled = false
 const statusMap = { 0: '在售', 1: '下架/草稿', 2: '已售出', 3: '已删除' }
@@ -308,7 +306,7 @@ const products = computed(() => items.value.map(w => {
         : w.autoDeliveryType === 2
           ? '自定义'
           : w.autoDeliveryType == null
-            ? '配置状态未知'
+            ? '暂未配置'
             : '未知类型',
     deliveryTypeBadge: w.autoDeliveryType === 0 ? 'purple' : w.autoDeliveryType === 2 ? 'blue' : w.autoDeliveryType === 1 ? 'green' : 'gray',
     deliveryOn: normalizeSwitchState(w.xianyuAutoDeliveryOn),
@@ -551,7 +549,6 @@ async function refreshSingle(row) {
   // 复用 syncProducts 的完整同步+进度展示逻辑，确保三个同步入口行为一致
   return syncProducts(false, accountId)
 }
-function toggleDelivery(_row) { showNotice('info', '自动发货开关请到“自动发货”模块配置规则') }
 async function toggleReply(row) {
   if (typeof isItemBusy === 'function' && isItemBusy(row)) return
   const nextEnabled = !row.replyOn
@@ -1267,7 +1264,7 @@ onBeforeUnmount(()=>{ syncPollCanceled = true; window.removeEventListener('xya-h
   border-radius: 10px;
 }
 .products-table {
-  min-width: 1064px;
+  min-width: 1020px;
   table-layout: fixed;
 }
 .products-table :deep(th),
@@ -1283,15 +1280,13 @@ onBeforeUnmount(()=>{ syncPollCanceled = true; window.removeEventListener('xya-h
 .products-table :deep(th:nth-child(1)) { width: 44px; text-align: center; } /* 选择列 */
 .products-table :deep(th:nth-child(2)) { width: 280px; text-align: left; }   /* 商品信息 */
 .products-table :deep(th:nth-child(3)) { width: 80px; text-align: right; }    /* 价格 */
-.products-table :deep(th:nth-child(4)) { width: 60px; text-align: center; }
-.products-table :deep(th:nth-child(5)) { width: 60px; text-align: center; }
-.products-table :deep(th:nth-child(6)) { width: 90px; text-align: center; }
-.products-table :deep(th:nth-child(7)) { width: 110px; text-align: center; }
-.products-table :deep(th:nth-child(8)) { width: 78px; text-align: center; }
-.products-table :deep(th:nth-child(9)) { width: 78px; text-align: center; }
-.products-table :deep(th:nth-child(10)) { width: 78px; text-align: center; }
-.products-table :deep(th:nth-child(11)) { width: 140px; text-align: center; }
-.products-table :deep(th:nth-child(12)) { width: 160px; text-align: center; }
+.products-table :deep(th:nth-child(4)) { width: 60px; text-align: center; }   /* 库存 */
+.products-table :deep(th:nth-child(5)) { width: 90px; text-align: center; }   /* 状态 */
+.products-table :deep(th:nth-child(6)) { width: 110px; text-align: center; }  /* 发货类型 */
+.products-table :deep(th:nth-child(7)) { width: 78px; text-align: center; }   /* 自动回复 */
+.products-table :deep(th:nth-child(8)) { width: 78px; text-align: center; }   /* 在售 */
+.products-table :deep(th:nth-child(9)) { width: 140px; text-align: center; }  /* 更新时间 */
+.products-table :deep(th:nth-child(10)) { width: 160px; text-align: center; } /* 操作 */
 
 .products-table :deep(td:nth-child(1)) { text-align: center; } /* 选择列 */
 .products-table :deep(td:nth-child(2)) { text-align: left; }
@@ -1301,10 +1296,8 @@ onBeforeUnmount(()=>{ syncPollCanceled = true; window.removeEventListener('xya-h
 .products-table :deep(td:nth-child(6)),
 .products-table :deep(td:nth-child(7)),
 .products-table :deep(td:nth-child(8)),
-.products-table :deep(td:nth-child(9)),
-.products-table :deep(td:nth-child(10)),
-.products-table :deep(td:nth-child(11)) { text-align: center; }
-.products-table :deep(td:nth-child(12)) { text-align: center; }
+.products-table :deep(td:nth-child(9)) { text-align: center; }
+.products-table :deep(td:nth-child(10)) { text-align: center; }
 
 .products-table :deep(tbody tr) { cursor: pointer; }
 .products-table :deep(tbody tr.row-selected) { background: #eef5ff; box-shadow: inset 3px 0 0 #2563eb; }

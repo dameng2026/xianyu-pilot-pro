@@ -13,6 +13,9 @@ class OrderQueryReqDTO(CamelModel):
 class ConfirmShipmentReqDTO(CamelModel):
     xianyu_account_id: int
     order_id: str
+    is_bargain: Optional[bool] = False
+    item_id: Optional[str] = None
+    buyer_id: Optional[str] = None
 
 
 class SoldOrderSyncReqDTO(CamelModel):

@@ -17,7 +17,9 @@ from .ws_storage import save_chat_message
 
 logger = logging.getLogger(__name__)
 
-AI_AUTO_REPLY_DEBOUNCE_SECONDS = 2.0
+# 去抖窗口：同一会话在此时间窗口内到达的多条消息会被合并为一条 AI 回复。
+# 设为 1 秒：既保留快速连发的合并能力（避免触发闲鱼风控），又减少正常对话间隔下的误合并。
+AI_AUTO_REPLY_DEBOUNCE_SECONDS = 1.0
 _ai_auto_reply_batch_lock = asyncio.Lock()
 _ai_auto_reply_batches: dict[str, dict[str, Any]] = {}
 _ai_auto_reply_tasks: dict[str, asyncio.Task] = {}
@@ -329,17 +331,122 @@ async def on_message_callback(tenant_id: int, account_id: int, msg: dict) -> Non
         return
 
     if saved_message_id is None:
-        logger.debug(
-            "消息已存在，跳过自动回复与自动发货 accountId=%d sId=%s pnmId=%s",
-            account_id,
-            msg.get("sId", ""),
-            msg.get("pnmId", ""),
-        )
+        # 消息已存在（去重命中）。但对于付款消息（contentType=26 且含"等待你发货"），
+        # 仍需触发自动发货作为兜底，避免因去重逻辑或 pnm_id 复用导致付款通知被跳过。
+        try:
+            from .ws_delivery_handler import is_payment_message
+            if is_payment_message(msg):
+                logger.info(
+                    "消息已存在但为付款消息，仍触发自动发货兜底: accountId=%d sId=%s pnmId=%s",
+                    account_id, msg.get("sId", ""), msg.get("pnmId", ""),
+                )
+                asyncio.create_task(_run_delivery_after_message_saved(tenant_id, account_id, dict(msg)))
+        except Exception:
+            logger.debug(
+                "消息已存在，跳过自动回复与自动发货 accountId=%d sId=%s pnmId=%s",
+                account_id, msg.get("sId", ""), msg.get("pnmId", ""),
+            )
         return
+
+    # 推断缺失的会话信息：轻量级内容消息格式（{"1":101,"3":{...}}）缺少 sId/sender，
+    # 从同账号最近的有 sId 的消息推断当前消息属于哪个会话。
+    await _infer_missing_session_info(tenant_id, account_id, msg, seller_external_uid)
 
     # Offload heavy follow-up work so the WS loop can continue syncing new messages.
     asyncio.create_task(_run_delivery_after_message_saved(tenant_id, account_id, dict(msg)))
     asyncio.create_task(_queue_ai_auto_reply_after_message_saved(tenant_id, account_id, dict(msg), seller_external_uid))
+
+
+async def _infer_missing_session_info(
+    tenant_id: int,
+    account_id: int,
+    msg: dict,
+    seller_external_uid: str,
+) -> None:
+    """当消息缺少 sId/sender 时，从同账号最近的消息推断会话信息。
+
+    背景：轻量级内容消息格式 {"1":101,"3":{...}} 不携带 sId/senderUserId，
+    导致无法触发 AI 自动回复。同一账号在短时间内收到的消息通常属于同一会话，
+    因此从最近 5 分钟内有 sId 的消息推断会话信息是可靠的。
+    """
+    sid = str(msg.get("sId") or "").strip()
+    sender_user_id = str(msg.get("senderUserId") or "").strip()
+    if sid and sender_user_id:
+        return  # 信息完整，无需推断
+
+    content_type = msg.get("contentType", 1)
+    try:
+        content_type_int = int(content_type) if str(content_type).isdigit() else 1
+    except (TypeError, ValueError):
+        content_type_int = 1
+    if content_type_int != 1:
+        return  # 仅对文本消息推断
+
+    msg_content = str(msg.get("msgContent") or "").strip()
+    if not msg_content:
+        return  # 无内容不推断
+
+    try:
+        async with async_session() as db:
+            # 查询最近 5 分钟内有 sId 的消息（不限 direction）。
+            # 优先买家发的 IN 消息（sender_user_id 是买家），
+            # 其次卖家发的 OUT 消息（peer_external_uid 是买家）。
+            row = (await db.execute(text("""
+                SELECT s_id, sender_user_id, peer_external_uid, xy_goods_id, reminder_url
+                FROM xianyu_chat_message
+                WHERE tenant_id = :tenant_id
+                  AND account_id = :account_id
+                  AND deleted = 0
+                  AND content_type = 1
+                  AND s_id IS NOT NULL AND s_id != ''
+                  AND created_time >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+                ORDER BY id DESC
+                LIMIT 1
+            """), {
+                "tenant_id": tenant_id,
+                "account_id": account_id,
+            })).mappings().first()
+
+            if not row:
+                return
+
+            inferred_sid = str(row.get("s_id") or "").strip()
+            inferred_sender = str(row.get("sender_user_id") or "").strip()
+            inferred_peer = str(row.get("peer_external_uid") or "").strip()
+            inferred_goods_id = str(row.get("xy_goods_id") or "").strip()
+            inferred_reminder_url = str(row.get("reminder_url") or "").strip()
+
+            # 判断推断源消息的 sender 是否是卖家自己
+            seller_normalized = seller_external_uid.replace("@goofish", "").strip() if seller_external_uid else ""
+            sender_normalized = inferred_sender.replace("@goofish", "").strip() if inferred_sender else ""
+            sender_is_seller = bool(seller_normalized and sender_normalized and seller_normalized == sender_normalized)
+
+            # 如果 sender 是卖家自己（OUT 消息同步回来），买家 ID 从 peer_external_uid 获取
+            effective_buyer = inferred_peer if sender_is_seller else inferred_sender
+
+            if not sid and inferred_sid:
+                msg["sId"] = inferred_sid
+            if not sender_user_id and effective_buyer:
+                msg["senderUserId"] = effective_buyer
+            if not msg.get("peerExternalUid") and inferred_peer:
+                msg["peerExternalUid"] = inferred_peer
+            if not msg.get("xyGoodsId") and inferred_goods_id:
+                msg["xyGoodsId"] = inferred_goods_id
+            if not msg.get("reminderUrl") and inferred_reminder_url:
+                msg["reminderUrl"] = inferred_reminder_url
+
+            logger.info(
+                "推断会话信息: tenantId=%d accountId=%d sId=%s buyer=%s senderIsSeller=%s goodsId=%s contentLen=%d",
+                tenant_id,
+                account_id,
+                inferred_sid[:20] if inferred_sid else "(空)",
+                effective_buyer[:20] if effective_buyer else "(空)",
+                sender_is_seller,
+                inferred_goods_id[:20] if inferred_goods_id else "(空)",
+                len(msg_content),
+            )
+    except Exception as exc:
+        logger.warning("推断会话信息失败 tenantId=%d accountId=%d: %s", tenant_id, account_id, exc)
 
 
 async def auto_start_all() -> None:

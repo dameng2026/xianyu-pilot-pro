@@ -692,6 +692,13 @@ async def publish_item(
         if not token:
             return ResultObject.failed("Cookie 中缺少 _m_h5_tk，请重新登录")
 
+        # 按账号类型决定库存：鱼小铺账号可自定义库存，普通账号库存固定为 1
+        is_fish_shop = await _is_fish_shop_account(db, account_id, tenant_id)
+        if not is_fish_shop:
+            if stock != 1:
+                logger.info("普通账号发布强制库存为1: account_id=%s, 原stock=%s", account_id, stock)
+            stock = 1
+
         # 构建发布数据
         item_data = {
             "title": title,
@@ -1210,7 +1217,7 @@ async def update_item_price(
         if not account:
             return ResultObject.failed("账号不存在")
 
-        is_fish_shop = bool(getattr(account, "fish_shop", False))
+        is_fish_shop = bool(getattr(account, "fish_shop_user", 0))
         if not is_fish_shop:
             return ResultObject.failed("当前账号不是鱼小铺，无法改价")
 
@@ -1581,8 +1588,8 @@ async def _get_account_auth(db: AsyncSession, account_id: int, tenant_id: int):
 async def _is_fish_shop_account(db: AsyncSession, account_id: int, tenant_id: int) -> bool:
     """
     判断账号是否为鱼小铺账号。
-    通过 XianyuAccount 扩展字段判断，默认返回 False（普通账号）。
-    如需启用鱼小铺功能，请在数据库账号记录中添加 fish_shop 标记。
+    通过 XianyuAccount.fish_shop_user 字段判断（由 Java 端从闲鱼接口 superShow 字段解析后写入）。
+    默认返回 False（普通账号）。
     """
     try:
         result = await db.execute(
@@ -1597,7 +1604,7 @@ async def _is_fish_shop_account(db: AsyncSession, account_id: int, tenant_id: in
         account = result.scalar_one_or_none()
         if not account:
             return False
-        # 检查是否有 fish_shop 属性（模型扩展字段/实际列）
-        return bool(getattr(account, "fish_shop", False))
+        # fish_shop_user 列在数据库中为 TINYINT（1=鱼小铺，0=普通账号）
+        return bool(getattr(account, "fish_shop_user", 0))
     except Exception:
         return False

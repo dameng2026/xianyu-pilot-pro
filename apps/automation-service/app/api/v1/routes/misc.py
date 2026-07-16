@@ -1159,6 +1159,8 @@ async def websocket_start(
                 response=None,
                 auto_solve=True,
                 trigger_scene="ws_connect",
+                open_reason="WS 连接鉴权失败自动触发",
+                solve_reason="用户手动点击连接失败（auth_failed），自动尝试滑块求解恢复",
             )
             recovered = bool(captcha_result.get("recovered"))
             auto_solve_result = captcha_result.get("autoSolveResult") or {}

@@ -366,6 +366,8 @@ async def _do_cookie_keepalive(state: AccountRefreshState) -> bool:
                         response=None,
                         auto_solve=True,
                         trigger_scene="cookie_keepalive",
+                        open_reason="Cookie 保活失败自动触发",
+                        solve_reason=f"Cookie 保活触发滑块验证（{err_str}）",
                     ))
                     logger.info("Cookie 保活触发滑块，已异步启动自动求解 accountId=%d", state.account_id)
                 except Exception as solve_err:

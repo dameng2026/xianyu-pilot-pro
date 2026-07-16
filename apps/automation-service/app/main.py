@@ -192,6 +192,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log_service_failure(logger, e, operation="start_cookie_token_dispatcher")
 
+    # 启动定时任务 Worker（内嵌模式）
+    # 将 worker 集成到 web 服务进程中，避免需要单独启动 run-worker.py
+    # worker 每 60 秒扫描到期任务（auto_delivery / sync_orders / redelivery / polish_goods）
+    worker_task = None
+    try:
+        from .worker import run_forever as worker_run_forever
+        worker_interval = int(os.getenv("WORKER_INTERVAL_SECONDS", "60"))
+        worker_task = asyncio.create_task(worker_run_forever(worker_interval))
+        logger.info("定时任务 Worker 已内嵌启动，interval=%ss", worker_interval)
+    except Exception as e:
+        log_service_failure(logger, e, operation="start_inline_worker")
+
     yield
 
     storage_reconcile_task.cancel()
@@ -199,6 +211,14 @@ async def lifespan(app: FastAPI):
         await storage_reconcile_task
     except asyncio.CancelledError:
         pass
+
+    # 停止定时任务 Worker
+    if worker_task is not None:
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            pass
 
     # 停止 Cookie/Token 刷新调度器
     if refresh_started:

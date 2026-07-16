@@ -47,15 +47,15 @@ public class XianyuTradeOrderService {
     /**
      * 分页查询订单列表
      */
-    public PageResult<XianyuTradeOrderVO> page(Long tenantId, Long accountId, String keyword, Integer status,
+    public PageResult<XianyuTradeOrderVO> page(Long tenantId, Long accountId, String keyword, Integer status, String buyerId,
                                                  int current, int size) {
         int safeCurrent = PageUtils.normalizeCurrent(current);
         int safeSize = PageUtils.normalizeSize(size);
         int offset = (safeCurrent - 1) * safeSize;
         int limit = safeSize;
 
-        int total = orderMapper.count(tenantId, accountId, keyword, status);
-        List<XianyuTradeOrder> list = orderMapper.list(tenantId, accountId, keyword, status, offset, limit);
+        int total = orderMapper.count(tenantId, accountId, keyword, status, buyerId);
+        List<XianyuTradeOrder> list = orderMapper.list(tenantId, accountId, keyword, status, buyerId, offset, limit);
 
         List<XianyuTradeOrderVO> records = list.stream()
                 .map(this::toVO)
@@ -150,6 +150,7 @@ public class XianyuTradeOrderService {
                 .toList();
         Map<Long, List<Map<String, Object>>> rowsByOrderId = queryOrderItemsForSummaryBatch(tenantId, orderIds);
         Set<String> externalIds = new HashSet<>();
+        // 1) 从订单项表收集 external_goods_id
         for (List<Map<String, Object>> rows : rowsByOrderId.values()) {
             for (Map<String, Object> row : rows) {
                 String externalId = asString(row.get("external_goods_id"));
@@ -158,19 +159,22 @@ public class XianyuTradeOrderService {
                 }
             }
         }
-        Map<String, String> goodsImageMap = loadGoodsImagesByExternalIds(tenantId, externalIds);
+        // 2) 兜底：从订单顶层 item_id 收集（订单项为空时使用）
+        for (XianyuTradeOrderVO vo : records) {
+            String orderItemId = vo.getItemId();
+            if (orderItemId != null && !orderItemId.isBlank()) {
+                externalIds.add(orderItemId);
+            }
+        }
+        Map<String, GoodsInfo> goodsInfoMap = loadGoodsInfoByExternalIds(tenantId, externalIds);
         for (XianyuTradeOrderVO vo : records) {
             List<Map<String, Object>> rows = rowsByOrderId.getOrDefault(vo.getId(), Collections.emptyList());
-            applyPageItemSummary(vo, rows, goodsImageMap);
+            applyPageItemSummary(vo, rows, goodsInfoMap);
         }
     }
 
     private void enrichPageItemSummary(Long tenantId, XianyuTradeOrderVO vo) {
         List<Map<String, Object>> rows = queryOrderItemsForSummary(tenantId, vo.getId());
-        if (rows.isEmpty()) {
-            applyPageItemSummary(vo, rows, Collections.emptyMap());
-            return;
-        }
         Set<String> externalIds = new HashSet<>();
         for (Map<String, Object> row : rows) {
             String externalId = asString(row.get("external_goods_id"));
@@ -178,13 +182,37 @@ public class XianyuTradeOrderService {
                 externalIds.add(externalId);
             }
         }
-        applyPageItemSummary(vo, rows, loadGoodsImagesByExternalIds(tenantId, externalIds));
+        // 兜底：订单顶层 item_id
+        String orderItemId = vo.getItemId();
+        if (orderItemId != null && !orderItemId.isBlank()) {
+            externalIds.add(orderItemId);
+        }
+        applyPageItemSummary(vo, rows, loadGoodsInfoByExternalIds(tenantId, externalIds));
     }
 
     private void applyPageItemSummary(XianyuTradeOrderVO vo,
                                       List<Map<String, Object>> rows,
-                                      Map<String, String> goodsImageMap) {
+                                      Map<String, GoodsInfo> goodsInfoMap) {
         if (rows == null || rows.isEmpty()) {
+            // 订单项为空：用订单顶层 item_id 兜底合成单项
+            String orderItemId = vo.getItemId();
+            if (orderItemId != null && !orderItemId.isBlank()) {
+                GoodsInfo info = goodsInfoMap.get(orderItemId);
+                String title = (info != null && info.title != null && !info.title.isBlank())
+                        ? info.title
+                        : ("商品 " + orderItemId);
+                String image = info != null ? info.image : null;
+
+                XianyuTradeOrderItemVO itemVO = new XianyuTradeOrderItemVO();
+                itemVO.setGoodsTitle(title);
+                itemVO.setGoodsCount(1);
+                itemVO.setExternalGoodsId(orderItemId);
+                itemVO.setGoodsImage(image);
+                vo.setItems(java.util.Collections.singletonList(itemVO));
+                vo.setItemSummary(title + " x1");
+                vo.setQuantityTotal(1);
+                return;
+            }
             vo.setItems(Collections.emptyList());
             vo.setItemSummary("View detail");
             vo.setQuantityTotal(0);
@@ -197,7 +225,16 @@ public class XianyuTradeOrderService {
             String goodsTitle = asString(row.get("goods_title"));
             int goodsCount = Math.max(asInteger(row.get("goods_count"), 1), 1);
             String externalGoodsId = asString(row.get("external_goods_id"));
-            String goodsImage = externalGoodsId != null ? goodsImageMap.get(externalGoodsId) : null;
+            String goodsImage = null;
+            if (externalGoodsId != null) {
+                GoodsInfo info = goodsInfoMap.get(externalGoodsId);
+                if (info != null) {
+                    if (info.title != null && !info.title.isBlank()) {
+                        goodsTitle = info.title;
+                    }
+                    goodsImage = info.image;
+                }
+            }
 
             quantityTotal += goodsCount;
             if (parts.size() < 2 && goodsTitle != null && !goodsTitle.isBlank()) {
@@ -287,9 +324,9 @@ public class XianyuTradeOrderService {
     }
 
     /**
-     * 根据 external_goods_id 批量查询商品封面图（cover_pic 优先，image_url 兜底）
+     * 根据 external_goods_id 批量查询商品信息（title + 封面图，cover_pic 优先，image_url 兜底）
      */
-    private Map<String, String> loadGoodsImagesByExternalIds(Long tenantId, Set<String> externalIds) {
+    private Map<String, GoodsInfo> loadGoodsInfoByExternalIds(Long tenantId, Set<String> externalIds) {
         if (externalIds == null || externalIds.isEmpty()) {
             return Collections.emptyMap();
         }
@@ -299,25 +336,35 @@ public class XianyuTradeOrderService {
         params.addAll(externalIds);
 
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT external_goods_id, cover_pic, image_url FROM xianyu_goods " +
+                "SELECT external_goods_id, title, cover_pic, image_url FROM xianyu_goods " +
                         "WHERE tenant_id = ? AND external_goods_id IN (" + placeholders + ") AND deleted = 0",
                 params.toArray()
         );
 
-        Map<String, String> result = new HashMap<>();
+        Map<String, GoodsInfo> result = new HashMap<>();
         for (Map<String, Object> row : rows) {
             String externalId = asString(row.get("external_goods_id"));
             if (externalId == null || result.containsKey(externalId)) {
                 continue;
             }
+            String title = asString(row.get("title"));
             String coverPic = asString(row.get("cover_pic"));
             String imageUrl = asString(row.get("image_url"));
             String image = (coverPic != null && !coverPic.isBlank()) ? coverPic : imageUrl;
-            if (image != null && !image.isBlank()) {
-                result.put(externalId, image);
-            }
+            result.put(externalId, new GoodsInfo(title, image));
         }
         return result;
+    }
+
+    /** 商品信息聚合（标题 + 封面图） */
+    private static final class GoodsInfo {
+        final String title;
+        final String image;
+
+        GoodsInfo(String title, String image) {
+            this.title = title;
+            this.image = image;
+        }
     }
 
     private void enrichDeliverySnapshot(Long tenantId, XianyuTradeOrderVO vo) {

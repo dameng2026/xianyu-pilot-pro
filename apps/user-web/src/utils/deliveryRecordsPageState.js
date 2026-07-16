@@ -45,6 +45,15 @@ export function canScheduleRedelivery(record) {
   return [3, 6, 7].includes(numericStatus) || ['failed', 'partial'].includes(stringStatus)
 }
 
+/**
+ * 是否允许"重新发货"：对所有已存在的发货记录均允许。
+ * 用于已成功但买家未收到、待处理、进行中等任意状态的重新触发。
+ * 后端 retryDelivery 接口本身不做 status 限制，会重置为 pending 后重新执行。
+ */
+export function canRedeliverRecord(record) {
+  return Number(record?.id) > 0
+}
+
 export function buildDeliveryRecordRowViewModel(record) {
   const meta = deliveryStatusMeta(record)
   const quantityRequested = Number(record?.quantityRequested ?? 0) || 0
@@ -52,7 +61,11 @@ export function buildDeliveryRecordRowViewModel(record) {
   return {
     ...record,
     goodsTitleText: record?.goodsTitle || record?.goodsName || '-',
+    goodsCoverPic: record?.goodsCoverPic || record?.coverPic || record?.imageUrl || '',
     buyerNameText: record?.buyerNick || record?.buyerName || '-',
+    sellerNameText: record?.sellerName || record?.sellerDisplayName || record?.sellerNickname || '-',
+    // 列表"订单时间"列：优先用订单购买时间，回退到记录创建时间，保证旧数据也有显示
+    purchaseTimeText: dateTime(record?.payTime || record?.purchaseTime || record?.orderCreateTime || record?.createdTime),
     timingText: TIMING_TEXT[record?.deliveryTiming || record?.timing] || record?.deliveryTiming || record?.timing || '-',
     deliveryModeText: record?.deliveryMode === 'card' ? '卡密' : '文本',
     deliveryStatusText: meta.text,
@@ -62,16 +75,24 @@ export function buildDeliveryRecordRowViewModel(record) {
     completedTimeText: dateTime(record?.completedTime || record?.finishedTime),
     platformSyncTimeText: dateTime(record?.platformSyncTime),
     canRetry: canRetryDeliveryRecord(record),
-    canScheduleRedelivery: canScheduleRedelivery(record)
+    canScheduleRedelivery: canScheduleRedelivery(record),
+    canRedeliver: canRedeliverRecord(record)
   }
 }
 
 export function buildDeliveryRecordDetailViewModel(record) {
   return {
     ...buildDeliveryRecordRowViewModel(record),
+    // 用户期望的详情字段
+    purchaseTimeText: dateTime(record?.payTime || record?.purchaseTime || record?.orderCreateTime),
+    goodsIdText: record?.goodsId || record?.externalGoodsId || '-',
+    goodsNameText: record?.goodsName || record?.goodsTitle || '-',
+    buyerIdText: record?.buyerId || '-',
+    sellerNameText: record?.sellerName || record?.sellerDisplayName || record?.sellerNickname || '-',
+    externalOrderIdText: record?.externalOrderId || '-',
     deliveryContentText: record?.deliveryContent || record?.content || '-',
     resultText: record?.result || record?.deliveryResult || '-',
-    errorMessageText: record?.errorMessage || '-'
+    errorMessageText: record?.errorMessage || record?.failReason || '-'
   }
 }
 

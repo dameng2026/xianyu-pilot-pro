@@ -525,8 +525,16 @@ function emitClose() {
   emit('close')
 }
 
+function isReadableConfigName(name) {
+  if (!name) return false
+  const str = String(name).trim()
+  if (!str || str.length > 40) return false
+  // 仅允许字母/数字/空格及常见命名标点，拒绝加密串、乱码或含异常符号的值
+  return /^[\p{L}\p{N}\s\u00B7\u30FB\-_\/()().、+]+$/u.test(str)
+}
+
 function paymentMethodLabel(method) {
-  if (method?.configName) return method.configName
+  if (isReadableConfigName(method?.configName)) return String(method.configName).trim()
   if (method?.channelType === 'wechat') return '微信支付'
   if (method?.channelType === 'alipay') return '支付宝'
   return '支付方式'
@@ -550,7 +558,10 @@ function validateOrderSnapshot(order, expectedOrderNo = '') {
 
 function paymentMethodDesc(method) {
   if (Number(method.sandbox || 0) === 1) return '沙箱环境支付测试'
-  return method.description || '由后台支付配置提供'
+  if (method.description) return method.description
+  if (method.providerType === 'yipay') return '易支付通道'
+  if (method.providerType === 'official') return '官方接口'
+  return '由后台支付配置提供'
 }
 
 function paymentMethodIcon(method) {
@@ -1233,6 +1244,7 @@ onBeforeUnmount(() => {
 .pay-order-panel {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .pay-flow-box,
@@ -1273,6 +1285,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   min-height: 24px;
+  min-width: 0;
   color: #64748b;
   font-size: 12px;
 }
@@ -1285,6 +1298,10 @@ onBeforeUnmount(() => {
 .pay-order-row b {
   color: #334155;
   font-weight: 400;
+  min-width: 0;
+  flex: 1;
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .pay-order-row em {

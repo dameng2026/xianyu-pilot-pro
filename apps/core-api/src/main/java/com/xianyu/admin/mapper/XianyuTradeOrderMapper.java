@@ -23,6 +23,9 @@ public interface XianyuTradeOrderMapper {
             "<if test='status != null'>" +
             "  AND order_status = #{status} " +
             "</if>" +
+            "<if test='buyerId != null and buyerId != \"\"'>" +
+            "  AND (buyer_id = #{buyerId} OR buyer_id = CONCAT(#{buyerId}, '@goofish')) " +
+            "</if>" +
             "ORDER BY created_time DESC " +
             "LIMIT #{offset}, #{limit}" +
             "</script>")
@@ -30,6 +33,7 @@ public interface XianyuTradeOrderMapper {
                                 @Param("accountId") Long accountId,
                                 @Param("keyword") String keyword,
                                 @Param("status") Integer status,
+                                @Param("buyerId") String buyerId,
                                 @Param("offset") int offset,
                                 @Param("limit") int limit);
 
@@ -45,11 +49,15 @@ public interface XianyuTradeOrderMapper {
             "<if test='status != null'>" +
             "  AND order_status = #{status} " +
             "</if>" +
+            "<if test='buyerId != null and buyerId != \"\"'>" +
+            "  AND (buyer_id = #{buyerId} OR buyer_id = CONCAT(#{buyerId}, '@goofish')) " +
+            "</if>" +
             "</script>")
     int count(@Param("tenantId") Long tenantId,
               @Param("accountId") Long accountId,
               @Param("keyword") String keyword,
-              @Param("status") Integer status);
+              @Param("status") Integer status,
+              @Param("buyerId") String buyerId);
 
     @Select("SELECT * FROM xianyu_trade_order WHERE tenant_id = #{tenantId} AND id = #{id} AND deleted = 0")
     XianyuTradeOrder findById(@Param("tenantId") Long tenantId, @Param("id") Long id);

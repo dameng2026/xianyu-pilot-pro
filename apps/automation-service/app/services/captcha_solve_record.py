@@ -27,6 +27,7 @@ TRIGGER_SCENE_DESC = {
     "cookie_keepalive": "Cookie 保活触发滑块验证",
     "token_refresh": "Token 刷新触发滑块验证",
     "manual": "手动触发滑块求解",
+    "manual_retry": "手动重试滑块求解",
 }
 
 
@@ -61,6 +62,8 @@ async def create_solve_record(
     tenant_id: int,
     trigger_scene: str = "manual",
     event_desc: str = "",
+    open_reason: str = "",
+    solve_reason: str = "",
     retry_count: int = 0,
 ) -> Optional[int]:
     """创建一条滑块求解记录，返回 record_id。
@@ -70,6 +73,8 @@ async def create_solve_record(
         tenant_id: 租户 ID
         trigger_scene: 触发场景 (ws_connect/cookie_keepalive/token_refresh/manual)
         event_desc: 事件描述（为空时根据 trigger_scene 自动生成）
+        open_reason: 开启原因（为什么打开滑块求解流程，例如"用户手动点击"/"账号状态异常自动触发"）
+        solve_reason: 求解原因（为什么进行滑块求解，例如"WS Token 失败"/"Cookie 保活触发滑块"）
         retry_count: 重试次数
 
     Returns:
@@ -77,6 +82,15 @@ async def create_solve_record(
     """
     if not event_desc:
         event_desc = _build_event_desc(trigger_scene)
+    # 默认开启原因：根据触发场景推断
+    if not open_reason:
+        if trigger_scene in ("manual", "manual_retry"):
+            open_reason = "用户手动点击求解按钮"
+        else:
+            open_reason = "账号状态异常自动触发"
+    # 默认求解原因：使用事件描述
+    if not solve_reason:
+        solve_reason = event_desc
 
     account_name = await _lookup_account_name(tenant_id, account_id)
 
@@ -85,15 +99,18 @@ async def create_solve_record(
             result = await db.execute(
                 text(
                     "INSERT INTO xianyu_captcha_solve_record "
-                    "(tenant_id, account_id, account_name, event_desc, trigger_scene, "
+                    "(tenant_id, account_id, account_name, event_desc, open_reason, solve_reason, trigger_scene, "
                     " result, status, engine, retry_count, created_at, updated_at) "
-                    "VALUES (:tid, :aid, :aname, :edesc, :scene, '', 'retrying', 'Playwright', :rc, NOW(), NOW())"
+                    "VALUES (:tid, :aid, :aname, :edesc, :oreason, :sreason, :scene, "
+                    " '', 'retrying', 'Playwright', :rc, NOW(), NOW())"
                 ),
                 {
                     "tid": tenant_id,
                     "aid": account_id,
                     "aname": account_name,
                     "edesc": event_desc,
+                    "oreason": open_reason,
+                    "sreason": solve_reason,
                     "scene": trigger_scene,
                     "rc": retry_count,
                 },
@@ -101,8 +118,8 @@ async def create_solve_record(
             await db.commit()
             record_id = result.lastrowid
             logger.info(
-                "创建滑块求解记录: recordId=%d accountId=%d scene=%s",
-                record_id, account_id, trigger_scene,
+                "创建滑块求解记录: recordId=%d accountId=%d scene=%s openReason=%s solveReason=%s",
+                record_id, account_id, trigger_scene, open_reason, solve_reason,
             )
             return record_id
     except Exception as e:
@@ -166,6 +183,7 @@ async def list_solve_records(
     tenant_id: int,
     account_id: int = 0,
     status: str = "",
+    trigger_scene: str = "",
     page: int = 1,
     page_size: int = 20,
 ) -> dict:
@@ -183,6 +201,9 @@ async def list_solve_records(
     if status:
         where_clauses.append("status = :status")
         params["status"] = status
+    if trigger_scene:
+        where_clauses.append("trigger_scene = :scene")
+        params["scene"] = trigger_scene
 
     where_sql = " AND ".join(where_clauses)
     offset = max(0, (page - 1) * page_size)
@@ -199,8 +220,8 @@ async def list_solve_records(
             # 查询列表
             rows = (await db.execute(
                 text(
-                    f"SELECT id, account_id, account_name, event_desc, trigger_scene, "
-                    f"result, status, engine, retry_count, error_message, "
+                    f"SELECT id, account_id, account_name, event_desc, open_reason, solve_reason, "
+                    f"trigger_scene, result, status, engine, retry_count, error_message, "
                     f"created_at, updated_at "
                     f"FROM xianyu_captcha_solve_record WHERE {where_sql} "
                     f"ORDER BY created_at DESC, id DESC LIMIT :limit OFFSET :offset"
@@ -215,6 +236,8 @@ async def list_solve_records(
                     "accountId": row["account_id"],
                     "accountName": row["account_name"],
                     "eventDesc": row["event_desc"],
+                    "openReason": row.get("open_reason") or "",
+                    "solveReason": row.get("solve_reason") or "",
                     "triggerScene": row["trigger_scene"],
                     "result": row["result"],
                     "status": row["status"],

@@ -9,7 +9,6 @@ spring:
       max-file-size: 20MB
       max-request-size: 50MB
   main:
-    lazy-initialization: true
     banner-mode: off
     cloud-platform: none
     allow-bean-definition-overriding: false
@@ -79,6 +78,7 @@ notification:
 payment:
   sandbox:
     enabled: ${PAYMENT_SANDBOX_ENABLED:false}
+  external-base-url: ${PAYMENT_EXTERNAL_BASE_URL:}
 
 # 开源版桥接配置：开源版通过 HTTP 头 X-Open-Source-Token 访问
 # /admin-api/open-source-bridge/* 系列接口。token 为空时拒绝所有桥接请求（fail-closed）。
