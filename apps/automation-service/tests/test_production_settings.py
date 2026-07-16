@@ -74,7 +74,16 @@ def test_production_rejects_unmetered_or_implicit_upload_governance():
     with pytest.raises(ValidationError, match="UPLOAD_GOVERNANCE_ENABLED"):
         _production_settings(upload_governance_enabled=False)
     with pytest.raises(ValidationError, match="upload governance limits"):
-        _production_settings(upload_tenant_quota_bytes=None)
+        _production_settings(upload_rate_limit_requests=None)
+
+
+def test_production_accepts_optional_storage_quota_fields():
+    """存储配额字段（tenant / global）已不再用于 enforcement，可省略。"""
+    settings = _production_settings(
+        upload_tenant_quota_bytes=None,
+        upload_global_quota_bytes=None,
+    )
+    assert settings.app_env == "production"
 
 
 def test_runtime_schema_mutations_default_off_in_production_and_on_in_development():

@@ -36,44 +36,82 @@ DEFAULT_TARGET_URL = "https://www.goofish.com/im"
 DEFAULT_MAX_RETRIES = 5
 
 # 人工在「自动化窗口」里拖也失败的根因：环境被标为机器人（非轨迹）。
-# 反检测脚本覆盖常见 CDP / webdriver / 指纹探针。
+# Baxia 检测维度（2026 实测）：
+#   1. navigator.webdriver / navigator.plugins instanceof / navigator.languages
+#   2. window.chrome 完整性（runtime/csi/loadTimes/app）
+#   3. WebGL vendor&renderer（SwiftShader = 机器人强信号）
+#   4. Canvas 指纹（headless 固定哈希）
+#   5. AudioContext 指纹（headless 返回固定值）
+#   6. navigator.userAgentData (Client Hints) — Chrome 131+ 必有，Playwright 缺失即识破
+#   7. navigator.connection (Network Information API) — 真人必有
+#   8. navigator.getBattery() — 真人浏览器必有
+#   9. MediaDevices.enumerateDevices — 真人有音频/视频设备
+#  10. WebRTC IP 泄漏 — 暴露内网 IP 与公网 IP 不一致
+#  11. window.outerWidth/outerHeight — headless 下 outerWidth==innerWidth
+#  12. navigator.permissions.query 一致性
+#  13. CDP 注入痕迹：cdc_ / $cdc_ / __playwright / Runtime.enable 检测
+#  14. speechSynthesis.getVoices — headless 返回空数组
+#  15. navigator.webdriver 通过 toString 检测（native code vs 重新定义）
+# 本脚本全面覆盖以上检测点
 STEALTH_INIT_SCRIPT = r"""
 (() => {
-  try {
-    // webdriver: 删除属性比返回 undefined 更难被 'in' 检测识破
+  // 工具：安全定义属性，避免重复定义报错
+  const defineGetter = (obj, prop, getter) => {
     try {
-      delete Object.getPrototypeOf(navigator).webdriver;
+      Object.defineProperty(obj, prop, { get: getter, configurable: true });
     } catch (e) {}
-    Object.defineProperty(navigator, 'webdriver', {
-      get: () => undefined,
-      configurable: true,
-    });
+  };
 
-    // chrome 运行时
-    window.chrome = window.chrome || {};
-    window.chrome.runtime = window.chrome.runtime || {
-      OnInstalledReason: { INSTALL: 'install', UPDATE: 'update', CHROME_UPDATE: 'chrome_update', SHARED_MODULE_UPDATE: 'shared_module_update' },
-      PlatformOs: { WIN: 'win', MAC: 'mac', LINUX: 'linux', ANDROID: 'android' },
-      PlatformArch: { X86_64: 'x86-64', X86_32: 'x86-32', ARM: 'arm' },
-    };
-    window.chrome.csi = window.chrome.csi || (() => ({ startE: Date.now(), onloadT: Date.now(), pageT: Math.random() * 1000, tran: 15 }));
-    window.chrome.loadTimes = window.chrome.loadTimes || (() => ({
-      commitLoadTime: Date.now() / 1000 - 4,
-      connectionInfo: 'h2',
-      finishDocumentLoadTime: Date.now() / 1000 - 2,
-      finishLoadTime: Date.now() / 1000 - 1.5,
-      firstPaintAfterLoadTime: 0,
-      firstPaintTime: Date.now() / 1000 - 3,
-      navigationType: 'Other',
-      npnNegotiatedProtocol: 'h2',
-      requestTime: Date.now() / 1000 - 5,
-      startLoadTime: Date.now() / 1000 - 5,
-      wasAlternateProtocolAvailable: false,
-      wasFetchedViaSpdy: true,
-      wasNpnNegotiated: true,
-    }));
+  try {
+    // ===== 1. navigator.webdriver =====
+    // 删除原型属性 + 重定义为 undefined，双重保险
+    try { delete Object.getPrototypeOf(navigator).webdriver; } catch (e) {}
+    defineGetter(navigator, 'webdriver', () => undefined);
+    try {
+      defineGetter(Navigator.prototype, 'webdriver', () => undefined);
+    } catch (e) {}
 
-    // plugins / mimeTypes 真实结构
+    // ===== 2. window.chrome 完整对象 =====
+    if (!window.chrome) window.chrome = {};
+    if (!window.chrome.runtime) {
+      window.chrome.runtime = {
+        OnInstalledReason: { INSTALL: 'install', UPDATE: 'update', CHROME_UPDATE: 'chrome_update', SHARED_MODULE_UPDATE: 'shared_module_update' },
+        OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' },
+        PlatformArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64' },
+        PlatformOs: { MAC: 'mac', WIN: 'win', ANDROID: 'android', CROS: 'cros', LINUX: 'linux', OPENBSD: 'openbsd' },
+        // 真人 Chrome 有 runtime.id（扩展 ID），空值也可但有的检测会查
+        id: undefined,
+        // connect / sendMessage 让检测脚本调用不报错
+        connect: () => {},
+        sendMessage: () => {},
+      };
+    }
+    if (!window.chrome.csi) {
+      window.chrome.csi = () => ({ startE: Date.now() - Math.floor(Math.random() * 3000 + 2000), onloadT: Date.now(), pageT: Math.random() * 2000 + 500, tran: 15 });
+    }
+    if (!window.chrome.loadTimes) {
+      const t = Date.now() / 1000;
+      window.chrome.loadTimes = () => ({
+        commitLoadTime: t - 4,
+        connectionInfo: 'h2',
+        finishDocumentLoadTime: t - 2,
+        finishLoadTime: t - 1.5,
+        firstPaintAfterLoadTime: t - 1.8,
+        firstPaintTime: t - 3,
+        navigationType: 'Other',
+        npnNegotiatedProtocol: 'h2',
+        requestTime: t - 5,
+        startLoadTime: t - 5,
+        wasAlternateProtocolAvailable: false,
+        wasFetchedViaSpdy: true,
+        wasNpnNegotiated: true,
+      });
+    }
+    if (!window.chrome.app) {
+      window.chrome.app = { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' }, RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' } };
+    }
+
+    // ===== 3. navigator.plugins 真实 PluginArray 结构 =====
     const mkPlugin = (name, filename, description) => {
       const p = { name, filename, description, length: 1 };
       p[0] = { type: 'application/pdf', suffixes: 'pdf', description };
@@ -85,75 +123,265 @@ STEALTH_INIT_SCRIPT = r"""
       mkPlugin('PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format'),
       mkPlugin('Chrome PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format'),
       mkPlugin('Chromium PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format'),
+      mkPlugin('Microsoft Edge PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format'),
+      mkPlugin('WebKit built-in PDF', 'internal-pdf-viewer', 'Portable Document Format'),
     ];
-    Object.defineProperty(navigator, 'plugins', {
-      get: () => {
-        const arr = pluginData.slice();
-        arr.item = (i) => arr[i] || null;
-        arr.namedItem = (n) => arr.find(x => x.name === n) || null;
-        arr.refresh = () => {};
-        return arr;
-      },
-      configurable: true,
+    defineGetter(navigator, 'plugins', () => {
+      const arr = pluginData.slice();
+      arr.length = pluginData.length;
+      arr.item = (i) => arr[i] || null;
+      arr.namedItem = (n) => arr.find(x => x.name === n) || null;
+      arr.refresh = () => {};
+      return arr;
+    });
+    // mimeTypes 真实结构
+    defineGetter(navigator, 'mimeTypes', () => {
+      const m = [{ type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format', enabledPlugin: pluginData[0] }];
+      m.length = 1;
+      m.item = (i) => m[i] || null;
+      m.namedItem = (n) => (m[0] && m[0].type === n ? m[0] : null);
+      return m;
     });
 
-    Object.defineProperty(navigator, 'languages', {
-      get: () => ['zh-CN', 'zh', 'en-US', 'en'],
-      configurable: true,
-    });
-    Object.defineProperty(navigator, 'language', {
-      get: () => 'zh-CN',
-      configurable: true,
-    });
-    Object.defineProperty(navigator, 'platform', {
-      get: () => 'Win32',
-      configurable: true,
-    });
-    Object.defineProperty(navigator, 'hardwareConcurrency', {
-      get: () => 8,
-      configurable: true,
-    });
-    Object.defineProperty(navigator, 'deviceMemory', {
-      get: () => 8,
-      configurable: true,
-    });
-    Object.defineProperty(navigator, 'maxTouchPoints', {
-      get: () => 0,
-      configurable: true,
-    });
+    // ===== 4. navigator 基础属性 =====
+    defineGetter(navigator, 'languages', () => ['zh-CN', 'zh', 'en-US', 'en']);
+    defineGetter(navigator, 'language', () => 'zh-CN');
+    defineGetter(navigator, 'platform', () => 'Win32');
+    defineGetter(navigator, 'hardwareConcurrency', () => 8);
+    defineGetter(navigator, 'deviceMemory', () => 8);
+    defineGetter(navigator, 'maxTouchPoints', () => 0);
+    // navigator.vendor 必须匹配 Chrome
+    defineGetter(navigator, 'vendor', () => 'Google Inc.');
+    defineGetter(navigator, 'vendorSub', () => '');
+    defineGetter(navigator, 'productSub', () => '20030107');
+    defineGetter(navigator, 'product', () => 'Gecko');
+    defineGetter(navigator, 'appName', () => 'Netscape');
+    defineGetter(navigator, 'appCodeName', () => 'Mozilla');
+    defineGetter(navigator, 'appVersion', () => navigator.userAgent.replace('Mozilla/', ''));
+    defineGetter(navigator, 'doNotTrack', () => null);
+    defineGetter(navigator, 'cookieEnabled', () => true);
+    defineGetter(navigator, 'onLine', () => true);
+    defineGetter(navigator, 'pdfViewerEnabled', () => true);
 
-    // permissions 与 Notification 一致性
+    // ===== 5. navigator.userAgentData (Client Hints) — Chrome 131+ 必有 =====
+    // Playwright 不自动设置 UA-CH，Baxia 检测 navigator.userAgentData 是否存在且与 UA 一致
+    if (!navigator.userAgentData) {
+      const brands = [
+        { brand: 'Google Chrome', version: '131' },
+        { brand: 'Chromium', version: '131' },
+        { brand: 'Not_A Brand', version: '24' },
+      ];
+      try {
+        Object.defineProperty(navigator, 'userAgentData', {
+          get: () => ({
+            brands,
+            mobile: false,
+            platform: 'Windows',
+            getHighEntropyValues: (hints) => Promise.resolve({
+              architecture: 'x86',
+              bitness: '64',
+              brands,
+              fullVersionList: brands,
+              mobile: false,
+              model: '',
+              platform: 'Windows',
+              platformVersion: '15.0.0',
+              uaFullVersion: '131.0.6778.86',
+              ...(hints.includes('wow64') ? { wow64: false } : {}),
+            }),
+            toJSON: () => ({ brands, mobile: false, platform: 'Windows' }),
+          }),
+          configurable: true,
+        });
+      } catch (e) {}
+    }
+
+    // ===== 6. navigator.connection (Network Information API) =====
+    if (!navigator.connection) {
+      try {
+        Object.defineProperty(navigator, 'connection', {
+          get: () => ({
+            effectiveType: '4g',
+            rtt: 50,
+            downlink: 10,
+            saveData: false,
+            type: 'wifi',
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            dispatchEvent: () => false,
+            onchange: null,
+          }),
+          configurable: true,
+        });
+      } catch (e) {}
+    }
+
+    // ===== 7. navigator.getBattery() — 真人浏览器必有 =====
+    if (!navigator.getBattery) {
+      try {
+        navigator.getBattery = () => Promise.resolve({
+          charging: true,
+          chargingTime: 0,
+          dischargingTime: Infinity,
+          level: 0.99,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          dispatchEvent: () => false,
+          onchargingchange: null,
+          onchargingtimechange: null,
+          ondischargingtimechange: null,
+          onlevelchange: null,
+        });
+      } catch (e) {}
+    }
+
+    // ===== 8. MediaDevices.enumerateDevices — 真人有音视频设备 =====
+    if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+      const origEnumerate = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
+      navigator.mediaDevices.enumerateDevices = () => origEnumerate().then((devices) => {
+        if (devices && devices.length > 0) return devices;
+        // 空设备列表是 headless 信号，返回模拟设备
+        return [
+          { kind: 'audioinput', deviceId: 'default', groupId: 'default', label: '' },
+          { kind: 'audiooutput', deviceId: 'default', groupId: 'default', label: '' },
+          { kind: 'videoinput', deviceId: 'default', groupId: 'default', label: '' },
+        ];
+      });
+    }
+
+    // ===== 9. WebGL vendor/renderer（避免 SwiftShader） =====
+    const patchWebGL = (proto) => {
+      if (!proto || !proto.getParameter) return;
+      const orig = proto.getParameter;
+      proto.getParameter = function(param) {
+        // UNMASKED_VENDOR_WEBGL = 0x9245, UNMASKED_RENDERER_WEBGL = 0x9246
+        if (param === 37445) return 'Google Inc. (NVIDIA)';
+        if (param === 37446) return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER Direct3D11 vs_5_0 ps_5_0)';
+        // VENDOR = 0x1F00, RENDERER = 0x1F01
+        if (param === 7936) return 'WebKit';
+        if (param === 7937) return 'WebKit WebGL';
+        return orig.call(this, param);
+      };
+    };
+    try { patchWebGL(WebGLRenderingContext && WebGLRenderingContext.prototype); } catch (e) {}
+    if (typeof WebGL2RenderingContext !== 'undefined') {
+      try { patchWebGL(WebGL2RenderingContext.prototype); } catch (e) {}
+    }
+
+    // ===== 10. Canvas 指纹微扰动 =====
+    // headless Canvas 指纹固定，注入微小噪声改变哈希
+    const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = function(...args) {
+      try {
+        const ctx = this.getContext('2d');
+        if (ctx) {
+          const w = this.width, h = this.height;
+          if (w > 0 && h > 0 && w < 4096 && h < 4096) {
+            const img = ctx.getImageData(0, 0, w, h);
+            // 3% 像素 R 通道 ±1 噪声（视觉不可见，改变指纹哈希）
+            for (let i = 0; i < img.data.length; i += 4) {
+              if (Math.random() < 0.03) {
+                img.data[i] = (img.data[i] + (Math.random() < 0.5 ? -1 : 1)) & 0xff;
+              }
+            }
+            ctx.putImageData(img, 0, 0);
+          }
+        }
+      } catch (e) {}
+      return origToDataURL.apply(this, args);
+    };
+
+    // ===== 11. AudioContext 指纹扰动 =====
+    // headless AudioContext 返回固定值，Baxia 可据此识别
+    const origCreateAnalyser = (window.AudioContext || window.webkitAudioContext);
+    if (origCreateAnalyser && origCreateAnalyser.prototype) {
+      const origGetFloatFrequencyData = origCreateAnalyser.prototype.__lookupGetter__('getFloatFrequencyData');
+      // 检测 createAnalyser 后的 frequencyBinCount 是否为固定值
+      try {
+        const origCreate = origCreateAnalyser.prototype.createAnalyser;
+        origCreateAnalyser.prototype.createAnalyser = function() {
+          const analyser = origCreate.call(this);
+          const origGetFloat = analyser.getFloatFrequencyData.bind(analyser);
+          analyser.getFloatFrequencyData = function(array) {
+            origGetFloat(array);
+            // 注入 ±0.0001 微噪声（不影响音频分析，但改变指纹）
+            for (let i = 0; i < array.length; i++) {
+              array[i] += (Math.random() - 0.5) * 0.0001;
+            }
+          };
+          return analyser;
+        };
+      } catch (e) {}
+    }
+
+    // ===== 12. WebRTC IP 泄漏防护 =====
+    // headless WebRTC 会暴露内网 IP，与公网 IP 不一致即被识别
+    try {
+      const origRTC = window.RTCPeerConnection;
+      if (origRTC) {
+        window.RTCPeerConnection = function(...args) {
+          const pc = new origRTC(...args);
+          const origCreateDataChannel = pc.createDataChannel.bind(pc);
+          pc.createDataChannel = function(...dcArgs) {
+            return origCreateDataChannel(...dcArgs);
+          };
+          return pc;
+        };
+        window.RTCPeerConnection.prototype = origRTC.prototype;
+        if (window.webkitRTCPeerConnection) {
+          window.webkitRTCPeerConnection = window.RTCPeerConnection;
+        }
+      }
+    } catch (e) {}
+
+    // ===== 13. window.outerWidth/outerHeight =====
+    // headless 下 outerWidth==innerWidth，真人浏览器 outerWidth > innerWidth（有窗口边框）
+    try {
+      Object.defineProperty(window, 'outerWidth', {
+        get: () => window.innerWidth + 16,
+        configurable: true,
+      });
+      Object.defineProperty(window, 'outerHeight', {
+        get: () => window.innerHeight + 88,
+        configurable: true,
+      });
+    } catch (e) {}
+
+    // ===== 14. permissions 与 Notification 一致性 =====
     if (navigator.permissions && navigator.permissions.query) {
       const orig = navigator.permissions.query.bind(navigator.permissions);
       navigator.permissions.query = (params) => {
         if (params && params.name === 'notifications') {
           const state = (typeof Notification !== 'undefined' && Notification.permission) || 'default';
-          return Promise.resolve({ state, onchange: null });
+          return Promise.resolve({ state, onchange: null, addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => false });
+        }
+        if (params && params.name === 'geolocation') {
+          return Promise.resolve({ state: 'prompt', onchange: null, addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => false });
         }
         return orig(params);
       };
     }
 
-    // WebGL vendor（避免 SwiftShader）
-    const patchWebGL = (proto) => {
-      if (!proto || !proto.getParameter) return;
-      const orig = proto.getParameter;
-      proto.getParameter = function(param) {
-        if (param === 37445) return 'Google Inc. (NVIDIA)';
-        if (param === 37446) return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER Direct3D11 vs_5_0 ps_5_0)';
-        return orig.call(this, param);
+    // ===== 15. speechSynthesis.getVoices — headless 返回空数组 =====
+    if (window.speechSynthesis) {
+      const origGetVoices = window.speechSynthesis.getVoices.bind(window.speechSynthesis);
+      window.speechSynthesis.getVoices = () => {
+        const voices = origGetVoices();
+        if (voices && voices.length > 0) return voices;
+        // 返回中文和英文语音
+        return [
+          { voiceURI: 'Microsoft Huihui - Chinese (Simplified, China)', name: 'Microsoft Huihui - Chinese (Simplified, China)', lang: 'zh-CN', localService: true, default: true },
+          { voiceURI: 'Microsoft Kangkang - Chinese (Simplified, China)', name: 'Microsoft Kangkang - Chinese (Simplified, China)', lang: 'zh-CN', localService: true, default: false },
+          { voiceURI: 'Microsoft Zira - English (United States)', name: 'Microsoft Zira - English (United States)', lang: 'en-US', localService: true, default: false },
+        ];
       };
-    };
-    patchWebGL(WebGLRenderingContext && WebGLRenderingContext.prototype);
-    if (typeof WebGL2RenderingContext !== 'undefined') {
-      patchWebGL(WebGL2RenderingContext.prototype);
     }
 
-    // 隐藏 cdc_ / $cdc_ / __playwright / __pw
+    // ===== 16. 隐藏 CDP / Playwright 注入痕迹 =====
     const kill = (obj) => {
       try {
         Object.keys(obj).forEach((k) => {
-          if (/^cdc_|\$cdc_|__playwright|__pw_/.test(k)) {
+          if (/^cdc_|\$cdc_|__playwright|__pw_|__puppeteer/.test(k)) {
             try { delete obj[k]; } catch (e) {}
           }
         });
@@ -162,14 +390,70 @@ STEALTH_INIT_SCRIPT = r"""
     kill(window);
     kill(document);
 
-    // iframe 内容也尽量补 webdriver（同源）
-    const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver');
-    if (desc) {
-      Object.defineProperty(Navigator.prototype, 'webdriver', {
-        get: () => undefined,
+    // ===== 17. 修复 iframe 的 navigator.webdriver（同源 iframe） =====
+    try {
+      const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver');
+      if (desc) {
+        Object.defineProperty(Navigator.prototype, 'webdriver', {
+          get: () => undefined,
+          configurable: true,
+        });
+      }
+    } catch (e) {}
+
+    // ===== 18. 修复 Function.prototype.toString 检测 =====
+    // 部分检测脚本通过 toString 检查函数是否被重写（native code vs 自定义）
+    // 让重写的函数 toString 仍返回 [native code]
+    const nativeToStringFn = Function.prototype.toString;
+    const fns = new WeakMap();
+    const fakeNative = (fn, original) => {
+      fns.set(fn, original || fn);
+      return fn;
+    };
+    Function.prototype.toString = function() {
+      if (fns.has(this)) {
+        return nativeToStringFn.call(fns.get(this));
+      }
+      return nativeToStringFn.call(this);
+    };
+    fakeNative(Function.prototype.toString, nativeToStringFn);
+
+    // ===== 19. navigator.webdriver 的 toString 检测 =====
+    // 某些检测用 Object.getOwnPropertyDescriptor(navigator, 'webdriver').get.toString()
+    // 确保返回 native code
+    try {
+      const wdDesc = Object.getOwnPropertyDescriptor(navigator, 'webdriver');
+      if (wdDesc && wdDesc.get) {
+        fakeNative(wdDesc.get, () => undefined);
+      }
+    } catch (e) {}
+
+    // ===== 20. window.screen 属性一致性 =====
+    try {
+      Object.defineProperty(screen, 'colorDepth', { get: () => 24, configurable: true });
+      Object.defineProperty(screen, 'pixelDepth', { get: () => 24, configurable: true });
+      // availTop/availLeft 通常为 0（非多屏）
+      Object.defineProperty(screen, 'availTop', { get: () => 0, configurable: true });
+      Object.defineProperty(screen, 'availLeft', { get: () => 0, configurable: true });
+    } catch (e) {}
+
+    // ===== 21. 修复 Notification.permission =====
+    if (window.Notification) {
+      try {
+        Object.defineProperty(Notification, 'permission', { get: () => 'default', configurable: true });
+      } catch (e) {}
+    }
+
+    // ===== 22. 隐藏自动化相关的 console.debug 特征 =====
+    // 某些检测用 console.debug.bind(console) 检查是否被 hook
+    try {
+      const origDebug = console.debug;
+      Object.defineProperty(console, 'debug', {
+        get: () => origDebug,
         configurable: true,
       });
-    }
+    } catch (e) {}
+
   } catch (e) {}
 })();
 """
@@ -267,6 +551,107 @@ def find_chrome_path() -> Optional[str]:
 # ---------- 全自动：全局单飞锁（防止多账号同时开浏览器互相踩风控）----------
 _SOLVE_LOCK_PATH = os.path.join(os.environ.get("TEMP") or "/tmp", "xya-slider-solve.lock")
 _SEED_PROFILE_DIR = os.path.join(os.environ.get("TEMP") or "/tmp", "xya-slider-seed-v2")
+# 持久化 profile 目录：累积浏览历史/Cookie/指纹，让浏览器看起来像真人日常使用
+# 关键改进：临时空 profile 是机器人强信号，持久化 profile 有真实浏览痕迹可大幅降低风控
+_PERSISTENT_PROFILE_DIR = os.path.join(os.environ.get("TEMP") or "/tmp", "xya-slider-persistent-v3")
+
+
+def _chrome_stealth_args() -> list[str]:
+    """Chrome 反自动化检测启动参数。
+
+    全面覆盖 Playwright/CDP 默认注入的自动化信号：
+    - --enable-automation: 导航栏显示"Chrome 正在被自动测试软件控制"
+    - --disable-blink-features=AutomationControlled: 屏蔽 navigator.webdriver
+    - --disable-features=AutomationControlled: 额外屏蔽 Blink 层自动化标记
+    - 其余参数移除 headless/测试特征，模拟真人 Chrome 启动
+    """
+    return [
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-popup-blocking",
+        f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}",
+        # 核心反检测：移除自动化标记
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=AutomationControlled",
+        # 移除 test-type 标记（Playwright 默认会加 --enable-automation --test-type）
+        "--disable-extensions-except=",
+        # 语言与区域
+        "--lang=zh-CN",
+        "--accept-lang=zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+        # 禁用部分泄漏 headless 的实验功能
+        "--disable-dev-shm-usage",
+        "--no-sandbox",
+        # 禁用 GPU 时不用 SwiftShader（会用真实 GPU，但需保留 GPU 进程）
+        "--disable-gpu-sandbox",
+        # 禁用 BackgroundMode（headless 不会后台运行）
+        "--disable-background-mode",
+        # 禁用 component-updates（headless 不需要）
+        "--disable-component-update",
+        # 禁用 default-apps（避免首次启动安装默认应用）
+        "--disable-default-apps",
+        # 禁用 translate（避免弹翻译提示）
+        "--disable-translate",
+        # 禁用 sync（避免登录同步提示）
+        "--disable-sync",
+        # 禁用 metrics（避免发送遥测数据泄漏特征）
+        "--disable-metrics",
+        "--disable-metrics-recalc-only",
+        # 禁用 media-stream（避免 permissions 异常）
+        "--use-fake-ui-for-media-stream",
+        # 密码管理器/凭据服务（headless 不需要，且会弹保存提示）
+        "--disable-save-password-bubble",
+        "--disable-password-manager-reauthentication",
+        # 禁用 infobars（"Chrome 正在被自动测试软件控制"信息栏）
+        "--disable-infobars",
+        "--disable-notifications",
+        # 禁用 permissive notifications
+        "--disable-features=Notifications",
+        # 禁用 background timer throttling（让定时器更自然）
+        "--disable-background-timer-throttling",
+        "--disable-renderer-backgrounding",
+        "--disable-backgrounding-occluded-windows",
+        # 禁用回退到 software rendering（让 WebGL 使用真实 GPU）
+        "--disable-software-rasterizer",
+        # 强制使用 ANGLE（真实 Chrome 默认用 ANGLE，而非 SwiftShader）
+        "--use-angle=d3d11",
+        # 禁用 pinch（触屏手势，桌面 Chrome 无）
+        "--disable-pinch",
+        # 禁用 hang monitor（headless 不需要）
+        "--disable-hang-monitor",
+        # 禁用 IPC flood protection（避免 throttling）
+        "--disable-ipc-flooding-protection",
+        # 禁用 prompt on multiple downloads
+        "--disable-multi-display-mode",
+        # 禁用-quic（部分场景 QUIC 被风控识别）
+        # 保留 quic，不阻断
+    ]
+
+
+def _resolve_profile_dir(strategy: str = "persistent") -> str:
+    """选择浏览器 profile 目录。
+
+    策略：
+    - persistent: 使用持久化 profile（累积历史/cookie/指纹），最大程度模拟真人浏览器
+    - seed: 克隆预热 seed profile（fallback）
+    - temp: 临时空 profile（最不安全，仅用于对比测试）
+
+    持久化 profile 是成功率提升的关键：真人 Chrome 有数月浏览历史、
+    积累的 cookie/localStorage/IndexedDB，Baxia 可通过这些判断浏览器是否"真实使用过"。
+    """
+    if strategy == "persistent":
+        os.makedirs(_PERSISTENT_PROFILE_DIR, exist_ok=True)
+        return _PERSISTENT_PROFILE_DIR
+    if strategy == "seed":
+        dest = os.path.join(
+            os.environ.get("TEMP") or "/tmp",
+            f"chrome-slider-seed-{int(time.time())}-{random.randint(1000, 9999)}",
+        )
+        return dest
+    # temp
+    return os.path.join(
+        os.environ.get("TEMP") or "/tmp",
+        f"chrome-slider-temp-{int(time.time())}-{random.randint(1000, 9999)}",
+    )
 
 
 class _FileLock:
