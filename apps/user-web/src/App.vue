@@ -48,7 +48,15 @@
         </div>
       </PageHeader>
       <div v-if="globalNotice" class="global-notice" :class="globalNotice.type">{{ globalNotice.text }}</div>
-      <component :is="pageComponent" :active="active" :user="currentUserInfo" @navigate="navigate" />
+      <component
+        :is="pageComponent"
+        :active="active"
+        :user="currentUserInfo"
+        :reason="featureUnavailableInfo.reason"
+        :required="featureUnavailableInfo.required"
+        :feature-key="featureUnavailableInfo.featureKey"
+        @navigate="navigate"
+      />
     </main>
   </div>
   <ConfirmModal />
@@ -74,6 +82,7 @@ import { closeSse, connectSse } from './utils/sse.js'
 import { installClientErrorReporter, recordClientError } from './utils/errorReporter.js'
 import { playIncomingMessageSound, primeAudioOnFirstGesture } from './utils/notifySound.js'
 import { warmLiteAccountsList } from './api/accounts.js'
+import { getFeatureSwitchStatus, invalidateFeatureSwitchCache } from './api/feature-switch.js'
 
 const AsyncPageLoading = {
   name: 'AsyncPageLoading',
@@ -130,14 +139,17 @@ const pageMap = {
   'settings-notify': asyncPage(() => import('./pages/settings/NotifySettings.vue')),
   vip: asyncPage(() => import('./pages/VipPage.vue')),
   profile: asyncPage(() => import('./pages/ProfileCenterPage.vue')),
-  'user-manual': asyncPage(() => import('./pages/UserManualPage.vue'))
+  'user-manual': asyncPage(() => import('./pages/UserManualPage.vue')),
+  'feature-unavailable': asyncPage(() => import('./pages/FeatureUnavailablePage.vue'))
 }
 
 const settingsKeys = ['settings-ai-cs', 'settings-product', 'settings-about']
 const authPages = ['login', 'register', 'forgot-password']
 const defaultPage = 'dashboard'
 const profileEntryStorageKey = 'xya_profile_initial_tab'
-const pagesWithEmbeddedTitle = new Set(['messages', 'message-center', 'delivery-statement', 'delivery-mall'])
+const pagesWithEmbeddedTitle = new Set(['messages', 'message-center', 'delivery-statement', 'delivery-mall', 'feature-unavailable'])
+// 功能开关检查跳过的页面：登录/注册/忘记密码/占位页/工作台（避免登录后卡死）
+const featureSwitchSkipPages = new Set(['login', 'register', 'forgot-password', 'feature-unavailable', 'dashboard'])
 const profileEntryTabs = new Set(['overview', 'security', 'token'])
 const mobileLitePages = new Set([
   'dashboard',
@@ -164,6 +176,8 @@ const displaySseStatus = ref('disconnected')
 const globalNotice = ref(null)
 const isMobile = ref(false)
 const mobileDesktopOverride = ref(localStorage.getItem('xya_mobile_desktop_override') === '1')
+// 功能开关拦截信息（传递给 FeatureUnavailablePage）
+const featureUnavailableInfo = ref({ reason: 'disabled', required: '', featureKey: '' })
 let noticeTimer = null
 let mediaSessionTimer = null
 // 程序式导航（navigate 设置 location.hash）触发的 hashchange 不再走守卫，避免重复弹窗
@@ -226,6 +240,36 @@ function showNotice(text, type = 'info') {
   }, 4500)
 }
 
+/**
+ * 功能开关检查：判断目标页面是否对当前用户开放。
+ * 返回 { allowed: true } 或 { allowed: false, reason, required }。
+ * 失败降级：API 异常时默认放行，避免后端故障锁死所有页面。
+ */
+async function checkFeatureSwitch(pageKey) {
+  if (featureSwitchSkipPages.has(pageKey)) return { allowed: true }
+  // 仅对已知页面（pageMap 或 settingsKeys）检查，避免对未知 key 误拦
+  if (!pageMap[pageKey] && !settingsKeys.includes(pageKey)) return { allowed: true }
+  try {
+    const status = await getFeatureSwitchStatus()
+    if (!status || typeof status !== 'object') return { allowed: true }
+    const accessible = status.accessible || {}
+    const blocked = status.blocked || {}
+    if (accessible[pageKey] === true) return { allowed: true }
+    if (blocked[pageKey]) {
+      const info = blocked[pageKey]
+      return {
+        allowed: false,
+        reason: info.reason || 'disabled',
+        required: info.required_level || ''
+      }
+    }
+    return { allowed: true }
+  } catch (e) {
+    recordClientError(e, { source: 'feature_switch_check' })
+    return { allowed: true }
+  }
+}
+
 async function navigate(key) {
   const requested = key || defaultPage
   const next = normalizePageKey(requested)
@@ -241,6 +285,19 @@ async function navigate(key) {
   // 离开当前页前，交由导航守卫处理草稿询问等逻辑
   const allowed = await runNavigationGuard()
   if (!allowed) return
+  // 功能开关检查：被拦截时跳转到占位页
+  const switchResult = await checkFeatureSwitch(next)
+  if (!switchResult.allowed) {
+    featureUnavailableInfo.value = {
+      reason: switchResult.reason || 'disabled',
+      required: switchResult.required || '',
+      featureKey: next
+    }
+    suppressHashGuard = true
+    location.hash = '#/feature-unavailable'
+    active.value = 'feature-unavailable'
+    return
+  }
   suppressHashGuard = true
   location.hash = `#/${next}`
   active.value = next
@@ -311,6 +368,19 @@ async function handleGuardedHashNavigation(next) {
     location.hash = `#/${active.value}`
     return
   }
+  // 功能开关检查：被拦截时跳转到占位页
+  const switchResult = await checkFeatureSwitch(next)
+  if (!switchResult.allowed) {
+    featureUnavailableInfo.value = {
+      reason: switchResult.reason || 'disabled',
+      required: switchResult.required || '',
+      featureKey: next
+    }
+    suppressHashGuard = true
+    location.hash = '#/feature-unavailable'
+    active.value = 'feature-unavailable'
+    return
+  }
   const previous = active.value
   active.value = next
   if (authPages.includes(next) && next !== previous) authNotice.value = ''
@@ -370,6 +440,7 @@ async function handleLoginSuccess(payload) {
   loggingIn.value = true
   try {
     invalidateCurrentUserCache()
+    invalidateFeatureSwitchCache()
     setAuth(token, payload.username)
     await initializeMediaSession()
     currentUserInfo.value = buildDefaultUserInfo(payload?.username || getCachedUsername() || '当前用户')
@@ -394,6 +465,7 @@ async function handleLogout() {
   clearWarmupTimers()
   clearMediaSessionTimer()
   invalidateCurrentUserCache()
+  invalidateFeatureSwitchCache()
   let logoutWarning = ''
   try {
     await logoutApi()

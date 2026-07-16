@@ -95,6 +95,7 @@ export const adminRoutes: AppRouteRecord[] = [
     meta: { title: '系统运维', icon: 'ri:settings-4-line', roles: ADMIN_OPERATORS },
     children: [
       { path: 'settings', name: 'AdminSystemSettings', component: '/admin/ops/settings/index', meta: { title: '系统配置', icon: 'ri:settings-line', roles: SUPER_ONLY } as any },
+      { path: 'feature-switch', name: 'AdminFeatureSwitch', component: '/admin/ops/feature-switch/index', meta: { title: '功能管理', icon: 'ri:toggle-line', roles: SUPER_ONLY } as any },
       { path: 'audit-logs', name: 'AdminAuditLogs', component: '/admin/ops/audit-logs/index', meta: { title: '操作审计日志', icon: 'ri:shield-check-line', roles: ADMIN_OPERATORS } as any },
       { path: 'client-errors', name: 'AdminClientErrors', component: '/admin/ops/client-errors/index', meta: { title: '前端错误日志', icon: 'ri:bug-line', roles: SUPER_ONLY } as any },
       { path: 'runtime', name: 'AdminRuntime', component: moduleComponent, meta: { title: '运行日志', icon: 'ri:terminal-box-line', moduleKey: 'runtime', roles: ADMIN_OPERATORS } as any },
