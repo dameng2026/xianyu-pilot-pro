@@ -127,27 +127,12 @@ async def assert_auto_solve_allowed(
     *,
     force: bool = False,
 ) -> Optional[dict[str, Any]]:
-    """若处于冷却期返回阻断信息 dict；允许则返回 None。"""
-    if force:
-        return None
-    st = await get_backoff_status(account_id, tenant_id)
-    if st.get("allowed"):
-        return None
-    remaining = int(st.get("remainingSec") or 0)
-    mins = max(1, (remaining + 59) // 60)
-    return {
-        "success": False,
-        "solved": False,
-        "captchaDetected": False,
-        "attempts": 0,
-        "errorCode": "CAPTCHA_BACKOFF",
-        "error": (
-            f"全自动滑块冷却中：连续失败 {st.get('failCount')} 次，"
-            f"请约 {mins} 分钟后再试（指数退避，最高 6 小时）"
-        ),
-        "durationMs": 0,
-        "backoff": st,
-    }
+    """若处于冷却期返回阻断信息 dict；允许则返回 None。
+
+    冷却限制已取消：始终返回 None，允许立即重试。失败计数仍会记录到
+    xianyu_captcha_backoff 表以便观察，但不再阻断求解。
+    """
+    return None
 
 
 async def record_solve_success(account_id: int, tenant_id: int) -> None:

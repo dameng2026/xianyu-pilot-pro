@@ -35,9 +35,14 @@ export const navGroups = [
   ]}
 ]
 
+// 数据同步板块仅在本地开发环境显示（VITE_SHOW_DATA_SYNC=true）
+// 商业版（线上生产）不设置此变量，数据同步 tab 不会出现在设置页
+const showDataSync = import.meta.env.VITE_SHOW_DATA_SYNC === 'true'
+
 export const settingsTabs = [
   { key: 'settings-ai-cs', label: 'AI客服配置', icon: 'message' },
   { key: 'settings-product', label: '商品操作', icon: 'product' },
+  ...(showDataSync ? [{ key: 'settings-sync', label: '数据同步', icon: 'data' }] : []),
   { key: 'settings-about', label: '关于', icon: 'help' }
 ]
 
@@ -68,6 +73,7 @@ export const pageTitles = {
   feedback: ['反馈建议', '提交产品建议、Bug 反馈与功能诉求'],
   'settings-ai-cs': ['系统设置 / AI客服配置', '管理 AI 客服相关配置'],
   'settings-product': ['系统设置 / 商品操作', '管理商品相关系统级配置'],
+  'settings-sync': ['系统设置 / 数据同步', '将本地配置一键同步到线上服务器'],
   'settings-notify': ['', ''],
   'settings-about': ['系统设置 / 关于', '查看版本信息与服务支持'],
   vip: ['VIP会员中心', '查看会员能力与套餐信息'],

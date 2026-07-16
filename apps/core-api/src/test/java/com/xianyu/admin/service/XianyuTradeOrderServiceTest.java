@@ -93,15 +93,15 @@ class XianyuTradeOrderServiceTest {
         order.setExternalOrderId("ORDER-101");
         order.setOrderStatus(3);
 
-        when(orderMapper.count(1L, null, null, null)).thenReturn(1);
-        when(orderMapper.list(1L, null, null, null, 0, 20)).thenReturn(List.of(order));
+        when(orderMapper.count(1L, null, null, null, null)).thenReturn(1);
+        when(orderMapper.list(1L, null, null, null, null, 0, 20)).thenReturn(List.of(order));
         when(jdbcTemplate.queryForList(contains("FROM xianyu_trade_order_item"), eq(1L), eq(101L)))
                 .thenReturn(List.of(
                         Map.of("order_id", 101L, "goods_title", "Pack A", "goods_count", 2),
                         Map.of("order_id", 101L, "goods_title", "Pack B", "goods_count", 1)
                 ));
 
-        PageResult<XianyuTradeOrderVO> result = service.page(1L, null, null, null, 1, 20);
+        PageResult<XianyuTradeOrderVO> result = service.page(1L, null, null, null, null, 1, 20);
 
         assertEquals("Pack A x2 / Pack B x1", result.getRecords().get(0).getItemSummary());
         assertEquals(3, result.getRecords().get(0).getQuantityTotal());

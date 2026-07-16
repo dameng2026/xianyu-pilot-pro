@@ -28,8 +28,9 @@ import java.util.*;
 public class BusinessSettingsService {
     private static final Logger log = LoggerFactory.getLogger(BusinessSettingsService.class);
     private static final String AI_CS_SETTING_KEY = "ai-customer-service";
+    private static final String DATA_SYNC_SETTING_KEY = "data-sync-config";
     private static final Set<String> ALLOWED_SETTING_KEYS = Set.of(
-            AI_CS_SETTING_KEY, "message-settings", "delivery-settings", "product-op-settings");
+            AI_CS_SETTING_KEY, "message-settings", "delivery-settings", "product-op-settings", DATA_SYNC_SETTING_KEY);
     private static final int MAX_CONFIG_JSON_LENGTH = 200_000;
 
     private final JdbcTemplate jdbcTemplate;
@@ -212,6 +213,17 @@ public class BusinessSettingsService {
                 config.put("allowAutoAdjustPrice", false);
                 config.put("syncOnLogin", true);
                 config.put("notifyOnShelfOff", true);
+            }
+            case "data-sync-config" -> {
+                // 数据同步配置（本地 → 线上）
+                // 预配置连接信息：用户无需手动填写即可直接执行同步
+                config.put("targetBaseUrl", "http://1.12.66.249:18080");
+                config.put("targetUsername", "slfasd");
+                config.put("targetToken", "HIDpsuvrKSlWfczLiFTJa0Ydhqm8gx7Q");
+                config.put("sourceAccountId", null);
+                config.put("lastSyncAt", null);
+                config.put("lastSyncStatus", null);
+                config.put("lastSyncMessage", null);
             }
             default -> {
                 throw new BizException(400, "不支持的配置分类");

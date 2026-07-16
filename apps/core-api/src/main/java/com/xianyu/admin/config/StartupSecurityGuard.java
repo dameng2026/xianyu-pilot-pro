@@ -46,6 +46,7 @@ public class StartupSecurityGuard implements ApplicationRunner {
         requireStrong("OPS_METRICS_TOKEN", property("ops.metrics.token"), 32);
         requireStrong("SPRING_DATASOURCE_PASSWORD", property("spring.datasource.password"), 32);
         requireStrong("REDIS_PASSWORD", property("spring.data.redis.password"), 32);
+        requireStrong("DATA_SYNC_API_TOKEN", property("xianyu.sync.token"), 32);
 
         if (Boolean.parseBoolean(property("admin.seed.enabled", "false"))) {
             throw new IllegalStateException("ADMIN_SEED_ENABLED must be false in prod/staging");

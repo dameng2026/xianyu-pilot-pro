@@ -78,12 +78,23 @@
         <div class="toolbar">
           <span class="subtle">用于查看当前货源已经绑定过的商品</span>
           <AppButton @click="refreshSelectedGoods">刷新商品列表</AppButton>
+          <AppButton
+            :disabled="!goodsAvailable || selectedConfiguredIds.length === 0"
+            @click="batchRemoveConfiguredGoods"
+          >批量删除</AppButton>
         </div>
         <EmptyState v-if="goodsLoading" title="正在加载商品数据" description="正在读取当前货源的已配置商品。" />
         <EmptyState v-else-if="goodsLoadError" variant="error" title="已配置商品暂时无法加载" :description="goodsLoadError">
           <template #actions><AppButton @click="refreshSelectedGoods">重新加载</AppButton></template>
         </EmptyState>
-        <BaseTable v-else :columns="configuredColumns" :rows="filteredConfiguredGoods">
+        <BaseTable
+          v-else
+          v-model:selected-keys="selectedConfiguredIds"
+          :columns="configuredColumns"
+          :rows="filteredConfiguredGoods"
+          :selectable="true"
+          :row-key="row => row.id"
+        >
           <template #title="{ row }">
             <div class="goods-cell">
               <img v-if="goodsCover(row)" :src="goodsCover(row)" class="goods-thumb" alt="" />
@@ -212,6 +223,7 @@ const goodsAvailable = ref(false)
 const goodsLoading = ref(false)
 const goodsLoadError = ref('')
 const selectedGoodsIds = ref([])
+const selectedConfiguredIds = ref([])
 const applyTiming = ref('payDelivery')
 const goodsKeyword = ref('')
 const goodsView = ref('all')
@@ -369,6 +381,7 @@ function clearSelected() {
   goodsLoading.value = false
   goodsLoadError.value = ''
   selectedGoodsIds.value = []
+  selectedConfiguredIds.value = []
   goodsView.value = 'all'
 }
 
@@ -436,6 +449,7 @@ async function loadSelectedGoods(sourceId = selected.value?.id) {
     configuredGoods.value = data.configuredGoods
     allGoods.value = data.allGoods
     goodsAvailable.value = true
+    selectedConfiguredIds.value = []
   } catch (loadFailure) {
     configuredGoods.value = []
     allGoods.value = []
@@ -555,17 +569,58 @@ async function removeConfiguredGoods(row) {
   })) return
   try {
     await removeDeliverySourceFromGoods(selected.value.id, row.id)
-    success.value = '已删除已配置商品'
   } catch (e) {
     error.value = e.message || '删除失败'
     return
   }
-  try {
-    await loadSelectedGoods(selected.value.id)
-    await loadSources()
-  } catch (refreshError) {
-    error.value = `删除已提交，但刷新商品绑定状态失败：${refreshError?.message || '请手动刷新'}。`
+  // 无感刷新：本地移除被删商品，不触发整表 loading
+  configuredGoods.value = configuredGoods.value.filter(item => String(item.id) !== String(row.id))
+  selectedConfiguredIds.value = selectedConfiguredIds.value.filter(id => String(id) !== String(row.id))
+  if (typeof selected.value.usageCount === 'number') {
+    selected.value = { ...selected.value, usageCount: Math.max(0, selected.value.usageCount - 1) }
   }
+  success.value = '已删除已配置商品'
+  // 静默同步货源列表计数（不阻塞、不显示 loading）
+  loadSources().catch(() => {})
+}
+
+async function batchRemoveConfiguredGoods() {
+  if (!sourcesAvailable.value || !goodsAvailable.value) return
+  if (!selected.value) return
+  const ids = [...selectedConfiguredIds.value]
+  if (ids.length === 0) return
+  if (!await confirmAction({
+    title: `确认删除选中的 ${ids.length} 个已配置商品？`,
+    description: '删除后将解除这些商品与当前货源的绑定关系，相关商品的发货配置将被禁用。',
+    dangerous: true,
+    confirmText: '删除'
+  })) return
+  const sourceId = selected.value.id
+  const results = await Promise.allSettled(ids.map(goodsId => removeDeliverySourceFromGoods(sourceId, goodsId)))
+  const successIds = new Set()
+  let failureCount = 0
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') {
+      successIds.add(String(ids[i]))
+    } else {
+      failureCount += 1
+    }
+  })
+  // 无感刷新：仅移除删除成功的商品
+  if (successIds.size > 0) {
+    configuredGoods.value = configuredGoods.value.filter(item => !successIds.has(String(item.id)))
+    selectedConfiguredIds.value = selectedConfiguredIds.value.filter(id => !successIds.has(String(id)))
+    if (typeof selected.value.usageCount === 'number') {
+      selected.value = { ...selected.value, usageCount: Math.max(0, selected.value.usageCount - successIds.size) }
+    }
+  }
+  if (failureCount > 0) {
+    error.value = `部分删除失败：成功 ${successIds.size} 个，失败 ${failureCount} 个`
+  } else {
+    success.value = `已删除 ${successIds.size} 个已配置商品`
+  }
+  // 静默同步货源列表计数
+  loadSources().catch(() => {})
 }
 
 async function refreshSelectedGoods() {

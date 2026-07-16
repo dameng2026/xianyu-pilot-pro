@@ -49,7 +49,7 @@ class UploadStorageGovernanceServiceTest {
     }
 
     @Test
-    void rejectsGlobalLimitsSmallerThanTenantLimits() {
+    void rejectsGlobalConcurrencySmallerThanTenantConcurrency() {
         Environment environment = mock(Environment.class);
         when(environment.acceptsProfiles(any(Profiles.class))).thenReturn(false);
         UploadStorageGovernanceService service = new UploadStorageGovernanceService(
@@ -61,6 +61,22 @@ class UploadStorageGovernanceServiceTest {
         );
 
         assertThrows(IllegalStateException.class, service::init);
+    }
+
+    @Test
+    void tenantAndGlobalQuotaFieldsAreAcceptedButNotEnforced() {
+        // 存储配额字段已不再用于 enforcement：即使设置为极小值，初始化也能成功。
+        Environment environment = mock(Environment.class);
+        when(environment.acceptsProfiles(any(Profiles.class))).thenReturn(false);
+        UploadStorageGovernanceService service = new UploadStorageGovernanceService(
+                mock(JdbcTemplate.class),
+                mock(PlatformTransactionManager.class),
+                new UploadPathConfig("uploads"),
+                environment,
+                "true", "1", "1", "30", "60", "2", "8"
+        );
+
+        service.init();
     }
 
     @Test

@@ -116,6 +116,7 @@ required=(
   CRAWLER_DB_PASSWORD
   REDIS_PASSWORD
   ADMIN_JWT_SECRET
+  JWT_SECRET
   COOKIE_CRYPTO_SECRET
   INTERNAL_API_TOKEN
   OPS_METRICS_TOKEN
@@ -124,8 +125,6 @@ required=(
   JWT_EXPIRE_SECONDS
   MEDIA_COOKIE_SECURE
   MEDIA_SESSION_MAX_AGE_SECONDS
-  UPLOAD_TENANT_QUOTA_BYTES
-  UPLOAD_GLOBAL_QUOTA_BYTES
   UPLOAD_RATE_LIMIT_REQUESTS
   UPLOAD_RATE_LIMIT_WINDOW_SECONDS
   UPLOAD_MAX_CONCURRENT_PER_TENANT
@@ -354,7 +353,7 @@ ok "Migration manifest and recovery evidence passed"
 declare -A seen_production_credentials=()
 for credential_key in \
   MYSQL_ROOT_PASSWORD MYSQL_APP_PASSWORD CRAWLER_DB_PASSWORD REDIS_PASSWORD \
-  ADMIN_JWT_SECRET COOKIE_CRYPTO_SECRET INTERNAL_API_TOKEN OPS_METRICS_TOKEN; do
+  ADMIN_JWT_SECRET JWT_SECRET COOKIE_CRYPTO_SECRET INTERNAL_API_TOKEN OPS_METRICS_TOKEN; do
   credential_value="${!credential_key}"
   [[ -z "${seen_production_credentials[$credential_value]+x}" ]] \
     || fail "Production credentials must be distinct"
@@ -407,8 +406,6 @@ fi
 # unbounded storage limits would otherwise be discovered only after the live
 # source cutover and force an avoidable rollback.
 for key in \
-  UPLOAD_TENANT_QUOTA_BYTES \
-  UPLOAD_GLOBAL_QUOTA_BYTES \
   UPLOAD_RATE_LIMIT_REQUESTS \
   UPLOAD_RATE_LIMIT_WINDOW_SECONDS \
   UPLOAD_MAX_CONCURRENT_PER_TENANT \
@@ -418,12 +415,6 @@ for key in \
   [[ "$value" =~ ^[1-9][0-9]{0,13}$ ]] || fail "$key must be a positive canonical integer"
 done
 
-if (( UPLOAD_TENANT_QUOTA_BYTES < 5242880 || UPLOAD_TENANT_QUOTA_BYTES > 1099511627776 )); then
-  fail "UPLOAD_TENANT_QUOTA_BYTES must be between 5 MiB and 1 TiB"
-fi
-if (( UPLOAD_GLOBAL_QUOTA_BYTES < UPLOAD_TENANT_QUOTA_BYTES || UPLOAD_GLOBAL_QUOTA_BYTES > 10995116277760 )); then
-  fail "UPLOAD_GLOBAL_QUOTA_BYTES must be at least the tenant quota and at most 10 TiB"
-fi
 if (( UPLOAD_RATE_LIMIT_REQUESTS < 1 || UPLOAD_RATE_LIMIT_REQUESTS > 10000 )); then
   fail "UPLOAD_RATE_LIMIT_REQUESTS must be between 1 and 10000"
 fi
@@ -439,7 +430,7 @@ fi
 if (( UPLOAD_RETENTION_DAYS < 1 || UPLOAD_RETENTION_DAYS > 3650 )); then
   fail "UPLOAD_RETENTION_DAYS must be between 1 and 3650"
 fi
-ok "Upload quota, rate, concurrency, and retention limits passed"
+ok "Upload rate, concurrency, and retention limits passed"
 
 # Compose must never start the commercial stack with unbounded memory, CPU or
 # process counts. These checks validate syntax and broad safety bounds only;

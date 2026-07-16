@@ -13,6 +13,7 @@ import ConfigNav from '../components/ConfigNav.vue'
 import AiCsSettings from './settings/AiCsSettings.vue'
 import ProductOpSettings from './settings/ProductOpSettings.vue'
 import NotifySettings from './settings/NotifySettings.vue'
+import SyncSettings from './settings/SyncSettings.vue'
 import AboutSettings from './settings/AboutSettings.vue'
 
 const props = defineProps({ active: String })
@@ -21,6 +22,7 @@ const emit = defineEmits(['navigate'])
 const map = {
   'settings-ai-cs': AiCsSettings,
   'settings-product': ProductOpSettings,
+  'settings-sync': SyncSettings,
   'settings-about': AboutSettings,
   'settings-notify': NotifySettings
 }

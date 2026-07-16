@@ -33,6 +33,10 @@ export interface SlideSolveOptions {
   timeoutMs?: number;     // 单次操作超时，默认 30000
   /** 账号绑定代理（全自动固定出口） */
   proxy?: { server: string; username?: string; password?: string };
+  /** profile 选择策略：persistent（持久化，默认）/ seed（克隆预热）/ temp（临时空） */
+  profileStrategy?: 'persistent' | 'seed' | 'temp';
+  /** 全自动失败后保留浏览器窗口供人工拖拽（120 秒超时） */
+  semiAutoFallback?: boolean;
 }
 
 export interface SlideSolveResult {
@@ -1409,6 +1413,13 @@ async function solveSliderViaPythonScript(
       args.push('--proxy-server', options.proxy.server);
       if (options.proxy.username) args.push('--proxy-username', options.proxy.username);
       if (options.proxy.password) args.push('--proxy-password', options.proxy.password);
+    }
+    // 传递 profile 策略（默认 persistent 持久化，累积浏览历史降低风控）
+    const profileStrategy = options.profileStrategy || 'persistent';
+    args.push('--profile-strategy', profileStrategy);
+    // 传递半自动人工兜底开关
+    if (options.semiAutoFallback) {
+      args.push('--semi-auto-fallback');
     }
     const child = spawn(pythonPath!, args, {
       stdio: ['ignore', 'pipe', 'pipe'],

@@ -696,7 +696,7 @@ app.get('/api/goofish/stores/:userId/items', async (req, res) => {
 app.post('/api/goofish/slide-solve', async (req, res) => {
   try {
     const tenantId = tenantIdFrom(req);
-    const { cookie, targetUrl, headless, maxRetries, timeoutMs, proxy } = req.body || {};
+    const { cookie, targetUrl, headless, maxRetries, timeoutMs, proxy, profileStrategy, semiAutoFallback } = req.body || {};
     let cookieStr: string;
     try {
       cookieStr = normalizeCookieInput(cookie);
@@ -741,6 +741,10 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
           maxRetries: Math.max(1, Math.min(Number(maxRetries) || 5, 8)),
           timeoutMs: Math.max(5000, Math.min(Number(timeoutMs) || 90000, 180000)),
           proxy: safeProxy,
+          // profile 策略：persistent（默认持久化，累积历史降低风控）/ seed / temp
+          profileStrategy: (profileStrategy === 'seed' || profileStrategy === 'temp') ? profileStrategy : 'persistent',
+          // 半自动人工兜底：全自动失败后保留窗口供人工拖拽
+          semiAutoFallback: semiAutoFallback === true,
         });
       } finally {
         releaseBrowser();

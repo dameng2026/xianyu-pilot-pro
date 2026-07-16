@@ -25,10 +25,18 @@ import time
 from typing import Any, Optional
 
 try:
-    from playwright.async_api import async_playwright
+    # patchright 是 Playwright 的反检测分支，自动清理 CDP 痕迹（cdc_/__playwright__/Runtime.enable），
+    # 从根本上解决 Baxia 通过 CDP 协议识别 Playwright 控制的问题。
+    # API 完全兼容 Playwright，只需替换 import。
+    from patchright.async_api import async_playwright
+    _USING_PATCHRIGHT = True
 except ImportError:
-    print("ERROR: playwright is not installed. Run: pip install playwright", file=sys.stderr)
-    sys.exit(2)
+    try:
+        from playwright.async_api import async_playwright
+        _USING_PATCHRIGHT = False
+    except ImportError:
+        print("ERROR: patchright/playwright is not installed. Run: pip install patchright", file=sys.stderr)
+        sys.exit(2)
 
 WINDOW_WIDTH = 1366
 WINDOW_HEIGHT = 768
@@ -459,6 +467,188 @@ STEALTH_INIT_SCRIPT = r"""
 """
 
 
+# patchright 模式专用：只包含 patchright 不处理的高级指纹规避。
+# patchright 自动处理 navigator.webdriver / userAgentData / CDP 痕迹，
+# 但不处理 window.chrome / WebGL/Canvas/Audio/WebRTC/connection/getBattery/MediaDevices/speechSynthesis 等指纹维度。
+# 注入这个脚本补充高级指纹规避，避免与 patchright 冲突。
+_ADVANCED_FINGERPRINT_SCRIPT = r"""
+(() => {
+  const defineGetter = (obj, prop, getter) => {
+    try {
+      Object.defineProperty(obj, prop, { get: getter, configurable: true });
+    } catch (e) {}
+  };
+
+  try {
+    // ===== 1. window.chrome 完整对象（patchright 不补全 chrome.runtime，Baxia 检测 chrome.runtime） =====
+    // 用 Object.defineProperty 强制定义，避免 patchright 用 writable:false 导致赋值静默失败
+    if (!window.chrome) {
+      try { Object.defineProperty(window, 'chrome', { value: {}, writable: true, configurable: true }); } catch (e) { window.chrome = {}; }
+    }
+    // 强制设置 runtime（即使 chrome 对象是只读的）
+    const runtimeObj = {
+      OnInstalledReason: { INSTALL: 'install', UPDATE: 'update', CHROME_UPDATE: 'chrome_update', SHARED_MODULE_UPDATE: 'shared_module_update' },
+      OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' },
+      PlatformArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64' },
+      PlatformOs: { MAC: 'mac', WIN: 'win', ANDROID: 'android', CROS: 'cros', LINUX: 'linux', OPENBSD: 'openbsd' },
+      id: undefined,
+      connect: () => {},
+      sendMessage: () => {},
+    };
+    try {
+      Object.defineProperty(window.chrome, 'runtime', { value: runtimeObj, writable: true, configurable: true, enumerable: true });
+    } catch (e) {
+      try { window.chrome.runtime = runtimeObj; } catch (e2) {}
+    }
+    if (!window.chrome.csi) {
+      try { Object.defineProperty(window.chrome, 'csi', { value: () => ({ startE: Date.now() - Math.floor(Math.random() * 3000 + 2000), onloadT: Date.now(), pageT: Math.random() * 2000 + 500, tran: 15 }), writable: true, configurable: true }); } catch (e) { window.chrome.csi = () => ({ startE: Date.now() - 2000, onloadT: Date.now(), pageT: 500, tran: 15 }); }
+    }
+    if (!window.chrome.loadTimes) {
+      const t = Date.now() / 1000;
+      const ltFn = () => ({
+        commitLoadTime: t - 4, connectionInfo: 'h2', finishDocumentLoadTime: t - 2,
+        finishLoadTime: t - 1.5, firstPaintAfterLoadTime: t - 1.8, firstPaintTime: t - 3,
+        navigationType: 'Other', npnNegotiatedProtocol: 'h2', requestTime: t - 5,
+        startLoadTime: t - 5, wasAlternateProtocolAvailable: false,
+        wasFetchedViaSpdy: true, wasNpnNegotiated: true,
+      });
+      try { Object.defineProperty(window.chrome, 'loadTimes', { value: ltFn, writable: true, configurable: true }); } catch (e) { window.chrome.loadTimes = ltFn; }
+    }
+    if (!window.chrome.app) {
+      const appObj = { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' }, RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' } };
+      try { Object.defineProperty(window.chrome, 'app', { value: appObj, writable: true, configurable: true }); } catch (e) { window.chrome.app = appObj; }
+    }
+
+    // ===== 2. navigator.languages（patchright 只设 zh-CN，真人有多个语言） =====
+    defineGetter(navigator, 'languages', () => ['zh-CN', 'zh', 'en-US', 'en']);
+
+    // ===== 3. speechSynthesis.getVoices（headless 返回空，真人有 voices） =====
+    try {
+      if (window.speechSynthesis) {
+        const origGetVoices = window.speechSynthesis.getVoices.bind(window.speechSynthesis);
+        const fakeVoices = [
+          { default: true, lang: 'zh-CN', localService: true, name: 'Microsoft Huihui - Chinese (Simplified, China)', voiceURI: 'Microsoft Huihui - Chinese (Simplified, China)' },
+          { default: false, lang: 'zh-CN', localService: true, name: 'Microsoft Kangkang - Chinese (Simplified, China)', voiceURI: 'Microsoft Kangkang - Chinese (Simplified, China)' },
+          { default: false, lang: 'zh-TW', localService: true, name: 'Microsoft Hanhan - Chinese (Traditional, Taiwan)', voiceURI: 'Microsoft Hanhan - Chinese (Traditional, Taiwan)' },
+          { default: false, lang: 'en-US', localService: true, name: 'Microsoft Zira - English (United States)', voiceURI: 'Microsoft Zira - English (United States)' },
+          { default: false, lang: 'en-US', localService: true, name: 'Microsoft David - English (United States)', voiceURI: 'Microsoft David - English (United States)' },
+        ];
+        window.speechSynthesis.getVoices = () => {
+          const real = origGetVoices();
+          return (real && real.length > 0) ? real : fakeVoices;
+        };
+      }
+    } catch (e) {}
+
+    // ===== 4. navigator.connection (Network Information API) =====
+    if (!navigator.connection) {
+      try {
+        Object.defineProperty(navigator, 'connection', {
+          get: () => ({
+            effectiveType: '4g', rtt: 50, downlink: 10, saveData: false, type: 'wifi',
+            addEventListener: () => {}, removeEventListener: () => {},
+            dispatchEvent: () => false, onchange: null,
+          }),
+          configurable: true,
+        });
+      } catch (e) {}
+    }
+
+    // ===== 5. navigator.getBattery() =====
+    if (!navigator.getBattery) {
+      try {
+        navigator.getBattery = () => Promise.resolve({
+          charging: true, chargingTime: 0, dischargingTime: Infinity, level: 0.99,
+          addEventListener: () => {}, removeEventListener: () => {},
+          dispatchEvent: () => false,
+          onchargingchange: null, onchargingtimechange: null,
+          ondischargingtimechange: null, onlevelchange: null,
+        });
+      } catch (e) {}
+    }
+
+    // ===== 6. MediaDevices.enumerateDevices =====
+    if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+      const origEnumerate = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
+      navigator.mediaDevices.enumerateDevices = () => origEnumerate().then((devices) => {
+        if (devices && devices.length > 0) return devices;
+        return [
+          { kind: 'audioinput', deviceId: 'default', groupId: 'default', label: '' },
+          { kind: 'audiooutput', deviceId: 'default', groupId: 'default', label: '' },
+          { kind: 'videoinput', deviceId: 'default', groupId: 'default', label: '' },
+        ];
+      });
+    }
+
+    // ===== 7. WebGL vendor/renderer（保留真实 GPU 信息，不修改） =====
+    // 注意：之前修改为 NVIDIA GTX 1660 SUPER，但实际 GPU 是 AMD Radeon RX 7700 XT，
+    // 修改会导致 WebGL 指纹与实际 GPU 不一致，反而更可疑。
+    // patchright 用真实 Chrome，WebGL 指纹是真实的，不需要修改。
+
+    // ===== 8. Canvas 指纹微扰动 =====
+    const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = function(...args) {
+      try {
+        const ctx = this.getContext('2d');
+        if (ctx) {
+          const w = this.width, h = this.height;
+          if (w > 0 && h > 0 && w < 4096 && h < 4096) {
+            const img = ctx.getImageData(0, 0, w, h);
+            for (let i = 0; i < img.data.length; i += 4) {
+              if (Math.random() < 0.03) {
+                img.data[i] = (img.data[i] + (Math.random() < 0.5 ? -1 : 1)) & 0xff;
+              }
+            }
+            ctx.putImageData(img, 0, 0);
+          }
+        }
+      } catch (e) {}
+      return origToDataURL.apply(this, args);
+    };
+
+    // ===== 9. AudioContext 指纹扰动 =====
+    const origCreateAnalyser = (window.AudioContext || window.webkitAudioContext);
+    if (origCreateAnalyser && origCreateAnalyser.prototype) {
+      try {
+        const origCreate = origCreateAnalyser.prototype.createAnalyser;
+        origCreateAnalyser.prototype.createAnalyser = function() {
+          const analyser = origCreate.call(this);
+          const origGetFloat = analyser.getFloatFrequencyData.bind(analyser);
+          analyser.getFloatFrequencyData = function(array) {
+            origGetFloat(array);
+            for (let i = 0; i < array.length; i++) {
+              array[i] += (Math.random() - 0.5) * 0.0001;
+            }
+          };
+          return analyser;
+        };
+      } catch (e) {}
+    }
+
+    // ===== 10. WebRTC IP 泄漏防护 =====
+    try {
+      const origRTC = window.RTCPeerConnection;
+      if (origRTC) {
+        window.RTCPeerConnection = function(...args) {
+          const pc = new origRTC(...args);
+          const origCreateDataChannel = pc.createDataChannel.bind(pc);
+          pc.createDataChannel = function(...dcArgs) {
+            return origCreateDataChannel(...dcArgs);
+          };
+          return pc;
+        };
+        window.RTCPeerConnection.prototype = origRTC.prototype;
+        if (window.webkitRTCPeerConnection) {
+          window.webkitRTCPeerConnection = window.RTCPeerConnection;
+        }
+      }
+    } catch (e) {}
+
+  } catch (e) {}
+})();
+"""
+
+
 def get_chrome_user_agent(chrome_path: str) -> str:
     """UA 主版本尽量匹配本机 Chrome，避免 Client Hints 与 UA 不一致。"""
     ver = "131.0.0.0"
@@ -627,11 +817,12 @@ def _chrome_stealth_args() -> list[str]:
     ]
 
 
-def _resolve_profile_dir(strategy: str = "persistent") -> str:
+def _resolve_profile_dir(strategy: str = "persistent", cookie_str: str = "") -> str:
     """选择浏览器 profile 目录。
 
     策略：
     - persistent: 使用持久化 profile（累积历史/cookie/指纹），最大程度模拟真人浏览器
+      - 同一 cookie 使用同一 profile 目录（按 cookie 哈希区分），避免多账号共用同一 profile 导致冲突
     - seed: 克隆预热 seed profile（fallback）
     - temp: 临时空 profile（最不安全，仅用于对比测试）
 
@@ -639,8 +830,16 @@ def _resolve_profile_dir(strategy: str = "persistent") -> str:
     积累的 cookie/localStorage/IndexedDB，Baxia 可通过这些判断浏览器是否"真实使用过"。
     """
     if strategy == "persistent":
-        os.makedirs(_PERSISTENT_PROFILE_DIR, exist_ok=True)
-        return _PERSISTENT_PROFILE_DIR
+        # 按 cookie 哈希区分 profile 目录，避免多账号共用同一 profile
+        # 同一账号每次使用相同的 profile，累积浏览历史；不同账号使用不同 profile，避免 cookie 冲突
+        if cookie_str:
+            import hashlib as _hashlib
+            cookie_hash = _hashlib.md5(cookie_str[:200].encode("utf-8")).hexdigest()[:8]
+            profile_dir = os.path.join(_PERSISTENT_PROFILE_DIR, f"acct-{cookie_hash}")
+        else:
+            profile_dir = _PERSISTENT_PROFILE_DIR
+        os.makedirs(profile_dir, exist_ok=True)
+        return profile_dir
     if strategy == "seed":
         dest = os.path.join(
             os.environ.get("TEMP") or "/tmp",
@@ -782,6 +981,48 @@ async def ensure_seed_profile(playwright, chrome_path: str, ua: str) -> None:
                 await ctx.close()
         except Exception:
             pass
+
+
+# Baxia/淘宝风控相关 cookie 字段。
+# 这些字段标记了会话的风控状态（punish/封禁），带着它们访问会被服务器持续判定为高风险。
+# 清除后让服务器重新评估会话，有助于脱离 punish 状态。
+# 保留登录态字段：cookie2/_m_h5_tk/unb/t/_tb_token_/sgcookie/tracknick/csg/havana_lgc2_*/XSRF-TOKEN 等。
+_RISK_COOKIE_NAMES = {
+    "x5sectag",        # Baxia 风控标签（账号 1/2 都有）
+    "x5sec",           # Baxia session 数据（hex 编码 JSON）
+    "x5secdata",       # Baxia punish 数据
+    "x5pref",          # Baxia 偏好
+    "bx-cookie-test",  # Baxia cookie 测试标记
+    "tfstk",           # 淘宝风控 token stack（437-477 字节）
+    "cbc",             # 风控相关
+    "sca",             # 风控相关
+    "isg",             # 阿里 ISG 风控指纹
+}
+
+
+def strip_risk_cookies(cookie_str: str) -> str:
+    """从 cookie 字符串中移除风控相关字段，返回清理后的 cookie 字符串。
+
+    保留登录态字段，只清除 Baxia/淘宝风控标记字段。
+    这样服务器会重新评估会话，有助于脱离 punish 状态。
+    """
+    kept: list[str] = []
+    removed: list[str] = []
+    for part in cookie_str.split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        eq = part.find("=")
+        if eq <= 0:
+            continue
+        name = part[:eq].strip()
+        if name in _RISK_COOKIE_NAMES:
+            removed.append(name)
+        else:
+            kept.append(part)
+    if removed:
+        log(f"已清除风控 cookie 字段: {', '.join(removed)}")
+    return "; ".join(kept)
 
 
 def parse_cookie_string(cookie_str: str, domain: str = ".goofish.com") -> list[dict]:
@@ -1384,11 +1625,14 @@ async def close_captcha_dialog(page) -> bool:
     return False
 
 
-async def navigate_fresh(page, target_url: str, *, hard: bool = False) -> None:
-    """重置导航。
+async def navigate_fresh(page, target_url: str, *, hard: bool = False) -> tuple:
+    """重置导航（真人鼠标点击进入消息页）。
 
     hard=False（默认）：不清 localStorage/sessionStorage，避免把登录痕迹一并清掉加重风控。
-    hard=True：清 storage 后回首页再进目标页（仅在加载失败连跪时使用）。
+    hard=True：清 storage 后再进入目标页（仅在加载失败连跪时使用）。
+
+    返回 (page, actual_im_url)：actual_im_url 是带 spm 参数的消息页 URL。
+    human_warmup_and_enter_im 内部会先打开首页再点击消息入口，不在这里重复打开首页。
     """
     if hard:
         try:
@@ -1402,31 +1646,19 @@ async def navigate_fresh(page, target_url: str, *, hard: bool = False) -> None:
         except Exception as e:
             log(f"清理存储失败(可忽略): {e}")
 
-    home_wait = 1.5 + random.random() * 1.8
+    # 真人鼠标点击进入消息页（human_warmup_and_enter_im 内部会先打开首页）
     try:
-        await page.goto("https://www.goofish.com", wait_until="domcontentloaded", timeout=45000)
-        log(f"已回到首页，等待 {home_wait:.1f}s 后重新导航到目标页")
-        await asyncio.sleep(home_wait)
-        # 拟人轻微滚动
+        page, actual_url = await human_warmup_and_enter_im(page, target_url or DEFAULT_TARGET_URL)
+        return page, actual_url
+    except Exception:
+        target_wait = 2.0 + random.random() * 1.8
         try:
-            await page.mouse.wheel(0, 150 + random.randint(0, 200))
-        except Exception:
-            pass
-        await asyncio.sleep(0.4 + random.random() * 0.6)
-    except Exception as e:
-        log(f"回首页失败: {e}")
-
-    target_wait = 2.0 + random.random() * 1.8
-    try:
-        # 优先仍用拟人路径；失败再直开
-        try:
-            await human_warmup_and_enter_im(page, target_url or DEFAULT_TARGET_URL)
-        except Exception:
             await page.goto(target_url or DEFAULT_TARGET_URL, wait_until="domcontentloaded", timeout=45000)
             log(f"已导航到目标页，等待 {target_wait:.1f}s 让页面加载")
             await asyncio.sleep(target_wait)
-    except Exception as e:
-        log(f"导航到目标页失败: {e}")
+        except Exception as e:
+            log(f"导航到目标页失败: {e}")
+        return page, target_url or DEFAULT_TARGET_URL
 
 
 async def click_retry_if_needed(page) -> bool:
@@ -1507,10 +1739,77 @@ async def page_shows_load_failure(page) -> bool:
         return False
 
 
-async def human_warmup_and_enter_im(page, target_url: str):
-    """拟人路径进入消息页：首页闲逛 → 点击消息（优先），避免直接 goto /im 触发反爬。
+async def human_mouse_move_to(page, target_x: float, target_y: float, *, approach: bool = True) -> None:
+    """真人鼠标移动到目标点（贝塞尔曲线 + 犹豫 + 微过冲）。
 
-    返回实际操作的 page（可能是 popup 消息窗）。
+    模拟真人从当前位置移动到目标点的轨迹：
+    - 贝塞尔曲线（非直线）
+    - 中段轻微减速（犹豫）
+    - 接近终点时微过冲再回退
+    - 每步随机延迟（对数正态分布）
+    """
+    # 获取当前鼠标位置（近似：用上次记录或随机起点）
+    # Playwright 没有获取当前位置的 API，用随机起点模拟
+    if approach:
+        # 从目标点附近随机起点接近（模拟真人从某处移过来）
+        angle = random.uniform(0, 2 * math.pi)
+        dist = 200 + random.random() * 300
+        start_x = max(5, min(WINDOW_WIDTH - 5, target_x + math.cos(angle) * dist))
+        start_y = max(5, min(WINDOW_HEIGHT - 5, target_y + math.sin(angle) * dist))
+    else:
+        start_x = target_x + random.uniform(-50, 50)
+        start_y = target_y + random.uniform(-50, 50)
+
+    # 贝塞尔控制点：制造弧线
+    mid_x = (start_x + target_x) / 2
+    mid_y = (start_y + target_y) / 2
+    arc_amp = (20 + random.random() * 40) * (1 if random.random() > 0.5 else -1)
+    c1 = (start_x + (target_x - start_x) * 0.3, start_y + (target_y - start_y) * 0.1 + arc_amp * 0.5)
+    c2 = (start_x + (target_x - start_x) * 0.7, start_y + (target_y - start_y) * 0.9 + arc_amp)
+
+    steps = 25 + random.randint(0, 15)
+    pts = _bezier_points((start_x, start_y), c1, c2, (target_x, target_y), steps)
+
+    for i, (x, y) in enumerate(pts):
+        await page.mouse.move(x, y, steps=1)
+        p = (i + 1) / steps
+        # 中段减速（犹豫），两端稍快
+        delay = 8 + random.random() * 20
+        if 0.3 < p < 0.7:
+            delay *= 1.6
+        await page.wait_for_timeout(delay)
+
+    # 微过冲再回退到目标
+    overshoot = 3 + random.random() * 6
+    await page.mouse.move(target_x + overshoot, target_y + random.uniform(-2, 2), steps=2)
+    await page.wait_for_timeout(30 + random.random() * 60)
+    await page.mouse.move(target_x, target_y, steps=2)
+    await page.wait_for_timeout(40 + random.random() * 80)
+
+
+async def human_mouse_click(page, x: float, y: float) -> None:
+    """真人鼠标点击：移动到目标 → 停顿 → 按下 → 微停 → 抬起。"""
+    await human_mouse_move_to(page, x, y)
+    # 悬停停顿（真人看准目标后停顿一下再点）
+    await page.wait_for_timeout(80 + random.random() * 180)
+    await page.mouse.down()
+    # 按下持续时间（真人 50-150ms）
+    await page.wait_for_timeout(50 + random.random() * 100)
+    await page.mouse.up()
+    await page.wait_for_timeout(30 + random.random() * 60)
+
+
+async def human_warmup_and_enter_im(page, target_url: str):
+    """拟人路径进入消息页：首页闲逛 → 真人鼠标点击消息入口，避免直接 goto /im 触发反爬。
+
+    关键改进（基于实测：真人从首页点击消息入口一次通过，直接访问 /im 被风控）：
+    1. 首页用贝塞尔曲线鼠标移动（非直线）
+    2. 点击前先 hover（触发 mouseover），再用真人鼠标点击（move + down + up）
+    3. 点击后轮询 URL 变化或 popup（不用 expect_popup，避免同窗口 SPA 跳转误判超时）
+    4. 真人鼠标点击失败时，用 locator.click() 备选（确保点击到正确元素）
+    5. 记录带 spm 参数的 URL，后续刷新都用这个 URL
+
+    返回 (page, actual_im_url)：actual_im_url 是带 spm 参数的消息页 URL。
     """
     home = "https://www.goofish.com/"
     log(f"拟人导航：先打开首页 {home}")
@@ -1519,11 +1818,14 @@ async def human_warmup_and_enter_im(page, target_url: str):
     except Exception as e:
         log(f"首页加载警告: {e}")
 
-    # 首页随机鼠标移动 + 轻微滚动（制造真实浏览痕迹）
+    # 等待首页侧边栏渲染完成
+    await asyncio.sleep(2.0 + random.random() * 1.5)
+
+    # 首页真人鼠标晃动（贝塞尔曲线，非直线）+ 轻微滚动
     for _ in range(3 + random.randint(0, 3)):
         x = 120 + random.random() * (WINDOW_WIDTH - 240)
         y = 100 + random.random() * (WINDOW_HEIGHT - 200)
-        await page.mouse.move(x, y, steps=random.randint(5, 14))
+        await human_mouse_move_to(page, x, y, approach=True)
         await asyncio.sleep(0.15 + random.random() * 0.35)
     try:
         await page.mouse.wheel(0, 200 + random.randint(0, 400))
@@ -1531,64 +1833,155 @@ async def human_warmup_and_enter_im(page, target_url: str):
         pass
     await asyncio.sleep(1.2 + random.random() * 1.8)
 
-    # 尝试点击「消息」入口（侧边栏）
-    async def _click_msg_eval() -> bool:
-        return bool(
-            await page.evaluate(
-                """() => {
-                const wraps = Array.from(document.querySelectorAll('[class*="sidebar-item-wrap"], [class*="sidebar"] a, aside a, [class*="side"] a'));
-                const t = wraps.find(w => ((w.textContent||'').trim().includes('消息')));
-                if (!t) return false;
-                t.scrollIntoView({block:'center'});
-                t.click();
-                return true;
-            }"""
-            )
+    # 查找「消息」入口元素，返回 boundingBox
+    async def _find_msg_entry_bbox() -> Optional[dict]:
+        """查找消息入口元素，选面积最小的候选（最精确匹配）。"""
+        return await page.evaluate(
+            """() => {
+            // 扩大选择器范围，覆盖闲鱼首页侧边栏各种命名约定
+            const candidates = [];
+            const selectors = [
+                '[class*="sidebar-item"]', '[class*="side-item"]', '[class*="nav-item"]',
+                '[class*="menu-item"]', '[class*="entry-item"]', '[class*="bar-item"]',
+                'aside a', 'aside li', 'nav a', 'nav li', '[role="link"]', '[role="menuitem"]',
+                '[class*="sidebar"] a', '[class*="sidebar"] li', '[class*="sidebar"] div'
+            ];
+            selectors.forEach(sel => {
+                try { document.querySelectorAll(sel).forEach(el => {
+                    const t = (el.textContent || '').trim();
+                    if (t.includes('消息') && t.length < 30) candidates.push(el);
+                }); } catch(e) {}
+            });
+            // 选面积最小的元素（最精确匹配"消息"入口，避免选到外层容器）
+            let best = null;
+            let bestArea = Infinity;
+            for (const el of candidates) {
+                const r = el.getBoundingClientRect();
+                if (r.width <= 0 || r.height <= 0) continue;
+                const area = r.width * r.height;
+                if (area < bestArea) { bestArea = area; best = el; }
+            }
+            if (!best) return null;
+            best.scrollIntoView({block:'center'});
+            const r = best.getBoundingClientRect();
+            return {
+                x: r.left + r.width / 2,
+                y: r.top + r.height / 2,
+                width: r.width,
+                height: r.height,
+                text: (best.textContent||'').trim().substring(0, 20),
+            };
+        }"""
         )
 
-    async def _click_msg_locator() -> bool:
-        loc = page.locator('[class*="sidebar-item-wrap"]').filter(has_text="消息").first
-        if await loc.count() > 0:
-            await loc.click(timeout=3000, force=True)
-            return True
-        return False
-
-    for name, fn in (("eval-click", _click_msg_eval), ("locator-click", _click_msg_locator)):
+    # 检测是否有新 popup 打开（返回 popup page 或 None）
+    def _find_im_popup():
         try:
-            try:
-                async with page.expect_popup(timeout=5000) as popup_info:
-                    ok = await fn()
-                    if not ok:
-                        raise RuntimeError("no-msg-entry")
-                popup = await popup_info.value
-                await popup.wait_for_load_state("domcontentloaded", timeout=30000)
-                log(f"消息页新窗口已打开 via {name}: {popup.url}")
-                await asyncio.sleep(2.0 + random.random() * 1.5)
-                return popup
-            except Exception:
-                # 可能同页跳转或未弹出
-                ok = False
-                try:
-                    ok = await fn()
-                except Exception:
-                    ok = False
-                await asyncio.sleep(2.0)
-                if "/im" in (page.url or ""):
-                    log(f"消息页同窗口打开 via {name}: {page.url}")
-                    return page
-                if not ok:
-                    continue
-        except Exception as e:
-            log(f"点击消息失败 {name}: {e}")
+            for p in page.context.pages:
+                if p != page and "/im" in (p.url or ""):
+                    return p
+        except Exception:
+            pass
+        return None
 
-    # 回退：直接访问 /im（风险更高）
-    log("未点到消息入口，回退直接访问目标页（可能触发加载失败）")
+    # 为目标页面（popup 或同窗口跳转页）注入指纹修复脚本
+    async def _fix_fingerprint_and_return(target_page, actual_url: str, tag: str):
+        if _USING_PATCHRIGHT:
+            try:
+                await target_page.add_init_script(_ADVANCED_FINGERPRINT_SCRIPT)
+            except Exception:
+                pass
+            try:
+                await target_page.evaluate(_ADVANCED_FINGERPRINT_SCRIPT)
+                fix = await target_page.evaluate(
+                    "() => ({ chrome: !!(window.chrome && window.chrome.runtime), languages: navigator.languages })"
+                )
+                log(f"{tag} 指纹修复结果: {fix}")
+            except Exception as e:
+                log(f"{tag} 指纹修复异常: {e}")
+        await asyncio.sleep(2.0 + random.random() * 1.5)
+        return target_page, actual_url
+
+    # 轮询等待 URL 变化或 popup（同时处理同窗口 SPA 跳转和新窗口 popup）
+    async def _wait_for_im_navigation(old_url: str, timeout_s: float, tag: str):
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            await asyncio.sleep(0.3)
+            # 检查 popup（新窗口）
+            popup = _find_im_popup()
+            if popup:
+                try:
+                    await popup.wait_for_load_state("domcontentloaded", timeout=30000)
+                except Exception:
+                    pass
+                actual_url = popup.url
+                log(f"✓ 消息页新窗口已打开（{tag}）: {actual_url}")
+                return await _fix_fingerprint_and_return(popup, actual_url, "popup")
+            # 检查同窗口跳转
+            current_url = page.url or ""
+            if "/im" in current_url and current_url != old_url:
+                log(f"✓ 消息页同窗口打开（{tag}）: {current_url}")
+                return await _fix_fingerprint_and_return(page, current_url, "同窗口")
+        return None
+
+    # 尝试真人鼠标点击「消息」入口
+    max_click_attempts = 3
+    for attempt in range(1, max_click_attempts + 1):
+        try:
+            msg_bbox = await _find_msg_entry_bbox()
+            if not msg_bbox:
+                log(f"未找到消息入口元素（尝试 {attempt}/{max_click_attempts}）")
+                await asyncio.sleep(0.8 + random.random() * 1.2)
+                continue
+
+            click_x = msg_bbox["x"] + random.uniform(-3, 3)
+            click_y = msg_bbox["y"] + random.uniform(-2, 2)
+            log(f"找到消息入口「{msg_bbox.get('text','')}」位置=({click_x:.0f},{click_y:.0f})，真人鼠标点击（尝试 {attempt}/{max_click_attempts}）")
+
+            # 点击前先 hover（移动到目标 + 停顿，触发 mouseover 事件）
+            # 某些导航组件需要 mouseover 激活后才响应 click
+            await page.mouse.move(click_x, click_y)
+            await asyncio.sleep(0.3 + random.random() * 0.5)
+
+            old_url = page.url or ""
+
+            # 真人鼠标点击：贝塞尔移动 + down + up
+            await human_mouse_click(page, click_x, click_y)
+
+            # 轮询等待 URL 变化或 popup（不用 expect_popup，避免同窗口 SPA 跳转误判）
+            result = await _wait_for_im_navigation(old_url, 12.0, "真人点击")
+            if result:
+                return result
+
+            # 真人鼠标点击未跳转，尝试用 locator.click() 备选（确保点击到正确元素）
+            log(f"真人鼠标点击未跳转（尝试 {attempt}），改用 locator.click() 备选")
+            try:
+                old_url2 = page.url or ""
+                # 用 Playwright locator 直接点击元素（它会自动滚动到元素并点击中心）
+                loc = page.locator(':has-text("消息")').first
+                if await loc.count() > 0:
+                    await loc.click(timeout=5000)
+                    result2 = await _wait_for_im_navigation(old_url2, 10.0, "locator点击")
+                    if result2:
+                        return result2
+            except Exception as e:
+                log(f"locator.click() 备选失败: {e}")
+
+            log(f"点击尝试 {attempt}/{max_click_attempts} 失败，重试")
+            await asyncio.sleep(0.5 + random.random() * 1.0)
+        except Exception as e:
+            log(f"真人点击消息失败（尝试 {attempt}）: {e}")
+            await asyncio.sleep(0.5 + random.random() * 1.0)
+
+    # 所有点击尝试都失败，回退：直接访问 target_url
+    log("⚠ 真人鼠标点击消息入口失败，回退直接访问目标页（风控风险较高）")
+    fallback_url = target_url or DEFAULT_TARGET_URL
     try:
-        await page.goto(target_url or DEFAULT_TARGET_URL, wait_until="domcontentloaded", timeout=45000)
+        await page.goto(fallback_url, wait_until="domcontentloaded", timeout=45000)
     except Exception as e:
         log(f"目标页加载警告: {e}")
     await asyncio.sleep(2.0 + random.random() * 1.5)
-    return page
+    return page, fallback_url
 
 
 async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
@@ -1627,12 +2020,15 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
         pass
 
     # 拟人路径进入消息页（避免直接 /im）
-    page = await human_warmup_and_enter_im(page, target_url or DEFAULT_TARGET_URL)
+    # human_warmup_and_enter_im 返回 (page, actual_im_url)
+    # actual_im_url 是带 spm 参数的消息页 URL（从首页点击进入），后续刷新都用这个 URL
+    page, actual_im_url = await human_warmup_and_enter_im(page, target_url or DEFAULT_TARGET_URL)
     try:
         page.on("response", _on_response)
     except Exception:
         pass
     log(f"当前操作页 URL: {page.url}")
+    log(f"✓ 记录消息页 URL（带 spm 参数，后续刷新复用）: {actual_im_url}")
 
     if await page_shows_load_failure(page):
         log("⚠ 进入消息页即出现「加载失败」——浏览器环境很可能已被风控标记")
@@ -1691,9 +2087,8 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
                 result["screenshotPath"] = shot
             except Exception:
                 pass
-            # 加载失败：硬重置（清 storage）
-            await navigate_fresh(page, target_url or DEFAULT_TARGET_URL, hard=True)
-            page = await human_warmup_and_enter_im(page, target_url or DEFAULT_TARGET_URL)
+            # 加载失败：硬重置（清 storage），用真人点击重新进入消息页
+            page, actual_im_url = await navigate_fresh(page, actual_im_url, hard=True)
             if load_fail_streak >= 3:
                 result["error"] = (
                     "连续出现「加载失败」：自动化浏览器环境被闲鱼风控标记，"
@@ -1746,8 +2141,7 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
             except Exception:
                 pass
             log("刷新页面重试（彻底重置）...")
-            await navigate_fresh(page, target_url or DEFAULT_TARGET_URL)
-            page = await human_warmup_and_enter_im(page, target_url or DEFAULT_TARGET_URL)
+            page, actual_im_url = await navigate_fresh(page, actual_im_url)
             continue
 
         result["captchaDetected"] = True
@@ -1802,7 +2196,7 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
         except Exception as e:
             last_error = f"拖动异常: {e}"
             log(last_error)
-            await navigate_fresh(page, target_url or DEFAULT_TARGET_URL, hard=False)
+            page, actual_im_url = await navigate_fresh(page, actual_im_url, hard=False)
             continue
 
         result_wait = 2.6 + random.random() * 1.8
@@ -1835,7 +2229,7 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
                 )
                 if body and ("下载消息失败" in body or "加载失败" in body):
                     log("滑块通过但页面显示加载失败/下载消息失败，刷新重试")
-                    await navigate_fresh(page, target_url or DEFAULT_TARGET_URL, hard=False)
+                    page, actual_im_url = await navigate_fresh(page, actual_im_url, hard=False)
                     continue
             except Exception:
                 pass
@@ -1868,7 +2262,7 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
             if closed:
                 log("已关闭弹窗，等待页面变化...")
                 await asyncio.sleep(1.5)
-            await navigate_fresh(page, target_url or DEFAULT_TARGET_URL, hard=False)
+            page, actual_im_url = await navigate_fresh(page, actual_im_url, hard=False)
             cooldown = 4.0 + random.random() * 4.0
             log(f"冷静期 {cooldown:.1f}s ...")
             await asyncio.sleep(cooldown)
@@ -1900,6 +2294,207 @@ async def export_cookies(ctx) -> str:
         return ""
 
 
+# ============================================================
+# 指纹诊断探针：实时记录关键检测信号，便于对比优化效果
+# ============================================================
+# 作用：每次求解前打印当前浏览器环境的机器人特征信号，定位被 Baxia 识破的根因。
+# 告警维度覆盖 Baxia 2026 实测的 14+ 检测点。
+_FINGERPRINT_PROBE_JS = r"""
+(() => {
+  const signals = {};
+  try { signals.webdriver = navigator.webdriver; } catch (e) { signals.webdriver = 'ERR'; }
+  try { signals.pluginsLength = (navigator.plugins && navigator.plugins.length) || 0; } catch (e) { signals.pluginsLength = 'ERR'; }
+  try { signals.userAgentData = !!(navigator.userAgentData); } catch (e) { signals.userAgentData = 'ERR'; }
+  try { signals.connection = !!(navigator.connection); } catch (e) { signals.connection = 'ERR'; }
+  try { signals.getBattery = typeof navigator.getBattery === 'function'; } catch (e) { signals.getBattery = 'ERR'; }
+  try { signals.chrome = !!(window.chrome && window.chrome.runtime); } catch (e) { signals.chrome = 'ERR'; }
+  try { signals.outerWidth = window.outerWidth; } catch (e) { signals.outerWidth = 'ERR'; }
+  try { signals.innerWidth = window.innerWidth; } catch (e) { signals.innerWidth = 'ERR'; }
+  try { signals.cdc_ = !!(document.querySelector('[id*="cdc_"]') || window.cdc_adoQpoasnfa76pfcZLmcfl_Array || window.cdc_adoQpoasnfa76pfcZLmcfl_Promise || window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol); } catch (e) { signals.cdc_ = 'ERR'; }
+  try { signals.playwright = !!(window.__playwright__ || window.__pw_manual); } catch (e) { signals.playwright = 'ERR'; }
+  try { signals.voices = (window.speechSynthesis && window.speechSynthesis.getVoices && window.speechSynthesis.getVoices().length) || 0; } catch (e) { signals.voices = 'ERR'; }
+  try {
+    const c = document.createElement('canvas');
+    const gl = c.getContext('webgl') || c.getContext('experimental-webgl');
+    if (gl) {
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      signals.webglVendor = ext ? gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR);
+      signals.webglRenderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    } else {
+      signals.webglVendor = 'no-webgl';
+      signals.webglRenderer = 'no-webgl';
+    }
+  } catch (e) { signals.webglVendor = 'ERR'; signals.webglRenderer = 'ERR'; }
+  try { signals.permissions = typeof navigator.permissions !== 'undefined'; } catch (e) { signals.permissions = 'ERR'; }
+  try { signals.languages = JSON.stringify(navigator.languages || []); } catch (e) { signals.languages = 'ERR'; }
+  return signals;
+})()
+"""
+
+
+async def _log_fingerprint_probe(page, label: str = "probe") -> dict:
+    """实时记录 14+ 检测信号并告警。
+
+    用法：在每次求解前调用，打印当前浏览器环境的机器人特征信号。
+    出现告警信号时打印 ⚠ 告警；全部通过时打印 ✓ 通过。
+    """
+    try:
+        signals = await page.evaluate(_FINGERPRINT_PROBE_JS)
+    except Exception as e:
+        log(f"⚠ 指纹探针[{label}] 执行失败: {e}")
+        return {}
+
+    if not isinstance(signals, dict):
+        log(f"⚠ 指纹探针[{label}] 返回非 dict: {signals}")
+        return {}
+
+    alerts: list[str] = []
+
+    # 1. webdriver 必须为 undefined / false
+    if signals.get("webdriver") not in (None, False, "undefined"):
+        alerts.append(f"webdriver={signals.get('webdriver')}")
+
+    # 2. plugins.length 必须大于 0
+    try:
+        if int(signals.get("pluginsLength", 0)) <= 0:
+            alerts.append("plugins.length=0（headless 信号）")
+    except (TypeError, ValueError):
+        alerts.append(f"plugins.length={signals.get('pluginsLength')}")
+
+    # 3. userAgentData 必须存在（Chrome 131+）
+    if signals.get("userAgentData") is not True:
+        alerts.append("userAgentData 缺失（Client Hints）")
+
+    # 4. connection 必须存在
+    if signals.get("connection") is not True:
+        alerts.append("connection 缺失（Network Information API）")
+
+    # 5. getBattery 必须为 function
+    if signals.get("getBattery") is not True:
+        alerts.append("getBattery 缺失")
+
+    # 6. window.chrome.runtime 必须存在
+    if signals.get("chrome") is not True:
+        alerts.append("window.chrome.runtime 缺失")
+
+    # 7. outerWidth 必须 > innerWidth（headless 下相等）
+    try:
+        ow = int(signals.get("outerWidth", 0))
+        iw = int(signals.get("innerWidth", 0))
+        if ow <= iw:
+            alerts.append(f"outerWidth({ow})<=innerWidth({iw})（headless 信号）")
+    except (TypeError, ValueError):
+        alerts.append(f"outerWidth={signals.get('outerWidth')} innerWidth={signals.get('innerWidth')}")
+
+    # 8. cdc_ 痕迹必须不存在
+    if signals.get("cdc_") is True:
+        alerts.append("cdc_ CDP 注入痕迹存在")
+
+    # 9. __playwright 必须不存在
+    if signals.get("playwright") is True:
+        alerts.append("__playwright 对象存在")
+
+    # 10. speechSynthesis.getVoices().length 必须 > 0
+    try:
+        if int(signals.get("voices", 0)) <= 0:
+            alerts.append("speechSynthesis.getVoices()=0（headless 信号）")
+    except (TypeError, ValueError):
+        alerts.append(f"voices={signals.get('voices')}")
+
+    # 11. WebGL renderer 不能包含 SwiftShader
+    renderer = str(signals.get("webglRenderer", ""))
+    if "SwiftShader" in renderer or "swiftshader" in renderer:
+        alerts.append(f"WebGL renderer={renderer}（SwiftShader 机器人强信号）")
+    if renderer in ("no-webgl", "ERR", ""):
+        alerts.append(f"WebGL renderer 异常: {renderer}")
+
+    # 12. permissions API 必须存在
+    if signals.get("permissions") is not True:
+        alerts.append("navigator.permissions 缺失")
+
+    # 13. languages 不能为空数组
+    langs = str(signals.get("languages", "[]"))
+    if langs in ("[]", "null", "ERR"):
+        alerts.append(f"navigator.languages={langs}")
+
+    if alerts:
+        log(f"⚠ 指纹探针告警[{label}]: {' | '.join(alerts)}")
+    else:
+        log(f"✓ 指纹探针[{label}] 全部通过，无机器人信号")
+
+    # 完整信号也打印一遍（debug 用）
+    log(f"  指纹详情[{label}]: {json.dumps(signals, ensure_ascii=False)}")
+    return signals
+
+
+# ============================================================
+# 半自动人工兜底：全自动失败后保留浏览器窗口供人工拖拽
+# ============================================================
+# 设计动机：用户反馈"通过自动化打开的窗口，人工拖拽也失败"。
+# 根因是浏览器环境被标为机器人，而非拖拽轨迹问题。
+# 但在持久化 profile + stealth 增强后，环境会接近真人浏览器，
+# 此时人工拖拽的成功率会显著提升。
+# 本函数在全自动失败后保留窗口，给人工最后一次机会。
+async def _semi_auto_human_fallback(
+    ctx,
+    solve_result: dict,
+    timeout_sec: int = 120,
+) -> dict:
+    """半自动人工兜底模式。
+
+    全自动失败后保留浏览器窗口，提示人工拖拽滑块。
+    每 2 秒检测一次 check_solved，通过则返回成功。
+    超时则返回原 solve_result（保留失败信息）。
+    """
+    log("=== 进入半自动人工兜底模式 ===")
+    log(f"请在浏览器窗口中手动完成滑块验证（{timeout_sec} 秒超时）")
+
+    pages = ctx.pages if ctx else []
+    if not pages:
+        log("半自动兜底失败：无活动页面")
+        return solve_result
+
+    page = pages[0]
+    deadline = time.time() + timeout_sec
+    poll_interval = 2.0
+
+    while time.time() < deadline:
+        try:
+            # 检测当前页面是否已通过验证
+            solved = await check_solved(page)
+            if solved:
+                elapsed = int(timeout_sec - (deadline - time.time()))
+                log(f"✓ 人工拖拽成功！耗时 {elapsed}s")
+                solve_result.update({
+                    "solved": True,
+                    "ok": True,
+                    "engine": "Playwright+Human",
+                    "humanFallback": True,
+                    "humanSolveDurationSec": elapsed,
+                })
+                # 导出最新 cookie
+                try:
+                    fresh = await export_cookies(ctx)
+                    if fresh:
+                        solve_result["cookies"] = fresh
+                        solve_result["cookieCount"] = fresh.count("=")
+                except Exception:
+                    pass
+                return solve_result
+        except Exception as e:
+            log(f"半自动检测异常（继续等待）: {e}")
+
+        remaining = int(deadline - time.time())
+        if remaining > 0 and remaining % 10 == 0:
+            log(f"半自动兜底等待中... 剩余 {remaining}s")
+        await asyncio.sleep(poll_interval)
+
+    log("✗ 半自动人工兜底超时，未完成验证")
+    solve_result["humanFallback"] = False
+    solve_result["humanFallbackTimeout"] = True
+    return solve_result
+
+
 async def _launch_solve_once(
     playwright,
     chrome_path: str,
@@ -1908,41 +2503,71 @@ async def _launch_solve_once(
     target_url: str,
     max_retries: int,
     proxy: Optional[dict] = None,
+    profile_strategy: str = "persistent",
+    semi_auto_fallback: bool = False,
 ) -> dict:
-    """启动一次浏览器并求解（内部复用）。"""
-    temp_root = os.environ.get("TEMP") or "/tmp"
-    user_data_dir = os.path.join(
-        temp_root, f"chrome-slider-warm-{int(time.time())}-{random.randint(1000, 9999)}"
-    )
-    prepare_profile_dir(user_data_dir)
+    """启动一次浏览器并求解（内部复用）。
+
+    Args:
+        profile_strategy: profile 选择策略
+            - persistent: 持久化 profile（累积历史/cookie/指纹，最大程度模拟真人）
+            - seed: 克隆预热 seed profile（fallback）
+            - temp: 临时空 profile（最不安全，仅用于对比测试）
+        semi_auto_fallback: 全自动失败后是否保留窗口供人工拖拽
+    """
+    user_data_dir = _resolve_profile_dir(profile_strategy, cookie_str=cookie_str)
+    is_persistent = profile_strategy == "persistent"
+    # seed/temp 策略需要克隆/清理；persistent 不清理（保留历史）
+    if not is_persistent:
+        prepare_profile_dir(user_data_dir)
     ctx = None
     try:
         log(
-            "=== 启动真实 Chrome（seed 克隆 + 无 remote-debugging-port）"
+            f"=== 启动真实 Chrome（profile={profile_strategy} patchright={_USING_PATCHRIGHT}"
             f" hasProxy={bool(proxy and proxy.get('server'))} ==="
         )
-        launch_kwargs = dict(
-            user_data_dir=user_data_dir,
-            headless=False,
-            executable_path=chrome_path,
-            viewport={"width": WINDOW_WIDTH, "height": WINDOW_HEIGHT},
-            locale="zh-CN",
-            timezone_id="Asia/Shanghai",
-            user_agent=ua,
-            color_scheme="light",
-            device_scale_factor=1,
-            is_mobile=False,
-            has_touch=False,
-            ignore_default_args=["--enable-automation"],
-            args=[
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--disable-popup-blocking",
-                f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}",
-                "--disable-blink-features=AutomationControlled",
-                "--lang=zh-CN",
-            ],
-        )
+        if _USING_PATCHRIGHT:
+            # patchright 模式：patchright 自动清理 CDP 痕迹（cdc_/__playwright__/webdriver），
+            # 自动处理 navigator.webdriver / window.chrome / userAgentData。
+            # 关键：不注入 STEALTH_INIT_SCRIPT（会与 patchright 冲突，引入 toString 检测漏洞），
+            #       不设置 user_agent（patchright 用真实 Chrome UA，手动覆盖会破坏一致性），
+            #       不用 ignore_default_args（patchright 自动处理 --enable-automation）。
+            # 只保留 patchright 不处理的高级指纹规避（WebGL/Canvas/Audio）。
+            launch_kwargs = dict(
+                user_data_dir=user_data_dir,
+                headless=False,
+                executable_path=chrome_path,
+                viewport={"width": WINDOW_WIDTH, "height": WINDOW_HEIGHT},
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+                color_scheme="light",
+                device_scale_factor=1,
+                is_mobile=False,
+                has_touch=False,
+                args=[
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}",
+                    "--lang=zh-CN",
+                ],
+            )
+        else:
+            # playwright 模式：保留原有反检测逻辑（STEALTH_INIT_SCRIPT + stealth_args）
+            launch_kwargs = dict(
+                user_data_dir=user_data_dir,
+                headless=False,
+                executable_path=chrome_path,
+                viewport={"width": WINDOW_WIDTH, "height": WINDOW_HEIGHT},
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+                user_agent=ua,
+                color_scheme="light",
+                device_scale_factor=1,
+                is_mobile=False,
+                has_touch=False,
+                ignore_default_args=["--enable-automation"],
+                args=_chrome_stealth_args(),
+            )
         if proxy and proxy.get("server"):
             launch_kwargs["proxy"] = {
                 "server": str(proxy["server"]),
@@ -1961,7 +2586,12 @@ async def _launch_solve_once(
             ]
             ctx = await playwright.chromium.launch_persistent_context(**launch_kwargs)
 
-        await ctx.add_init_script(STEALTH_INIT_SCRIPT)
+        # playwright 模式注入完整 STEALTH_INIT_SCRIPT；patchright 模式只注入高级指纹规避
+        if _USING_PATCHRIGHT:
+            await ctx.add_init_script(_ADVANCED_FINGERPRINT_SCRIPT)
+            log("✓ patchright 模式：已注入高级指纹规避（WebGL/Canvas/Audio），CDP 痕迹由 patchright 自动清理")
+        else:
+            await ctx.add_init_script(STEALTH_INIT_SCRIPT)
 
         page0 = ctx.pages[0] if ctx.pages else await ctx.new_page()
         # 先落到业务域再注入 Cookie，避免 add_cookies 被丢弃
@@ -1969,9 +2599,12 @@ async def _launch_solve_once(
             await page0.goto("https://www.goofish.com/", wait_until="domcontentloaded", timeout=45000)
         except Exception as e:
             log(f"预热域导航警告: {e}")
-        cookies = parse_cookie_string(cookie_str, ".goofish.com")
+        # 清除风控相关 cookie（x5sectag/x5sec/tfstk 等），让服务器重新评估会话，
+        # 避免带着 punish 标记访问导致持续被风控。
+        clean_cookie_str = strip_risk_cookies(cookie_str)
+        cookies = parse_cookie_string(clean_cookie_str, ".goofish.com")
         # 同步 www 主机 cookie，提高会话命中
-        cookies += parse_cookie_string(cookie_str, "www.goofish.com")
+        cookies += parse_cookie_string(clean_cookie_str, "www.goofish.com")
         if cookies:
             try:
                 await ctx.add_cookies(cookies)
@@ -1980,26 +2613,69 @@ async def _launch_solve_once(
                 log(f"注入 cookies 警告: {e}")
                 # 回退只写 .goofish.com
                 try:
-                    await ctx.add_cookies(parse_cookie_string(cookie_str, ".goofish.com"))
+                    await ctx.add_cookies(parse_cookie_string(clean_cookie_str, ".goofish.com"))
                 except Exception:
                     pass
         try:
             await page0.reload(wait_until="domcontentloaded", timeout=45000)
         except Exception:
             pass
-        # Cookie 落地后拟人闲逛，降低“秒进消息页”特征
-        warm = 2.5 + random.random() * 2.5
+
+        # 强制修复指纹（add_init_script 可能被 patchright 覆盖，用 page.evaluate 在页面加载后直接修复）
+        # 关键：Baxia 在页面加载时检测 window.chrome.runtime，必须在检测前修复
+        if _USING_PATCHRIGHT:
+            try:
+                await page0.evaluate(_ADVANCED_FINGERPRINT_SCRIPT)
+                fix_check = await page0.evaluate(
+                    """() => ({
+                        chrome: !!(window.chrome && window.chrome.runtime),
+                        languages: navigator.languages,
+                        voices: (window.speechSynthesis && window.speechSynthesis.getVoices && window.speechSynthesis.getVoices().length) || 0,
+                    })"""
+                )
+                log(f"指纹强制修复结果: {fix_check}")
+            except Exception as e:
+                log(f"指纹强制修复异常: {e}")
+
+        # 指纹诊断探针：在求解前打印当前浏览器环境的机器人特征信号
+        try:
+            await _log_fingerprint_probe(page0, label="pre-solve")
+        except Exception as e:
+            log(f"指纹探针调用异常（不影响后续流程）: {e}")
+
+        # Cookie 落地后拟人闲逛，降低"秒进消息页"特征
+        # 增强：4-7 次鼠标移动 + 2-4 次滚动 + 30% 概率访问商品页
+        warm = 3.0 + random.random() * 3.0
         log(f"Cookie 预热闲逛 {warm:.1f}s ...")
         await asyncio.sleep(warm)
         try:
-            for _ in range(3):
+            mouse_moves = random.randint(4, 7)
+            for i in range(mouse_moves):
                 await page0.mouse.move(
                     100 + random.random() * 800,
                     120 + random.random() * 400,
-                    steps=random.randint(5, 12),
+                    steps=random.randint(8, 16),
                 )
-                await asyncio.sleep(0.15 + random.random() * 0.25)
-            await page0.mouse.wheel(0, 200 + random.randint(0, 300))
+                await asyncio.sleep(0.2 + random.random() * 0.4)
+            # 多次滚动，模拟真人浏览
+            scroll_count = random.randint(2, 4)
+            for _ in range(scroll_count):
+                await page0.mouse.wheel(0, 200 + random.randint(0, 400))
+                await asyncio.sleep(0.4 + random.random() * 0.6)
+            # 30% 概率访问一个商品页，增加真实浏览痕迹
+            if random.random() < 0.3:
+                try:
+                    sample_url = "https://www.goofish.com/item?itemId=746285119876"
+                    log(f"访问商品页增加浏览痕迹: {sample_url}")
+                    await page0.goto(sample_url, wait_until="domcontentloaded", timeout=30000)
+                    await asyncio.sleep(1.5 + random.random() * 1.5)
+                    # 滚动一下商品页
+                    await page0.mouse.wheel(0, 300 + random.randint(0, 500))
+                    await asyncio.sleep(0.8 + random.random() * 0.8)
+                    # 返回首页
+                    await page0.go_back(wait_until="domcontentloaded", timeout=30000)
+                except Exception as e:
+                    log(f"商品页访问警告（不影响后续）: {e}")
         except Exception:
             pass
         await asyncio.sleep(0.8 + random.random() * 1.0)
@@ -2011,6 +2687,15 @@ async def _launch_solve_once(
                 solve_result["cookies"] = fresh
                 solve_result["cookieCount"] = fresh.count("=")
                 log(f"导出 {solve_result['cookieCount']} 个最新 cookies（{len(fresh)} 字符）")
+            return solve_result
+
+        # 全自动失败 → 半自动人工兜底（保留窗口供人工拖拽）
+        if semi_auto_fallback and solve_result.get("captchaDetected") and not solve_result.get("isLoginPage"):
+            log("全自动求解失败，尝试半自动人工兜底...")
+            solve_result = await _semi_auto_human_fallback(ctx, solve_result, timeout_sec=120)
+            if solve_result.get("solved"):
+                return solve_result
+
         return solve_result
     finally:
         if ctx is not None:
@@ -2018,21 +2703,25 @@ async def _launch_solve_once(
                 await ctx.close()
             except Exception:
                 pass
-        try:
-            shutil.rmtree(user_data_dir, ignore_errors=True)
-        except Exception:
-            pass
+        # 持久化 profile 不删除（保留浏览历史/cookie/指纹）
+        # seed/temp 策略清理临时目录
+        if not is_persistent:
+            try:
+                shutil.rmtree(user_data_dir, ignore_errors=True)
+            except Exception:
+                pass
 
 
 async def main_async(args) -> dict:
-    """全自动求解入口（无半自动人工介入）。
+    """全自动求解入口（可选半自动人工介入）。
 
     策略：
     1) 全局文件锁：同时只允许 1 个求解浏览器
-    2) seed profile 预热 + 克隆：降低空配置被秒杀概率
-    3) 真实 Chrome + 去 enable-automation + stealth
+    2) persistent profile 持久化：累积历史/cookie/指纹，最大程度模拟真人
+    3) 真实 Chrome + 去 enable-automation + stealth 增强（22+ 检测点覆盖）
     4) 拟人进消息页 + 多策略拖拽（仅浏览器内 page.mouse，不控制系统鼠标）
-    5) 首轮全失败后，换新 profile 再全自动重开一轮（仍无人工）
+    5) 首轮全失败后，换 seed profile 再全自动重开一轮
+    6) 半自动人工兜底（可选）：两轮全自动均失败后保留窗口供人工拖拽
     """
     start_time = time.time()
     result: dict[str, Any] = {
@@ -2066,6 +2755,11 @@ async def main_async(args) -> dict:
     log(f"Chrome 路径: {chrome_path}")
     log(f"UA: {ua}")
 
+    # 读取 CLI 参数（支持命令行调用和外部直接调用两种方式）
+    profile_strategy = getattr(args, "profile_strategy", "persistent") or "persistent"
+    semi_auto_fallback = bool(getattr(args, "semi_auto_fallback", False))
+    log(f"求解配置: profile_strategy={profile_strategy} semi_auto_fallback={semi_auto_fallback}")
+
     try:
         # 跨进程单飞：避免多账号同时求解把 IP/设备画像打爆
         with _FileLock(_SOLVE_LOCK_PATH, timeout=360.0):
@@ -2082,20 +2776,25 @@ async def main_async(args) -> dict:
                     }
                     log(f"使用绑定代理 server={args.proxy_server}")
 
-                # 第一轮
+                # 第一轮：使用配置的 profile 策略
+                # 半自动兜底只在第一轮启用（避免第二轮重复等待人工）
                 r1 = await _launch_solve_once(
-                    p, chrome_path, ua, cookie_str, args.target_url, args.max_retries, proxy=proxy_cfg,
+                    p, chrome_path, ua, cookie_str, args.target_url, args.max_retries,
+                    proxy=proxy_cfg,
+                    profile_strategy=profile_strategy,
+                    semi_auto_fallback=semi_auto_fallback,
                 )
                 result.update(r1)
                 total_attempts = int(r1.get("attempts") or 0)
 
-                # 全自动第二轮：仅当检测到滑块且未通过时，换 profile 再来一次
+                # 第二轮：仅当检测到滑块且未通过时，换 seed profile 再来一次
+                # 第二轮不启用半自动兜底（第一轮已等过人工）
                 if (
                     not result.get("solved")
                     and result.get("captchaDetected")
                     and not result.get("isLoginPage")
                 ):
-                    log("=== 全自动第二轮：新 profile 重开浏览器再试 ===")
+                    log("=== 第二轮：换 seed profile 重开浏览器再试 ===")
                     await asyncio.sleep(2.0 + random.random() * 2.5)
                     r2 = await _launch_solve_once(
                         p,
@@ -2105,6 +2804,8 @@ async def main_async(args) -> dict:
                         args.target_url,
                         max(2, min(3, int(args.max_retries or 3))),
                         proxy=proxy_cfg,
+                        profile_strategy="seed",
+                        semi_auto_fallback=False,
                     )
                     total_attempts += int(r2.get("attempts") or 0)
                     # 第二轮成功则覆盖；失败保留第一轮截图/错误
@@ -2138,6 +2839,17 @@ def main() -> None:
     parser.add_argument("--proxy-server", default="", help="账号绑定代理 server，如 http://host:port")
     parser.add_argument("--proxy-username", default="", help="代理用户名")
     parser.add_argument("--proxy-password", default="", help="代理密码")
+    parser.add_argument(
+        "--profile-strategy",
+        default="persistent",
+        choices=["persistent", "seed", "temp"],
+        help="profile 选择策略：persistent（持久化，默认）/ seed（克隆预热）/ temp（临时空）",
+    )
+    parser.add_argument(
+        "--semi-auto-fallback",
+        action="store_true",
+        help="全自动失败后保留浏览器窗口供人工拖拽（120 秒超时）",
+    )
     args = parser.parse_args()
     result = asyncio.run(main_async(args))
     output_result(result)

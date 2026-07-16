@@ -23,7 +23,7 @@ class UploadStorageCleanupServiceTest {
 
     @TempDir Path tempDir;
 
-    private UploadPathConfig paths() {
+    private UploadPathConfig paths() throws java.io.IOException {
         UploadPathConfig paths = new UploadPathConfig(tempDir.resolve("uploads").toString());
         paths.init();
         return paths;
@@ -100,7 +100,7 @@ class UploadStorageCleanupServiceTest {
     }
 
     @Test
-    void returnsZeroWhenNoCandidates() {
+    void returnsZeroWhenNoCandidates() throws java.io.IOException {
         UploadPathConfig paths = paths();
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         UploadStorageGovernanceService governance = mock(UploadStorageGovernanceService.class);

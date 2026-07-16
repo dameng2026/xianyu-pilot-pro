@@ -96,7 +96,6 @@ def test_every_upload_writer_uses_one_writable_volume_and_production_limits_are_
     assert "http://127.0.0.1:18080/api/ops/readiness" in production
     assert production.count('UPLOAD_GOVERNANCE_ENABLED: "true"') == 3
     assert len(re.findall(r"^\s+UPLOAD_MAX_CONCURRENT_GLOBAL:", production, re.MULTILINE)) == 3
-    assert len(re.findall(r"^\s+UPLOAD_TENANT_QUOTA_BYTES:", production, re.MULTILINE)) == 3
     assert "MEDIA_COOKIE_SECURE: \"true\"" in production
     assert "Path=/uploads" in operations
     assert "SameSite=Strict" in operations

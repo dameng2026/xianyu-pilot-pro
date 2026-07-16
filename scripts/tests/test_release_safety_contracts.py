@@ -660,8 +660,6 @@ def test_legacy_production_preflight_runs_shared_transport_gate_before_loading_e
         "JWT_EXPIRE_SECONDS",
         "MEDIA_COOKIE_SECURE",
         "MEDIA_SESSION_MAX_AGE_SECONDS",
-        "UPLOAD_TENANT_QUOTA_BYTES",
-        "UPLOAD_GLOBAL_QUOTA_BYTES",
         "UPLOAD_RATE_LIMIT_REQUESTS",
         "UPLOAD_RATE_LIMIT_WINDOW_SECONDS",
         "UPLOAD_MAX_CONCURRENT_PER_TENANT",
@@ -669,10 +667,8 @@ def test_legacy_production_preflight_runs_shared_transport_gate_before_loading_e
         "UPLOAD_RETENTION_DAYS",
     ):
         assert required in script
-    assert "UPLOAD_TENANT_QUOTA_BYTES must be between 5 MiB and 1 TiB" in script
-    assert "UPLOAD_GLOBAL_QUOTA_BYTES must be at least the tenant quota and at most 10 TiB" in script
     assert "UPLOAD_MAX_CONCURRENT_GLOBAL must be at least the tenant limit and at most 1000" in script
-    assert "Upload quota, rate, concurrency, and retention limits passed" in script
+    assert "Upload rate, concurrency, and retention limits passed" in script
 
 
 @pytest.mark.skipif(BASH is None, reason="Bash is required for legacy preflight contract")

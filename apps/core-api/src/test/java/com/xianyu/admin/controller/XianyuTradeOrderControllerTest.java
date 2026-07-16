@@ -72,22 +72,22 @@ class XianyuTradeOrderControllerTest {
     @Test
     void pageShouldRejectLegacyGetSideEffectInsteadOfReturningPossiblyStaleSuccess() {
         BizException error = assertThrows(BizException.class,
-                () -> controller.page(8L, null, null, 1, 20, true));
+                () -> controller.page(8L, null, null, null, 1, 20, true));
 
         assertEquals(410, error.getCode());
         verify(orderDeliveryCommandService, never()).syncOrders(eq(1L), any(OrderSyncRequest.class));
-        verify(orderService, never()).page(1L, 8L, null, null, 1, 20);
+        verify(orderService, never()).page(1L, 8L, null, null, null, 1, 20);
     }
 
     @Test
     void pageShouldListWithoutTriggeringSyncWhenSyncIsFalse() {
-        when(orderService.page(1L, null, null, null, 1, 20))
+        when(orderService.page(1L, null, null, null, null, 1, 20))
                 .thenReturn(new PageResult<XianyuTradeOrderVO>(java.util.List.of(), 1, 20, 0));
 
-        Result<PageResult<XianyuTradeOrderVO>> result = controller.page(null, null, null, 1, 20, false);
+        Result<PageResult<XianyuTradeOrderVO>> result = controller.page(null, null, null, null, 1, 20, false);
 
         verify(orderDeliveryCommandService, never()).syncOrders(eq(1L), any(OrderSyncRequest.class));
-        verify(orderService).page(1L, null, null, null, 1, 20);
+        verify(orderService).page(1L, null, null, null, null, 1, 20);
         assertEquals(200, result.getCode());
     }
 }

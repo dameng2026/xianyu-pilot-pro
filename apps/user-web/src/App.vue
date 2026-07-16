@@ -144,7 +144,14 @@ const pageMap = {
   'feature-unavailable': asyncPage(() => import('./pages/FeatureUnavailablePage.vue'))
 }
 
-const settingsKeys = ['settings-ai-cs', 'settings-product', 'settings-sync', 'settings-about']
+// 数据同步板块仅在本地开发环境显示（VITE_SHOW_DATA_SYNC=true）
+// 商业版（线上生产）不设置此变量，settings-sync 不会进入 settingsKeys
+const settingsKeys = [
+  'settings-ai-cs',
+  'settings-product',
+  ...(import.meta.env.VITE_SHOW_DATA_SYNC === 'true' ? ['settings-sync'] : []),
+  'settings-about'
+]
 const authPages = ['login', 'register', 'forgot-password']
 const defaultPage = 'dashboard'
 const profileEntryStorageKey = 'xya_profile_initial_tab'

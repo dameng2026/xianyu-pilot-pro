@@ -2,12 +2,6 @@
   <div class="feedback-page">
     <div v-if="notice.text" :class="['global-notice', notice.type]">{{ notice.text }}</div>
     <div v-if="bridgeStatusError" class="global-notice error">桥接状态加载失败：{{ bridgeStatusError }}</div>
-    <div v-else-if="bridgeStatusLoaded && !bridgeEnabled" class="global-notice warn">
-      反馈仅保存在当前开源部署的本地数据库，不会发送到商业版后端；请由部署管理员在本页查看和处理。
-    </div>
-    <div v-else-if="bridgeStatusLoaded && bridgeEnabled" class="global-notice success">
-      反馈将同步发送到商业版后端，由官方团队统一处理。
-    </div>
     <div v-if="feedbackStatsError" class="global-notice error">反馈统计加载失败：{{ feedbackStatsError }}</div>
 
     <section class="fbk-hero">
@@ -426,8 +420,6 @@ import Pagination from '../components/Pagination.vue'
 import { submitFeedback, listMyFeedback, getFeedbackDetail, appendFeedbackReply, getFeedbackStats, getFeedbackBridgeStatus } from '../api/feedback.js'
 
 const notice = ref({ text: '', type: 'info' })
-const bridgeEnabled = ref(false)
-const bridgeStatusLoaded = ref(false)
 const bridgeStatusError = ref('')
 
 const categoryOptions = [
@@ -713,17 +705,13 @@ function formatTime(value) {
 }
 
 async function loadBridgeStatus() {
-  bridgeStatusLoaded.value = false
   bridgeStatusError.value = ''
   try {
     const res = await getFeedbackBridgeStatus()
     const data = res?.data
     if (!data || typeof data !== 'object') throw new Error('桥接状态响应格式异常')
-    bridgeEnabled.value = data.bridgeEnabled === true
   } catch (e) {
     bridgeStatusError.value = e?.message || '桥接状态加载失败'
-  } finally {
-    bridgeStatusLoaded.value = true
   }
 }
 

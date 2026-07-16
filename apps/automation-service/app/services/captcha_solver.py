@@ -204,6 +204,8 @@ async def try_auto_solve(
     max_retries: int = 5,
     *,
     force: bool = False,
+    profile_strategy: str = "persistent",
+    semi_auto_fallback: bool = False,
 ) -> dict:
     """调用 crawler-service 的 Playwright 滑块求解接口。
 
@@ -313,6 +315,10 @@ async def try_auto_solve(
         "headless": resolved_headless,
         "maxRetries": max_retries,
         "timeoutMs": 90000,
+        # profile 策略：persistent（默认持久化，累积历史降低风控）/ seed / temp
+        "profileStrategy": profile_strategy,
+        # 半自动人工兜底：全自动失败后保留窗口供人工拖拽
+        "semiAutoFallback": semi_auto_fallback,
     }
     if proxy_payload:
         payload["proxy"] = proxy_payload

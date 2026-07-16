@@ -1,202 +1,298 @@
 <template>
-  <div class="delivery-mall">
-    <!-- 顶部标题区域 -->
-    <header class="mall-head">
-      <div class="mall-head-title">
-        <span class="circle-ico blue-bg mall-head-icon"><Icon name="product" /></span>
-        <div>
-          <h1>货源商城</h1>
-          <p>海量优质虚拟商品资源，自动发货，即买即用</p>
+  <div class="mall-page">
+    <div class="mall-main-wrap">
+      <div class="mall-main">
+        <div class="mall-header">
+          <div class="mall-header-left">
+            <div class="mall-icon-wrap">
+              <svg viewBox="0 0 24 24" fill="none" class="mall-header-icon">
+                <path d="M7 22C8.10457 22 9 21.1046 9 20C9 18.8954 8.10457 18 7 18C5.89543 18 5 18.8954 5 20C5 21.1046 5.89543 22 7 22Z" fill="currentColor"/>
+                <path d="M17 22C18.1046 22 19 21.1046 19 20C19 18.8954 18.1046 18 17 18C15.8954 18 15 18.8954 15 20C15 21.1046 15.8954 22 17 22Z" fill="currentColor"/>
+                <path d="M3 3H5L5.4 5M7 13H17L19 7H5.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <div class="mall-header-titles">
+              <h2 class="mall-header-title">货源商城</h2>
+              <p class="mall-header-desc">海量优质虚拟商品资源，自动发货，即买即用</p>
+            </div>
+          </div>
+          <div class="mall-stat-card">
+            <div class="stat-icon">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="M17 20H5C3.89543 20 3 19.1046 3 18V7C3 5.89543 3.89543 5 5 5H19C20.1046 5 21 5.89543 21 7V13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <path d="M3 7L12 13L21 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <circle cx="17" cy="17" r="4" fill="#4F7CFF" fill-opacity="0.15"/>
+                <path d="M15 17H19M17 15V19" stroke="#4F7CFF" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <div class="stat-content">
+              <div class="stat-label">已购买人数</div>
+              <div class="stat-number">12,458<span class="stat-unit">人</span></div>
+              <div class="stat-hint">昨日新增326人</div>
+            </div>
+          </div>
         </div>
-      </div>
-      <div class="mall-head-stat">
-        <span class="circle-ico blue-bg"><Icon name="users" /></span>
-        <div class="mall-head-stat-info">
-          <span>已购买人数</span>
-          <strong>12,458 人</strong>
-          <em>昨日新增 326 人</em>
-        </div>
-      </div>
-    </header>
 
-    <div class="mall-grid">
-      <!-- 中间主内容区 -->
-      <section class="mall-main">
-        <!-- 宣传与说明区域 -->
         <div class="mall-banner">
-          <div class="mall-banner-left">
-            <div class="mall-banner-text">
-              <h2>自动发货 · <span class="mall-brand">货源商城</span></h2>
-              <ul class="mall-points">
-                <li>海量优质资源，持续更新</li>
-                <li>自动发货，秒发到手</li>
-                <li>安全稳定，售后无忧</li>
-              </ul>
-              <div class="mall-banner-art">
-                <span class="art-box art-box-1"></span>
-                <span class="art-box art-box-2"></span>
-                <span class="art-tag">自动发货</span>
+          <div class="banner-left">
+            <h3 class="banner-title">
+              <span class="banner-title-dark">自动发货 ·</span>
+              <span class="banner-title-blue">货源商城</span>
+            </h3>
+            <ul class="banner-points">
+              <li>
+                <span class="point-check"><svg viewBox="0 0 16 16" fill="none"><path d="M13 4L6 11L3 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                海量优质资源，持续更新
+              </li>
+              <li>
+                <span class="point-check"><svg viewBox="0 0 16 16" fill="none"><path d="M13 4L6 11L3 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                自动发货，秒发到手
+              </li>
+              <li>
+                <span class="point-check"><svg viewBox="0 0 16 16" fill="none"><path d="M13 4L6 11L3 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                安全稳定，售后无忧
+              </li>
+            </ul>
+            <div class="banner-illustration">
+              <div class="illus-tag">
+                <div class="tag-hole"></div>
+                <div class="tag-hole tag-hole-r"></div>
+                <span class="tag-text">自动发货</span>
+                <div class="tag-string tag-string-l"></div>
+                <div class="tag-string tag-string-r"></div>
               </div>
-            </div>
-            <div class="mall-search">
-              <input class="input" placeholder="输入商品名称或关键词" />
-              <select class="input mall-search-cat">
-                <option>全部分类</option>
-                <option v-for="c in mallCategories.slice(1)" :key="c">{{ c }}</option>
-              </select>
-              <button class="app-btn primary" type="button">
-                <Icon name="search" /><span>搜索</span>
-              </button>
+              <div class="illus-cart">
+                <div class="cart-handle"></div>
+                <div class="cart-basket">
+                  <div class="basket-item basket-item-1"></div>
+                  <div class="basket-item basket-item-2"></div>
+                  <div class="basket-item basket-item-3"></div>
+                </div>
+                <div class="cart-wheel cart-wheel-l"></div>
+                <div class="cart-wheel cart-wheel-r"></div>
+              </div>
+              <div class="illus-box">
+                <div class="box-tape box-tape-v"></div>
+                <div class="box-tape box-tape-h"></div>
+                <div class="box-flap"></div>
+              </div>
+              <div class="illus-spark illus-spark-1"></div>
+              <div class="illus-spark illus-spark-2"></div>
+              <div class="illus-spark illus-spark-3"></div>
             </div>
           </div>
-
-          <aside class="mall-banner-right">
-            <div class="mall-info-block">
-              <div class="mall-info-head">
-                <span class="circle-ico blue-bg"><Icon name="help" /></span>
-                <b>文本商品说明</b>
+          <div class="banner-right">
+            <div class="notice-card">
+              <div class="notice-item">
+                <div class="notice-head">
+                  <span class="notice-icon notice-icon-blue">
+                    <svg viewBox="0 0 20 20" fill="none">
+                      <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.5"/>
+                      <path d="M10 6V11M10 14V14.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    </svg>
+                  </span>
+                  <span class="notice-title">文本商品说明</span>
+                </div>
+                <p class="notice-text">本站所有文本商品会一直更新，若出现文本商品不可用情况，可点击<span class="text-blue">投诉</span>，核实后将会<span class="text-red">下架处理</span>，感谢您的监督与支持！</p>
               </div>
-              <p>本站所有文本商品会一直更新，若出现文本商品不可用情况，可点击<em class="t-blue">投诉</em>，核实后将会<em class="t-red">下架处理</em>，感谢您的监督与支持！</p>
-            </div>
-            <div class="mall-info-divider"></div>
-            <div class="mall-info-block">
-              <div class="mall-info-head">
-                <span class="circle-ico green-bg"><Icon name="key" /></span>
-                <b>卡密商品说明</b>
+              <div class="notice-divider"></div>
+              <div class="notice-item">
+                <div class="notice-head">
+                  <span class="notice-icon notice-icon-green">
+                    <svg viewBox="0 0 20 20" fill="none">
+                      <rect x="2" y="5" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                      <path d="M2 8H18" stroke="currentColor" stroke-width="1.5"/>
+                      <path d="M6 3V7M14 3V7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                  </span>
+                  <span class="notice-title">卡密商品说明</span>
+                </div>
+                <p class="notice-text">卡密商品库存实时更新，购买后自动发货，请及时使用。如遇问题可联系客服或提交工单，我们将尽快为您处理！</p>
               </div>
-              <p>卡密商品库存实时更新，购买后自动发货，请及时使用。如遇问题可联系客服或提交工单，我们将尽快为您处理！</p>
             </div>
-          </aside>
+          </div>
         </div>
 
-        <!-- 商品主体卡片 -->
-        <div class="card-panel mall-content">
-          <!-- 商品类型切换 -->
-          <div class="mall-type-tabs">
-            <button class="mall-type-tab active" type="button">文本商品</button>
-            <button class="mall-type-tab" type="button">卡密商品</button>
+        <div class="mall-content-card">
+          <div class="mall-tabs">
+            <div
+              v-for="tab in productTabs"
+              :key="tab.value"
+              :class="['mall-tab', { active: activeTab === tab.value }]"
+              @click="activeTab = tab.value"
+            >
+              {{ tab.label }}
+            </div>
           </div>
 
-          <!-- 筛选与视图工具栏 -->
           <div class="mall-toolbar">
-            <div class="mall-cats">
-              <button
-                v-for="(c, i) in mallCategories"
-                :key="c"
-                type="button"
-                :class="['mall-cat', { active: i === 0 }]"
+            <div class="toolbar-left">
+              <div
+                v-for="cat in categories"
+                :key="cat"
+                :class="['cat-chip', { active: activeCategory === cat }]"
+                @click="activeCategory = cat"
               >
-                {{ c }}
-              </button>
+                {{ cat }}
+              </div>
             </div>
-            <div class="mall-tools">
-              <input class="input mall-tool-search" placeholder="搜索商品" />
-              <select class="input">
-                <option>综合排序</option>
-                <option>销量优先</option>
-                <option>价格从低到高</option>
-                <option>价格从高到低</option>
-                <option>最新上架</option>
+            <div class="toolbar-right">
+              <div class="tool-search">
+                <svg viewBox="0 0 18 18" fill="none" class="tool-search-icon">
+                  <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.8"/>
+                  <path d="M12.5 12.5L16 16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+                <input type="text" placeholder="搜索商品名称、关键词" class="tool-search-input">
+              </div>
+              <select class="tool-select">
+                <option value="">综合排序</option>
+                <option value="sales">销量优先</option>
+                <option value="price-asc">价格从低到高</option>
+                <option value="price-desc">价格从高到低</option>
+                <option value="new">最新发布</option>
               </select>
-              <button class="mall-view active" type="button" :title="'宫格视图'">
-                <Icon name="product" />
-              </button>
-              <button class="mall-view" type="button" :title="'列表视图'">
-                <Icon name="data" />
-              </button>
+              <div class="view-switch">
+                <button :class="['view-btn', { active: viewMode === 'grid' }]" @click="viewMode = 'grid'" title="宫格视图">
+                  <svg viewBox="0 0 18 18" fill="none">
+                    <rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5" :fill="viewMode === 'grid' ? 'currentColor' : 'none'"/>
+                    <rect x="11" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5" :fill="viewMode === 'grid' ? 'currentColor' : 'none'"/>
+                    <rect x="2" y="11" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5" :fill="viewMode === 'grid' ? 'currentColor' : 'none'"/>
+                    <rect x="11" y="11" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5" :fill="viewMode === 'grid' ? 'currentColor' : 'none'"/>
+                  </svg>
+                </button>
+                <button :class="['view-btn', { active: viewMode === 'list' }]" @click="viewMode = 'list'" title="列表视图">
+                  <svg viewBox="0 0 18 18" fill="none">
+                    <rect x="2" y="3" width="3" height="2" rx="0.5" stroke="currentColor" stroke-width="1.5" :fill="viewMode === 'list' ? 'currentColor' : 'none'"/>
+                    <rect x="2" y="8" width="3" height="2" rx="0.5" stroke="currentColor" stroke-width="1.5" :fill="viewMode === 'list' ? 'currentColor' : 'none'"/>
+                    <rect x="2" y="13" width="3" height="2" rx="0.5" stroke="currentColor" stroke-width="1.5" :fill="viewMode === 'list' ? 'currentColor' : 'none'"/>
+                    <rect x="7" y="3" width="9" height="2" rx="0.5" stroke="currentColor" stroke-width="1.5" :fill="viewMode === 'list' ? 'currentColor' : 'none'"/>
+                    <rect x="7" y="8" width="9" height="2" rx="0.5" stroke="currentColor" stroke-width="1.5" :fill="viewMode === 'list' ? 'currentColor' : 'none'"/>
+                    <rect x="7" y="13" width="9" height="2" rx="0.5" stroke="currentColor" stroke-width="1.5" :fill="viewMode === 'list' ? 'currentColor' : 'none'"/>
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
 
-          <!-- 商品宫格 -->
-          <div class="mall-products">
+          <div :class="['mall-products', viewMode]">
             <MallProductCard
-              v-for="p in textProducts"
-              :key="p.id"
-              :product="p"
-              type="text"
+              v-for="product in displayProducts"
+              :key="product.id"
+              :product="product"
+              :product-type="activeTab"
+              @detail="handleDetail(product)"
+              @buy="handleBuy(product)"
             />
           </div>
 
-          <!-- 隐藏预留：卡密商品卡片结构（切换到卡密Tab时展示） -->
-          <div v-if="false" class="mall-products">
-            <MallProductCard
-              v-for="p in cardProducts"
-              :key="p.id"
-              :product="p"
-              type="card"
-            />
-          </div>
-
-          <!-- 分页 -->
           <div class="mall-pagination">
-            <button class="page-no" type="button">上一页</button>
-            <button class="page-no active" type="button">1</button>
-            <button class="page-no" type="button">2</button>
-            <button class="page-no" type="button">3</button>
-            <button class="page-no" type="button">4</button>
-            <button class="page-no" type="button">5</button>
-            <span class="mall-ellipsis">…</span>
-            <button class="page-no" type="button">12</button>
-            <button class="page-no" type="button">下一页</button>
-            <span class="mall-page-total">共12页，96条数据</span>
+            <button class="page-btn page-prev">上一页</button>
+            <button class="page-btn page-num active">1</button>
+            <button class="page-btn page-num">2</button>
+            <button class="page-btn page-num">3</button>
+            <button class="page-btn page-num">4</button>
+            <button class="page-btn page-num">5</button>
+            <span class="page-dots">...</span>
+            <button class="page-btn page-num">12</button>
+            <button class="page-btn page-next">下一页</button>
+            <span class="page-info">共12页，96条数据</span>
           </div>
         </div>
-      </section>
+      </div>
 
-      <!-- 右侧辅助栏 -->
-      <aside class="mall-side">
-        <!-- 使用指南 -->
-        <div class="card-panel mall-side-card">
-          <h3 class="mall-side-title">使用指南</h3>
-          <div v-for="g in mallGuides" :key="g.title" class="mall-guide-item">
-            <span class="circle-ico blue-bg"><Icon :name="g.icon" /></span>
-            <div class="mall-guide-main">
-              <b>{{ g.title }}</b>
-              <span>{{ g.desc }}</span>
+      <aside class="mall-aside">
+        <div class="aside-card aside-guide">
+          <div class="aside-head">
+            <h4 class="aside-title">使用指南</h4>
+            <a href="#/user-manual" class="aside-more">查看更多</a>
+          </div>
+          <div class="guide-list">
+            <div v-for="(item, idx) in guideList" :key="idx" class="guide-item">
+              <span class="guide-dot" :style="{ background: item.color }">
+                <svg viewBox="0 0 16 16" fill="none">
+                  <path :d="item.icon" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </span>
+              <div class="guide-text">
+                <div class="guide-name">{{ item.title }}</div>
+                <div class="guide-desc">{{ item.desc }}</div>
+              </div>
             </div>
           </div>
         </div>
 
-        <!-- 公告通知 -->
-        <div class="card-panel mall-side-card">
-          <h3 class="mall-side-title">公告通知</h3>
-          <div v-for="(a, i) in mallAnnouncements" :key="i" class="mall-notice-item">
-            <span class="mall-notice-date">{{ a.date }}</span>
-            <span class="mall-notice-text">{{ a.text }}</span>
-            <span v-if="a.badge" :class="['mall-notice-badge', a.badge === 'NEW' ? 'new' : 'hot']">{{ a.badge }}</span>
+        <div class="aside-card aside-announce">
+          <div class="aside-head">
+            <h4 class="aside-title">公告通知</h4>
+          </div>
+          <div class="announce-list">
+            <div v-for="(ann, idx) in announcements" :key="idx" class="announce-item">
+              <span class="ann-date">{{ ann.date }}</span>
+              <span class="ann-title" :title="ann.title">{{ ann.title }}</span>
+              <span v-if="ann.tag" :class="['ann-tag', ann.tag]">{{ ann.tag }}</span>
+            </div>
           </div>
         </div>
 
-        <!-- 联系客服 -->
-        <div class="card-panel mall-side-card">
-          <h3 class="mall-side-title">联系客服</h3>
-          <div class="mall-contact-item">
-            <div class="mall-contact-main">
-              <b>在线客服</b>
-              <span>工作日 9:00-22:00 在线</span>
-            </div>
-            <button class="app-btn mall-contact-btn" type="button">立即咨询</button>
+        <div class="aside-card aside-service">
+          <div class="aside-head">
+            <h4 class="aside-title">联系客服</h4>
           </div>
-          <div class="mall-contact-item">
-            <div class="mall-contact-main">
-              <b>工单反馈</b>
-              <span>提交问题，专人跟进</span>
+          <div class="service-list">
+            <div class="service-item">
+              <div class="service-icon-wrap s1">
+                <svg viewBox="0 0 22 22" fill="none">
+                  <path d="M11 2C6.58 2 3 5.24 3 9.27C3 11.54 4.23 13.54 6.12 14.76L5.36 17.9L8.72 16.34C9.44 16.51 10.2 16.6 11 16.6C15.42 16.6 19 13.36 19 9.33C19 5.3 15.42 2 11 2Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                </svg>
+              </div>
+              <div class="service-text">
+                <div class="service-name">在线客服</div>
+                <div class="service-desc">工作日 9:00 - 18:00 在线</div>
+              </div>
+              <button class="service-btn">立即咨询</button>
             </div>
-            <button class="app-btn mall-contact-btn" type="button">提交工单</button>
-          </div>
-          <div class="mall-contact-item">
-            <div class="mall-contact-main">
-              <b>常见问题</b>
-              <span>查看高频问题解答</span>
+            <div class="service-item">
+              <div class="service-icon-wrap s2">
+                <svg viewBox="0 0 22 22" fill="none">
+                  <rect x="4" y="3" width="14" height="16" rx="2" stroke="currentColor" stroke-width="1.8"/>
+                  <path d="M4 7H18" stroke="currentColor" stroke-width="1.8"/>
+                  <path d="M8 11H14M8 14H12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+              </div>
+              <div class="service-text">
+                <div class="service-name">工单反馈</div>
+                <div class="service-desc">24小时内响应您的问题</div>
+              </div>
+              <button class="service-btn">提交工单</button>
             </div>
-            <button class="app-btn mall-contact-btn" type="button">立即查看</button>
+            <div class="service-item">
+              <div class="service-icon-wrap s3">
+                <svg viewBox="0 0 22 22" fill="none">
+                  <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="1.8"/>
+                  <path d="M9 9C9 7.9 9.9 7 11 7C12.1 7 13 7.9 13 9C13 10.1 11.6 10.6 11.3 11.3C11.1 11.7 11 12.1 11 12.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                  <circle cx="11" cy="15" r="0.8" fill="currentColor"/>
+                </svg>
+              </div>
+              <div class="service-text">
+                <div class="service-name">常见问题</div>
+                <div class="service-desc">查看常见问题解答</div>
+              </div>
+              <button class="service-btn">查看帮助</button>
+            </div>
           </div>
         </div>
 
-        <!-- 温馨提示 -->
-        <div class="mall-warm-tip">
-          <span class="circle-ico warm-icon"><Icon name="bell" /></span>
-          <p>请在购买后及时查看商品内容，如遇问题请第一时间联系我们！</p>
+        <div class="aside-tips">
+          <div class="tips-icon-wrap">
+            <svg viewBox="0 0 20 20" fill="none">
+              <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M10 6V10.5M10 13.5V14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div class="tips-content">
+            <div class="tips-title">温馨提示</div>
+            <div class="tips-text">请在购买后及时查看商品内容，如遇问题请第一时间联系我们！</div>
+          </div>
         </div>
       </aside>
     </div>
@@ -204,735 +300,982 @@
 </template>
 
 <script setup>
-import Icon from '../components/Icon.vue'
+import { ref, computed } from 'vue'
 import MallProductCard from '../components/MallProductCard.vue'
-import {
-  textProducts,
-  cardProducts,
-  mallCategories,
-  mallAnnouncements,
-  mallGuides
-} from '../data/mallProducts.js'
+import { textProducts, cardProducts } from '../data/mallProducts'
+
+const activeTab = ref('text')
+const activeCategory = ref('全部')
+const viewMode = ref('grid')
+
+const productTabs = [
+  { label: '文本商品', value: 'text' },
+  { label: '卡密商品', value: 'card' }
+]
+
+const categories = ['全部', '软件工具', '教程资料', '运营营销', '设计素材', '编程开发', '考试学习', '其他']
+
+const displayProducts = computed(() => {
+  return activeTab.value === 'text' ? textProducts : cardProducts
+})
+
+const guideList = [
+  { title: '注册账号', desc: '完成注册并实名认证', color: 'rgba(79,124,255,.92)', icon: 'M4 13C4 10.79 5.79 9 8 9H12M12 9L9.5 6.5M12 9L9.5 11.5' },
+  { title: '选择商品', desc: '浏览商品并查看详情', color: 'rgba(99,102,241,.92)', icon: 'M8 6L12 2L16 6M12 2V13' },
+  { title: '购买商品', desc: '完成支付自动获取卡密', color: 'rgba(139,92,246,.92)', icon: 'M3 7H17M5 7H15V14C15 14.55 14.55 15 14 15H6C5.45 15 5 14.55 5 14V7Z' },
+  { title: '开始使用', desc: '查看订单并使用商品', color: 'rgba(168,85,247,.92)', icon: 'M5 13L8 16L15 9' }
+]
+
+const announcements = [
+  { date: '07-15', title: '商城上线优惠活动：新用户首单立减5元', tag: 'NEW' },
+  { date: '07-14', title: '暑期运营资料包限时特惠，低至3折起', tag: 'HOT' },
+  { date: '07-12', title: '新增AI大模型系列教程，持续更新中', tag: 'NEW' },
+  { date: '07-10', title: '卡密自动发货系统升级，发货速度提升', tag: '' },
+  { date: '07-08', title: '售后客服通道已开通，欢迎反馈问题', tag: '' }
+]
+
+function handleDetail(product) {
+  console.log('detail', product)
+}
+function handleBuy(product) {
+  console.log('buy', product)
+}
 </script>
 
 <style scoped>
-.delivery-mall {
+.mall-page {
+  width: 100%;
+  min-height: 100%;
+  box-sizing: border-box;
+}
+
+.mall-main-wrap {
   display: flex;
-  flex-direction: column;
-  gap: 16px;
+  gap: 20px;
+  align-items: flex-start;
+  width: 100%;
 }
 
-/* 顶部标题区域 */
-.mall-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  box-shadow: var(--shadow);
-  padding: 18px 22px;
-}
-
-.mall-head-title {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.mall-head-icon .ui-icon-img {
-  width: 30px;
-  height: 30px;
-}
-
-.mall-head-title h1 {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 800;
-  color: var(--text);
-  letter-spacing: .3px;
-}
-
-.mall-head-title p {
-  margin: 6px 0 0;
-  color: #72809a;
-  font-size: 14px;
-}
-
-.mall-head-stat {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  background: linear-gradient(135deg, #f3f8ff, #eef4ff);
-  border: 1px solid #dbe8fa;
-  border-radius: 12px;
-  padding: 12px 18px;
-  min-width: 280px;
-}
-
-.mall-head-stat .circle-ico {
-  width: 46px;
-  height: 46px;
-}
-
-.mall-head-stat .ui-icon-img {
-  width: 28px;
-  height: 28px;
-}
-
-.mall-head-stat-info {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.3;
-}
-
-.mall-head-stat-info span {
-  font-size: 12.5px;
-  color: #72809a;
-}
-
-.mall-head-stat-info strong {
-  font-size: 22px;
-  color: var(--text);
-  font-weight: 800;
-  margin: 2px 0;
-}
-
-.mall-head-stat-info em {
-  font-style: normal;
-  font-size: 12px;
-  color: var(--green);
-}
-
-/* 主网格：中间内容 + 右侧辅助栏 */
-.mall-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
-  gap: 18px;
-  align-items: start;
+@media (max-width: 1200px) {
+  .mall-main-wrap {
+    flex-direction: column;
+  }
 }
 
 .mall-main {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  flex: 1;
   min-width: 0;
 }
 
-/* 宣传与说明区域 */
-.mall-banner {
-  display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+.mall-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
   gap: 16px;
-  height: 220px;
+  flex-wrap: wrap;
 }
 
-.mall-banner-left {
-  position: relative;
+.mall-header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.mall-icon-wrap {
+  width: 48px;
+  height: 48px;
   border-radius: 14px;
-  padding: 22px 24px;
-  overflow: hidden;
-  background: linear-gradient(120deg, #eef2ff 0%, #e7ecff 45%, #e0e7ff 100%);
-  border: 1px solid #dfe5fb;
+  background: linear-gradient(135deg, #4F7CFF, #6366F1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(79, 124, 255, .25);
+  flex-shrink: 0;
+}
+
+.mall-header-icon {
+  width: 26px;
+  height: 26px;
+}
+
+.mall-header-titles {
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  gap: 2px;
 }
 
-.mall-banner-text {
-  position: relative;
-  z-index: 1;
-}
-
-.mall-banner-text h2 {
+.mall-header-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #0f172a;
   margin: 0;
+  line-height: 1.2;
+}
+
+.mall-header-desc {
+  font-size: 13px;
+  color: #64748b;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.mall-stat-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #fff;
+  border-radius: 14px;
+  padding: 12px 18px;
+  border: 1px solid #e8edf5;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .03);
+}
+
+.stat-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(79,124,255,.08), rgba(99,102,241,.08));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #4F7CFF;
+  flex-shrink: 0;
+}
+.stat-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.stat-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.stat-label {
+  font-size: 12px;
+  color: #94a3b8;
+}
+.stat-number {
   font-size: 22px;
   font-weight: 800;
-  color: #2b3358;
-  letter-spacing: .3px;
+  color: #0f172a;
+  line-height: 1.2;
+  letter-spacing: -0.5px;
+}
+.stat-unit {
+  font-size: 13px;
+  font-weight: 500;
+  color: #64748b;
+  margin-left: 1px;
+}
+.stat-hint {
+  font-size: 11px;
+  color: #94a3b8;
 }
 
-.mall-brand {
-  color: var(--primary);
-}
-
-.mall-points {
-  margin: 12px 0 0;
-  padding: 0;
-  list-style: none;
+.mall-banner {
+  background: linear-gradient(120deg, #dbeafe 0%, #e0e7ff 35%, #ede9fe 100%);
+  border-radius: 18px;
+  padding: 28px 32px;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.mall-points li {
-  position: relative;
-  padding-left: 18px;
-  color: #41506c;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.mall-points li::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 8px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--primary);
-  box-shadow: 0 0 0 3px rgba(13, 107, 255, .15);
-}
-
-.mall-banner-art {
-  position: absolute;
-  right: 18px;
-  top: 14px;
-  width: 150px;
-  height: 80px;
-}
-
-.art-box {
-  position: absolute;
-  border-radius: 16px;
-  background: linear-gradient(135deg, #b8c8ff, #6a8dff);
-  box-shadow: 0 12px 24px rgba(13, 107, 255, .22);
-}
-
-.art-box-1 {
-  width: 92px;
-  height: 58px;
-  right: 30px;
-  top: 4px;
-  transform: rotate(-8deg);
-}
-
-.art-box-2 {
-  width: 70px;
-  height: 46px;
-  right: 0;
-  top: 32px;
-  background: linear-gradient(135deg, #c9b6ff, #8b5cf6);
-  transform: rotate(10deg);
-  opacity: .92;
-}
-
-.art-tag {
-  position: absolute;
-  left: 8px;
-  bottom: -2px;
-  height: 24px;
-  padding: 0 10px;
-  border-radius: 7px;
-  background: #fff;
-  color: var(--primary);
-  font-size: 12px;
-  font-weight: 800;
-  display: inline-flex;
   align-items: center;
-  box-shadow: 0 6px 16px rgba(31, 53, 94, .14);
-}
-
-.mall-search {
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 18px;
   position: relative;
-  z-index: 1;
-  display: flex;
-  gap: 8px;
-  align-items: center;
+  overflow: hidden;
 }
 
-.mall-search .input {
+.banner-left {
   flex: 1;
-  background: #fff;
+  min-width: 0;
 }
 
-.mall-search-cat {
-  min-width: 130px;
-  max-width: 150px;
+.banner-title {
+  font-size: 26px;
+  font-weight: 800;
+  margin: 0 0 16px;
+  line-height: 1.2;
+  letter-spacing: -0.3px;
+}
+.banner-title-dark {
+  color: #1e293b;
+}
+.banner-title-blue {
+  color: #4F7CFF;
 }
 
-.mall-search .app-btn {
-  height: 38px;
-  min-width: 88px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.mall-search .app-btn .ui-icon-img {
-  width: 16px;
-  height: 16px;
-  filter: brightness(0) invert(1);
-}
-
-/* 右侧说明卡片 */
-.mall-banner-right {
-  background: rgba(255, 255, 255, .82);
-  backdrop-filter: blur(4px);
-  border: 1px solid #e3e9fb;
-  border-radius: 14px;
-  padding: 18px 20px;
+.banner-points {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 20px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  gap: 8px;
 }
-
-.mall-info-head {
+.banner-points li {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 8px;
+  font-size: 14px;
+  color: #475569;
 }
-
-.mall-info-head .circle-ico {
-  width: 34px;
-  height: 34px;
-}
-
-.mall-info-head .ui-icon-img {
+.point-check {
   width: 20px;
   height: 20px;
-}
-
-.mall-info-head b {
-  font-size: 15px;
-  color: var(--text);
-}
-
-.mall-info-block p {
-  margin: 0;
-  font-size: 12.5px;
-  line-height: 1.7;
-  color: #5f6f8b;
-}
-
-.mall-info-block .t-blue {
-  font-style: normal;
-  color: var(--primary);
-  font-weight: 700;
-}
-
-.mall-info-block .t-red {
-  font-style: normal;
-  color: #ff3b30;
-  font-weight: 700;
-}
-
-.mall-info-divider {
-  height: 1px;
-  background: #eaeff8;
-  margin: 14px 0;
-}
-
-/* 商品主体卡片 */
-.mall-content {
-  padding: 16px 18px 20px;
-}
-
-.mall-type-tabs {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 14px;
-}
-
-.mall-type-tab {
-  height: 42px;
-  padding: 0 18px;
-  border: 0;
-  background: transparent;
-  color: #6c7890;
-  font-size: 15px;
-  font-weight: 650;
-  border-bottom: 2px solid transparent;
-  cursor: pointer;
-}
-
-.mall-type-tab.active {
-  color: var(--primary);
-  border-bottom-color: var(--primary);
-  font-weight: 800;
-}
-
-/* 工具栏 */
-.mall-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 16px;
-}
-
-.mall-cats {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.mall-cat {
-  height: 32px;
-  padding: 0 14px;
-  border: 1px solid var(--line);
-  background: #fff;
-  color: #41506c;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all .15s ease;
-}
-
-.mall-cat:hover {
-  border-color: #bcd7ff;
-  color: var(--primary);
-}
-
-.mall-cat.active {
-  background: var(--primary);
-  border-color: var(--primary);
+  border-radius: 50%;
+  background: #4F7CFF;
   color: #fff;
-  box-shadow: 0 6px 14px rgba(13, 107, 255, .22);
-}
-
-.mall-tools {
   display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.mall-tool-search {
-  width: 160px;
-}
-
-.mall-tools .input {
-  height: 34px;
-}
-
-.mall-view {
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--line);
-  background: #fff;
-  border-radius: 8px;
-  color: #6c7890;
-  display: inline-flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
+  flex-shrink: 0;
+}
+.point-check svg {
+  width: 11px;
+  height: 11px;
 }
 
-.mall-view .ui-icon-img {
-  width: 18px;
+.banner-illustration {
+  position: relative;
+  height: 90px;
+}
+
+.illus-tag {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 80px;
+  height: 54px;
+  background: linear-gradient(135deg, #fef3c7, #fbbf24);
+  border-radius: 4px 4px 0 0;
+  clip-path: polygon(0 12%, 12% 0, 88% 0, 100% 12%, 100% 100%, 0 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 2px 4px 0 rgba(0,0,0,.08);
+  transform: rotate(-8deg);
+}
+.tag-hole {
+  position: absolute;
+  top: 4px;
+  left: 12px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e0e7ff;
+}
+.tag-hole-r {
+  left: auto;
+  right: 12px;
+}
+.tag-text {
+  font-size: 11px;
+  font-weight: 700;
+  color: #92400e;
+}
+.tag-string {
+  position: absolute;
+  top: -18px;
+  left: 14px;
+  width: 2px;
+  height: 20px;
+  background: #94a3b8;
+  border-radius: 1px;
+  transform: rotate(10deg);
+  transform-origin: bottom;
+}
+.tag-string-r {
+  left: auto;
+  right: 14px;
+  transform: rotate(-10deg);
+}
+
+.illus-cart {
+  position: absolute;
+  left: 120px;
+  bottom: 4px;
+}
+.cart-handle {
+  position: absolute;
+  top: -12px;
+  left: -18px;
+  width: 22px;
   height: 18px;
+  border: 3px solid #4F7CFF;
+  border-right: none;
+  border-bottom: none;
+  border-radius: 12px 0 0 0;
+}
+.cart-basket {
+  width: 72px;
+  height: 44px;
+  background: linear-gradient(135deg, #60a5fa, #4F7CFF);
+  border-radius: 6px 6px 10px 10px;
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+  padding-top: 6px;
+}
+.basket-item {
+  width: 12px;
+  border-radius: 3px;
+}
+.basket-item-1 {
+  height: 20px;
+  background: #f87171;
+  margin-top: 4px;
+}
+.basket-item-2 {
+  height: 26px;
+  background: #fbbf24;
+}
+.basket-item-3 {
+  height: 22px;
+  background: #34d399;
+  margin-top: 2px;
+}
+.cart-wheel {
+  position: absolute;
+  bottom: -8px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #1e293b;
+  border: 2px solid #fff;
+}
+.cart-wheel-l {
+  left: 12px;
+}
+.cart-wheel-r {
+  right: 12px;
 }
 
-.mall-view.active {
-  background: var(--primary);
-  border-color: var(--primary);
+.illus-box {
+  position: absolute;
+  right: 60px;
+  bottom: 4px;
+  width: 70px;
+  height: 56px;
+  background: linear-gradient(135deg, #fde68a, #fcd34d);
+  border-radius: 4px;
+  border: 2px solid #d97706;
+}
+.box-tape {
+  position: absolute;
+  background: rgba(239, 68, 68, .8);
+}
+.box-tape-v {
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  transform: translateX(-50%);
+}
+.box-tape-h {
+  top: 50%;
+  left: -2px;
+  right: -2px;
+  height: 6px;
+  transform: translateY(-50%);
+}
+.box-flap {
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40px;
+  height: 12px;
+  background: linear-gradient(135deg, #fef3c7, #fde68a);
+  border: 2px solid #d97706;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+}
+
+.illus-spark {
+  position: absolute;
+  border-radius: 50%;
+}
+.illus-spark-1 {
+  right: 30px;
+  top: 10px;
+  width: 8px;
+  height: 8px;
+  background: #818cf8;
+  box-shadow: 0 0 0 4px rgba(129,140,248,.2);
+}
+.illus-spark-2 {
+  right: 10px;
+  top: 28px;
+  width: 6px;
+  height: 6px;
+  background: #f472b6;
+  box-shadow: 0 0 0 3px rgba(244,114,182,.2);
+}
+.illus-spark-3 {
+  left: 200px;
+  top: 0;
+  width: 5px;
+  height: 5px;
+  background: #34d399;
+  box-shadow: 0 0 0 2px rgba(52,211,153,.2);
+}
+
+.banner-right {
+  flex-shrink: 0;
+  width: 300px;
+}
+
+@media (max-width: 900px) {
+  .mall-banner {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 24px 20px;
+  }
+  .banner-right {
+    width: 100%;
+  }
+  .banner-illustration {
+    display: none;
+  }
+}
+
+.notice-card {
+  background: rgba(255,255,255,.85);
+  backdrop-filter: blur(8px);
+  border-radius: 14px;
+  padding: 16px 18px;
+  border: 1px solid rgba(255,255,255,.7);
+  box-shadow: 0 4px 16px rgba(79,124,255,.08);
+}
+.notice-item {
+  padding: 2px 0;
+}
+.notice-divider {
+  height: 1px;
+  background: #e2e8f0;
+  margin: 12px 0;
+}
+.notice-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.notice-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.notice-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.notice-icon-blue {
+  background: rgba(79,124,255,.12);
+  color: #4F7CFF;
+}
+.notice-icon-green {
+  background: rgba(16,185,129,.12);
+  color: #10b981;
+}
+.notice-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e293b;
+}
+.notice-text {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.7;
+  margin: 0;
+  padding-left: 30px;
+}
+.text-blue {
+  color: #4F7CFF;
+  font-weight: 600;
+}
+.text-red {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.mall-content-card {
+  background: #fff;
+  border-radius: 16px;
+  border: 1px solid #e8edf5;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .04);
+  padding: 16px 20px 20px;
+}
+
+.mall-tabs {
+  display: flex;
+  gap: 24px;
+  border-bottom: 1px solid #f1f5f9;
+  margin-bottom: 16px;
+}
+.mall-tab {
+  padding: 10px 0;
+  font-size: 15px;
+  color: #64748b;
+  cursor: pointer;
+  font-weight: 500;
+  position: relative;
+  transition: color .2s;
+}
+.mall-tab.active {
+  color: #4F7CFF;
+  font-weight: 600;
+}
+.mall-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: #4F7CFF;
+  border-radius: 2px;
+}
+
+.mall-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cat-chip {
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  color: #475569;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  cursor: pointer;
+  transition: all .2s;
+  white-space: nowrap;
+}
+.cat-chip:hover {
+  border-color: #c7d2fe;
+  color: #4F7CFF;
+}
+.cat-chip.active {
+  background: #4F7CFF;
   color: #fff;
+  border-color: #4F7CFF;
+  font-weight: 500;
 }
 
-.mall-view.active .ui-icon-img {
-  filter: brightness(0) invert(1);
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.tool-search {
+  position: relative;
+  width: 220px;
+}
+.tool-search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 15px;
+  height: 15px;
+  color: #94a3b8;
+}
+.tool-search-input {
+  width: 100%;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  padding: 0 10px 0 32px;
+  font-size: 13px;
+  color: #1e293b;
+  outline: none;
+  box-sizing: border-box;
+  transition: all .2s;
+}
+.tool-search-input:focus {
+  border-color: #4F7CFF;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(79,124,255,.1);
+}
+.tool-search-input::placeholder {
+  color: #94a3b8;
 }
 
-/* 商品宫格 */
+.tool-select {
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  padding: 0 28px 0 12px;
+  font-size: 13px;
+  color: #475569;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+
+.view-switch {
+  display: flex;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+  height: 34px;
+}
+.view-btn {
+  width: 36px;
+  height: 100%;
+  border: none;
+  background: #fff;
+  color: #94a3b8;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all .15s;
+  padding: 0;
+}
+.view-btn svg {
+  width: 16px;
+  height: 16px;
+}
+.view-btn:hover {
+  color: #64748b;
+}
+.view-btn.active {
+  color: #4F7CFF;
+  background: rgba(79,124,255,.08);
+}
+
 .mall-products {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 16px;
+  margin-bottom: 20px;
+}
+.mall-products.list {
+  grid-template-columns: 1fr;
 }
 
-/* 分页 */
+@media (max-width: 1700px) {
+  .mall-products { grid-template-columns: repeat(4, 1fr); }
+}
+
+@media (max-width: 1400px) {
+  .mall-products { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 1000px) {
+  .mall-products { grid-template-columns: repeat(2, 1fr); }
+}
+
 .mall-pagination {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  margin-top: 22px;
+  gap: 6px;
+  padding-top: 12px;
   flex-wrap: wrap;
 }
-
-.mall-pagination .page-no {
+.page-btn {
   min-width: 34px;
   height: 34px;
-  padding: 0 10px;
-  border: 1px solid #e4ebf5;
-  background: #fff;
   border-radius: 8px;
-  color: #41506c;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #475569;
   font-size: 13px;
-  font-weight: 600;
   cursor: pointer;
+  transition: all .2s;
+  padding: 0 12px;
 }
-
-.mall-pagination .page-no.active {
-  background: var(--primary);
-  border-color: var(--primary);
+.page-btn:hover {
+  border-color: #c7d2fe;
+  color: #4F7CFF;
+}
+.page-btn.active {
+  background: #4F7CFF;
   color: #fff;
+  border-color: #4F7CFF;
+  font-weight: 600;
 }
-
-.mall-ellipsis {
-  color: #98a4b7;
-  padding: 0 2px;
-}
-
-.mall-page-total {
-  margin-left: 10px;
-  color: #72809a;
+.page-dots {
+  color: #94a3b8;
   font-size: 13px;
+  padding: 0 4px;
+}
+.page-info {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-left: 10px;
 }
 
-/* 右侧辅助栏 */
-.mall-side {
+.mall-aside {
+  width: 280px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  min-width: 0;
 }
 
-.mall-side-card {
-  padding: 16px 18px;
+@media (max-width: 1200px) {
+  .mall-aside {
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .aside-card, .aside-tips {
+    flex: 1;
+    min-width: 260px;
+  }
 }
 
-.mall-side-title {
-  margin: 0 0 14px;
-  font-size: 16px;
-  font-weight: 800;
-  color: var(--text);
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.aside-card {
+  background: #fff;
+  border-radius: 14px;
+  border: 1px solid #e8edf5;
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .03);
 }
-
-.mall-side-title::before {
-  content: "";
-  width: 4px;
-  height: 15px;
-  border-radius: 3px;
-  background: var(--primary);
-}
-
-/* 使用指南 */
-.mall-guide-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid #f0f4fa;
-}
-
-.mall-guide-item:last-child {
-  border-bottom: 0;
-}
-
-.mall-guide-item .circle-ico {
-  width: 36px;
-  height: 36px;
-  flex: 0 0 auto;
-}
-
-.mall-guide-item .ui-icon-img {
-  width: 20px;
-  height: 20px;
-}
-
-.mall-guide-main {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.mall-guide-main b {
-  font-size: 14px;
-  color: var(--text);
-}
-
-.mall-guide-main span {
-  font-size: 12px;
-  color: #8a96aa;
-  line-height: 1.5;
-}
-
-/* 公告通知 */
-.mall-notice-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 0;
-  border-bottom: 1px solid #f0f4fa;
-}
-
-.mall-notice-item:last-child {
-  border-bottom: 0;
-}
-
-.mall-notice-date {
-  color: #98a4b7;
-  font-size: 12px;
-  font-weight: 600;
-  flex: 0 0 auto;
-}
-
-.mall-notice-text {
-  flex: 1;
-  font-size: 13px;
-  color: #41506c;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mall-notice-badge {
-  height: 18px;
-  padding: 0 6px;
-  border-radius: 5px;
-  font-size: 10px;
-  font-weight: 800;
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-}
-
-.mall-notice-badge.new {
-  background: #edf5ff;
-  color: var(--primary);
-}
-
-.mall-notice-badge.hot {
-  background: #fff0f1;
-  color: #ff5b61;
-}
-
-/* 联系客服 */
-.mall-contact-item {
+.aside-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 11px 0;
-  border-bottom: 1px solid #f0f4fa;
+  margin-bottom: 14px;
+}
+.aside-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+.aside-more {
+  font-size: 12px;
+  color: #4F7CFF;
+  text-decoration: none;
 }
 
-.mall-contact-item:last-child {
-  border-bottom: 0;
-}
-
-.mall-contact-main {
+.guide-list {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  min-width: 0;
 }
-
-.mall-contact-main b {
-  font-size: 14px;
-  color: var(--text);
+.guide-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px dashed #f1f5f9;
 }
-
-.mall-contact-main span {
-  font-size: 12px;
-  color: #8a96aa;
+.guide-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
 }
-
-.mall-contact-btn {
-  height: 32px;
-  min-width: 0;
-  padding: 0 12px;
-  border-radius: 7px;
-  border: 1px solid var(--primary);
-  background: #fff;
-  color: var(--primary);
-  font-size: 12.5px;
-  font-weight: 700;
-  box-shadow: none;
-  flex: 0 0 auto;
-}
-
-/* 温馨提示 */
-.mall-warm-tip {
+.guide-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
-  gap: 12px;
-  background: linear-gradient(135deg, #eef2ff, #f3eeff);
-  border: 1px solid #e0e6fb;
-  border-radius: 14px;
-  padding: 16px 18px;
+  justify-content: center;
+  flex-shrink: 0;
 }
-
-.mall-warm-tip .warm-icon {
-  width: 38px;
-  height: 38px;
-  background: #fff;
-  color: var(--primary);
-  flex: 0 0 auto;
+.guide-dot svg {
+  width: 14px;
+  height: 14px;
 }
-
-.mall-warm-tip .ui-icon-img {
-  width: 22px;
-  height: 22px;
+.guide-text {
+  flex: 1;
+  min-width: 0;
 }
-
-.mall-warm-tip p {
-  margin: 0;
+.guide-name {
   font-size: 13px;
-  line-height: 1.6;
-  color: #41506c;
   font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 2px;
+}
+.guide-desc {
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.4;
 }
 
-/* 响应式：窄屏堆叠 */
-@media (max-width: 1500px) {
-  .mall-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .mall-products {
-    grid-template-columns: repeat(3, 1fr);
-  }
-
-  .mall-banner {
-    grid-template-columns: 1fr;
-    height: auto;
-  }
-
-  .mall-banner-right {
-    order: -1;
-  }
+.announce-list {
+  display: flex;
+  flex-direction: column;
+}
+.announce-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px dashed #f1f5f9;
+  font-size: 12px;
+}
+.announce-item:last-child {
+  border-bottom: none;
+}
+.ann-date {
+  color: #94a3b8;
+  font-size: 11px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.ann-title {
+  flex: 1;
+  color: #334155;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+.ann-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.ann-tag.NEW {
+  background: #fff7ed;
+  color: #f97316;
+}
+.ann-tag.HOT {
+  background: #fef2f2;
+  color: #ef4444;
 }
 
-@media (max-width: 1100px) {
-  .mall-products {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .mall-head {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .mall-head-stat {
-    width: 100%;
-  }
+.service-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.service-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+.service-icon-wrap {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.service-icon-wrap svg {
+  width: 20px;
+  height: 20px;
+}
+.service-icon-wrap.s1 {
+  background: rgba(79,124,255,.12);
+  color: #4F7CFF;
+}
+.service-icon-wrap.s2 {
+  background: rgba(16,185,129,.12);
+  color: #10b981;
+}
+.service-icon-wrap.s3 {
+  background: rgba(245,158,11,.12);
+  color: #f59e0b;
+}
+.service-text {
+  flex: 1;
+  min-width: 0;
+}
+.service-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 2px;
+}
+.service-desc {
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.3;
+}
+.service-btn {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid #4F7CFF;
+  background: #fff;
+  color: #4F7CFF;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .2s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.service-btn:hover {
+  background: #4F7CFF;
+  color: #fff;
 }
 
-@media (max-width: 640px) {
-  .mall-products {
-    grid-template-columns: 1fr;
-  }
-
-  .mall-cats,
-  .mall-tools {
-    width: 100%;
-  }
-
-  .mall-tool-search {
-    flex: 1;
-    width: auto;
-  }
+.aside-tips {
+  background: linear-gradient(135deg, #eef2ff, #f5f3ff, #faf5ff);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid #e0e7ff;
+}
+.tips-icon-wrap {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(99,102,241,.15);
+  color: #6366f1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.tips-icon-wrap svg {
+  width: 15px;
+  height: 15px;
+}
+.tips-content {
+  flex: 1;
+}
+.tips-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #6366f1;
+  margin-bottom: 4px;
+}
+.tips-text {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.6;
 }
 </style>

@@ -117,3 +117,10 @@ scripts/tests/test_prod_deploy.py
 _wf_*
 wf_*
 
+# Local slider/debug scratch scripts
+scripts/_check_*.py
+scripts/_extract_cookie.py
+scripts/_test_db_conn.py
+scripts/slider_test_report.json
+scripts/test_slider_success_rate.py
+
