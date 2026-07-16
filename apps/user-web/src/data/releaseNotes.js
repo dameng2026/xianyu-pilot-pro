@@ -1,0 +1,141 @@
+/**
+ * 前台「关于 → 更新日志」数据源
+ *
+ * 维护规则见 .trae/rules/release-notes-workflow.md
+ *
+ * 版本号遵循语义化版本（SemVer）：
+ *   - patch (1.0.0 → 1.0.1)：bug 修复类小变动
+ *   - minor (1.0.0 → 1.1.0)：功能更改 / 优化 / 升级
+ *   - major (1.0.0 → 2.0.0)：大量功能改变的大版本
+ *
+ * 每次上线前由 AI 对比已上线代码与本地代码，找出前台功能变动后追加条目。
+ * 新条目始终放在数组最前面（最新在上）。
+ */
+
+/** 变动类型 */
+export const RELEASE_TYPES = {
+  MAJOR: 'major', // 大版本：大量功能改变，版本号 1.0.0 → 2.0.0
+  MINOR: 'minor', // 功能更新：更改 / 优化 / 升级了一些功能，1.0.0 → 1.1.0
+  PATCH: 'patch'  // 问题修复：bug 修复类小变动，1.0.0 → 1.0.1
+}
+
+/** 类型展示元信息 */
+export const RELEASE_TYPE_META = {
+  major: {
+    label: '大版本',
+    desc: '大量功能改变',
+    bumpRule: '主版本号 +1（1.0.0 → 2.0.0）',
+    tone: 'major'
+  },
+  minor: {
+    label: '功能更新',
+    desc: '更改 / 优化 / 升级功能',
+    bumpRule: '次版本号 +1（1.0.0 → 1.1.0）',
+    tone: 'minor'
+  },
+  patch: {
+    label: '问题修复',
+    desc: 'bug 修复类小变动',
+    bumpRule: '修订号 +1（1.0.0 → 1.0.1）',
+    tone: 'patch'
+  }
+}
+
+/** 版本号递增规则（供规则文档与维护提示引用） */
+export const VERSION_BUMP_RULES = [
+  { type: RELEASE_TYPES.PATCH, trigger: 'bug 修复、文案微调、样式小修补', example: '1.0.0 → 1.0.1' },
+  { type: RELEASE_TYPES.MINOR, trigger: '新增功能、功能优化升级、交互重构', example: '1.0.0 → 1.1.0' },
+  { type: RELEASE_TYPES.MAJOR, trigger: '大量功能改变、架构调整、不兼容更新', example: '1.0.0 → 2.0.0' }
+]
+
+/**
+ * @typedef {Object} ReleaseChangeGroup
+ * @property {string} label - 分类标签，如「新增 / 优化 / 修复 / 移除」
+ * @property {string[]} items - 该分类下的变更条目
+ */
+
+/**
+ * @typedef {Object} ReleaseNote
+ * @property {string} version - 版本号，不带 v 前缀，如 '1.0.0'
+ * @property {string} date - 发布日期 YYYY-MM-DD
+ * @property {('major'|'minor'|'patch')} type - 变动类型
+ * @property {string} title - 版本标题
+ * @property {string} summary - 一句话概述
+ * @property {ReleaseChangeGroup[]} changes - 分类变更列表
+ * @property {string} [remark] - 可选备注
+ */
+
+/** 当前最新版本号（应与 package.json 的 version 字段保持一致） */
+export const CURRENT_VERSION = '1.1.0'
+
+/**
+ * 更新日志数据，最新在前。
+ * @type {ReleaseNote[]}
+ */
+export const releaseNotes = [
+  {
+    version: '1.1.0',
+    date: '2026-07-16',
+    type: RELEASE_TYPES.MINOR,
+    title: '自动化与滑块求解体验升级',
+    summary: '围绕自动发货、滑块求解、发货记录与店铺抓取等场景进行功能优化与交互重构，并上线结构化更新日志面板。',
+    changes: [
+      {
+        label: '新增',
+        items: [
+          '定时任务支持创建「自动发货」类型任务，可按计划自动执行发货',
+          '发货记录列表新增「重新发货」入口，任意状态的记录均可一键重新触发发货流程',
+          '发货记录列表与详情新增商品缩略图、卖家、订单时间、外部订单号、商品 ID、购买时间等字段'
+        ]
+      },
+      {
+        label: '优化',
+        items: [
+          '自动发货配置面板重构为模态弹窗，新增标题栏、滚动区与底部操作栏，长商品名自适应省略',
+          '滑块求解记录页改版：新增「触发场景」筛选（手动 / 重试 / WS 连接 / Cookie 保活 / Token 刷新），列表与详情展示开启原因、求解原因、重试次数',
+          '滑块求解失败原因明确区分「滑块已通过但 Cookie Session 已过期」与「滑块验证未通过」',
+          '账号管理、连接管理、消息页手动滑块求解按钮自动识别「手动触发 / 手动重试」场景并记录原因',
+          '滑块求解接口超时延长至 180 秒，避免复杂验证流程被提前中断',
+          '商机发掘店铺抓取轮询时间从 60 秒延长至 5 分钟，超时后提示后台继续进行',
+          '关于页更新日志面板升级为结构化展示，支持版本类型标签、标题、分类变更列表与备注'
+        ]
+      },
+      {
+        label: '修复',
+        items: [
+          '支付弹窗在配置名含加密串或乱码时显示异常，现回退为「微信支付 / 支付宝」并补充易支付、官方接口描述',
+          '支付弹窗订单信息行在长文本下溢出，现已自适应换行',
+          '仪表盘在中等屏幕宽度下功能特性卡片文字过窄溢出，现自适应降为 3 列'
+        ]
+      },
+      {
+        label: '移除',
+        items: [
+          '商品列表移除「SKU」与「自动发货」列（自动发货开关统一在「自动发货」模块配置）',
+          '导航栏移除「模板管理」入口'
+        ]
+      }
+    ]
+  },
+  {
+    version: '1.0.0',
+    date: '2026-07-11',
+    type: RELEASE_TYPES.MAJOR,
+    title: '企业级上线基线',
+    summary: '闲鱼助手前台首个企业级上线版本，覆盖账号、商品、消息、自动化与系统配置全链路能力。',
+    changes: [
+      {
+        label: '包含功能',
+        items: [
+          '概览中心：导航面板快速上手入口，数据面板实时呈现店铺运营数据与销售趋势',
+          '账号与商品：闲鱼账号管理、连接状态监控（WebSocket 心跳与重连）、商品管理（同步 / 上下架 / 库存）、商品发布（省市区地址与分类选择）、商机发掘（关键词搜索与店铺链接搜索，支持智能降级）',
+          '在线消息：聚合多账号买家咨询，展示会话、未读与连接状态',
+          '自动化引擎：工作流可视化设计与执行监控、自动发货（付款 / 收货 / 好评触发）、发货声明、模板管理、卡密仓库、发货记录、定时任务与自动回复规则',
+          '系统配置：AI 客服（角色人设、安全策略、上下文管理）、商品操作（库存 / 库容自动下架）、通知设置',
+          '用户中心：VIP 会员中心与个人中心'
+        ]
+      }
+    ],
+    remark: '当前前端构建基于 Vue 3 + Vite，包含 PC 与移动端界面。各项能力是否可用取决于后台服务、账号状态与部署配置。'
+  }
+]
