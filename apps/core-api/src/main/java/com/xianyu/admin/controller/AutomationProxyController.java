@@ -1259,7 +1259,15 @@ public class AutomationProxyController {
         if (body == null) body = new java.util.LinkedHashMap<>();
         injectTenantId(body);
         // 滑块求解涉及 Playwright 浏览器操作 + 多场景重试（加载转圈/点击重试/下载失败刷新），需 180 秒超时
-        return Result.ok(automationClient.postInternalForData("/api/captcha/auto-solve", body, 180));
+        try {
+            return Result.ok(automationClient.postInternalForData("/api/captcha/auto-solve", body, 180));
+        } catch (BizException e) {
+            // automation 宕机时仍落一条失败记录，保证记录页可追溯
+            if (e.getCode() == 503) {
+                persistCaptchaSolveFallbackRecord(body, "manual", e.getMessage());
+            }
+            throw e;
+        }
     }
 
     @PostMapping("/captcha/handle")
@@ -1267,7 +1275,92 @@ public class AutomationProxyController {
         if (body == null) body = new java.util.LinkedHashMap<>();
         injectTenantId(body);
         // 滑块求解涉及 Playwright 浏览器操作 + 多场景重试（加载转圈/点击重试/下载失败刷新），需 180 秒超时
-        return Result.ok(automationClient.postInternalForData("/api/captcha/handle", body, 180));
+        try {
+            return Result.ok(automationClient.postInternalForData("/api/captcha/handle", body, 180));
+        } catch (BizException e) {
+            if (e.getCode() == 503) {
+                String scene = stringValue(body.get("triggerScene"));
+                if (scene == null || scene.isBlank()) scene = "manual";
+                persistCaptchaSolveFallbackRecord(body, scene, e.getMessage());
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * automation-service 不可达时，在 MySQL 直接写入一条失败记录，
+     * 避免用户手动/重试求解后「记录页完全空白、无法感知操作已触发」。
+     * 正常路径由 Python handle_captcha_for_account 写库，本方法仅兜底。
+     */
+    private void persistCaptchaSolveFallbackRecord(Map<String, Object> body, String defaultScene, String errorMessage) {
+        try {
+            Long tenantId = TenantContext.getCurrentTenantId();
+            if (tenantId == null || tenantId <= 0) return;
+            Long accountId = longValue(body.get("accountId"));
+            if (accountId == null || accountId <= 0) {
+                accountId = longValue(body.get("account_id"));
+            }
+            if (accountId == null || accountId <= 0) return;
+
+            String scene = stringValue(body.get("triggerScene"));
+            if (scene == null || scene.isBlank()) scene = defaultScene;
+            String openReason = stringValue(body.get("openReason"));
+            if (openReason == null || openReason.isBlank()) {
+                openReason = "用户触发滑块求解（网关兜底记录）";
+            }
+            String solveReason = stringValue(body.get("solveReason"));
+            if (solveReason == null || solveReason.isBlank()) {
+                solveReason = "滑块求解请求";
+            }
+            String eventDesc = switch (scene) {
+                case "manual_retry" -> "手动重试滑块求解";
+                case "ws_connect" -> "WS 连接触发滑块验证";
+                case "cookie_keepalive" -> "Cookie 保活触发滑块验证";
+                case "token_refresh" -> "Token 刷新触发滑块验证";
+                default -> "手动触发滑块求解";
+            };
+
+            String accountName = "";
+            try {
+                List<Map<String, Object>> names = jdbcTemplate.queryForList(
+                        "SELECT nickname FROM xianyu_account WHERE id = ? AND tenant_id = ? AND COALESCE(deleted,0)=0 LIMIT 1",
+                        accountId, tenantId
+                );
+                if (!names.isEmpty() && names.get(0).get("nickname") != null) {
+                    accountName = String.valueOf(names.get(0).get("nickname"));
+                }
+            } catch (Exception ignore) {
+                // 查昵称失败不影响落库
+            }
+            if (accountName.isBlank()) accountName = String.valueOf(accountId);
+
+            String err = errorMessage == null || errorMessage.isBlank()
+                    ? "依赖服务暂时不可用，请稍后重试"
+                    : errorMessage;
+
+            jdbcTemplate.update(
+                    "INSERT INTO xianyu_captcha_solve_record "
+                            + "(tenant_id, account_id, account_name, event_desc, open_reason, solve_reason, "
+                            + " trigger_scene, result, status, engine, retry_count, error_message, created_at, updated_at, deleted) "
+                            + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)",
+                    tenantId,
+                    accountId,
+                    accountName,
+                    eventDesc,
+                    openReason,
+                    solveReason,
+                    scene,
+                    "slider_fail",
+                    "fail",
+                    "Gateway",
+                    0,
+                    err
+            );
+            log.warn("automation 不可达，已写入滑块求解兜底失败记录 tenantId={} accountId={} scene={}",
+                    tenantId, accountId, scene);
+        } catch (Exception ex) {
+            log.error("写入滑块求解兜底记录失败 errorType={}", ex.getClass().getSimpleName());
+        }
     }
 
     /**

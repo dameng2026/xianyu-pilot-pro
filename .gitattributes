@@ -2,3 +2,7 @@
 *.sql text eol=lf
 db/migrations-manifest.json text eol=lf
 apps/core-api/src/main/resources/db/migration-quarantine/*.disabled text eol=lf
+# Shell scripts must use LF line endings for Linux deployment targets.
+*.sh text eol=lf
+# Python scripts must use LF for cross-platform consistency.
+*.py text eol=lf
