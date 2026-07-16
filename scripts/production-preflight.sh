@@ -96,7 +96,8 @@ for loaded_key in "${!loaded_env_keys[@]}"; do
   if [[ "$lowered_value" =~ (change-me|dev-only|123456|mock|sandbox|placeholder|replace-with) ]]; then
     fail "$loaded_key contains an unsafe placeholder-like value"
   fi
-  if [[ "$loaded_key" =~ SECRET|TOKEN|PASSWORD ]] && [[ ! "$loaded_key" =~ _FILE$ ]]; then
+  if [[ "$loaded_key" =~ SECRET|TOKEN|PASSWORD ]] && [[ ! "$loaded_key" =~ _FILE$ ]] \
+     && [[ "$loaded_key" != "MONITORING_SECRET_GID" ]]; then
     [[ ${#value} -ge 32 ]] || fail "$loaded_key must be at least 32 characters"
     [[ "$value" =~ ^[A-Za-z0-9._~+/=-]+$ ]] \
       || fail "$loaded_key must use URL-safe ASCII without dotenv or shell metacharacters"
