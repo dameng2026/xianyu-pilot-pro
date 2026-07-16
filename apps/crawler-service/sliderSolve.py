@@ -436,13 +436,13 @@ async def element_hover_drag(page, button, distance: float, attempt: int = 1) ->
         raise RuntimeError("button box gone")
     sx = box["x"] + box["width"] / 2
     sy = box["y"] + box["height"] / 2
-    # attempt 调制终点：1 精确、2 略超、3 略欠再补
-    if attempt == 1:
+    # attempt 调制终点：1 精确、2 略超、3 略欠
+    if attempt % 3 == 1:
         dist = distance
-    elif attempt == 2:
-        dist = distance + 4 + random.random() * 6
+    elif attempt % 3 == 2:
+        dist = distance + 3 + random.random() * 5
     else:
-        dist = max(180.0, distance - 3 + random.random() * 5)
+        dist = max(180.0, distance - 2 + random.random() * 4)
 
     log(f"  元素悬停拖动: start=({sx:.1f},{sy:.1f}) dist={dist:.1f} attempt={attempt}")
     await button.hover(timeout=3000)
@@ -464,17 +464,100 @@ async def element_hover_drag(page, button, distance: float, attempt: int = 1) ->
             tail = (p - 0.78) / 0.22
             eased = 0.85 + 0.15 * math.sin(tail * math.pi / 2)
         x = sx + dist * eased
-        y = sy + math.sin(math.pi * p) * (2 + random.random() * 4) * (1 if random.random() > 0.5 else -1)
+        # Y 抖动控制在 ±3px，过大易被判机器人
+        y = sy + math.sin(math.pi * p) * (1.2 + random.random() * 2.0) * (1 if random.random() > 0.5 else -1)
         await page.mouse.move(x, y, steps=1)
         delay = 18 + random.random() * 42
         if p < 0.2 or p > 0.85:
             delay *= 1.7
         await page.wait_for_timeout(delay)
 
-    await page.mouse.move(sx + dist, sy + random.uniform(-2, 2), steps=2)
+    await page.mouse.move(sx + dist, sy + random.uniform(-1.5, 1.5), steps=2)
     await page.wait_for_timeout(60 + random.random() * 80)
     await page.mouse.up()
     await page.wait_for_timeout(40 + random.random() * 60)
+
+
+def _bezier_points(p0, p1, p2, p3, n: int) -> list[tuple[float, float]]:
+    pts = []
+    for i in range(1, n + 1):
+        t = i / n
+        u = 1 - t
+        x = u**3 * p0[0] + 3 * u**2 * t * p1[0] + 3 * u * t**2 * p2[0] + t**3 * p3[0]
+        y = u**3 * p0[1] + 3 * u**2 * t * p1[1] + 3 * u * t**2 * p2[1] + t**3 * p3[1]
+        pts.append((x, y))
+    return pts
+
+
+async def bezier_mouse_drag(page, start_x: float, start_y: float, distance: float, attempt: int = 1) -> None:
+    """三次贝塞尔拟人拖动（仅 page.mouse，X 近似单调递增）。"""
+    dist = distance + random.uniform(-2, 4)
+    sx = start_x + random.uniform(-2, 2)
+    sy = start_y + random.uniform(-1.5, 1.5)
+    ex = sx + dist
+    ey = sy + random.uniform(-2, 2)
+    # 控制点：中段轻微弧线，幅度 2~6px
+    amp = (2 + random.random() * 4) * (1 if random.random() > 0.5 else -1)
+    c1 = (sx + dist * 0.25, sy + amp * 0.6)
+    c2 = (sx + dist * 0.7, sy + amp)
+    steps = 40 + random.randint(0, 20)
+    log(f"  贝塞尔拖动: start=({sx:.1f},{sy:.1f}) dist={dist:.1f} steps={steps} attempt={attempt}")
+
+    # 接近
+    await page.mouse.move(sx - 30 - random.random() * 40, sy + random.uniform(-15, 15), steps=8)
+    await page.wait_for_timeout(80 + random.random() * 120)
+    await page.mouse.move(sx, sy, steps=6)
+    await page.wait_for_timeout(100 + random.random() * 150)
+    await page.mouse.down()
+    await page.wait_for_timeout(90 + random.random() * 100)
+
+    pts = _bezier_points((sx, sy), c1, c2, (ex, ey), steps)
+    last_x = sx
+    for i, (x, y) in enumerate(pts):
+        # 强制 X 不回退超过 1px（Baxia 对大幅回退敏感）
+        if x < last_x - 1:
+            x = last_x + random.uniform(0.5, 1.5)
+        await page.mouse.move(x, y, steps=1)
+        p = (i + 1) / steps
+        delay = 16 + random.random() * 38
+        if p < 0.2 or p > 0.82:
+            delay *= 1.75
+        await page.wait_for_timeout(delay)
+        last_x = x
+
+    await page.mouse.move(ex, ey + random.uniform(-1, 1), steps=2)
+    await page.wait_for_timeout(70 + random.random() * 90)
+    await page.mouse.up()
+    await page.wait_for_timeout(50 + random.random() * 70)
+
+
+async def microstep_drag(page, start_x: float, start_y: float, distance: float, attempt: int = 1) -> None:
+    """小步匀加速拖动：每步 2~4px，总时长约 1.2~2.2s，贴近部分真人习惯。"""
+    sx = start_x + random.uniform(-1.5, 1.5)
+    sy = start_y + random.uniform(-1, 1)
+    dist = distance + random.uniform(-1, 3)
+    log(f"  微步拖动: start=({sx:.1f},{sy:.1f}) dist={dist:.1f} attempt={attempt}")
+    await page.mouse.move(sx, sy, steps=5)
+    await page.wait_for_timeout(120 + random.random() * 100)
+    await page.mouse.down()
+    await page.wait_for_timeout(80 + random.random() * 80)
+    moved = 0.0
+    while moved < dist:
+        # 前慢后略快
+        ratio = moved / dist if dist else 1
+        step = 2.0 + random.random() * 2.5
+        if ratio < 0.2:
+            step *= 0.55
+        elif ratio > 0.75:
+            step *= 0.7
+        step = min(step, dist - moved)
+        moved += step
+        y = sy + random.uniform(-1.2, 1.2)
+        await page.mouse.move(sx + moved, y, steps=1)
+        await page.wait_for_timeout(12 + random.random() * 22)
+    await page.mouse.move(sx + dist, sy, steps=1)
+    await page.wait_for_timeout(50 + random.random() * 60)
+    await page.mouse.up()
 
 
 def close_proc_gracefully(proc: Optional[subprocess.Popen], timeout: float = 5.0) -> None:
@@ -1136,8 +1219,34 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
     screenshot_dir = os.path.join(os.getcwd(), "screenshots")
     os.makedirs(screenshot_dir, exist_ok=True)
 
+    # 监听 Baxia 校验响应，辅助判定成功（不依赖 DOM）
+    net_success = {"flag": False}
+
+    def _on_response(resp) -> None:
+        try:
+            u = resp.url or ""
+            if any(k in u for k in ("_____tmd_____", "x5sec", "baxia", "punish", "nc_captcha", "captcha")):
+                # 2xx 且非 punish 页面可能表示通过
+                if resp.status == 200 and "punish" not in u and "deny" not in u.lower():
+                    # 延迟读 body 可能失败，仅作弱信号
+                    pass
+            # 消息 token 成功也算环境恢复信号
+            if "idlemessage" in u and "token" in u and resp.status == 200 and "punish" not in u:
+                net_success["flag"] = True
+        except Exception:
+            pass
+
+    try:
+        page.on("response", _on_response)
+    except Exception:
+        pass
+
     # 拟人路径进入消息页（避免直接 /im）
     page = await human_warmup_and_enter_im(page, target_url or DEFAULT_TARGET_URL)
+    try:
+        page.on("response", _on_response)
+    except Exception:
+        pass
     log(f"当前操作页 URL: {page.url}")
 
     if await page_shows_load_failure(page):
@@ -1287,16 +1396,23 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
             await asyncio.sleep(0.06 + random.random() * 0.15)
 
         try:
-            # 仅使用浏览器内 page.mouse（不控制系统/硬件鼠标）
-            # 1 元素悬停拖  2 容器内  3 出容器  4+ 轮换
-            if attempt % 3 == 1 and button_el is not None:
-                log(f"  attempt={attempt} 使用【元素悬停】page.mouse 拖动（不控制系统鼠标）")
+            # 仅浏览器内 page.mouse（绝不控制系统鼠标）
+            # 轮换：贝塞尔 / 元素悬停 / 微步 / 容器内 / 出容器
+            mode = (attempt - 1) % 5
+            if mode == 0:
+                log(f"  attempt={attempt} 【贝塞尔】page.mouse")
+                await bezier_mouse_drag(page, sx, sy, dist, attempt)
+            elif mode == 1 and button_el is not None:
+                log(f"  attempt={attempt} 【元素悬停】page.mouse")
                 await element_hover_drag(page, button_el, dist, attempt)
-            elif attempt % 3 == 2:
-                log(f"  attempt={attempt} 使用【容器内】page.mouse 拖动（不控制系统鼠标）")
+            elif mode == 2:
+                log(f"  attempt={attempt} 【微步】page.mouse")
+                await microstep_drag(page, sx, sy, dist, attempt)
+            elif mode == 3:
+                log(f"  attempt={attempt} 【容器内】page.mouse")
                 await human_like_drag(page, sx, sy, dist, attempt)
             else:
-                log(f"  attempt={attempt} 使用【超出容器】page.mouse 拖动（不控制系统鼠标）")
+                log(f"  attempt={attempt} 【超出容器】page.mouse")
                 await human_like_drag_out_of_container(page, sx, sy, dist, attempt)
         except Exception as e:
             last_error = f"拖动异常: {e}"
@@ -1317,6 +1433,15 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
             pass
 
         solved = await check_solved(page)
+        # 网络弱信号：token 接口 200 且无 punish
+        if not solved and net_success.get("flag"):
+            await asyncio.sleep(1.0)
+            still = await detect_captcha_container(page)
+            if not still[0]:
+                log("✓ 网络信号显示会话恢复且弹窗消失，视为通过")
+                solved = True
+            net_success["flag"] = False
+
         if solved:
             # 检查是否“下载消息失败”假阳性
             try:
@@ -1325,7 +1450,7 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
                 )
                 if body and ("下载消息失败" in body or "加载失败" in body):
                     log("滑块通过但页面显示加载失败/下载消息失败，刷新重试")
-                    await navigate_fresh(page, target_url)
+                    await navigate_fresh(page, target_url or DEFAULT_TARGET_URL, hard=False)
                     continue
             except Exception:
                 pass
@@ -1452,17 +1577,47 @@ async def _launch_solve_once(
             ctx = await playwright.chromium.launch_persistent_context(**launch_kwargs)
 
         await ctx.add_init_script(STEALTH_INIT_SCRIPT)
-        cookies = parse_cookie_string(cookie_str, ".goofish.com")
-        if cookies:
-            await ctx.add_cookies(cookies)
-            log(f"注入 {len(cookies)} 条 cookies")
 
         page0 = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        # 先落到业务域再注入 Cookie，避免 add_cookies 被丢弃
         try:
-            await page0.goto("about:blank")
+            await page0.goto("https://www.goofish.com/", wait_until="domcontentloaded", timeout=45000)
+        except Exception as e:
+            log(f"预热域导航警告: {e}")
+        cookies = parse_cookie_string(cookie_str, ".goofish.com")
+        # 同步 www 主机 cookie，提高会话命中
+        cookies += parse_cookie_string(cookie_str, "www.goofish.com")
+        if cookies:
+            try:
+                await ctx.add_cookies(cookies)
+                log(f"注入 {len(cookies)} 条 cookies（含 .goofish / www）")
+            except Exception as e:
+                log(f"注入 cookies 警告: {e}")
+                # 回退只写 .goofish.com
+                try:
+                    await ctx.add_cookies(parse_cookie_string(cookie_str, ".goofish.com"))
+                except Exception:
+                    pass
+        try:
+            await page0.reload(wait_until="domcontentloaded", timeout=45000)
         except Exception:
             pass
-        await asyncio.sleep(0.6 + random.random() * 0.9)
+        # Cookie 落地后拟人闲逛，降低“秒进消息页”特征
+        warm = 2.5 + random.random() * 2.5
+        log(f"Cookie 预热闲逛 {warm:.1f}s ...")
+        await asyncio.sleep(warm)
+        try:
+            for _ in range(3):
+                await page0.mouse.move(
+                    100 + random.random() * 800,
+                    120 + random.random() * 400,
+                    steps=random.randint(5, 12),
+                )
+                await asyncio.sleep(0.15 + random.random() * 0.25)
+            await page0.mouse.wheel(0, 200 + random.randint(0, 300))
+        except Exception:
+            pass
+        await asyncio.sleep(0.8 + random.random() * 1.0)
 
         solve_result = await solve_in_context(ctx, target_url, max_retries)
         if solve_result.get("solved"):

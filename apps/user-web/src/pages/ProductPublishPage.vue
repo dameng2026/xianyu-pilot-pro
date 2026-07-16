@@ -7,6 +7,11 @@
       <div v-if="aiCategoryStatusError" class="global-notice error">AI 分类状态不可用：{{ aiCategoryStatusError }}</div>
       <div v-if="success" class="global-notice success">{{ success }}</div>
 
+      <div class="draft-toolbar">
+        <span class="draft-tip">📝 草稿会自动保存本页已输入内容，仅保留上一次未发布的草稿</span>
+        <button type="button" class="clear-draft-btn" @click="clearAllData">清空数据</button>
+      </div>
+
       <CardPanel title="宝贝基础信息">
         <div class="form-grid">
           <div class="form-row">
@@ -676,14 +681,9 @@ function displayImageUrl(url) {
   return value
 }
 
-async function handleCancel() {
-  const ok = await confirmAction({
-    title: '确认离开？',
-    description: '未保存的更改将丢失，确定要离开吗？',
-    confirmText: '离开',
-    dangerous: true
-  })
-  if (ok) emit('navigate', 'products')
+function handleCancel() {
+  // 由全局导航守卫统一处理草稿询问
+  emit('navigate', 'products')
 }
 
 // ---- 发货设置（互斥） ----
@@ -934,6 +934,9 @@ async function submit() {
         status: 0,
       })
       success.value = '发布成功！'
+      // 发布成功后清除草稿并解除导航守卫，避免跳转时再弹草稿询问
+      clearPublishDraft()
+      clearNavigationGuard()
       // 标记商品待同步，下次进入商品管理页面时自动触发同步
       localStorage.setItem('xianyu_pending_sync', 'true')
       setTimeout(() => emit('navigate', 'products'), 1000)
@@ -950,11 +953,195 @@ async function submit() {
   }
 }
 
-onMounted(() => {
-  load()
+// ---- 草稿（自动保存 / 恢复 / 清空） ----
+const isRestoring = ref(false)
+let saveTimer = null
+
+const hasDraftData = computed(() => {
+  // accountId 不计入判定，因为会自动选择
+  return !!(form.title.trim()
+    || form.description.trim()
+    || form.imageUrls.length
+    || form.price
+    || form.stock
+    || selectedCategoryName.value
+    || isPublishAddressComplete(selectedAddress.value))
+})
+
+function serializeCurrentDraft() {
+  return {
+    form: {
+      accountId: form.accountId,
+      title: form.title,
+      description: form.description,
+      imageUrls: [...form.imageUrls],
+      price: form.price,
+      stock: form.stock,
+      supportSelfPick: form.supportSelfPick,
+    },
+    shippingMode: shippingMode.value,
+    category: {
+      name: selectedCategoryName.value,
+      path: selectedCategoryPath.value,
+      pathIds: [level1Id.value, level2Id.value, level3Id.value].filter(Boolean),
+    },
+    address: selectedAddress.value ? JSON.parse(JSON.stringify(selectedAddress.value)) : null,
+  }
+}
+
+function restoreDraft(draft) {
+  isRestoring.value = true
+  try {
+    const f = draft.form || {}
+    form.accountId = f.accountId || ''
+    form.title = f.title || ''
+    form.description = f.description || ''
+    form.imageUrls = Array.isArray(f.imageUrls) ? [...f.imageUrls] : []
+    form.price = f.price || ''
+    form.stock = f.stock || ''
+    form.supportSelfPick = !!f.supportSelfPick
+    shippingMode.value = draft.shippingMode || 'free'
+    // 分类恢复：优先走级联选择，无 pathIds 时回退到直接设置 name/path
+    const cat = draft.category || {}
+    if (cat.pathIds && cat.pathIds.length) {
+      nextTick(() => {
+        // 试图在分类树中找到对应路径
+        try {
+          if (cat.pathIds[0]) selectLevel1(categories.value.find(c => c.id === cat.pathIds[0]))
+          if (cat.pathIds[1]) selectLevel2(level2List.value.find(c => c.id === cat.pathIds[1]))
+          if (cat.pathIds[2]) selectLevel3(level3List.value.find(c => c.id === cat.pathIds[2]))
+        } catch {
+          selectedCategoryName.value = cat.name || ''
+          selectedCategoryPath.value = cat.path || ''
+        }
+      })
+    } else {
+      selectedCategoryName.value = cat.name || ''
+      selectedCategoryPath.value = cat.path || ''
+    }
+    if (draft.address) selectedAddress.value = draft.address
+  } finally {
+    nextTick(() => { isRestoring.value = false })
+  }
+}
+
+function scheduleAutoSave() {
+  if (isRestoring.value) return
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => {
+    if (hasDraftData.value) {
+      savePublishDraft(serializeCurrentDraft())
+    } else {
+      clearPublishDraft()
+    }
+  }, 800)
+}
+
+// 监听表单与分类、地址变化，自动保存草稿（防抖 800ms）
+watch(
+  () => [
+    form.accountId, form.title, form.description, form.price, form.stock,
+    form.supportSelfPick, form.imageUrls.length,
+  ],
+  scheduleAutoSave,
+)
+watch(shippingMode, scheduleAutoSave)
+watch(selectedCategoryName, scheduleAutoSave)
+watch(selectedAddress, scheduleAutoSave, { deep: true })
+
+function flushDraftBeforeUnload() {
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+  }
+  // beforeunload 需要立即落盘，不经过防抖
+  if (hasDraftData.value) {
+    savePublishDraft(serializeCurrentDraft())
+  }
+}
+
+// 导航守卫：有未发布数据时弹窗询问是否保存草稿
+async function navigationGuardFn() {
+  if (!hasDraftData.value) return true
+  const choice = await promptDraftChoice({
+    title: '是否保存草稿？',
+    description: '离开后本页已输入的内容将保存为草稿，下次进入可自动恢复。',
+  })
+  if (choice === 'discard') {
+    clearPublishDraft()
+    return true
+  }
+  // save 或未选择（自动保存）
+  savePublishDraft(serializeCurrentDraft())
+  return true
+}
+
+async function clearAllData() {
+  const ok = await confirmAction({
+    title: '清空本页所有数据？',
+    description: '将一键清除已填写的标题、描述、图片、分类、地址、价格等全部内容，且会删除已保存的草稿。此操作不可撤销。',
+    confirmText: '清空',
+    dangerous: true,
+  })
+  if (!ok) return
+  isRestoring.value = true
+  try {
+    form.title = ''
+    form.description = ''
+    form.imageUrls = []
+    form.price = ''
+    form.stock = ''
+    form.supportSelfPick = false
+    shippingMode.value = 'free'
+    selectedCategoryName.value = ''
+    selectedCategoryPath.value = ''
+    level1Id.value = null
+    level2Id.value = null
+    level3Id.value = null
+    level2List.value = []
+    level3List.value = []
+    selectedAddress.value = null
+    categoryKeyword.value = ''
+    autoCategoryCandidates.value = []
+    autoCategoryMessage.value = ''
+    autoSelectedCatId.value = null
+    aiCategoryMessage.value = ''
+    error.value = ''
+    success.value = ''
+    clearPublishDraft()
+  } finally {
+    isRestoring.value = false
+  }
+}
+
+onMounted(async () => {
+  setNavigationGuard(navigationGuardFn)
+  window.addEventListener('beforeunload', flushDraftBeforeUnload)
+  await load()
+  // 尝试恢复草稿
+  try {
+    const draft = loadPublishDraft()
+    if (draft && draft.form) {
+      // 验证 accountId 是否仍存在于账号列表，避免引用已删除账号
+      if (draft.form.accountId) {
+        const exists = accounts.value.some(a => String(a.id) === String(draft.form.accountId))
+        if (!exists) draft.form.accountId = ''
+      }
+      restoreDraft(draft)
+      success.value = '已恢复上次未发布的草稿'
+    }
+  } catch {
+    // 草稿恢复失败不影响正常使用
+  }
 })
 
 onBeforeUnmount(() => {
+  clearNavigationGuard()
+  window.removeEventListener('beforeunload', flushDraftBeforeUnload)
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+  }
   categoryRefreshGate.dispose()
 })
 </script>
@@ -1182,5 +1369,37 @@ onBeforeUnmount(() => {
 .candidate-btn small {
   font-weight: 400;
   opacity: 0.8;
+}
+/* ---- 草稿工具栏 ---- */
+.draft-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+.draft-tip {
+  font-size: 13px;
+  color: #475569;
+}
+.clear-draft-btn {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #dc2626;
+  border-radius: 8px;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.clear-draft-btn:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
 }
 </style>

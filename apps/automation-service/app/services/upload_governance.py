@@ -57,7 +57,12 @@ def enforce_upload_admission(
     *, recent_count: int, concurrent_count: int, used_bytes: int,
     global_concurrent_count: int, global_used_bytes: int, incoming_bytes: int
 ) -> None:
-    """Pure admission policy shared by the database reservation path and tests."""
+    """Pure admission policy shared by the database reservation path and tests.
+
+    存储配额（tenant / global）检查已被有意移除：用户上传不再受容量限制，
+    磁盘占用由 UploadStorageCleanupService 每日清理 7 天前未被引用的图片来约束。
+    此处仅保留请求频率与并发上限，用于防止滥用。
+    """
 
     if recent_count >= settings.resolved_upload_rate_limit_requests:
         raise UploadGovernanceError("上传请求过于频繁，请稍后重试", 429)
@@ -65,10 +70,6 @@ def enforce_upload_admission(
         raise UploadGovernanceError("当前租户并发上传已达上限，请稍后重试", 429)
     if global_concurrent_count >= settings.resolved_upload_max_concurrent_global:
         raise UploadGovernanceError("平台并发上传已达上限，请稍后重试", 429)
-    if used_bytes + incoming_bytes > settings.resolved_upload_tenant_quota_bytes:
-        raise UploadGovernanceError("租户图片存储配额已满，请先清理历史文件", 413)
-    if global_used_bytes + incoming_bytes > settings.resolved_upload_global_quota_bytes:
-        raise UploadGovernanceError("平台图片存储容量已满，请联系管理员清理", 503)
 
 
 def _positive_id(value: Any, field: str) -> int:
@@ -461,20 +462,14 @@ async def _reserve_asset(
                 global_concurrent = await connection.scalar(text(
                     "SELECT COUNT(*) FROM tenant_storage_asset WHERE status='reserved'"
                 ))
-                used_bytes = await connection.scalar(text(
-                    "SELECT COALESCE(SUM(size_bytes),0) FROM tenant_storage_asset "
-                    "WHERE tenant_id=:tenant_id AND status IN ('reserved','active','deleting')"
-                ), {"tenant_id": tenant_id})
-                global_used_bytes = await connection.scalar(text(
-                    "SELECT COALESCE(SUM(size_bytes),0) FROM tenant_storage_asset "
-                    "WHERE status IN ('reserved','active','deleting')"
-                ))
+                # 存储配额检查已移除，无需查询 used_bytes / global_used_bytes。
+                # 保留 enforce_upload_admission 调用以维持频率与并发上限策略。
                 enforce_upload_admission(
                     recent_count=int(recent_count or 0),
                     concurrent_count=int(concurrent or 0),
                     global_concurrent_count=int(global_concurrent or 0),
-                    used_bytes=int(used_bytes or 0),
-                    global_used_bytes=int(global_used_bytes or 0),
+                    used_bytes=0,
+                    global_used_bytes=0,
                     incoming_bytes=size_bytes,
                 )
 

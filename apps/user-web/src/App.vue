@@ -119,6 +119,7 @@ const pageMap = {
   'auto-delivery': asyncPage(() => import('./pages/AutoDeliveryPage.vue')),
   'delivery-source-library': asyncPage(() => import('./pages/DeliverySourceLibraryPage.vue')),
   'delivery-statement': asyncPage(() => import('./pages/DeliveryStatementPage.vue')),
+  'delivery-mall': asyncPage(() => import('./pages/DeliveryMallPage.vue')),
   'delivery-templates': asyncPage(() => import('./pages/DeliveryTemplatesPage.vue')),
   'delivery-records': asyncPage(() => import('./pages/DeliveryRecordsPage.vue')),
   'scheduled-tasks': asyncPage(() => import('./pages/ScheduledTasksPage.vue')),
@@ -136,7 +137,7 @@ const settingsKeys = ['settings-ai-cs', 'settings-product', 'settings-about']
 const authPages = ['login', 'register', 'forgot-password']
 const defaultPage = 'dashboard'
 const profileEntryStorageKey = 'xya_profile_initial_tab'
-const pagesWithEmbeddedTitle = new Set(['messages', 'message-center', 'delivery-statement'])
+const pagesWithEmbeddedTitle = new Set(['messages', 'message-center', 'delivery-statement', 'delivery-mall'])
 const profileEntryTabs = new Set(['overview', 'security', 'token'])
 const mobileLitePages = new Set([
   'dashboard',

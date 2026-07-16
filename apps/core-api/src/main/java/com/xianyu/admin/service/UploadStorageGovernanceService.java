@@ -87,20 +87,20 @@ public class UploadStorageGovernanceService {
     void init() {
         boolean production = environment.acceptsProfiles(Profiles.of("prod", "production", "staging"));
         if (production && (!"true".equalsIgnoreCase(enabledRaw)
-                || tenantQuotaRaw.isBlank() || globalQuotaRaw.isBlank()
                 || rateRequestsRaw.isBlank() || rateWindowRaw.isBlank()
                 || tenantConcurrentRaw.isBlank() || globalConcurrentRaw.isBlank())) {
-            throw new IllegalStateException("production upload governance limits must be explicit");
+            throw new IllegalStateException("production upload rate/concurrency limits must be explicit");
         }
         enabled = enabledRaw.isBlank() || Boolean.parseBoolean(enabledRaw);
+        // 存储配额字段保留读取以兼容现有部署环境变量，但已不再用于 enforcement。
         tenantQuotaBytes = positiveLong(tenantQuotaRaw, 100L * 1024 * 1024, "tenant quota");
         globalQuotaBytes = positiveLong(globalQuotaRaw, 10L * 1024 * 1024 * 1024, "global quota");
         rateRequests = positiveInt(rateRequestsRaw, 30, "rate requests");
         rateWindowSeconds = positiveInt(rateWindowRaw, 60, "rate window");
         maxConcurrentPerTenant = positiveInt(tenantConcurrentRaw, 2, "tenant concurrency");
         maxConcurrentGlobal = positiveInt(globalConcurrentRaw, 8, "global concurrency");
-        if (globalQuotaBytes < tenantQuotaBytes || maxConcurrentGlobal < maxConcurrentPerTenant) {
-            throw new IllegalStateException("global upload limits must not be smaller than tenant limits");
+        if (maxConcurrentGlobal < maxConcurrentPerTenant) {
+            throw new IllegalStateException("global upload concurrency must not be smaller than tenant concurrency");
         }
         localWriteSemaphore = new Semaphore(maxConcurrentGlobal, true);
     }
@@ -226,19 +226,13 @@ public class UploadStorageGovernanceService {
             long tenantConcurrent = scalar("SELECT COUNT(*) FROM tenant_storage_asset " +
                     "WHERE tenant_id=? AND status='reserved'", tenantId);
             long globalConcurrent = scalar("SELECT COUNT(*) FROM tenant_storage_asset WHERE status='reserved'");
-            long tenantUsed = scalar("SELECT COALESCE(SUM(size_bytes),0) FROM tenant_storage_asset " +
-                    "WHERE tenant_id=? AND status IN ('reserved','active','deleting')", tenantId);
-            long globalUsed = scalar("SELECT COALESCE(SUM(size_bytes),0) FROM tenant_storage_asset " +
-                    "WHERE status IN ('reserved','active','deleting')");
+            // 存储配额（tenant / global）检查已被有意移除：用户上传不再受容量限制，
+            // 磁盘占用由 UploadStorageCleanupService 每日清理 7 天前未被引用的图片来约束。
             if (recent >= rateRequests) throw new BizException(429, "上传请求过于频繁，请稍后重试");
             if (tenantConcurrent >= maxConcurrentPerTenant)
                 throw new BizException(429, "当前租户并发上传已达上限");
             if (globalConcurrent >= maxConcurrentGlobal)
                 throw new BizException(429, "平台并发上传已达上限");
-            if (tenantUsed + sizeBytes > tenantQuotaBytes)
-                throw new BizException(413, "租户图片存储配额已满");
-            if (globalUsed + sizeBytes > globalQuotaBytes)
-                throw new BizException(503, "平台图片存储容量已满");
 
             jdbcTemplate.update(
                     "INSERT INTO tenant_upload_rate_event(tenant_id,user_id,created_time) VALUES(?,?,NOW())",

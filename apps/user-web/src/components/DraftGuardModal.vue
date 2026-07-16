@@ -20,7 +20,7 @@
         <p v-if="state.description" id="draft-guard-desc" class="draft-guard-desc">{{ state.description }}</p>
         <div class="draft-guard-actions">
           <AppButton type="ghost" @click="chooseDiscard">不保存</AppButton>
-          <AppButton type="primary" ref="saveBtnRef" @click="chooseSave">保存草稿</AppButton>
+          <AppButton ref="saveBtnRef" type="primary" @click="chooseSave">保存草稿</AppButton>
         </div>
       </section>
     </div>
