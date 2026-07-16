@@ -61,12 +61,14 @@ import Topbar from './components/Topbar.vue'
 import PageHeader from './components/PageHeader.vue'
 import AppButton from './components/AppButton.vue'
 import ConfirmModal from './components/ConfirmModal.vue'
+import DraftGuardModal from './components/DraftGuardModal.vue'
 import MobileLite from './components/MobileLite.vue'
 import { pageTitles } from './data/nav.js'
 import { createMediaSession, logout as logoutApi } from './api/auth.js'
 import { currentUser, invalidateCurrentUserCache } from './api/system.js'
 import { clearAuth, getCachedUsername, getToken, isAuthed, setAuth } from './utils/auth.js'
 import { confirmAction } from './utils/confirmAction.js'
+import { runNavigationGuard } from './utils/navigationGuard.js'
 import { closeSse, connectSse } from './utils/sse.js'
 import { installClientErrorReporter, recordClientError } from './utils/errorReporter.js'
 import { playIncomingMessageSound, primeAudioOnFirstGesture } from './utils/notifySound.js'
@@ -162,6 +164,8 @@ const isMobile = ref(false)
 const mobileDesktopOverride = ref(localStorage.getItem('xya_mobile_desktop_override') === '1')
 let noticeTimer = null
 let mediaSessionTimer = null
+// 程序式导航（navigate 设置 location.hash）触发的 hashchange 不再走守卫，避免重复弹窗
+let suppressHashGuard = false
 
 function clearMediaSessionTimer() {
   if (mediaSessionTimer) clearTimeout(mediaSessionTimer)
@@ -220,7 +224,7 @@ function showNotice(text, type = 'info') {
   }, 4500)
 }
 
-function navigate(key) {
+async function navigate(key) {
   const requested = key || defaultPage
   const next = normalizePageKey(requested)
   if (requested !== next) {
@@ -231,6 +235,11 @@ function navigate(key) {
     active.value = 'login'
     return
   }
+  if (next === active.value) return
+  // 离开当前页前，交由导航守卫处理草稿询问等逻辑
+  const allowed = await runNavigationGuard()
+  if (!allowed) return
+  suppressHashGuard = true
   location.hash = `#/${next}`
   active.value = next
   if (authPages.includes(next)) authNotice.value = ''
