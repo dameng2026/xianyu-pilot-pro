@@ -52,6 +52,7 @@
     </main>
   </div>
   <ConfirmModal />
+  <DraftGuardModal />
 </template>
 
 <script setup>
@@ -286,6 +287,27 @@ function onHash() {
   const next = normalizePageKey(raw)
   if (!isAuthed() && !authPages.includes(next)) {
     navigate('login')
+    return
+  }
+  // 程序式导航产生的 hashchange：只同步 active，不再触发守卫
+  if (suppressHashGuard) {
+    suppressHashGuard = false
+    const previous = active.value
+    active.value = next
+    if (authPages.includes(next) && next !== previous) authNotice.value = ''
+    return
+  }
+  if (next === active.value) return
+  // 浏览器前进/后退或地址栏直接改 hash：走守卫后再切换
+  handleGuardedHashNavigation(next)
+}
+
+async function handleGuardedHashNavigation(next) {
+  const allowed = await runNavigationGuard()
+  if (!allowed) {
+    // 守卫拒绝：把 hash 还原回当前页，避免地址栏与内容不一致
+    suppressHashGuard = true
+    location.hash = `#/${active.value}`
     return
   }
   const previous = active.value

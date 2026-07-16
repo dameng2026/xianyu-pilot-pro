@@ -237,7 +237,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import CardPanel from '../components/CardPanel.vue'
 import AppButton from '../components/AppButton.vue'
 import ToggleSwitch from '../components/ToggleSwitch.vue'
@@ -255,6 +255,9 @@ import { aiRewriteGoods } from '../api/workflow.js'
 import { isPublishAddressComplete, normalizePublishAddress } from '../utils/publishAddress.js'
 import { imageUploadValidationMessage } from '../utils/imageUploadPolicy.js'
 import { createRequestGate } from '../utils/requestLifecycle.js'
+import { loadPublishDraft, savePublishDraft, clearPublishDraft } from '../utils/publishDraft.js'
+import { setNavigationGuard, clearNavigationGuard } from '../utils/navigationGuard.js'
+import { promptDraftChoice } from '../composables/draftGuardState.js'
 
 const emit = defineEmits(['navigate'])
 const accounts = ref([])
