@@ -1270,6 +1270,13 @@ public class AutomationProxyController {
         return Result.ok(automationClient.postInternalForData("/api/captcha/handle", body, 180));
     }
 
+    /**
+     * 滑块求解记录列表。
+     * <p>
+     * 直接从 MySQL 读取（与 automation-service 同库同表），不再强依赖 Python 服务在线。
+     * 原先透传到 /api/captcha/records 时，只要 automation 未启动/卡在滑块求解，
+     * 前端就会显示「依赖服务暂时不可用」，导致记录页整页不可用。
+     */
     @GetMapping("/captcha/records")
     public Result<Object> captchaRecords(
             @RequestParam(defaultValue = "1") int page,
@@ -1277,13 +1284,77 @@ public class AutomationProxyController {
             @RequestParam(defaultValue = "0") int accountId,
             @RequestParam(defaultValue = "") String status,
             @RequestParam(defaultValue = "") String triggerScene) {
-        java.util.Map<String, Object> params = new java.util.LinkedHashMap<>();
-        params.put("page", page);
-        params.put("pageSize", pageSize);
-        if (accountId > 0) params.put("accountId", accountId);
-        if (status != null && !status.isBlank()) params.put("status", status);
-        if (triggerScene != null && !triggerScene.isBlank()) params.put("triggerScene", triggerScene);
-        return Result.ok(automationClient.getInternalForData("/api/captcha/records", params));
+        Long tenantId = TenantContext.getCurrentTenantId();
+        if (tenantId == null || tenantId <= 0) {
+            throw new BizException(401, "租户上下文不能为空");
+        }
+        int safePage = Math.max(1, page);
+        int safeSize = Math.min(100, Math.max(1, pageSize));
+        int offset = (safePage - 1) * safeSize;
+
+        StringBuilder where = new StringBuilder(" WHERE tenant_id = ? AND COALESCE(deleted, 0) = 0");
+        List<Object> args = new ArrayList<>();
+        args.add(tenantId);
+        if (accountId > 0) {
+            where.append(" AND account_id = ?");
+            args.add(accountId);
+        }
+        if (status != null && !status.isBlank()) {
+            where.append(" AND status = ?");
+            args.add(status.trim());
+        }
+        if (triggerScene != null && !triggerScene.isBlank()) {
+            where.append(" AND trigger_scene = ?");
+            args.add(triggerScene.trim());
+        }
+
+        Long total = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM xianyu_captcha_solve_record" + where,
+                Long.class,
+                args.toArray()
+        );
+        if (total == null) total = 0L;
+
+        List<Object> listArgs = new ArrayList<>(args);
+        listArgs.add(safeSize);
+        listArgs.add(offset);
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT id, account_id, account_name, event_desc, open_reason, solve_reason, "
+                        + "trigger_scene, result, status, engine, retry_count, error_message, "
+                        + "created_at, updated_at "
+                        + "FROM xianyu_captcha_solve_record" + where
+                        + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+                listArgs.toArray()
+        );
+
+        List<Map<String, Object>> items = new ArrayList<>(rows.size());
+        for (Map<String, Object> row : rows) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", row.get("id"));
+            item.put("accountId", row.get("account_id"));
+            item.put("accountName", row.get("account_name") != null ? row.get("account_name") : "");
+            item.put("eventDesc", row.get("event_desc") != null ? row.get("event_desc") : "");
+            item.put("openReason", row.get("open_reason") != null ? row.get("open_reason") : "");
+            item.put("solveReason", row.get("solve_reason") != null ? row.get("solve_reason") : "");
+            item.put("triggerScene", row.get("trigger_scene") != null ? row.get("trigger_scene") : "");
+            item.put("result", row.get("result") != null ? row.get("result") : "");
+            item.put("status", row.get("status") != null ? row.get("status") : "");
+            item.put("engine", row.get("engine") != null ? row.get("engine") : "");
+            item.put("retryCount", row.get("retry_count") != null ? row.get("retry_count") : 0);
+            item.put("errorMessage", row.get("error_message") != null ? row.get("error_message") : "");
+            Object createdAt = row.get("created_at");
+            Object updatedAt = row.get("updated_at");
+            item.put("createdAt", createdAt != null ? String.valueOf(createdAt) : "");
+            item.put("updatedAt", updatedAt != null ? String.valueOf(updatedAt) : "");
+            items.add(item);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("list", items);
+        result.put("total", total);
+        result.put("page", safePage);
+        result.put("pageSize", safeSize);
+        return Result.ok(result);
     }
 
     // ==================== RAG 知识库 ====================

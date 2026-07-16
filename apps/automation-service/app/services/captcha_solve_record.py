@@ -116,12 +116,25 @@ async def create_solve_record(
                 },
             )
             await db.commit()
-            record_id = result.lastrowid
+            # aiomysql/SQLAlchemy 下 result.lastrowid 偶发为 0，回退 LAST_INSERT_ID()
+            record_id = getattr(result, "lastrowid", None) or 0
+            if not record_id:
+                try:
+                    rid_row = (await db.execute(text("SELECT LAST_INSERT_ID() AS id"))).mappings().first()
+                    record_id = int(rid_row["id"]) if rid_row and rid_row.get("id") else 0
+                except Exception:
+                    record_id = 0
+            if not record_id:
+                logger.warning(
+                    "创建滑块求解记录成功但未取到 recordId accountId=%d scene=%s",
+                    account_id, trigger_scene,
+                )
+                return None
             logger.info(
                 "创建滑块求解记录: recordId=%d accountId=%d scene=%s openReason=%s solveReason=%s",
                 record_id, account_id, trigger_scene, open_reason, solve_reason,
             )
-            return record_id
+            return int(record_id)
     except Exception as e:
         log_service_failure(
             logger, e, operation="create_captcha_solve_record",

@@ -17,7 +17,6 @@ from ..deps import get_current_user
 from ....services.captcha_solver import (
     detect_captcha_from_response,
     build_captcha_instructions,
-    try_auto_solve,
     handle_captcha_for_account,
 )
 
@@ -97,14 +96,20 @@ async def auto_solve_captcha(
     data: dict = {},
     current_user: dict = Depends(get_current_user),
 ):
-    """调用 Playwright 自动求解滑块。
+    """调用 Playwright 自动求解滑块，并写入滑块求解记录。
 
     请求体: {
         "accountId": 1,
         "targetUrl": "https://www.goofish.com/",  # 可选
         "headless": false,  # 可选，默认 false
-        "maxRetries": 3    # 可选
+        "maxRetries": 3,    # 可选
+        "triggerScene": "manual",
+        "openReason": "",
+        "solveReason": ""
     }
+
+    说明：统一走 handle_captcha_for_account(auto_solve=True)，保证每次求解
+    （手动/重试/自动）都落库到 xianyu_captcha_solve_record，可在记录页查看。
     """
     try:
         account_id = int(data.get("accountId") or 0)
@@ -112,22 +117,33 @@ async def auto_solve_captcha(
         if not account_id or not tenant_id:
             return ResultObject.validate_failed("accountId 和租户上下文不能为空")
 
-        target_url = data.get("targetUrl")
-        headless = _coerce_optional_bool(data.get("headless"))
-        max_retries = int(data.get("maxRetries") or 3)
+        trigger_scene = str(data.get("triggerScene") or "manual")
+        open_reason = str(data.get("openReason") or "")
+        solve_reason = str(data.get("solveReason") or "")
 
-        result = await try_auto_solve(
+        # 统一走综合处理：创建记录 + 求解 + 更新记录 + SSE
+        handled = await handle_captcha_for_account(
             account_id=account_id,
             tenant_id=tenant_id,
-            target_url=target_url,
-            headless=headless,
-            max_retries=max_retries,
+            response=None,
+            auto_solve=True,
+            trigger_scene=trigger_scene,
+            open_reason=open_reason,
+            solve_reason=solve_reason,
         )
-        if not result.get("success"):
+        result = handled.get("autoSolveResult") or {}
+        if not result.get("success") and not result.get("solved"):
+            # 与旧接口兼容：失败时返回 503 业务码（外层 Java 会再包装）
             return ResultObject.failed(
                 result.get("error") or "滑块自动求解暂不可用，请按人工指引处理",
                 503,
             )
+        # 附带 handle 元信息，便于前端判断 recovered
+        result = {
+            **result,
+            "recovered": bool(handled.get("recovered")),
+            "detected": bool(handled.get("detected")),
+        }
         return ResultObject.success(result)
     except Exception as e:
         return safe_route_failure(logger, e, operation="auto solve captcha", user_message="自动求解滑块失败，请稍后重试")
