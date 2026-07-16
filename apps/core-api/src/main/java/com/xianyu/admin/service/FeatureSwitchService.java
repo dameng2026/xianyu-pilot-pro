@@ -14,20 +14,21 @@ import java.util.*;
 
 /**
  * 功能开关服务。
- * 管理前台各功能页面的访问开关与最低账号等级要求。
+ * 管理前台各功能页面的访问开关，按账号等级（normal/vip/svp）独立控制。
  *
  * 数据存储：复用 admin_module_record 表（零迁移成本）
  *   - module_key = 'user_feature_switch'
  *   - status     = 'config'
- *   - json_text  = 单例 JSON 对象 {"features": { "<pageKey>": {"enabled": true, "minLevel": "normal"}, ... }}
+ *   - json_text  = 单例 JSON 对象 {"features": { "<pageKey>": {"normal": true, "vip": true, "svp": true}, ... }}
  *
  * 等级权重：normal=0 < vip=1 < svip/svp=2
- * 判定逻辑：
- *   - enabled=false → 不可访问，原因 disabled（暂未开放）
- *   - enabled=true 且用户等级 < minLevel → 不可访问，原因 level（等级不足）
- *   - 否则可访问
+ * 判定逻辑（用户等级 = L）：
+ *   - 功能该等级开关为 true → 可访问
+ *   - 功能该等级开关为 false：
+ *     - 存在比 L 更高的等级且开关为 true → reason=level, required_level=第一个开启的更高级别
+ *     - 所有等级都为 false → reason=disabled（暂未开放）
  *
- * 失败降级：读取异常时返回默认配置（全部开启 + normal），避免后端故障锁死前台。
+ * 失败降级：读取异常时返回默认配置（全部开启），避免后端故障锁死前台。
  */
 @Service
 public class FeatureSwitchService {
@@ -45,7 +46,10 @@ public class FeatureSwitchService {
         LEVEL_WEIGHT.put("svp", 2);
     }
 
-    /** 默认功能开关清单：全部开启，最低等级 normal */
+    /** 等级从低到高排序，用于查找"第一个开启的更高级别" */
+    private static final List<String> LEVELS_ASC = List.of("normal", "vip", "svp");
+
+    /** 默认功能开关清单：每个功能三个等级全部开启 */
     private static final List<Map<String, Object>> DEFAULT_FEATURES = buildDefaultFeatures();
 
     private final JdbcTemplate jdbcTemplate;
@@ -60,54 +64,56 @@ public class FeatureSwitchService {
     private static List<Map<String, Object>> buildDefaultFeatures() {
         List<Map<String, Object>> list = new ArrayList<>();
         // 概览
-        list.add(feature("dashboard", "工作台", "overview", "normal"));
-        list.add(feature("data", "数据看板", "overview", "normal"));
+        list.add(feature("dashboard", "工作台", "overview"));
+        list.add(feature("data", "数据看板", "overview"));
         // 账号与商品
-        list.add(feature("accounts", "闲鱼账号", "account", "normal"));
-        list.add(feature("connections", "连接状态", "account", "normal"));
-        list.add(feature("products", "商品管理", "account", "normal"));
-        list.add(feature("orders", "订单管理", "account", "normal"));
-        list.add(feature("product-publish", "商品发布", "account", "normal"));
+        list.add(feature("accounts", "闲鱼账号", "account"));
+        list.add(feature("connections", "连接状态", "account"));
+        list.add(feature("products", "商品管理", "account"));
+        list.add(feature("orders", "订单管理", "account"));
+        list.add(feature("product-publish", "商品发布", "account"));
         // 消息与商机
-        list.add(feature("messages", "消息中心", "message", "normal"));
-        list.add(feature("message-center", "会话收件箱", "message", "normal"));
-        list.add(feature("opportunities", "商机发掘", "message", "normal"));
+        list.add(feature("messages", "消息中心", "message"));
+        list.add(feature("message-center", "会话收件箱", "message"));
+        list.add(feature("opportunities", "商机发掘", "message"));
         // 自动化
-        list.add(feature("workflow", "工作流", "automation", "normal"));
-        list.add(feature("workflow-tasks", "工作流任务", "automation", "normal"));
-        list.add(feature("card-warehouse", "卡密仓库", "automation", "normal"));
-        list.add(feature("auto-delivery", "自动发货", "automation", "normal"));
-        list.add(feature("delivery-source-library", "货源库", "automation", "normal"));
-        list.add(feature("delivery-statement", "发货声明", "automation", "normal"));
-        list.add(feature("delivery-mall", "货源商城", "automation", "normal"));
-        list.add(feature("delivery-templates", "发货模板", "automation", "normal"));
-        list.add(feature("delivery-records", "发货记录", "automation", "normal"));
-        list.add(feature("scheduled-tasks", "定时任务", "automation", "normal"));
-        list.add(feature("auto-reply", "自动回复", "automation", "normal"));
+        list.add(feature("workflow", "工作流", "automation"));
+        list.add(feature("workflow-tasks", "工作流任务", "automation"));
+        list.add(feature("card-warehouse", "卡密仓库", "automation"));
+        list.add(feature("auto-delivery", "自动发货", "automation"));
+        list.add(feature("delivery-source-library", "货源库", "automation"));
+        list.add(feature("delivery-statement", "发货声明", "automation"));
+        list.add(feature("delivery-mall", "货源商城", "automation"));
+        list.add(feature("delivery-templates", "发货模板", "automation"));
+        list.add(feature("delivery-records", "发货记录", "automation"));
+        list.add(feature("scheduled-tasks", "定时任务", "automation"));
+        list.add(feature("auto-reply", "自动回复", "automation"));
         // 系统设置
-        list.add(feature("logs", "系统日志", "system", "normal"));
-        list.add(feature("slider-solve-records", "滑块记录", "system", "normal"));
-        list.add(feature("feedback", "意见反馈", "system", "normal"));
-        list.add(feature("settings-notify", "通知设置", "system", "normal"));
-        list.add(feature("user-manual", "使用手册", "system", "normal"));
-        list.add(feature("profile", "个人中心", "system", "normal"));
+        list.add(feature("logs", "系统日志", "system"));
+        list.add(feature("slider-solve-records", "滑块记录", "system"));
+        list.add(feature("feedback", "意见反馈", "system"));
+        list.add(feature("settings-notify", "通知设置", "system"));
+        list.add(feature("user-manual", "使用手册", "system"));
+        list.add(feature("profile", "个人中心", "system"));
         // 会员
-        list.add(feature("vip", "会员中心", "hidden", "normal"));
+        list.add(feature("vip", "会员中心", "hidden"));
         return Collections.unmodifiableList(list);
     }
 
-    private static Map<String, Object> feature(String key, String title, String group, String minLevel) {
+    private static Map<String, Object> feature(String key, String title, String group) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("key", key);
         m.put("title", title);
         m.put("group", group);
-        m.put("enabled", true);
-        m.put("minLevel", minLevel);
+        m.put("normal", true);
+        m.put("vip", true);
+        m.put("svp", true);
         return m;
     }
 
     /**
      * 管理端：列出所有功能开关（合并默认值）。
+     * 返回每个功能含 key/title/group/normal/vip/svp 五个字段。
      */
     public List<Map<String, Object>> listSwitches() {
         Map<String, Map<String, Object>> stored = loadStoredFeatures();
@@ -117,8 +123,11 @@ public class FeatureSwitchService {
             Map<String, Object> merged = new LinkedHashMap<>(def);
             Map<String, Object> override = stored.get(key);
             if (override != null) {
-                if (override.containsKey("enabled")) merged.put("enabled", override.get("enabled"));
-                if (override.containsKey("minLevel")) merged.put("minLevel", override.get("minLevel"));
+                for (String level : LEVELS_ASC) {
+                    if (override.containsKey(level)) merged.put(level, override.get(level));
+                }
+                if (override.containsKey("title")) merged.put("title", override.get("title"));
+                if (override.containsKey("group")) merged.put("group", override.get("group"));
             }
             result.add(merged);
         }
@@ -127,6 +136,9 @@ public class FeatureSwitchService {
             if (isDefaultKey(e.getKey())) continue;
             Map<String, Object> extra = new LinkedHashMap<>(e.getValue());
             if (!extra.containsKey("key")) extra.put("key", e.getKey());
+            for (String level : LEVELS_ASC) {
+                if (!extra.containsKey(level)) extra.put(level, true);
+            }
             result.add(extra);
         }
         return result;
@@ -140,6 +152,12 @@ public class FeatureSwitchService {
      *     "accessible": { "<pageKey>": true, ... },
      *     "blocked": { "<pageKey>": { "reason": "disabled|level", "required_level": "vip" } }
      *   }
+     *
+     * 判定逻辑：
+     *   - 用户等级对应的开关为 true → 可访问
+     *   - 用户等级对应的开关为 false：
+     *     - 存在更高级别开关为 true → reason=level, required_level=第一个开启的更高级别
+     *     - 所有级别都为 false → reason=disabled
      */
     public Map<String, Object> getStatusForCurrentUser(Long userId) {
         Map<String, Object> status = new LinkedHashMap<>();
@@ -152,32 +170,24 @@ public class FeatureSwitchService {
 
         for (Map<String, Object> def : DEFAULT_FEATURES) {
             String key = String.valueOf(def.get("key"));
-            boolean enabled = boolOr(def.get("enabled"), true);
-            String minLevel = strOr(def.get("minLevel"), "normal");
+            Map<String, Boolean> levelSwitches = resolveLevelSwitches(key, def, stored);
 
-            Map<String, Object> override = stored.get(key);
-            if (override != null) {
-                enabled = boolOr(override.getOrDefault("enabled", enabled), enabled);
-                minLevel = strOr(override.getOrDefault("minLevel", minLevel), minLevel);
-            }
-
-            if (!enabled) {
-                accessible.put(key, false);
-                Map<String, Object> info = new LinkedHashMap<>();
-                info.put("reason", "disabled");
-                info.put("required_level", minLevel);
-                blocked.put(key, info);
+            boolean userAllowed = boolOr(levelSwitches.get(normalizeLevel(userLevel)), true);
+            if (userAllowed) {
+                accessible.put(key, true);
                 continue;
             }
-            if (!levelSatisfied(userLevel, minLevel)) {
-                accessible.put(key, false);
-                Map<String, Object> info = new LinkedHashMap<>();
+            accessible.put(key, false);
+            Map<String, Object> info = new LinkedHashMap<>();
+            String firstHigherOn = findFirstHigherEnabled(userLevel, levelSwitches);
+            if (firstHigherOn != null) {
                 info.put("reason", "level");
-                info.put("required_level", minLevel);
-                blocked.put(key, info);
-                continue;
+                info.put("required_level", firstHigherOn);
+            } else {
+                info.put("reason", "disabled");
+                info.put("required_level", normalizeLevel(userLevel));
             }
-            accessible.put(key, true);
+            blocked.put(key, info);
         }
         status.put("accessible", accessible);
         status.put("blocked", blocked);
@@ -229,8 +239,9 @@ public class FeatureSwitchService {
         Map<String, Map<String, Object>> features = new LinkedHashMap<>();
         for (Map<String, Object> def : DEFAULT_FEATURES) {
             Map<String, Object> f = new LinkedHashMap<>();
-            f.put("enabled", def.get("enabled"));
-            f.put("minLevel", def.get("minLevel"));
+            for (String level : LEVELS_ASC) {
+                f.put(level, def.get(level));
+            }
             features.put(String.valueOf(def.get("key")), f);
         }
         Map<String, Object> root = new LinkedHashMap<>();
@@ -248,6 +259,36 @@ public class FeatureSwitchService {
     }
 
     // ===================== 内部方法 =====================
+
+    /**
+     * 解析某功能的三个等级开关状态（合并默认值与存储覆盖）。
+     */
+    private Map<String, Boolean> resolveLevelSwitches(String key, Map<String, Object> def, Map<String, Map<String, Object>> stored) {
+        Map<String, Boolean> result = new LinkedHashMap<>();
+        for (String level : LEVELS_ASC) {
+            boolean val = boolOr(def.get(level), true);
+            Map<String, Object> override = stored.get(key);
+            if (override != null && override.containsKey(level)) {
+                val = boolOr(override.get(level), val);
+            }
+            result.put(level, val);
+        }
+        return result;
+    }
+
+    /**
+     * 查找比用户等级更高的、第一个开关为 true 的等级。
+     * 返回 null 表示没有更高级别开启（含所有级别都关闭的情况）。
+     */
+    private String findFirstHigherEnabled(String userLevel, Map<String, Boolean> levelSwitches) {
+        int userWeight = weightOf(userLevel);
+        for (String level : LEVELS_ASC) {
+            if (weightOf(level) > userWeight && Boolean.TRUE.equals(levelSwitches.get(level))) {
+                return level;
+            }
+        }
+        return null;
+    }
 
     private Map<String, Map<String, Object>> loadStoredFeatures() {
         try {
@@ -286,7 +327,6 @@ public class FeatureSwitchService {
         } catch (BizException e) {
             throw e;
         } catch (DataAccessException e) {
-            // 表可能尚未创建（SchemaCompatibilityRunner 未跑），降级为默认配置
             log.warn("读取功能开关配置数据库访问失败，降级为默认值, errorType={}", e.getClass().getSimpleName());
             return null;
         } catch (Exception e) {
@@ -319,12 +359,10 @@ public class FeatureSwitchService {
             if (f == null) continue;
             String key = String.valueOf(f.getOrDefault("key", "")).trim();
             if (key.isEmpty()) continue;
-            boolean enabled = boolOr(f.get("enabled"), true);
-            String minLevel = normalizeLevel(strOr(f.get("minLevel"), "normal"));
             Map<String, Object> m = new LinkedHashMap<>();
-            m.put("enabled", enabled);
-            m.put("minLevel", minLevel);
-            // 保留 title/group 便于管理端展示，但不参与判定
+            for (String level : LEVELS_ASC) {
+                m.put(level, boolOr(f.get(level), true));
+            }
             if (f.containsKey("title")) m.put("title", f.get("title"));
             if (f.containsKey("group")) m.put("group", f.get("group"));
             result.put(key, m);
@@ -385,11 +423,5 @@ public class FeatureSwitchService {
         String s = String.valueOf(v).trim().toLowerCase(Locale.ROOT);
         if (s.isEmpty()) return fallback;
         return "true".equals(s) || "1".equals(s) || "yes".equals(s) || "on".equals(s);
-    }
-
-    private static String strOr(Object v, String fallback) {
-        if (v == null) return fallback;
-        String s = String.valueOf(v).trim();
-        return s.isEmpty() ? fallback : s;
     }
 }

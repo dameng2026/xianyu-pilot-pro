@@ -43,52 +43,19 @@ class FeatureSwitchServiceTest {
         return ups;
     }
 
-    // ===================== 等级判定 =====================
-
-    @Test
-    void levelWeightNormalVipSvp() {
-        FeatureSwitchService s = new FeatureSwitchService(mockJdbcEmpty(), mockUserProfile("normal"));
-        assertTrue(s.levelSatisfied("normal", "normal"));
-        assertFalse(s.levelSatisfied("normal", "vip"));
-        assertFalse(s.levelSatisfied("normal", "svp"));
-        assertTrue(s.levelSatisfied("vip", "normal"));
-        assertTrue(s.levelSatisfied("vip", "vip"));
-        assertFalse(s.levelSatisfied("vip", "svp"));
-        assertTrue(s.levelSatisfied("svp", "normal"));
-        assertTrue(s.levelSatisfied("svp", "vip"));
-        assertTrue(s.levelSatisfied("svp", "svp"));
-    }
-
-    @Test
-    void levelWeightAcceptsSvipAlias() {
-        FeatureSwitchService s = new FeatureSwitchService(mockJdbcEmpty(), mockUserProfile("normal"));
-        // svip 应等同于 svp
-        assertTrue(s.levelSatisfied("svip", "svp"));
-        assertTrue(s.levelSatisfied("svp", "svip"));
-        assertTrue(s.levelSatisfied("svip", "vip"));
-    }
-
-    @Test
-    void levelWeightUnknownLevelFallsBackToNormal() {
-        FeatureSwitchService s = new FeatureSwitchService(mockJdbcEmpty(), mockUserProfile("normal"));
-        // 未知等级视为 normal
-        assertFalse(s.levelSatisfied("unknown_level", "vip"));
-        assertTrue(s.levelSatisfied("unknown_level", "normal"));
-    }
-
     // ===================== 默认配置 =====================
 
     @Test
-    void missingConfigurationReturnsAllEnabledDefaults() {
-        JdbcTemplate jdbc = mockJdbcEmpty();
-        FeatureSwitchService s = new FeatureSwitchService(jdbc, mockUserProfile("normal"));
+    void missingConfigurationReturnsAllLevelsEnabled() {
+        FeatureSwitchService s = new FeatureSwitchService(mockJdbcEmpty(), mockUserProfile("normal"));
 
         List<Map<String, Object>> switches = s.listSwitches();
 
         assertFalse(switches.isEmpty(), "应返回默认开关清单");
         for (Map<String, Object> sw : switches) {
-            assertEquals(Boolean.TRUE, sw.get("enabled"), "默认全部开启: " + sw.get("key"));
-            assertEquals("normal", sw.get("minLevel"), "默认最低等级 normal: " + sw.get("key"));
+            assertEquals(Boolean.TRUE, sw.get("normal"), "默认 normal 开启: " + sw.get("key"));
+            assertEquals(Boolean.TRUE, sw.get("vip"), "默认 vip 开启: " + sw.get("key"));
+            assertEquals(Boolean.TRUE, sw.get("svp"), "默认 svp 开启: " + sw.get("key"));
         }
         // 验证用户要求的必含页面
         Set<String> keys = new HashSet<>();
@@ -105,10 +72,9 @@ class FeatureSwitchServiceTest {
                 .thenThrow(new RuntimeException("db unavailable"));
         FeatureSwitchService s = new FeatureSwitchService(jdbc, mockUserProfile("normal"));
 
-        // 不应抛异常，应降级返回默认配置
         List<Map<String, Object>> switches = s.listSwitches();
         assertFalse(switches.isEmpty());
-        assertEquals(Boolean.TRUE, switches.get(0).get("enabled"));
+        assertEquals(Boolean.TRUE, switches.get(0).get("normal"));
     }
 
     // ===================== 用户端状态 =====================
@@ -131,9 +97,9 @@ class FeatureSwitchServiceTest {
     }
 
     @Test
-    void userStatusBlockedWhenFeatureDisabled() {
-        // 配置 delivery-statement 为关闭
-        String json = "{\"features\":{\"delivery-statement\":{\"enabled\":false,\"minLevel\":\"normal\"}}}";
+    void userStatusBlockedWhenUserLevelSwitchOffAndHigherLevelOn() {
+        // workflow 对 normal 关闭，对 vip/svp 开放
+        String json = "{\"features\":{\"workflow\":{\"normal\":false,\"vip\":true,\"svp\":true}}}";
         FeatureSwitchService s = new FeatureSwitchService(mockJdbcWithConfig(json), mockUserProfile("normal"));
 
         Map<String, Object> status = s.getStatusForCurrentUser(1L);
@@ -142,42 +108,89 @@ class FeatureSwitchServiceTest {
         @SuppressWarnings("unchecked")
         Map<String, Map<String, Object>> blocked = (Map<String, Map<String, Object>>) status.get("blocked");
 
-        assertFalse(accessible.get("delivery-statement"));
-        Map<String, Object> info = blocked.get("delivery-statement");
-        assertNotNull(info);
-        assertEquals("disabled", info.get("reason"));
-        assertEquals("normal", info.get("required_level"));
-    }
-
-    @Test
-    void userStatusBlockedWhenLevelInsufficient() {
-        // 配置 vip 页面要求 vip 等级
-        String json = "{\"features\":{\"vip\":{\"enabled\":true,\"minLevel\":\"vip\"}}}";
-        FeatureSwitchService s = new FeatureSwitchService(mockJdbcWithConfig(json), mockUserProfile("normal"));
-
-        Map<String, Object> status = s.getStatusForCurrentUser(1L);
-        @SuppressWarnings("unchecked")
-        Map<String, Boolean> accessible = (Map<String, Boolean>) status.get("accessible");
-        @SuppressWarnings("unchecked")
-        Map<String, Map<String, Object>> blocked = (Map<String, Map<String, Object>>) status.get("blocked");
-
-        assertFalse(accessible.get("vip"));
-        Map<String, Object> info = blocked.get("vip");
+        assertFalse(accessible.get("workflow"));
+        Map<String, Object> info = blocked.get("workflow");
         assertNotNull(info);
         assertEquals("level", info.get("reason"));
         assertEquals("vip", info.get("required_level"));
     }
 
     @Test
-    void userStatusAccessibleWhenLevelSufficient() {
-        String json = "{\"features\":{\"vip\":{\"enabled\":true,\"minLevel\":\"vip\"}}}";
+    void userStatusAccessibleWhenUserLevelSwitchOn() {
+        // workflow 对 normal 关闭，对 vip/svp 开放
+        String json = "{\"features\":{\"workflow\":{\"normal\":false,\"vip\":true,\"svp\":true}}}";
         FeatureSwitchService s = new FeatureSwitchService(mockJdbcWithConfig(json), mockUserProfile("vip"));
 
         Map<String, Object> status = s.getStatusForCurrentUser(1L);
         @SuppressWarnings("unchecked")
         Map<String, Boolean> accessible = (Map<String, Boolean>) status.get("accessible");
 
-        assertTrue(accessible.get("vip"));
+        assertTrue(accessible.get("workflow"));
+    }
+
+    @Test
+    void userStatusBlockedDisabledWhenAllLevelsOff() {
+        // 所有级别都关闭
+        String json = "{\"features\":{\"workflow\":{\"normal\":false,\"vip\":false,\"svp\":false}}}";
+        FeatureSwitchService s = new FeatureSwitchService(mockJdbcWithConfig(json), mockUserProfile("normal"));
+
+        Map<String, Object> status = s.getStatusForCurrentUser(1L);
+        @SuppressWarnings("unchecked")
+        Map<String, Boolean> accessible = (Map<String, Boolean>) status.get("accessible");
+        @SuppressWarnings("unchecked")
+        Map<String, Map<String, Object>> blocked = (Map<String, Map<String, Object>>) status.get("blocked");
+
+        assertFalse(accessible.get("workflow"));
+        Map<String, Object> info = blocked.get("workflow");
+        assertNotNull(info);
+        assertEquals("disabled", info.get("reason"));
+    }
+
+    @Test
+    void userStatusBlockedDisabledForAllUserLevelsWhenAllOff() {
+        // 所有级别都关闭，vip 用户也应被 disabled
+        String json = "{\"features\":{\"workflow\":{\"normal\":false,\"vip\":false,\"svp\":false}}}";
+        FeatureSwitchService s = new FeatureSwitchService(mockJdbcWithConfig(json), mockUserProfile("vip"));
+
+        Map<String, Object> status = s.getStatusForCurrentUser(1L);
+        @SuppressWarnings("unchecked")
+        Map<String, Boolean> accessible = (Map<String, Boolean>) status.get("accessible");
+        @SuppressWarnings("unchecked")
+        Map<String, Map<String, Object>> blocked = (Map<String, Map<String, Object>>) status.get("blocked");
+
+        assertFalse(accessible.get("workflow"));
+        assertEquals("disabled", blocked.get("workflow").get("reason"));
+    }
+
+    @Test
+    void userStatusVipUserBlockedWhenVipOffButSvpOn() {
+        // vip 关闭，svp 开启 → vip 用户被拦截，提示升级到 svp
+        String json = "{\"features\":{\"workflow\":{\"normal\":false,\"vip\":false,\"svp\":true}}}";
+        FeatureSwitchService s = new FeatureSwitchService(mockJdbcWithConfig(json), mockUserProfile("vip"));
+
+        Map<String, Object> status = s.getStatusForCurrentUser(1L);
+        @SuppressWarnings("unchecked")
+        Map<String, Boolean> accessible = (Map<String, Boolean>) status.get("accessible");
+        @SuppressWarnings("unchecked")
+        Map<String, Map<String, Object>> blocked = (Map<String, Map<String, Object>>) status.get("blocked");
+
+        assertFalse(accessible.get("workflow"));
+        Map<String, Object> info = blocked.get("workflow");
+        assertEquals("level", info.get("reason"));
+        assertEquals("svp", info.get("required_level"));
+    }
+
+    @Test
+    void userStatusSvpUserAlwaysAccessibleWhenAnyLevelOn() {
+        // svp 用户：只要 svp 开关为 true 就可访问
+        String json = "{\"features\":{\"workflow\":{\"normal\":false,\"vip\":false,\"svp\":true}}}";
+        FeatureSwitchService s = new FeatureSwitchService(mockJdbcWithConfig(json), mockUserProfile("svp"));
+
+        Map<String, Object> status = s.getStatusForCurrentUser(1L);
+        @SuppressWarnings("unchecked")
+        Map<String, Boolean> accessible = (Map<String, Boolean>) status.get("accessible");
+
+        assertTrue(accessible.get("workflow"));
     }
 
     @Test
@@ -204,6 +217,19 @@ class FeatureSwitchServiceTest {
         assertEquals("normal", status.get("level"));
     }
 
+    @Test
+    void userStatusAcceptsSvipAliasAsSvp() {
+        // svip 应等同于 svp
+        String json = "{\"features\":{\"workflow\":{\"normal\":false,\"vip\":false,\"svp\":true}}}";
+        FeatureSwitchService s = new FeatureSwitchService(mockJdbcWithConfig(json), mockUserProfile("svip"));
+
+        Map<String, Object> status = s.getStatusForCurrentUser(1L);
+        @SuppressWarnings("unchecked")
+        Map<String, Boolean> accessible = (Map<String, Boolean>) status.get("accessible");
+
+        assertTrue(accessible.get("workflow"), "svip 用户应等同于 svp，可访问 svp 开启的功能");
+    }
+
     // ===================== 保存配置 =====================
 
     @Test
@@ -213,7 +239,7 @@ class FeatureSwitchServiceTest {
 
         FeatureSwitchService s = new FeatureSwitchService(jdbc, mockUserProfile("normal"));
         List<Map<String, Object>> features = List.of(
-                Map.of("key", "vip", "enabled", true, "minLevel", "vip"));
+                Map.of("key", "workflow", "normal", false, "vip", true, "svp", true));
 
         BizException error = assertThrows(BizException.class, () -> s.saveConfig(features));
         assertEquals(409, error.getCode());
@@ -233,7 +259,7 @@ class FeatureSwitchServiceTest {
 
         FeatureSwitchService s = new FeatureSwitchService(jdbc, mockUserProfile("normal"));
         List<Map<String, Object>> features = List.of(
-                Map.of("key", "vip", "enabled", false, "minLevel", "normal"));
+                Map.of("key", "workflow", "normal", false, "vip", true, "svp", true));
 
         s.saveConfig(features);
         verify(jdbc, times(1)).update(contains("INSERT INTO admin_module_record"), any(Object[].class));
@@ -246,38 +272,54 @@ class FeatureSwitchServiceTest {
 
         FeatureSwitchService s = new FeatureSwitchService(jdbc, mockUserProfile("normal"));
         List<Map<String, Object>> features = List.of(
-                Map.of("key", "vip", "enabled", false, "minLevel", "normal"));
+                Map.of("key", "workflow", "normal", false, "vip", true, "svp", true));
 
         s.saveConfig(features);
         verify(jdbc, times(1)).update(contains("UPDATE admin_module_record"), any(Object[].class));
     }
 
     @Test
-    void normalizeConfigSvipAliasBecomesSvp() {
-        FeatureSwitchService s = new FeatureSwitchService(mockJdbcEmpty(), mockUserProfile("normal"));
-        List<Map<String, Object>> features = List.of(
-                Map.of("key", "vip", "enabled", true, "minLevel", "svip"));
-        // 保存时 svip 会被规范化为 svp
-        // 通过保存后再读取验证（mock 已配置返回 {}，所以 listSwitches 会用默认值）
-        // 这里直接验证 levelSatisfied 兼容性
-        assertTrue(s.levelSatisfied("svip", "svip"));
-    }
-
-    @Test
     void listSwitchesMergesStoredOverrideWithDefaults() {
-        // 存储中关闭 vip 页面
-        String json = "{\"features\":{\"vip\":{\"enabled\":false,\"minLevel\":\"normal\"}}}";
+        // 存储中关闭 workflow 的 normal 开关
+        String json = "{\"features\":{\"workflow\":{\"normal\":false,\"vip\":true,\"svp\":true}}}";
         FeatureSwitchService s = new FeatureSwitchService(mockJdbcWithConfig(json), mockUserProfile("normal"));
 
         List<Map<String, Object>> switches = s.listSwitches();
-        Map<String, Object> vipSwitch = switches.stream()
-                .filter(sw -> "vip".equals(sw.get("key")))
+        Map<String, Object> workflowSwitch = switches.stream()
+                .filter(sw -> "workflow".equals(sw.get("key")))
                 .findFirst().orElseThrow();
-        assertEquals(false, vipSwitch.get("enabled"));
-        // 其他页面应保持默认开启
+        assertEquals(false, workflowSwitch.get("normal"));
+        assertEquals(true, workflowSwitch.get("vip"));
+        assertEquals(true, workflowSwitch.get("svp"));
+        // 其他功能应保持默认全开
         Map<String, Object> dashboardSwitch = switches.stream()
                 .filter(sw -> "dashboard".equals(sw.get("key")))
                 .findFirst().orElseThrow();
-        assertEquals(true, dashboardSwitch.get("enabled"));
+        assertEquals(true, dashboardSwitch.get("normal"));
+        assertEquals(true, dashboardSwitch.get("vip"));
+        assertEquals(true, dashboardSwitch.get("svp"));
+    }
+
+    // ===================== 等级判定（向后兼容） =====================
+
+    @Test
+    void levelWeightNormalVipSvp() {
+        FeatureSwitchService s = new FeatureSwitchService(mockJdbcEmpty(), mockUserProfile("normal"));
+        assertTrue(s.levelSatisfied("normal", "normal"));
+        assertFalse(s.levelSatisfied("normal", "vip"));
+        assertFalse(s.levelSatisfied("normal", "svp"));
+        assertTrue(s.levelSatisfied("vip", "normal"));
+        assertTrue(s.levelSatisfied("vip", "vip"));
+        assertFalse(s.levelSatisfied("vip", "svp"));
+        assertTrue(s.levelSatisfied("svp", "normal"));
+        assertTrue(s.levelSatisfied("svp", "vip"));
+        assertTrue(s.levelSatisfied("svp", "svp"));
+    }
+
+    @Test
+    void levelWeightAcceptsSvipAlias() {
+        FeatureSwitchService s = new FeatureSwitchService(mockJdbcEmpty(), mockUserProfile("normal"));
+        assertTrue(s.levelSatisfied("svip", "svp"));
+        assertTrue(s.levelSatisfied("svp", "svip"));
     }
 }

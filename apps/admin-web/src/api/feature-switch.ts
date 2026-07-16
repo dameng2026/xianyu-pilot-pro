@@ -1,7 +1,7 @@
 import request from '@/utils/http'
 
 /**
- * 功能开关配置项
+ * 功能开关配置项（每级别独立开关）
  */
 export interface FeatureSwitchItem {
   /** 页面 key（唯一标识） */
@@ -10,10 +10,12 @@ export interface FeatureSwitchItem {
   title?: string
   /** 分组：overview/account/message/automation/system/hidden */
   group?: string
-  /** 是否启用 */
-  enabled: boolean
-  /** 最低账号等级：normal | vip | svp | svip */
-  minLevel: string
+  /** 普通用户是否可访问 */
+  normal: boolean
+  /** VIP 是否可访问 */
+  vip: boolean
+  /** SVP 是否可访问 */
+  svp: boolean
 }
 
 /**

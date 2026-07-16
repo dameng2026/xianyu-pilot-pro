@@ -1,11 +1,11 @@
-<!-- 系统运维 - 功能管理页面 -->
+<!-- 系统运维 - 功能管理页面（表格布局：功能列 + 普通用户/VIP/SVP/全部 四列开关） -->
 <template>
   <div class="feature-switch-page">
     <ElCard shadow="never" class="filter-card">
       <div class="page-title-row">
         <div>
           <h2>功能管理</h2>
-          <p>控制前台各功能页面的访问开关与最低账号等级。关闭后用户在前台访问该页面时会提示"暂未开放"；等级不足时会提示需要升级。</p>
+          <p>按账号等级控制前台各功能页面的访问开关。第一列为功能名称，后续列分别为普通用户、VIP、SVP 的独立开关，最后一列"全部"为快捷开关：开启时三列全部打开，关闭时三列全部关闭。关闭"全部"后可单独控制各级别。</p>
         </div>
         <div class="toolbar-actions">
           <ElButton :disabled="configState !== 'ready'" @click="loadConfig">
@@ -44,41 +44,47 @@
         class="table-card"
       >
         <h4 class="section-title">{{ group.label }}</h4>
-        <div class="feature-rows">
-          <div
-            v-for="item in featuresByGroup[group.key] || []"
-            :key="item.key"
-            class="feature-row"
-          >
-            <div class="feature-info">
-              <span class="feature-title">{{ item.title || item.key }}</span>
-              <span class="feature-key">{{ item.key }}</span>
-            </div>
-            <div class="feature-controls">
+        <ElTable :data="featuresByGroup[group.key] || []" border stripe size="small">
+          <ElTableColumn label="功能" min-width="180" show-overflow-tooltip>
+            <template #default="{ row }">
+              <div class="feature-cell">
+                <span class="feature-title">{{ row.title || row.key }}</span>
+                <span class="feature-key">{{ row.key }}</span>
+              </div>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="普通用户" width="110" align="center">
+            <template #default="{ row }">
+              <ElSwitch v-model="row.normal" :active-value="true" :inactive-value="false" inline-prompt active-text="开" inactive-text="关" @change="onLevelChange(row)" />
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="VIP" width="110" align="center">
+            <template #default="{ row }">
+              <ElSwitch v-model="row.vip" :active-value="true" :inactive-value="false" inline-prompt active-text="开" inactive-text="关" @change="onLevelChange(row)" />
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="SVP" width="110" align="center">
+            <template #default="{ row }">
+              <ElSwitch v-model="row.svp" :active-value="true" :inactive-value="false" inline-prompt active-text="开" inactive-text="关" @change="onLevelChange(row)" />
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="全部" width="110" align="center">
+            <template #default="{ row }">
               <ElSwitch
-                v-model="item.enabled"
+                :model-value="isAllOn(row)"
                 :active-value="true"
                 :inactive-value="false"
-                active-text="启用"
-                inactive-text="停用"
                 inline-prompt
+                active-text="开"
+                inactive-text="关"
+                @change="(val: boolean) => onAllChange(row, val)"
               />
-              <ElSelect
-                v-model="item.minLevel"
-                placeholder="最低等级"
-                style="width: 140px"
-                :disabled="!item.enabled"
-              >
-                <ElOption label="普通用户" value="normal" />
-                <ElOption label="VIP" value="vip" />
-                <ElOption label="SVP" value="svp" />
-              </ElSelect>
-            </div>
-          </div>
-          <div v-if="!(featuresByGroup[group.key] || []).length" class="empty-group">
-            暂无功能项
-          </div>
-        </div>
+            </template>
+          </ElTableColumn>
+          <template #empty>
+            <div class="empty-state">暂无功能项</div>
+          </template>
+        </ElTable>
       </ElCard>
     </template>
   </div>
@@ -131,6 +137,23 @@ const featuresByGroup = computed(() => {
 
 const orderedGroups = computed(() => GROUPS)
 
+/** 判断某功能三个级别是否全部开启 */
+function isAllOn(row: FeatureSwitchItem): boolean {
+  return row.normal === true && row.vip === true && row.svp === true
+}
+
+/** 单个级别开关变化时无需额外处理（"全部"列由 isAllOn 自动计算） */
+function onLevelChange(_row: FeatureSwitchItem) {
+  // 空函数：单个级别变化时"全部"列的显示由 :model-value="isAllOn(row)" 自动更新
+}
+
+/** "全部"开关变化时：开启→三列全开；关闭→三列全关 */
+function onAllChange(row: FeatureSwitchItem, val: boolean) {
+  row.normal = val
+  row.vip = val
+  row.svp = val
+}
+
 async function loadConfig() {
   configState.value = 'loading'
   configError.value = ''
@@ -160,7 +183,7 @@ async function handleSave() {
 async function handleInit() {
   try {
     await ElMessageBox.confirm(
-      '将写入默认配置（全部开启 + 普通用户可访问）。若已存在配置则保持不变。是否继续？',
+      '将写入默认配置（全部开启）。若已存在配置则保持不变。是否继续？',
       '初始化默认配置',
       { type: 'warning', confirmButtonText: '继续', cancelButtonText: '取消' }
     )
@@ -194,23 +217,12 @@ onMounted(loadConfig)
   margin-bottom: 0;
 }
 .page-title-row h2 { margin: 0 0 6px; font-size: 20px; }
-.page-title-row p { margin: 0; color: var(--el-text-color-secondary); font-size: 13px; }
-.toolbar-actions { display: flex; gap: 8px; }
+.page-title-row p { margin: 0; color: var(--el-text-color-secondary); font-size: 13px; max-width: 720px; }
+.toolbar-actions { display: flex; gap: 8px; flex-shrink: 0; }
 .table-card { margin-bottom: 16px; }
 .section-title { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
-.feature-rows { display: flex; flex-direction: column; gap: 8px; }
-.feature-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 6px;
-  background: var(--el-fill-color-blank);
-}
-.feature-info { display: flex; flex-direction: column; gap: 2px; }
+.feature-cell { display: flex; flex-direction: column; gap: 2px; }
 .feature-title { font-size: 14px; font-weight: 500; }
 .feature-key { font-size: 12px; color: var(--el-text-color-secondary); }
-.feature-controls { display: flex; align-items: center; gap: 12px; }
-.empty-group { padding: 16px 0; text-align: center; color: var(--el-text-color-secondary); font-size: 13px; }
+.empty-state { padding: 16px 0; text-align: center; color: var(--el-text-color-secondary); font-size: 13px; }
 </style>
