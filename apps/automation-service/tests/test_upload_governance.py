@@ -24,15 +24,34 @@ def _image() -> ValidatedImage:
         ({"recent_count": 30, "concurrent_count": 0, "global_concurrent_count": 0, "used_bytes": 0, "global_used_bytes": 0}, 429),
         ({"recent_count": 0, "concurrent_count": 2, "global_concurrent_count": 0, "used_bytes": 0, "global_used_bytes": 0}, 429),
         ({"recent_count": 0, "concurrent_count": 0, "global_concurrent_count": 8, "used_bytes": 0, "global_used_bytes": 0}, 429),
-        ({"recent_count": 0, "concurrent_count": 0, "global_concurrent_count": 0, "used_bytes": 100 * 1024 * 1024, "global_used_bytes": 0}, 413),
-        ({"recent_count": 0, "concurrent_count": 0, "global_concurrent_count": 0, "used_bytes": 0, "global_used_bytes": 10 * 1024 * 1024 * 1024}, 503),
     ],
 )
-def test_upload_admission_enforces_rate_concurrency_tenant_and_global_quota(values, status):
+def test_upload_admission_enforces_rate_and_concurrency_only(values, status):
+    """存储配额检查已被有意移除；仅保留频率与并发上限。"""
     with pytest.raises(governance.UploadGovernanceError) as error:
         governance.enforce_upload_admission(**values, incoming_bytes=1)
 
     assert error.value.status_code == status
+
+
+@pytest.mark.parametrize(
+    ("used_bytes", "global_used_bytes"),
+    [
+        (100 * 1024 * 1024, 0),    # 超出原租户配额
+        (0, 10 * 1024 * 1024 * 1024),  # 超出原平台配额
+        (1024 * 1024 * 1024 * 1024, 10 * 1024 * 1024 * 1024 * 1024),  # 远超任何配额
+    ],
+)
+def test_upload_admission_no_longer_enforces_storage_quota(used_bytes, global_used_bytes):
+    """无论 used_bytes / global_used_bytes 多大，都不应触发配额错误。"""
+    governance.enforce_upload_admission(
+        recent_count=0,
+        concurrent_count=0,
+        global_concurrent_count=0,
+        used_bytes=used_bytes,
+        global_used_bytes=global_used_bytes,
+        incoming_bytes=1,
+    )
 
 
 @pytest.mark.asyncio

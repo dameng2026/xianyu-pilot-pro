@@ -167,8 +167,6 @@ class Settings(BaseSettings):
         env = (self.app_env or "dev").strip().lower()
         prod_like = is_production_like(env)
         upload_values = {
-            "UPLOAD_TENANT_QUOTA_BYTES": self.upload_tenant_quota_bytes,
-            "UPLOAD_GLOBAL_QUOTA_BYTES": self.upload_global_quota_bytes,
             "UPLOAD_RATE_LIMIT_REQUESTS": self.upload_rate_limit_requests,
             "UPLOAD_RATE_LIMIT_WINDOW_SECONDS": self.upload_rate_limit_window_seconds,
             "UPLOAD_MAX_CONCURRENT_PER_TENANT": self.upload_max_concurrent_per_tenant,
@@ -218,10 +216,6 @@ class Settings(BaseSettings):
                 if not (self.ai_provider_api_key or "").strip() or provider_url.scheme != "https" or not provider_url.netloc:
                     raise ValueError("AI_PROVIDER requires an HTTPS base URL and API key when enabled")
 
-        if not 5 * 1024 * 1024 <= self.resolved_upload_tenant_quota_bytes <= 1024 * 1024 * 1024 * 1024:
-            raise ValueError("UPLOAD_TENANT_QUOTA_BYTES is outside the supported range")
-        if not self.resolved_upload_tenant_quota_bytes <= self.resolved_upload_global_quota_bytes <= 10 * 1024 * 1024 * 1024 * 1024:
-            raise ValueError("UPLOAD_GLOBAL_QUOTA_BYTES is outside the supported range")
         if not 1 <= self.resolved_upload_rate_limit_requests <= 10_000:
             raise ValueError("UPLOAD_RATE_LIMIT_REQUESTS is outside the supported range")
         if not 1 <= self.resolved_upload_rate_limit_window_seconds <= 3600:
