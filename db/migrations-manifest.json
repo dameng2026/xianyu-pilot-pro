@@ -142,6 +142,14 @@
           "sha256": "52ef2ae308997ad141c2ace671b1e9f2ad2798476d66bac1f363fa671d1f1203",
           "risk": "expand",
           "rollback": "restore"
+        },
+        {
+          "version": "1.17",
+          "description": "notification dedup table",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.17__notification_dedup.sql",
+          "sha256": "0b43a6ea3e8e13ffb743a1315631c0b006ead734e860f6d84bd7c3ba710e583b",
+          "risk": "expand",
+          "rollback": "restore"
         }
       ],
       "quarantined": [
@@ -149,6 +157,16 @@
           "path": "apps/core-api/src/main/resources/db/migration-quarantine/LEGACY_V1.1__add_goods_sync_fields.sql.disabled",
           "sha256": "efcb7cdbba01221e2a1840f1c0c023363667035906e45bd135ba42d055b897c8",
           "reason": "Historical duplicate V1.1 used non-portable IF NOT EXISTS ALTER syntax; retained as audit evidence and never executable."
+        },
+        {
+          "path": "apps/core-api/src/main/resources/db/migration-quarantine/LEGACY_V1.11__add_open_source_ad_application_columns.sql.disabled",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "reason": "Empty file with version conflict against V1.11__user_frontend_performance_indexes.sql; never executed in production."
+        },
+        {
+          "path": "apps/core-api/src/main/resources/db/migration-quarantine/LEGACY_V1.12__add_instance_token_to_ad_application.sql.disabled",
+          "sha256": "38c21e17cd931cee3228a3e84ba7c8bde4bb50e25887b69f93285d676b260894",
+          "reason": "Version conflict against V1.12__add_china_address_dict.sql; targets open_source_ad_application table which does not exist in production; never executed."
         }
       ]
     },
@@ -206,6 +224,22 @@
           "path": "apps/automation-service/migrations/V1.7__add_quick_reply_template.sql",
           "sha256": "2c96305878df1cda02edab8d1cd638311e906969d9bfc0720393ac890dccc38d",
           "risk": "backfill",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.8",
+          "description": "captcha solve record table",
+          "path": "apps/automation-service/migrations/V1.8__add_captcha_solve_record.sql",
+          "sha256": "a51959454c7365e93f44d85fd29fd996416cd91a25d4452e1d26443c96fd15d9",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.9",
+          "description": "captcha solve record open_reason and solve_reason columns",
+          "path": "apps/automation-service/migrations/V1.9__add_captcha_solve_record_reasons.sql",
+          "sha256": "0d58ca582f96659059968df70030ff5b214c81ee246447efc9b79f5bf35b61af",
+          "risk": "expand",
           "rollback": "restore"
         }
       ],
