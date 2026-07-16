@@ -97,6 +97,7 @@ public class FeatureSwitchService {
         list.add(feature("profile", "个人中心", "system"));
         // 会员
         list.add(feature("vip", "会员中心", "hidden"));
+        list.add(feature("member-upgrade", "升级会员", "hidden"));
         return Collections.unmodifiableList(list);
     }
 

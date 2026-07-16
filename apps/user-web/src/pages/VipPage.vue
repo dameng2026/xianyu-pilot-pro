@@ -166,6 +166,7 @@ import Icon from '../components/Icon.vue'
 import PaymentModal from '../components/PaymentModal.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { getBillingPlans } from '../api/billing.js'
+import { getFeatureSwitchStatus } from '../api/feature-switch.js'
 import { globalConfirm } from '../composables/confirmState.js'
 import { resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
 
@@ -336,6 +337,17 @@ async function loadPlans() {
 
 async function handlePlanClick(plan) {
   if (!plan || plan.level === 'normal' || !plan.canPurchase) return
+  // 检查"升级会员"功能开关：开启则弹出充值弹窗，关闭则提示暂未开放
+  try {
+    const status = await getFeatureSwitchStatus()
+    if (status?.accessible?.['member-upgrade'] === true) {
+      selectedPlan.value = plan
+      paymentVisible.value = true
+      return
+    }
+  } catch (e) {
+    // 查询失败时降级为提示暂未开放
+  }
   await globalConfirm.alert('暂未开放', '会员升级功能暂未开放，敬请期待。')
 }
 

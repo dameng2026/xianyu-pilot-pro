@@ -671,6 +671,7 @@ import {
 } from '../api/profile.js'
 import { useAuthCapabilities } from '../utils/useAuthCapabilities.js'
 import { globalConfirm } from '../composables/confirmState.js'
+import { getFeatureSwitchStatus } from '../api/feature-switch.js'
 
 const tabs = [
   { key: 'overview', label: '概览' },
@@ -1119,6 +1120,16 @@ function maskEmail(value) {
 async function handleQuickAction(action) {
   if (action === 'security' || action === 'token') { activeTab.value = action; return }
   if (action === 'payment' || action === 'vip') {
+    // 检查"升级会员"功能开关：开启则前往会员中心，关闭则提示暂未开放
+    try {
+      const status = await getFeatureSwitchStatus()
+      if (status?.accessible?.['member-upgrade'] === true) {
+        location.hash = '#/vip'
+        return
+      }
+    } catch (e) {
+      // 查询失败时降级为提示暂未开放，避免后端故障导致误跳转
+    }
     await globalConfirm.alert('暂未开放', '会员升级与续费功能暂未开放，敬请期待。')
     return
   }

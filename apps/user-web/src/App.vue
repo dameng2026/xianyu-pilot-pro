@@ -83,6 +83,7 @@ import { installClientErrorReporter, recordClientError } from './utils/errorRepo
 import { playIncomingMessageSound, primeAudioOnFirstGesture } from './utils/notifySound.js'
 import { warmLiteAccountsList } from './api/accounts.js'
 import { getFeatureSwitchStatus, invalidateFeatureSwitchCache } from './api/feature-switch.js'
+import { globalConfirm } from './composables/confirmState.js'
 
 const AsyncPageLoading = {
   name: 'AsyncPageLoading',
@@ -143,7 +144,7 @@ const pageMap = {
   'feature-unavailable': asyncPage(() => import('./pages/FeatureUnavailablePage.vue'))
 }
 
-const settingsKeys = ['settings-ai-cs', 'settings-product', 'settings-about']
+const settingsKeys = ['settings-ai-cs', 'settings-product', 'settings-sync', 'settings-about']
 const authPages = ['login', 'register', 'forgot-password']
 const defaultPage = 'dashboard'
 const profileEntryStorageKey = 'xya_profile_initial_tab'
@@ -270,6 +271,27 @@ async function checkFeatureSwitch(pageKey) {
   }
 }
 
+/**
+ * 功能被开关拦截时，弹出提示弹窗（不跳转到占位页）。
+ * - reason=disabled：提示"暂未开放"
+ * - reason=level：提示"等级不足"，确认后跳转会员中心升级
+ */
+async function showFeatureBlockedNotice(switchResult) {
+  const reason = switchResult.reason || 'disabled'
+  const required = switchResult.required || ''
+  if (reason === 'level' && required) {
+    const levelLabel = required === 'svp' ? 'SVP' : required === 'vip' ? 'VIP' : required
+    const confirmed = await globalConfirm.confirm(
+      '等级不足',
+      `该功能需要 ${levelLabel} 等级才能使用，是否前往会员中心升级？`,
+      '立即升级'
+    )
+    if (confirmed) navigate('vip')
+  } else {
+    await globalConfirm.alert('暂未开放', '该功能暂未开放，敬请期待。')
+  }
+}
+
 async function navigate(key) {
   const requested = key || defaultPage
   const next = normalizePageKey(requested)
@@ -285,17 +307,10 @@ async function navigate(key) {
   // 离开当前页前，交由导航守卫处理草稿询问等逻辑
   const allowed = await runNavigationGuard()
   if (!allowed) return
-  // 功能开关检查：被拦截时跳转到占位页
+  // 功能开关检查：被拦截时弹出提示，不跳转占位页
   const switchResult = await checkFeatureSwitch(next)
   if (!switchResult.allowed) {
-    featureUnavailableInfo.value = {
-      reason: switchResult.reason || 'disabled',
-      required: switchResult.required || '',
-      featureKey: next
-    }
-    suppressHashGuard = true
-    location.hash = '#/feature-unavailable'
-    active.value = 'feature-unavailable'
+    await showFeatureBlockedNotice(switchResult)
     return
   }
   suppressHashGuard = true
@@ -368,17 +383,13 @@ async function handleGuardedHashNavigation(next) {
     location.hash = `#/${active.value}`
     return
   }
-  // 功能开关检查：被拦截时跳转到占位页
+  // 功能开关检查：被拦截时弹出提示，不跳转占位页
   const switchResult = await checkFeatureSwitch(next)
   if (!switchResult.allowed) {
-    featureUnavailableInfo.value = {
-      reason: switchResult.reason || 'disabled',
-      required: switchResult.required || '',
-      featureKey: next
-    }
+    // 还原 hash 到当前页，避免地址栏与内容不一致
     suppressHashGuard = true
-    location.hash = '#/feature-unavailable'
-    active.value = 'feature-unavailable'
+    location.hash = `#/${active.value}`
+    await showFeatureBlockedNotice(switchResult)
     return
   }
   const previous = active.value
