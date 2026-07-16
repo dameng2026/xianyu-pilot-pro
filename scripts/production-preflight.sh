@@ -118,6 +118,7 @@ required=(
   ADMIN_JWT_SECRET
   COOKIE_CRYPTO_SECRET
   INTERNAL_API_TOKEN
+  OPS_METRICS_TOKEN
   IMAGE_PROXY_ALLOWED_HOSTS
   AI_PROVIDER_ALLOWED_HOSTS
   JWT_EXPIRE_SECONDS
@@ -173,7 +174,6 @@ required=(
 
 # Monitoring-specific keys are only required when MONITORING_ENABLED=true.
 required_monitoring=(
-  OPS_METRICS_TOKEN
   OPS_METRICS_TOKEN_FILE
   ALERTMANAGER_WEBHOOK_URL_FILE
   MONITORING_SECRET_GID
@@ -354,17 +354,13 @@ ok "Migration manifest and recovery evidence passed"
 declare -A seen_production_credentials=()
 for credential_key in \
   MYSQL_ROOT_PASSWORD MYSQL_APP_PASSWORD CRAWLER_DB_PASSWORD REDIS_PASSWORD \
-  ADMIN_JWT_SECRET COOKIE_CRYPTO_SECRET INTERNAL_API_TOKEN; do
+  ADMIN_JWT_SECRET COOKIE_CRYPTO_SECRET INTERNAL_API_TOKEN OPS_METRICS_TOKEN; do
   credential_value="${!credential_key}"
   [[ -z "${seen_production_credentials[$credential_value]+x}" ]] \
     || fail "Production credentials must be distinct"
   seen_production_credentials[$credential_value]=1
 done
 if [[ "$MONITORING_ENABLED" == "true" ]]; then
-  credential_value="${OPS_METRICS_TOKEN}"
-  [[ -z "${seen_production_credentials[$credential_value]+x}" ]] \
-    || fail "Production credentials must be distinct"
-  seen_production_credentials[$credential_value]=1
   [[ -z "${seen_production_credentials[$grafana_admin_password]+x}" ]] \
     || fail "Production credentials must be distinct"
   seen_production_credentials[$grafana_admin_password]=1
