@@ -125,7 +125,8 @@ const pageMap = {
   feedback: asyncPage(() => import('./pages/FeedbackPage.vue')),
   'settings-notify': asyncPage(() => import('./pages/settings/NotifySettings.vue')),
   vip: asyncPage(() => import('./pages/VipPage.vue')),
-  profile: asyncPage(() => import('./pages/ProfileCenterPage.vue'))
+  profile: asyncPage(() => import('./pages/ProfileCenterPage.vue')),
+  'user-manual': asyncPage(() => import('./pages/UserManualPage.vue'))
 }
 
 const settingsKeys = ['settings-ai-cs', 'settings-product', 'settings-about']

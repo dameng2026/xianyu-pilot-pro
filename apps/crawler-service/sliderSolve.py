@@ -429,178 +429,6 @@ def parse_cookie_string(cookie_str: str, domain: str = ".goofish.com") -> list[d
     return cookies
 
 
-def _win_dpi_scale() -> float:
-    """CSS 像素 -> 物理像素比例（高 DPI 下 OS 鼠标坐标关键）。"""
-    if sys.platform != "win32":
-        return 1.0
-    try:
-        import ctypes
-
-        try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)
-        except Exception:
-            try:
-                ctypes.windll.user32.SetProcessDPIAware()
-            except Exception:
-                pass
-        try:
-            dpi = int(ctypes.windll.user32.GetDpiForSystem())
-            return max(1.0, dpi / 96.0)
-        except Exception:
-            return 1.0
-    except Exception:
-        return 1.0
-
-
-def _win_send_input_move_click(actions: list[tuple[str, int, int, int]]) -> None:
-    """Windows 系统级鼠标事件（SendInput），绕过部分 CDP 合成轨迹检测。
-
-    actions: list of (type, x, y, delay_ms) type in move/down/up
-    坐标为屏幕物理像素（已按 DPI 换算）。
-    """
-    if sys.platform != "win32":
-        raise RuntimeError("SendInput only on Windows")
-
-    import ctypes
-    from ctypes import wintypes
-
-    user32 = ctypes.windll.user32
-    INPUT_MOUSE = 0
-    MOUSEEVENTF_MOVE = 0x0001
-    MOUSEEVENTF_LEFTDOWN = 0x0002
-    MOUSEEVENTF_LEFTUP = 0x0004
-    MOUSEEVENTF_ABSOLUTE = 0x8000
-    SM_CXSCREEN = 0
-    SM_CYSCREEN = 1
-
-    class MOUSEINPUT(ctypes.Structure):
-        _fields_ = [
-            ("dx", wintypes.LONG),
-            ("dy", wintypes.LONG),
-            ("mouseData", wintypes.DWORD),
-            ("dwFlags", wintypes.DWORD),
-            ("time", wintypes.DWORD),
-            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
-        ]
-
-    class INPUT(ctypes.Structure):
-        class _I(ctypes.Union):
-            _fields_ = [("mi", MOUSEINPUT)]
-
-        _anonymous_ = ("i",)
-        _fields_ = [("type", wintypes.DWORD), ("i", _I)]
-
-    sw = user32.GetSystemMetrics(SM_CXSCREEN)
-    sh = user32.GetSystemMetrics(SM_CYSCREEN)
-
-    def to_abs(x: int, y: int) -> tuple[int, int]:
-        ax = int(max(0, min(sw - 1, x)) * 65535 / max(1, sw - 1))
-        ay = int(max(0, min(sh - 1, y)) * 65535 / max(1, sh - 1))
-        return ax, ay
-
-    def send_move(x: int, y: int) -> None:
-        ax, ay = to_abs(x, y)
-        inp = INPUT(type=INPUT_MOUSE)
-        inp.mi = MOUSEINPUT(ax, ay, 0, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, 0, None)
-        if user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT)) != 1:
-            raise OSError("SendInput move failed")
-
-    def send_btn(flags: int) -> None:
-        inp = INPUT(type=INPUT_MOUSE)
-        inp.mi = MOUSEINPUT(0, 0, 0, flags, 0, None)
-        if user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT)) != 1:
-            raise OSError("SendInput button failed")
-
-    for typ, x, y, delay_ms in actions:
-        if typ == "move":
-            send_move(x, y)
-        elif typ == "down":
-            send_move(x, y)
-            send_btn(MOUSEEVENTF_LEFTDOWN)
-        elif typ == "up":
-            send_move(x, y)
-            send_btn(MOUSEEVENTF_LEFTUP)
-        if delay_ms > 0:
-            time.sleep(delay_ms / 1000.0)
-
-
-async def os_level_human_drag(page, start_x: float, start_y: float, distance: float, attempt: int = 1) -> bool:
-    """把页面坐标映射到屏幕，用系统鼠标拖动（更像真人硬件输入）。"""
-    if sys.platform != "win32":
-        return False
-    try:
-        pos = await page.evaluate(
-            """([vx, vy]) => {
-              const borderX = Math.max(0, (window.outerWidth - window.innerWidth) / 2);
-              const borderY = Math.max(0, window.outerHeight - window.innerHeight - borderX);
-              const dpr = window.devicePixelRatio || 1;
-              const sx = window.screenX + borderX + vx;
-              const sy = window.screenY + borderY + vy;
-              return { sx, sy, borderX, borderY, dpr };
-            }""",
-            [start_x, start_y],
-        )
-        # CSS 像素 -> 物理像素（高 DPI）
-        scale = _win_dpi_scale()
-        # 优先用系统 DPI；若与页面 dpr 差很大，取较大值避免点偏
-        page_dpr = float(pos.get("dpr") or 1)
-        scale = max(scale, page_dpr if 0.9 < page_dpr < 4 else scale)
-
-        base_x = int(round(float(pos["sx"]) * scale))
-        base_y = int(round(float(pos["sy"]) * scale))
-        dist_px = float(distance) * scale
-        end_x = int(round(base_x + dist_px))
-        log(
-            f"  OS 坐标换算: page=({start_x:.1f},{start_y:.1f}) -> screen=({base_x},{base_y}) "
-            f"scale={scale:.2f} border=({pos.get('borderX')},{pos.get('borderY')})"
-        )
-
-        steps = 48 + random.randint(0, 20)
-        actions: list[tuple[str, int, int, int]] = []
-        ax0 = base_x - int(40 * scale) - random.randint(0, int(30 * scale))
-        ay0 = base_y + random.randint(int(-20 * scale), int(20 * scale))
-        actions.append(("move", ax0, ay0, 100 + random.randint(0, 100)))
-        actions.append(("move", base_x, base_y, 140 + random.randint(0, 120)))
-        actions.append(("down", base_x, base_y, 110 + random.randint(0, 90)))
-        for i in range(1, steps + 1):
-            p = i / steps
-            # 慢启动：前 25% 只完成约 12% 行程
-            if p < 0.25:
-                eased = 0.12 * (p / 0.25) ** 2.4
-            elif p < 0.75:
-                mid = (p - 0.25) / 0.5
-                eased = 0.12 + 0.70 * (mid * mid * (3 - 2 * mid))
-            else:
-                tail = (p - 0.75) / 0.25
-                eased = 0.82 + 0.18 * (1 - (1 - tail) ** 2)
-            x = int(base_x + dist_px * eased)
-            y = int(
-                base_y
-                + math.sin(math.pi * p) * (3 + random.random() * 6) * scale
-                * (1 if random.random() > 0.4 else -1)
-            )
-            delay = int(22 + random.random() * 50)
-            if p < 0.2 or p > 0.8:
-                delay = int(delay * 1.8)
-            actions.append(("move", x, y, delay))
-        # 终点：几乎不超轨（过冲过大易判失败）
-        actions.append(("move", end_x + random.randint(0, int(4 * scale)), base_y + random.randint(-2, 2), 80))
-        actions.append(("move", end_x, base_y, 100))
-        actions.append(("up", end_x, base_y, 60))
-        log(f"  OS 级拖动: screen=({base_x},{base_y}) -> +{dist_px:.0f}px steps={steps} attempt={attempt}")
-        await page.bring_to_front()
-        await asyncio.sleep(0.3)
-        try:
-            await page.mouse.move(start_x - 15, start_y, steps=6)
-        except Exception:
-            pass
-        await asyncio.to_thread(_win_send_input_move_click, actions)
-        return True
-    except Exception as e:
-        log(f"  OS 级拖动失败，回退 page.mouse: {e}")
-        return False
-
-
 async def element_hover_drag(page, button, distance: float, attempt: int = 1) -> None:
     """基于元素 hover 的 page.mouse 拖动：先悬停按钮再按下，减少“点空”。"""
     box = await button.bounding_box()
@@ -1459,23 +1287,16 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
             await asyncio.sleep(0.06 + random.random() * 0.15)
 
         try:
-            # 轮换：1 元素悬停拖  2 OS  3 容器内  4 出容器  5+ 再 OS
-            if attempt == 1 and button_el is not None:
-                log(f"  attempt={attempt} 使用【元素悬停】page.mouse 拖动")
+            # 仅使用浏览器内 page.mouse（不控制系统/硬件鼠标）
+            # 1 元素悬停拖  2 容器内  3 出容器  4+ 轮换
+            if attempt % 3 == 1 and button_el is not None:
+                log(f"  attempt={attempt} 使用【元素悬停】page.mouse 拖动（不控制系统鼠标）")
                 await element_hover_drag(page, button_el, dist, attempt)
-            elif attempt in (2, 5) and sys.platform == "win32":
-                log(f"  attempt={attempt} 使用【OS 系统鼠标 SendInput】拖动")
-                ok_os = await os_level_human_drag(page, sx, sy, dist, attempt)
-                if not ok_os:
-                    if button_el is not None:
-                        await element_hover_drag(page, button_el, dist, attempt)
-                    else:
-                        await human_like_drag(page, sx, sy, dist, attempt)
-            elif attempt == 3:
-                log(f"  attempt={attempt} 使用【容器内】page.mouse 拖动")
+            elif attempt % 3 == 2:
+                log(f"  attempt={attempt} 使用【容器内】page.mouse 拖动（不控制系统鼠标）")
                 await human_like_drag(page, sx, sy, dist, attempt)
             else:
-                log(f"  attempt={attempt} 使用【超出容器】page.mouse 拖动")
+                log(f"  attempt={attempt} 使用【超出容器】page.mouse 拖动（不控制系统鼠标）")
                 await human_like_drag_out_of_container(page, sx, sy, dist, attempt)
         except Exception as e:
             last_error = f"拖动异常: {e}"
@@ -1670,7 +1491,7 @@ async def main_async(args) -> dict:
     1) 全局文件锁：同时只允许 1 个求解浏览器
     2) seed profile 预热 + 克隆：降低空配置被秒杀概率
     3) 真实 Chrome + 去 enable-automation + stealth
-    4) 拟人进消息页 + 多策略拖拽（OS 鼠标 / page.mouse）
+    4) 拟人进消息页 + 多策略拖拽（仅浏览器内 page.mouse，不控制系统鼠标）
     5) 首轮全失败后，换新 profile 再全自动重开一轮（仍无人工）
     """
     start_time = time.time()

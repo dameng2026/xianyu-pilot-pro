@@ -122,7 +122,7 @@
         <CardPanel class="side-panel">
           <template #title>使用指南</template>
           <template #action>
-            <button class="side-link" type="button" @click="emit('navigate', 'settings-about')">查看全部 ›</button>
+            <button class="side-link" type="button" @click="emit('navigate', 'user-manual')">查看全部 ›</button>
           </template>
           <div class="guide-section">
             <h4>新手入门指南</h4>
@@ -815,7 +815,7 @@ function formatRealtimeType(type) {
 }
 
 function openGuideDocument() {
-  emit('navigate', 'settings-about')
+  emit('navigate', 'user-manual')
 }
 
 const quickStarts = [
