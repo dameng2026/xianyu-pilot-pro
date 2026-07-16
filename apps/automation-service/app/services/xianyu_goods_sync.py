@@ -2866,7 +2866,6 @@ class XianyuItemPublisher:
         # 闲鱼返回的 ret 格式通常为 "FAIL_XXX::中文描述"，把真实原因带给上层
         # 避免前端只看到"平台暂未接受该商品"而不知具体违规点
         friendly = _explain_publish_rejection(ret_msg, result.get("data"))
-        logger.warning("商品发布被平台拒绝 ret=%s data=%s", ret_msg, result.get("data"))
         return {
             "success": False,
             "itemId": "",
