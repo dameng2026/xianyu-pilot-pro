@@ -678,8 +678,8 @@ async def _internal_continue_workflow_bg(
         except _asyncio.CancelledError:
             try:
                 await bg_db.rollback()
-            except Exception:
-                pass
+            except Exception as rb_err:
+                logger.debug("[INT-CONT-BG] 取消时回滚失败 execution=%s errorType=%s", execution_id, type(rb_err).__name__)
             try:
                 now_str = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
                 await bg_db.execute(_text_sql("""
@@ -698,8 +698,8 @@ async def _internal_continue_workflow_bg(
             logger.error("[INT-CONT-BG] 工作流继续执行异常 execution=%s", execution_id, exc_info=True)
             try:
                 await bg_db.rollback()
-            except Exception:
-                pass
+            except Exception as rb_err:
+                logger.debug("[INT-CONT-BG] 异常时回滚失败 execution=%s errorType=%s", execution_id, type(rb_err).__name__)
             try:
                 now_str = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
                 await bg_db.execute(_text_sql("""
@@ -770,8 +770,8 @@ async def _internal_run_workflow_bg(
         except _asyncio.CancelledError:
             try:
                 await bg_db.rollback()
-            except Exception:
-                pass
+            except Exception as rb_err:
+                logger.debug("[INT-BG] 取消时回滚失败 execution=%s errorType=%s", execution_id, type(rb_err).__name__)
             try:
                 now_str = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
                 await bg_db.execute(_text_sql("""
@@ -790,8 +790,8 @@ async def _internal_run_workflow_bg(
             logger.error("[INT-BG] 工作流后台执行异常 execution=%s", execution_id, exc_info=True)
             try:
                 await bg_db.rollback()
-            except Exception:
-                pass
+            except Exception as rb_err:
+                logger.debug("[INT-BG] 异常时回滚失败 execution=%s errorType=%s", execution_id, type(rb_err).__name__)
             try:
                 now_str = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
                 await bg_db.execute(_text_sql("""

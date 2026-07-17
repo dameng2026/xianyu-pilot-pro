@@ -568,8 +568,8 @@ async def _wait_for_qr_login_and_recover(
                 tenant_id, user_open_id,
                 "扫码登录流程异常，请前往账号管理页手动处理。"
             )
-        except Exception:
-            pass
+        except Exception as notify_err:
+            logger.warning("扫码登录异常后发送飞书通知失败 errorType=%s", type(notify_err).__name__)
     finally:
         # 重置会话状态
         session.state = "idle"

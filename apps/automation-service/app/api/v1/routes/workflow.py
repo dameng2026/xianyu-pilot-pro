@@ -649,8 +649,8 @@ async def _run_workflow_background(
                     WHERE id=:eid AND status='running'
                 """), {"ft": now_str, "eid": execution_id})
                 await bg_db.commit()
-            except Exception:
-                pass
+            except Exception as cancel_err:
+                logger.warning("[BG-WORKFLOW] 取消时更新执行状态失败 execution=%s errorType=%s", execution_id, type(cancel_err).__name__)
             logger.warning("[BG-WORKFLOW] 后台执行被取消 execution=%s", execution_id)
         except Exception as e:
             log_route_failure(logger, e, operation="background workflow execution")
@@ -662,8 +662,8 @@ async def _run_workflow_background(
                     WHERE id=:eid
                 """), {"ft": now_str, "err": "后台执行异常，请联系管理员并提供执行编号", "eid": execution_id})
                 await bg_db.commit()
-            except Exception:
-                pass
+            except Exception as fail_err:
+                logger.warning("[BG-WORKFLOW] 异常时更新执行状态失败 execution=%s errorType=%s", execution_id, type(fail_err).__name__)
 
 
 @router.post("/definitions/{workflow_id}/execute", response_model=ResultObject)
@@ -1645,8 +1645,8 @@ async def ai_extract_keywords(
                     kw = _text(item).strip()
                     if kw and 2 <= len(kw) <= 30 and kw not in keywords:
                         keywords.append(kw)
-    except Exception:
-        pass
+    except Exception as parse_err:
+        logger.debug("AI 关键词 JSON 解析失败，将使用正则兜底提取 errorType=%s", type(parse_err).__name__)
 
     if not keywords:
         import re as _re

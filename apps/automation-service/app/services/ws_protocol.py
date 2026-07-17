@@ -95,7 +95,7 @@ def _normalize_msgpack_value(value: Any) -> Any:
                 try:
                     normalized[repr(k)] = _normalize_msgpack_value(v)
                 except Exception:
-                    pass
+                    pass  # 已知非关键异常：repr(k) 作为兜底 key 仍失败时跳过该字段
         return normalized
     return value
 
@@ -136,7 +136,7 @@ def decrypt_payload(encrypted_data: str) -> list[dict[str, Any]]:
                         parsed = json.loads(text)
                         _collect_dicts(parsed)
                     except Exception:
-                        pass
+                        pass  # 已知非关键异常：嵌套 JSON 字符串解析失败时跳过，继续其他解析策略
 
         # 策略 0：有些包实际是 base64(JSON)
         try:
@@ -147,7 +147,7 @@ def decrypt_payload(encrypted_data: str) -> list[dict[str, Any]]:
                 if results:
                     return results
         except Exception:
-            pass
+            pass  # 已知非关键异常：base64(JSON) 策略失败时回退到 MessagePack 解包策略
 
         # 策略一：标准流式解包 + 递归收集嵌套 dict
         try:
@@ -935,7 +935,7 @@ def parse_numbered_fields(data: dict) -> Optional[dict]:
             list(msg_info.keys()) if isinstance(msg_info, dict) else []
         )
     except Exception:
-        pass
+        pass  # 已知非关键异常：调试日志格式化失败不影响解析结果
 
     return {
         "sId": str(s_id) if s_id else "",

@@ -56,6 +56,11 @@ EVENT_AUTO_DELIVERY_FAILURE = "自动发货失败"
 EVENT_ACCOUNT_OFFLINE = "账号掉线"
 EVENT_CAPTCHA_REQUIRED = "人机验证"
 EVENT_CAPTCHA_SUCCESS = "人机验证成功"
+EVENT_TOKEN_LOW_BALANCE = "Token 余额预警"
+EVENT_AUTO_REPLY_PAUSED = "自动回复暂停"
+
+# 用户级通知使用 account_id=0 作为占位符，与账号级通知区分
+USER_LEVEL_ACCOUNT_PLACEHOLDER = 0
 
 
 # ============================================================
@@ -408,8 +413,13 @@ async def _insert_in_app_notification(
     content: str,
     level: str = "warning",
     priority: int = 2,
+    user_id: Optional[int] = None,
 ) -> None:
-    """向 notification 表写入站内提醒，便于前端在账号页直接展示。"""
+    """向 notification 表写入站内提醒，便于前端在账号页直接展示。
+
+    user_id 用于用户级通知（如 Token 余额预警、自动回复暂停）；
+    若不传则保持历史行为（user_id 为 NULL）。
+    """
     try:
         await db.execute(
             text(
@@ -418,13 +428,14 @@ async def _insert_in_app_notification(
                     tenant_id, user_id, account_id, notice_type, notification_type,
                     title, content, level, priority, is_read, created_time, updated_time, deleted
                 ) VALUES(
-                    :tenant_id, NULL, :account_id, :event_type, :event_type,
+                    :tenant_id, :user_id, :account_id, :event_type, :event_type,
                     :title, :content, :level, :priority, 0, NOW(), NOW(), 0
                 )
                 """
             ),
             {
                 "tenant_id": tenant_id,
+                "user_id": user_id,
                 "account_id": account_id,
                 "event_type": event_type,
                 "title": (title or "")[:200],
@@ -620,8 +631,8 @@ async def _http_post(channel_type: str, url: str, body: str, timeout_seconds: in
                         "message": f"{fail_prefix}: HTTP {status_code}"[:500],
                         "request_body": "", "response_body": "",
                     }
-            except Exception:
-                pass
+            except Exception as parse_err:
+                logger.debug("通知响应体非 JSON，按 HTTP 状态码判定成功 errorType=%s", type(parse_err).__name__)
         return {
             "success": success, "status_code": status_code, "cost_ms": cost_ms,
             "message": ok_msg if success else f"{fail_prefix}: HTTP {status_code}",
@@ -889,3 +900,154 @@ async def notify_auto_delivery(tenant_id: int, account_id: int, success: bool, o
         title=title,
         content=content,
     )
+
+
+async def notify_auto_reply_paused(
+    tenant_id: int,
+    user_id: int,
+    account_id: Optional[int] = None,
+    reason: str = "",
+) -> None:
+    """Token 余额不足导致自动回复暂停通知。
+
+    用户级通知（account_id 用 USER_LEVEL_ACCOUNT_PLACEHOLDER 占位），
+    避免对每个账号重复发送。充值后由 clear_token_low_balance_notifications 清除标记。
+
+    触发场景：
+    - 在线消息自动回复时 AiBillingPaymentRequired（余额不足）
+    - 单次调用通用模型前 ensureAiTokenBalance 校验失败（前端已提示，后端兜底）
+
+    去重策略：同一 tenant_id+user_id 在余额恢复前只发送一次通知。
+    """
+    dedup_account_id = account_id if account_id is not None else USER_LEVEL_ACCOUNT_PLACEHOLDER
+    if await _check_account_status_notified(tenant_id, dedup_account_id, EVENT_AUTO_REPLY_PAUSED):
+        logger.info(
+            "自动回复暂停通知去重跳过: tenant=%d user=%d（已通知过，等待充值后清除）",
+            tenant_id, user_id,
+        )
+        return
+
+    account_part = ""
+    if account_id is not None:
+        account_name = await _lookup_account_name(tenant_id, account_id)
+        account_part = f"账号名称：{account_name}\n"
+    content = (
+        f"{account_part}"
+        f"原因：{reason or 'AI Token 余额为 0，自动回复已暂停'}\n"
+        f"时间：{time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"请前往「个人中心 → Token 充值」补充余额后恢复自动回复。"
+    )
+    try:
+        async with async_session() as db:
+            await _insert_in_app_notification(
+                db,
+                tenant_id=tenant_id,
+                account_id=dedup_account_id,
+                event_type=EVENT_AUTO_REPLY_PAUSED,
+                title="AI 自动回复暂停",
+                content=content,
+                level="warning",
+                priority=1,
+                user_id=user_id,
+            )
+    except Exception:
+        logger.debug("写入自动回复暂停站内提醒失败，忽略", exc_info=True)
+    await dispatch_notification(
+        tenant_id=tenant_id,
+        event_display_name=EVENT_AUTO_REPLY_PAUSED,
+        title="⏸️ AI 自动回复暂停",
+        content=content,
+    )
+    await _mark_account_status_notified(tenant_id, dedup_account_id, EVENT_AUTO_REPLY_PAUSED)
+
+
+async def notify_token_low_balance(
+    tenant_id: int,
+    user_id: int,
+    balance: int,
+    threshold: int = 100,
+) -> None:
+    """Token 余额低于阈值预警通知。
+
+    用户级通知（account_id=USER_LEVEL_ACCOUNT_PLACEHOLDER）。
+    充值后由 clear_token_low_balance_notifications 清除标记。
+
+    触发场景：
+    - 定时扫描发现余额 < 阈值（默认 100）
+    - 在线消息自动回复扣费后余额跌至阈值以下
+
+    去重策略：同一 tenant_id+user_id 在余额恢复到阈值以上前只发送一次通知。
+    """
+    if await _check_account_status_notified(tenant_id, USER_LEVEL_ACCOUNT_PLACEHOLDER, EVENT_TOKEN_LOW_BALANCE):
+        logger.info(
+            "Token 余额预警去重跳过: tenant=%d user=%d（已预警过，等待余额恢复后清除）",
+            tenant_id, user_id,
+        )
+        return
+
+    content = (
+        f"当前 Token 余额：{balance}\n"
+        f"预警阈值：{threshold}\n"
+        f"时间：{time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"余额不足将影响 AI 自动回复、AI 润色、AI 客服等功能，请及时充值。"
+    )
+    try:
+        async with async_session() as db:
+            await _insert_in_app_notification(
+                db,
+                tenant_id=tenant_id,
+                account_id=USER_LEVEL_ACCOUNT_PLACEHOLDER,
+                event_type=EVENT_TOKEN_LOW_BALANCE,
+                title="Token 余额预警",
+                content=content,
+                level="warning",
+                priority=1,
+                user_id=user_id,
+            )
+    except Exception:
+        logger.debug("写入 Token 余额预警站内提醒失败，忽略", exc_info=True)
+    await dispatch_notification(
+        tenant_id=tenant_id,
+        event_display_name=EVENT_TOKEN_LOW_BALANCE,
+        title="💰 Token 余额预警",
+        content=content,
+    )
+    await _mark_account_status_notified(tenant_id, USER_LEVEL_ACCOUNT_PLACEHOLDER, EVENT_TOKEN_LOW_BALANCE)
+
+
+async def clear_token_low_balance_notifications(tenant_id: int, user_id: int) -> None:
+    """清除 Token 余额相关通知的去重标记。
+
+    在用户充值成功、余额恢复到阈值以上时调用，允许下次再次触发预警。
+    """
+    # 用户级去重使用 account_id=0 占位
+    try:
+        keys_to_remove = [
+            k for k in _ACCOUNT_STATUS_NOTIFIED
+            if k[0] == tenant_id
+            and k[1] == USER_LEVEL_ACCOUNT_PLACEHOLDER
+            and k[2] in (EVENT_TOKEN_LOW_BALANCE, EVENT_AUTO_REPLY_PAUSED)
+        ]
+        for k in keys_to_remove:
+            _ACCOUNT_STATUS_NOTIFIED.pop(k, None)
+    except Exception:
+        logger.debug("清除内存去重标记异常，忽略", exc_info=True)
+
+    try:
+        async with async_session() as db:
+            await db.execute(
+                text(
+                    "DELETE FROM notification_dedup "
+                    "WHERE tenant_id = :tid AND account_id = :aid "
+                    "AND event_type IN (:evt1, :evt2)"
+                ),
+                {
+                    "tid": tenant_id,
+                    "aid": USER_LEVEL_ACCOUNT_PLACEHOLDER,
+                    "evt1": EVENT_TOKEN_LOW_BALANCE,
+                    "evt2": EVENT_AUTO_REPLY_PAUSED,
+                },
+            )
+            await db.commit()
+    except Exception:
+        logger.debug("清除 notification_dedup 失败，仅清除内存", exc_info=True)

@@ -31,7 +31,7 @@ if os.name == "nt":
             try:
                 stream.reconfigure(encoding="utf-8", errors="backslashreplace")
             except Exception:
-                pass
+                pass  # 已知非关键异常：Windows 下重配置标准流编码失败时保持默认编码即可
 
 logger = logging.getLogger(__name__)
 UPLOADS_ROOT = (Path(__file__).resolve().parent.parent / "uploads").resolve()
@@ -204,6 +204,28 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log_service_failure(logger, e, operation="start_inline_worker")
 
+    # 启动 AI 计费待补扣定时循环
+    # 当 Java 计费服务暂不可用时，自动回复的计费请求会被暂存到 pending_ai_billing 表，
+    # 此循环每 60 秒扫描一次，在 Java 恢复后自动补扣，避免漏计费。
+    pending_billing_task = None
+    try:
+        from .services.pending_billing import run_pending_billing_loop
+        pending_billing_task = asyncio.create_task(run_pending_billing_loop())
+        logger.info("AI 计费待补扣循环已启动")
+    except Exception as e:
+        log_service_failure(logger, e, operation="start_pending_billing_loop")
+
+    # 启动 Token 余额预警定时循环
+    # 每 30 分钟扫描所有用户余额，对余额 < 用户配置阈值的用户触发预警通知，
+    # 余额恢复到阈值以上时自动清除预警标记，允许下次再次触发。
+    token_balance_warning_task = None
+    try:
+        from .services.token_balance_monitor import run_token_balance_warning_loop
+        token_balance_warning_task = asyncio.create_task(run_token_balance_warning_loop())
+        logger.info("Token 余额预警循环已启动")
+    except Exception as e:
+        log_service_failure(logger, e, operation="start_token_balance_warning_loop")
+
     yield
 
     storage_reconcile_task.cancel()
@@ -211,6 +233,22 @@ async def lifespan(app: FastAPI):
         await storage_reconcile_task
     except asyncio.CancelledError:
         pass
+
+    # 停止 AI 计费待补扣循环
+    if pending_billing_task is not None:
+        pending_billing_task.cancel()
+        try:
+            await pending_billing_task
+        except asyncio.CancelledError:
+            pass
+
+    # 停止 Token 余额预警循环
+    if token_balance_warning_task is not None:
+        token_balance_warning_task.cancel()
+        try:
+            await token_balance_warning_task
+        except asyncio.CancelledError:
+            pass
 
     # 停止定时任务 Worker
     if worker_task is not None:
@@ -225,7 +263,7 @@ async def lifespan(app: FastAPI):
         try:
             await stop_dispatcher()
         except Exception:
-            pass
+            logger.warning("关闭 Cookie/Token 刷新调度器失败，继续关闭流程")
 
     # 停止 WebSocket 连接
     if ws_task is not None:
@@ -240,7 +278,7 @@ async def lifespan(app: FastAPI):
     try:
         await engine.dispose()
     except Exception:
-        pass
+        logger.warning("关闭数据库连接失败，继续完成关闭流程")
     logger.info("应用关闭完成")
 
 
@@ -284,7 +322,7 @@ async def request_trace_middleware(request: Request, call_next):
             try:
                 response.headers["X-Request-Id"] = request_id  # type: ignore[name-defined]
             except Exception:
-                pass
+                pass  # 已知非关键异常：异常处理器生成的 response 可能无 headers 属性
             response_status = getattr(locals().get("response", None), "status_code", "unknown")
             logger.info(
                 "request_id=%s method=%s path=%s status=%s elapsed_ms=%s client=%s",

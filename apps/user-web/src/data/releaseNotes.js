@@ -66,13 +66,30 @@ export const VERSION_BUMP_RULES = [
  */
 
 /** 当前最新版本号（应与 package.json 的 version 字段保持一致） */
-export const CURRENT_VERSION = '1.2.0'
+export const CURRENT_VERSION = '1.2.1'
 
 /**
  * 更新日志数据，最新在前。
  * @type {ReleaseNote[]}
  */
 export const releaseNotes = [
+  {
+    version: '1.2.1',
+    date: '2026-07-17',
+    type: RELEASE_TYPES.PATCH,
+    title: '稳定性与体验修复',
+    summary: '修复定时器泄漏、轮询超时缺失、Token 余额不足无友好提示等问题，提升前台稳定性。',
+    changes: [
+      {
+        label: '修复',
+        items: [
+          '商机发掘页面切换时草稿自动保存定时器未清理，可能导致内存泄漏',
+          '账号一键擦亮轮询缺少兜底超时，极端情况下可能无限等待，现增加 5 分钟超时保护',
+          'Token 余额不足（HTTP 402）时无友好提示，现自动弹出充值入口并展示余额不足提醒'
+        ]
+      }
+    ]
+  },
   {
     version: '1.2.0',
     date: '2026-07-16',

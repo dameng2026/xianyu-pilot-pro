@@ -359,7 +359,7 @@ class XianyuWebSocketClient:
             try:
                 await self._ws.close()
             except Exception:
-                pass
+                logger.debug("stop 时关闭 WS 连接失败（可忽略）accountId=%d", self.account_id)
             self._ws = None
 
         # 取消所有任务
@@ -430,8 +430,9 @@ class XianyuWebSocketClient:
             )
             return {"code": 200, "uuid": cached.get("uuid", ""), "deduplicated": True}
         # 清理过期条目（最多保留 _RECENT_SEND_DEDUP_MAX 条）
-        if len(_recent_text_sends) >= _RECENT_SEND_DEDUP_MAX:
-            _cleanup_recent_text_sends(now)
+        async with _get_recent_text_sends_lock():
+            if len(_recent_text_sends) >= _RECENT_SEND_DEDUP_MAX:
+                _cleanup_recent_text_sends(now)
 
         # 获取发送者 ID
         from_id = f"{self.unb}@goofish" if self.unb else ""
@@ -462,10 +463,11 @@ class XianyuWebSocketClient:
             # 原 2 秒超时过短，易误判失败导致上层重试，进而触发重复发送
             result = await asyncio.wait_for(fut, timeout=_TEXT_MESSAGE_ACK_TIMEOUT)
             # 记录成功发送到去重缓存
-            _recent_text_sends[dedup_key] = {
-                "ts": now,
-                "uuid": result.get("uuid", "") if isinstance(result, dict) else "",
-            }
+            async with _get_recent_text_sends_lock():
+                _recent_text_sends[dedup_key] = {
+                    "ts": now,
+                    "uuid": result.get("uuid", "") if isinstance(result, dict) else "",
+                }
             return result
         except asyncio.TimeoutError:
             logger.error(
@@ -899,7 +901,7 @@ class XianyuWebSocketClient:
             try:
                 await ws.close()
             except Exception:
-                pass
+                logger.debug("连接异常后关闭 WS 失败（可忽略）accountId=%d", self.account_id)
 
     async def _update_token_in_db(self, new_m_h5_tk: str):
         """将刷新后的 _m_h5_tk 写回数据库。"""
@@ -1160,8 +1162,8 @@ class XianyuWebSocketClient:
         如果 cookie 中的 _m_h5_tk 也已过期，尝试调用 refresh_m_h5_tk 刷新令牌。
         遇到滑块验证时自动更新 cookie_status 为 0（失效）。
         """
-        access_token, effective_m_h5_tk, error_type, refreshed_cookie = get_ws_token_with_refreshed_m_h5_tk(
-            self.cookie_str, self.m_h5_tk
+        access_token, effective_m_h5_tk, error_type, refreshed_cookie = await asyncio.to_thread(
+            get_ws_token_with_refreshed_m_h5_tk, self.cookie_str, self.m_h5_tk
         )
         if access_token:
             self._access_token = access_token
@@ -1232,14 +1234,15 @@ class XianyuWebSocketClient:
         """
         # === 去重：同账号冷却期内只自动求解一次 ===
         now_ts = time.time()
-        last_solve_ts = _AUTO_SOLVE_LAST_TS.get(self.account_id, 0)
-        if now_ts - last_solve_ts < _AUTO_SOLVE_COOLDOWN_SEC:
-            logger.info(
-                "账号 %d 自动滑块求解去重跳过（%d 秒前刚执行过，间隔需 >= %d 秒）scene=%s",
-                self.account_id, int(now_ts - last_solve_ts), _AUTO_SOLVE_COOLDOWN_SEC, scene,
-            )
-            return
-        _AUTO_SOLVE_LAST_TS[self.account_id] = now_ts
+        async with _get_auto_solve_last_ts_lock():
+            last_solve_ts = _AUTO_SOLVE_LAST_TS.get(self.account_id, 0)
+            if now_ts - last_solve_ts < _AUTO_SOLVE_COOLDOWN_SEC:
+                logger.info(
+                    "账号 %d 自动滑块求解去重跳过（%d 秒前刚执行过，间隔需 >= %d 秒）scene=%s",
+                    self.account_id, int(now_ts - last_solve_ts), _AUTO_SOLVE_COOLDOWN_SEC, scene,
+                )
+                return
+            _AUTO_SOLVE_LAST_TS[self.account_id] = now_ts
 
         logger.info(
             "WS Token 失败后自动触发滑块求解 accountId=%d scene=%s",
@@ -1547,7 +1550,7 @@ class XianyuWebSocketClient:
                 try:
                     await ws.close()
                 except Exception:
-                    pass
+                    logger.debug("心跳失败后关闭 WS 失败（可忽略）accountId=%d", self.account_id)
                 break
 
     async def _handle_message(self, raw_msg: str, ws: _ThreadedWebSocketAdapter):

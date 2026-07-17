@@ -318,7 +318,7 @@ async def _do_cookie_keepalive(state: AccountRefreshState) -> bool:
             try:
                 await clear_all_account_status_notifications(state.tenant_id, state.account_id)
             except Exception:
-                pass
+                logger.debug("保活成功后清理状态通知失败 accountId=%d", state.account_id)
             # 保活成功时恢复 cookie_status=1，避免之前被设为 0 的状态无法恢复
             # （_load_ws_credentials 校验要求 cookie_status==1 且 login_status_code=="OK"）
             try:
@@ -327,7 +327,7 @@ async def _do_cookie_keepalive(state: AccountRefreshState) -> bool:
                     "OK", "Cookie 保活成功",
                 )
             except Exception:
-                pass
+                logger.warning("保活成功后恢复 cookie_status=1 失败 accountId=%d", state.account_id)
             return True
         else:
             error_code = str(result.get("errorCode") or result.get("error") or "COOKIE_KEEPALIVE_FAILED")
@@ -346,7 +346,7 @@ async def _do_cookie_keepalive(state: AccountRefreshState) -> bool:
                 try:
                     await notify_captcha_required(state.tenant_id, state.account_id, err_str)
                 except Exception:
-                    pass
+                    logger.warning("保活触发滑块后发送通知失败 accountId=%d", state.account_id)
                 # Cookie 已失效，主动断开 WS 连接，避免"WS 在线但 Cookie 失败"的矛盾状态
                 try:
                     from .ws_client import ws_manager
@@ -383,7 +383,7 @@ async def _do_cookie_keepalive(state: AccountRefreshState) -> bool:
                 try:
                     await notify_cookie_expired(state.tenant_id, state.account_id, 0)
                 except Exception:
-                    pass
+                    logger.warning("Cookie 会话过期后发送通知失败 accountId=%d", state.account_id)
                 # Cookie Session 已过期，主动断开 WS 连接
                 try:
                     from .ws_client import ws_manager
@@ -508,7 +508,7 @@ async def _call_has_login(account_id: int, tenant_id: int) -> dict:
     try:
         body_text = resp.text or ""
     except Exception:
-        pass
+        logger.debug("读取 hasLogin 响应体失败，按空处理")
 
     # 4. 检测风控
     risk_keywords = ["RGV587_ERROR", "FAIL_SYS_RGV587_ERROR", "被挤爆啦", "FAIL_SYS_USER_VALIDATE"]
@@ -667,7 +667,7 @@ async def _do_ws_token_refresh(state: AccountRefreshState, cookie_str: str, m_h5
                         "WS Token 刷新触发滑块验证，请到闲鱼完成验证后重试",
                     )
                 except Exception:
-                    pass
+                    logger.warning("WS Token 刷新触发滑块后发送通知失败 accountId=%d", state.account_id)
             elif error_type == "expired":
                 await _update_cookie_status(
                     state.account_id, state.tenant_id, 0,
@@ -676,7 +676,7 @@ async def _do_ws_token_refresh(state: AccountRefreshState, cookie_str: str, m_h5
                 try:
                     await notify_cookie_expired(state.tenant_id, state.account_id, 0)
                 except Exception:
-                    pass
+                    logger.warning("WS Token 刷新时 Cookie 过期发送通知失败 accountId=%d", state.account_id)
             return False
     except asyncio.TimeoutError:
         logger.warning("WS Token 刷新超时 accountId=%d", state.account_id)

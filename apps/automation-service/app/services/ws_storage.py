@@ -160,8 +160,8 @@ def _decode_live_message_payload(model: dict[str, Any]) -> tuple[dict[str, Any],
         decoded = json.loads(decoded_text)
         if isinstance(decoded, dict):
             return decoded, summary, extension
-    except Exception:
-        pass
+    except Exception as decode_err:
+        logger.debug("解码 live message payload 失败 errorType=%s", type(decode_err).__name__)
     return {}, summary, extension
 
 
@@ -1563,8 +1563,8 @@ async def save_chat_message(
                         {"pnm_id": pnm_id, "id": existing_id}
                     )
                     await db.flush()
-                except Exception:
-                    pass
+                except Exception as pnm_err:
+                    logger.debug("补充 pnm_id 失败（可忽略）existing_id=%d errorType=%s", existing_id, type(pnm_err).__name__)
             return None
     elif pnm_id:
         if is_card_update:
@@ -2303,16 +2303,16 @@ async def get_online_conversations(
         asyncio.create_task(_hydrate_online_conversation_avatars_async(
             db, tenant_id, account_id, result
         ))
-    except Exception:
-        pass
+    except Exception as task_err:
+        logger.debug("启动后台头像拉取任务失败（可忽略）errorType=%s", type(task_err).__name__)
 
     # === 后台异步拉取商品封面图（针对不在 xianyu_goods 表中的商品）===
     try:
         asyncio.create_task(_fetch_goods_covers_async(
             tenant_id, account_id, result
         ))
-    except Exception:
-        pass
+    except Exception as task_err:
+        logger.debug("启动后台商品封面拉取任务失败（可忽略）errorType=%s", type(task_err).__name__)
 
     if result:
         for r in result[:20]:
