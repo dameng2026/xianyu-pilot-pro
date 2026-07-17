@@ -200,7 +200,7 @@ async function reconcileOrphanedCrawlJobs(): Promise<void> {
   const candidates = await pool.query(
     `SELECT tenant_id, bullmq_job_id
      FROM goofish_crawl_jobs
-     WHERE status IN ('pending', 'running') AND created_at < NOW() - INTERVAL '1 minute'
+     WHERE status IN ('pending', 'retrying', 'running') AND created_at < NOW() - INTERVAL '1 minute'
      ORDER BY created_at ASC LIMIT 500`,
   );
   let repaired = 0;
@@ -210,7 +210,7 @@ async function reconcileOrphanedCrawlJobs(): Promise<void> {
       `UPDATE goofish_crawl_jobs
        SET status = 'failed', error_message = '队列任务不存在，请重新提交',
            finished_at = NOW(), execution_token = NULL
-       WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'running')`,
+       WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'retrying', 'running')`,
       [row.tenant_id, row.bullmq_job_id],
     );
     repaired += result.rowCount || 0;
@@ -403,7 +403,7 @@ app.post('/api/import/goofish', async (req, res) => {
       `SELECT bullmq_job_id, status, item_count, created_at FROM goofish_crawl_jobs
        WHERE tenant_id = $1
          AND store_user_id = $2
-         AND status IN ('pending', 'running', 'completed')
+         AND status IN ('pending', 'retrying', 'running', 'completed')
          AND created_at > NOW() - INTERVAL '6 hours'
        ORDER BY created_at DESC
        LIMIT 1`,
@@ -422,7 +422,7 @@ app.post('/api/import/goofish', async (req, res) => {
           message: '该店铺 6 小时内已完成采集，直接读取缓存商品',
         });
       }
-      if (row.status === 'pending' || row.status === 'running') {
+      if (row.status === 'pending' || row.status === 'retrying' || row.status === 'running') {
         if (isFreshPublishingRow(row.created_at)) {
           return res.status(200).json({
             ok: true,
@@ -451,7 +451,7 @@ app.post('/api/import/goofish', async (req, res) => {
         await pool.query(
           `UPDATE goofish_crawl_jobs
            SET status = 'failed', error_message = '队列任务不存在，请重新提交', finished_at = NOW(), execution_token = NULL
-           WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'running')`,
+           WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'retrying', 'running')`,
           [tenantId, row.bullmq_job_id],
         );
       }
@@ -461,7 +461,7 @@ app.post('/api/import/goofish', async (req, res) => {
       `UPDATE goofish_crawl_jobs
        SET status = 'failed', error_message = '采集任务超时，请重新提交', finished_at = NOW()
        WHERE tenant_id = $1 AND store_user_id = $2
-         AND status IN ('pending', 'running')
+         AND status IN ('pending', 'retrying', 'running')
          AND created_at <= NOW() - INTERVAL '6 hours'`,
       [tenantId, userId],
     );
@@ -481,7 +481,7 @@ app.post('/api/import/goofish', async (req, res) => {
       const active = await pool.query(
         `SELECT bullmq_job_id, status, created_at
          FROM goofish_crawl_jobs
-         WHERE tenant_id = $1 AND store_user_id = $2 AND status IN ('pending', 'running')
+         WHERE tenant_id = $1 AND store_user_id = $2 AND status IN ('pending', 'retrying', 'running')
          ORDER BY created_at DESC LIMIT 1`,
         [tenantId, userId],
       );
@@ -509,7 +509,7 @@ app.post('/api/import/goofish', async (req, res) => {
         await pool.query(
           `UPDATE goofish_crawl_jobs
            SET status = 'failed', error_message = '队列任务不存在，请重新提交', finished_at = NOW(), execution_token = NULL
-           WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'running')`,
+           WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'retrying', 'running')`,
           [tenantId, active.rows[0].bullmq_job_id],
         );
         reservation = await pool.query(
@@ -590,14 +590,14 @@ app.get('/api/crawl-jobs/:id', async (req, res) => {
     }
 
     const row = result.rows[0];
-    if ((row.status === 'pending' || row.status === 'running') && !isFreshPublishingRow(row.created_at)) {
+    if ((row.status === 'pending' || row.status === 'retrying' || row.status === 'running') && !isFreshPublishingRow(row.created_at)) {
       try {
         if (!await isQueueJobActive(String(row.bullmq_job_id || ''))) {
           await pool.query(
             `UPDATE goofish_crawl_jobs
              SET status = 'failed', error_message = '队列任务不存在，请重新提交',
                  finished_at = NOW(), execution_token = NULL
-             WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'running')`,
+             WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'retrying', 'running')`,
             [tenantId, id],
           );
           row.status = 'failed';

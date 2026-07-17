@@ -866,6 +866,9 @@ const unifiedConfigSuccess = ref('')
 const unifiedConfigTaskText = ref('')
 let polishTimer = null
 let polishTaskId = ''
+// 擦亮轮询兜底超时定时器：5 分钟后强制停止轮询，防止后端持续返回 running 导致永久轮询
+let polishPollTimeoutTimer = null
+const MAX_POLISH_POLL_DURATION_MS = 5 * 60 * 1000
 const polishingAccountId = ref(null)  // 正在擦亮的账号ID
 const pendingDeleteId = ref(null)     // 待删除的账号ID
 
@@ -1943,6 +1946,10 @@ function stopPolishPolling(resetTaskId = true) {
     clearInterval(polishTimer)
     polishTimer = null
   }
+  if (polishPollTimeoutTimer) {
+    clearTimeout(polishPollTimeoutTimer)
+    polishPollTimeoutTimer = null
+  }
   if (resetTaskId) polishTaskId = ''
 }
 
@@ -2013,6 +2020,12 @@ function startPolishPolling(accountId, taskId) {
   polishingAccountId.value = accountId
   polishTimer = setInterval(() => { void poll() }, 1500)
   setTimeout(() => { void poll() }, 300)
+  // 兜底超时：5 分钟后强制停止轮询，提示用户稍后查看结果
+  polishPollTimeoutTimer = setTimeout(() => {
+    stopPolishPolling()
+    polishingAccountId.value = null
+    error.value = '擦亮超时，请稍后在商品列表中查看结果'
+  }, MAX_POLISH_POLL_DURATION_MS)
 }
 
 const handleItemPolishWithProgress = async (account) => {

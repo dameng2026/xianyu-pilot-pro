@@ -1,0 +1,708 @@
+package com.xianyu.admin.service;
+
+import com.xianyu.admin.common.BizException;
+import com.xianyu.admin.common.PageResult;
+import com.xianyu.admin.common.PageUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+
+/**
+ * 货源商城商品服务。
+ * 管理端：商品/卡密/FAQ CRUD；用户端：商品列表、详情、分类、FAQ。
+ * 卡密商品库存量 = mall_card_key 表中 status='available' 的数量。
+ * price_cent 以分为单位存储，与 PaymentService 保持一致。
+ */
+@Service
+public class MallProductService {
+    private static final Logger log = LoggerFactory.getLogger(MallProductService.class);
+    private static final long MAX_PRICE_CENT = 100_000_000L;
+    private static final int MAX_TITLE_LENGTH = 200;
+    private static final int MAX_SUBTITLE_LENGTH = 200;
+    private static final int MAX_CONTENT_LENGTH = 20_000;
+    private static final int MAX_CATEGORY_LENGTH = 50;
+    private static final int MAX_COVER_URL_LENGTH = 500;
+    private static final int MAX_CARD_CONTENT_LENGTH = 10_000;
+    private static final int MAX_FAQ_QUESTION_LENGTH = 500;
+    private static final int MAX_FAQ_ANSWER_LENGTH = 5_000;
+
+    private final JdbcTemplate jdbcTemplate;
+    private final AutomationClient automationClient;
+
+    public MallProductService(JdbcTemplate jdbcTemplate, AutomationClient automationClient) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.automationClient = automationClient;
+    }
+
+    // ==================== 管理端：商品 ====================
+
+    public PageResult<Map<String, Object>> listProducts(String type, int current, int size) {
+        int safeCurrent = PageUtils.normalizeCurrent(current);
+        int safeSize = PageUtils.normalizeSize(size, 100);
+        int offset = (safeCurrent - 1) * safeSize;
+        String normalizedType = normalizeProductType(type);
+        StringBuilder where = new StringBuilder(" WHERE deleted=0");
+        List<Object> args = new ArrayList<>();
+        if (StringUtils.hasText(normalizedType)) {
+            where.append(" AND product_type=?");
+            args.add(normalizedType);
+        }
+        Long total = queryCount("SELECT COUNT(*) FROM mall_product" + where, args);
+        List<Object> pageArgs = new ArrayList<>(args);
+        pageArgs.add(safeSize);
+        pageArgs.add(offset);
+        List<Map<String, Object>> records = jdbcTemplate.queryForList(
+                "SELECT id, tenant_id AS tenantId, product_type AS productType, title, subtitle, content, copy, " +
+                        "delivery_content AS deliveryContent, " +
+                        "price_cent AS priceCent, ROUND(price_cent/100,2) AS priceYuan, " +
+                        "cover_url AS coverUrl, status, category, ai_category_confidence AS aiCategoryConfidence, " +
+                        "sort_order AS sortOrder, bought_count AS boughtCount, " +
+                        "created_time AS createdTime, updated_time AS updatedTime " +
+                        "FROM mall_product" + where + " ORDER BY sort_order ASC, id DESC LIMIT ? OFFSET ?",
+                pageArgs.toArray());
+        // 附带卡密商品库存数
+        for (Map<String, Object> record : records) {
+            attachStockInfo(record);
+        }
+        return new PageResult<>(records, safeCurrent, safeSize, total);
+    }
+
+    public Map<String, Object> getProduct(long id) {
+        Map<String, Object> product = queryOne(
+                "SELECT id, tenant_id AS tenantId, product_type AS productType, title, subtitle, content, copy, " +
+                        "delivery_content AS deliveryContent, " +
+                        "price_cent AS priceCent, ROUND(price_cent/100,2) AS priceYuan, " +
+                        "cover_url AS coverUrl, status, category, ai_category_confidence AS aiCategoryConfidence, " +
+                        "sort_order AS sortOrder, bought_count AS boughtCount, " +
+                        "created_time AS createdTime, updated_time AS updatedTime " +
+                        "FROM mall_product WHERE id=? AND deleted=0",
+                id);
+        if (product == null) throw new BizException(404, "商品不存在");
+        attachStockInfo(product);
+        return product;
+    }
+
+    @Transactional
+    public Map<String, Object> createProduct(Map<String, Object> data) {
+        if (data == null) throw new BizException(400, "商品参数不能为空");
+        String productType = normalizeProductType(required(data, "productType", "商品类型不能为空"));
+        String title = boundedRequired(data, "title", "商品标题不能为空", MAX_TITLE_LENGTH);
+        String subtitle = boundedOptional(data, "subtitle", MAX_SUBTITLE_LENGTH);
+        String content = boundedOptional(data, "content", MAX_CONTENT_LENGTH);
+        String copy = boundedOptional(data, "copy", MAX_CONTENT_LENGTH);
+        String deliveryContent = boundedOptional(data, "deliveryContent", MAX_CONTENT_LENGTH);
+        long priceCent = parseMoneyCent(data);
+        if (priceCent < 0 || priceCent > MAX_PRICE_CENT) {
+            throw new BizException(400, "商品价格必须在 0 至 1000000 元之间");
+        }
+        String coverUrl = boundedOptional(data, "coverUrl", MAX_COVER_URL_LENGTH);
+        int status = optionalEnabled(data.get("status"), 1, "商品状态");
+        String category = boundedOptional(data, "category", MAX_CATEGORY_LENGTH);
+        int sortOrder = optionalInt(data.get("sortOrder"), "排序值", -1_000_000, 1_000_000, 0);
+        int affected = safeUpdate("创建商品失败",
+                "INSERT INTO mall_product(tenant_id, product_type, title, subtitle, content, copy, delivery_content, price_cent, " +
+                        "cover_url, status, category, ai_category_confidence, sort_order, bought_count, " +
+                        "created_time, updated_time, deleted) " +
+                        "VALUES(0,?,?,?,?,?,?,?,?,'',0,?,0,NOW(),NOW(),0)",
+                productType, title, subtitle, content.isEmpty() ? null : content,
+                copy.isEmpty() ? null : copy,
+                deliveryContent.isEmpty() ? null : deliveryContent,
+                priceCent, coverUrl, status, category, sortOrder);
+        if (affected != 1) throw new BizException(503, "创建商品失败，数据库未确认写入");
+        Long newId = lastInsertId();
+        return getProduct(newId);
+    }
+
+    @Transactional
+    public Map<String, Object> updateProduct(long id, Map<String, Object> data) {
+        if (data == null) throw new BizException(400, "商品参数不能为空");
+        Map<String, Object> existing = getProduct(id);
+        String productType = StringUtils.hasText(text(data.get("productType")))
+                ? normalizeProductType(text(data.get("productType"))) : text(existing.get("productType"));
+        String title = data.containsKey("title")
+                ? boundedRequired(data, "title", "商品标题不能为空", MAX_TITLE_LENGTH)
+                : text(existing.get("title"));
+        String subtitle = data.containsKey("subtitle")
+                ? boundedOptional(data, "subtitle", MAX_SUBTITLE_LENGTH)
+                : text(existing.get("subtitle"));
+        String content = data.containsKey("content")
+                ? boundedOptional(data, "content", MAX_CONTENT_LENGTH)
+                : text(existing.get("content"));
+        String copy = data.containsKey("copy")
+                ? boundedOptional(data, "copy", MAX_CONTENT_LENGTH)
+                : text(existing.get("copy"));
+        String deliveryContent = data.containsKey("deliveryContent")
+                ? boundedOptional(data, "deliveryContent", MAX_CONTENT_LENGTH)
+                : text(existing.get("deliveryContent"));
+        long priceCent = data.containsKey("priceCent") || data.containsKey("priceYuan") || data.containsKey("price")
+                ? parseMoneyCent(data) : storedLong(existing.get("priceCent"), "商品价格", 0, MAX_PRICE_CENT);
+        if (priceCent < 0 || priceCent > MAX_PRICE_CENT) {
+            throw new BizException(400, "商品价格必须在 0 至 1000000 元之间");
+        }
+        String coverUrl = data.containsKey("coverUrl")
+                ? boundedOptional(data, "coverUrl", MAX_COVER_URL_LENGTH)
+                : text(existing.get("coverUrl"));
+        int status = data.containsKey("status")
+                ? optionalEnabled(data.get("status"), 1, "商品状态")
+                : storedInt(existing.get("status"), "商品状态", 0, 1);
+        String category = data.containsKey("category")
+                ? boundedOptional(data, "category", MAX_CATEGORY_LENGTH)
+                : text(existing.get("category"));
+        int sortOrder = data.containsKey("sortOrder")
+                ? optionalInt(data.get("sortOrder"), "排序值", -1_000_000, 1_000_000, 0)
+                : storedInt(existing.get("sortOrder"), "排序值", -1_000_000, 1_000_000);
+        int affected = safeUpdate("更新商品失败",
+                "UPDATE mall_product SET product_type=?, title=?, subtitle=?, content=?, copy=?, delivery_content=?, price_cent=?, " +
+                        "cover_url=?, status=?, category=?, sort_order=?, updated_time=NOW() WHERE id=? AND deleted=0",
+                productType, title, subtitle, content.isEmpty() ? null : content,
+                copy.isEmpty() ? null : copy,
+                deliveryContent.isEmpty() ? null : deliveryContent,
+                priceCent, coverUrl, status, category, sortOrder, id);
+        if (affected != 1) throw new BizException(404, "商品不存在");
+        return getProduct(id);
+    }
+
+    @Transactional
+    public void deleteProduct(long id) {
+        int affected = safeUpdate("删除商品失败",
+                "UPDATE mall_product SET deleted=1, updated_time=NOW() WHERE id=? AND deleted=0", id);
+        if (affected != 1) throw new BizException(404, "商品不存在");
+    }
+
+    // ==================== 管理端：卡密 ====================
+
+    @Transactional
+    public Map<String, Object> importCardKeys(long productId, String cards) {
+        // 校验商品存在且为卡密类型
+        Map<String, Object> product = getProduct(productId);
+        if (!"card".equals(text(product.get("productType")))) {
+            throw new BizException(400, "仅卡密商品支持导入卡密");
+        }
+        if (cards == null || cards.isBlank()) {
+            throw new BizException(400, "卡密内容不能为空");
+        }
+        String[] lines = cards.split("\\r?\\n");
+        int imported = 0;
+        int skipped = 0;
+        for (String raw : lines) {
+            String line = raw == null ? "" : raw.trim();
+            if (line.isEmpty()) {
+                skipped++;
+                continue;
+            }
+            if (line.length() > MAX_CARD_CONTENT_LENGTH) {
+                throw new BizException(400, "单条卡密长度不能超过 " + MAX_CARD_CONTENT_LENGTH + " 个字符");
+            }
+            try {
+                jdbcTemplate.update(
+                        "INSERT INTO mall_card_key(product_id, card_content, status, order_no, created_time) " +
+                                "VALUES(?,?,'available','',NOW())",
+                        productId, line);
+                imported++;
+            } catch (DataAccessException e) {
+                log.error("导入卡密失败, productId={}, errorType={}", productId, e.getClass().getSimpleName());
+                throw new BizException(503, "卡密导入暂时不可用，请稍后重试");
+            }
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("productId", productId);
+        result.put("imported", imported);
+        result.put("skipped", skipped);
+        return result;
+    }
+
+    public PageResult<Map<String, Object>> listCardKeys(long productId, int current, int size) {
+        // 校验商品存在
+        getProduct(productId);
+        int safeCurrent = PageUtils.normalizeCurrent(current);
+        int safeSize = PageUtils.normalizeSize(size, 200);
+        int offset = (safeCurrent - 1) * safeSize;
+        Long total = queryCount(
+                "SELECT COUNT(*) FROM mall_card_key WHERE product_id=?", List.of(productId));
+        List<Map<String, Object>> records = jdbcTemplate.queryForList(
+                "SELECT id, product_id AS productId, card_content AS cardContent, status, order_no AS orderNo, " +
+                        "created_time AS createdTime, sold_time AS soldTime " +
+                        "FROM mall_card_key WHERE product_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
+                productId, safeSize, offset);
+        return new PageResult<>(records, safeCurrent, safeSize, total);
+    }
+
+    public Map<String, Object> getCardKeyStock(long productId) {
+        getProduct(productId);
+        Long available = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM mall_card_key WHERE product_id=? AND status='available'",
+                Long.class, productId);
+        Long sold = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM mall_card_key WHERE product_id=? AND status='sold'",
+                Long.class, productId);
+        Long disabled = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM mall_card_key WHERE product_id=? AND status='disabled'",
+                Long.class, productId);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("productId", productId);
+        result.put("available", available == null ? 0 : available);
+        result.put("sold", sold == null ? 0 : sold);
+        result.put("disabled", disabled == null ? 0 : disabled);
+        result.put("total", (available == null ? 0 : available) + (sold == null ? 0 : sold) + (disabled == null ? 0 : disabled));
+        return result;
+    }
+
+    // ==================== 管理端：FAQ ====================
+
+    public List<Map<String, Object>> listFaqs() {
+        return jdbcTemplate.queryForList(
+                "SELECT id, tenant_id AS tenantId, question, answer, sort_order AS sortOrder, status, " +
+                        "created_time AS createdTime, updated_time AS updatedTime " +
+                        "FROM mall_faq WHERE deleted=0 ORDER BY sort_order ASC, id DESC");
+    }
+
+    @Transactional
+    public Map<String, Object> createFaq(Map<String, Object> data) {
+        if (data == null) throw new BizException(400, "FAQ 参数不能为空");
+        String question = boundedRequired(data, "question", "问题不能为空", MAX_FAQ_QUESTION_LENGTH);
+        String answer = boundedRequired(data, "answer", "答案不能为空", MAX_FAQ_ANSWER_LENGTH);
+        int sortOrder = optionalInt(data.get("sortOrder"), "排序值", -1_000_000, 1_000_000, 0);
+        int status = optionalEnabled(data.get("status"), 1, "FAQ 状态");
+        int affected = safeUpdate("创建 FAQ 失败",
+                "INSERT INTO mall_faq(tenant_id, question, answer, sort_order, status, " +
+                        "created_time, updated_time, deleted) VALUES(0,?,?,?,?,NOW(),NOW(),0)",
+                question, answer, sortOrder, status);
+        if (affected != 1) throw new BizException(503, "创建 FAQ 失败，数据库未确认写入");
+        Long newId = lastInsertId();
+        return getFaq(newId);
+    }
+
+    @Transactional
+    public Map<String, Object> updateFaq(long id, Map<String, Object> data) {
+        if (data == null) throw new BizException(400, "FAQ 参数不能为空");
+        Map<String, Object> existing = getFaq(id);
+        String question = data.containsKey("question")
+                ? boundedRequired(data, "question", "问题不能为空", MAX_FAQ_QUESTION_LENGTH)
+                : text(existing.get("question"));
+        String answer = data.containsKey("answer")
+                ? boundedRequired(data, "answer", "答案不能为空", MAX_FAQ_ANSWER_LENGTH)
+                : text(existing.get("answer"));
+        int sortOrder = data.containsKey("sortOrder")
+                ? optionalInt(data.get("sortOrder"), "排序值", -1_000_000, 1_000_000, 0)
+                : storedInt(existing.get("sortOrder"), "排序值", -1_000_000, 1_000_000);
+        int status = data.containsKey("status")
+                ? optionalEnabled(data.get("status"), 1, "FAQ 状态")
+                : storedInt(existing.get("status"), "FAQ 状态", 0, 1);
+        int affected = safeUpdate("更新 FAQ 失败",
+                "UPDATE mall_faq SET question=?, answer=?, sort_order=?, status=?, updated_time=NOW() " +
+                        "WHERE id=? AND deleted=0",
+                question, answer, sortOrder, status, id);
+        if (affected != 1) throw new BizException(404, "FAQ 不存在");
+        return getFaq(id);
+    }
+
+    @Transactional
+    public void deleteFaq(long id) {
+        int affected = safeUpdate("删除 FAQ 失败",
+                "UPDATE mall_faq SET deleted=1, updated_time=NOW() WHERE id=? AND deleted=0", id);
+        if (affected != 1) throw new BizException(404, "FAQ 不存在");
+    }
+
+    private Map<String, Object> getFaq(long id) {
+        Map<String, Object> faq = queryOne(
+                "SELECT id, tenant_id AS tenantId, question, answer, sort_order AS sortOrder, status, " +
+                        "created_time AS createdTime, updated_time AS updatedTime " +
+                        "FROM mall_faq WHERE id=? AND deleted=0", id);
+        if (faq == null) throw new BizException(404, "FAQ 不存在");
+        return faq;
+    }
+
+    // ==================== 用户端：商品 ====================
+
+    public PageResult<Map<String, Object>> listShopProducts(String type, String category, String keyword,
+                                                             int current, int size) {
+        int safeCurrent = PageUtils.normalizeCurrent(current);
+        int safeSize = PageUtils.normalizeSize(size, 100);
+        int offset = (safeCurrent - 1) * safeSize;
+        String normalizedType = StringUtils.hasText(type) ? normalizeProductType(type) : null;
+        StringBuilder where = new StringBuilder(" WHERE deleted=0 AND status=1");
+        List<Object> args = new ArrayList<>();
+        if (StringUtils.hasText(normalizedType)) {
+            where.append(" AND product_type=?");
+            args.add(normalizedType);
+        }
+        if (StringUtils.hasText(category)) {
+            where.append(" AND category=?");
+            args.add(category.trim());
+        }
+        if (StringUtils.hasText(keyword)) {
+            where.append(" AND (title LIKE ? OR subtitle LIKE ? OR content LIKE ?)");
+            String kw = "%" + keyword.trim() + "%";
+            args.add(kw); args.add(kw); args.add(kw);
+        }
+        Long total = queryCount("SELECT COUNT(*) FROM mall_product" + where, args);
+        List<Object> pageArgs = new ArrayList<>(args);
+        pageArgs.add(safeSize);
+        pageArgs.add(offset);
+        List<Map<String, Object>> records = jdbcTemplate.queryForList(
+                "SELECT id, product_type AS productType, title, subtitle, content, copy, " +
+                        "price_cent AS priceCent, ROUND(price_cent/100,2) AS priceYuan, " +
+                        "cover_url AS coverUrl, category, sort_order AS sortOrder, bought_count AS boughtCount, " +
+                        "created_time AS createdTime " +
+                        "FROM mall_product" + where + " ORDER BY sort_order ASC, id DESC LIMIT ? OFFSET ?",
+                pageArgs.toArray());
+        for (Map<String, Object> record : records) {
+            attachStockInfo(record);
+        }
+        return new PageResult<>(records, safeCurrent, safeSize, total);
+    }
+
+    public Map<String, Object> getShopProduct(long id) {
+        Map<String, Object> product = queryOne(
+                "SELECT id, product_type AS productType, title, subtitle, content, copy, " +
+                        "delivery_content AS deliveryContent, " +
+                        "price_cent AS priceCent, ROUND(price_cent/100,2) AS priceYuan, " +
+                        "cover_url AS coverUrl, category, sort_order AS sortOrder, bought_count AS boughtCount, " +
+                        "created_time AS createdTime " +
+                        "FROM mall_product WHERE id=? AND deleted=0 AND status=1",
+                id);
+        if (product == null) throw new BizException(404, "商品不存在或已下架");
+        attachStockInfo(product);
+        return product;
+    }
+
+    public List<Map<String, Object>> listCategories() {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT category, COUNT(*) AS product_count FROM mall_product " +
+                        "WHERE deleted=0 AND status=1 AND category<>'' GROUP BY category ORDER BY product_count DESC, category ASC");
+        List<Map<String, Object>> categories = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("category", row.get("category"));
+            item.put("productCount", row.get("product_count"));
+            categories.add(item);
+        }
+        return categories;
+    }
+
+    public List<Map<String, Object>> listShopFaqs() {
+        return jdbcTemplate.queryForList(
+                "SELECT id, question, answer, sort_order AS sortOrder " +
+                        "FROM mall_faq WHERE deleted=0 AND status=1 ORDER BY sort_order ASC, id DESC");
+    }
+
+    // ==================== AI 分类 ====================
+
+    /**
+     * 触发 AI 自动分类。查询所有 category 为空或需要重新分类的商品，
+     * 调用 automation-service 的 /api/mall/categorize 接口（批量），
+     * 更新商品的 category 和 ai_category_confidence 字段。
+     */
+    public Map<String, Object> refreshCategories() {
+        List<Map<String, Object>> products = jdbcTemplate.queryForList(
+                "SELECT id, title, subtitle, content, category FROM mall_product " +
+                        "WHERE deleted=0 AND (category='' OR category IS NULL) ORDER BY id ASC LIMIT 200");
+        int total = products.size();
+        if (total == 0) {
+            Map<String, Object> emptyResult = new LinkedHashMap<>();
+            emptyResult.put("total", 0);
+            emptyResult.put("updated", 0);
+            emptyResult.put("failed", 0);
+            return emptyResult;
+        }
+
+        // 构建批量请求
+        List<Map<String, Object>> productBatch = new ArrayList<>();
+        Map<Object, Long> idMap = new LinkedHashMap<>();
+        for (Map<String, Object> product : products) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            Object rawId = product.get("id");
+            Long productId = ((Number) rawId).longValue();
+            item.put("id", productId);
+            item.put("title", product.get("title"));
+            item.put("content", product.get("content"));
+            productBatch.add(item);
+            idMap.put(productId, productId);
+        }
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("products", productBatch);
+
+        int updated = 0;
+        int failed = 0;
+        try {
+            Map<String, Object> result = automationClient.postInternalForData(
+                    "/api/mall/categorize", payload, 60);
+            Object resultsObj = result.get("results");
+            if (resultsObj instanceof List<?> resultList) {
+                for (Object item : resultList) {
+                    if (!(item instanceof Map<?, ?> itemMap)) continue;
+                    Object idVal = itemMap.get("id");
+                    Long productId = null;
+                    if (idVal instanceof Number num) {
+                        productId = num.longValue();
+                    } else if (idVal != null) {
+                        try { productId = Long.parseLong(String.valueOf(idVal)); } catch (NumberFormatException ignored) {}
+                    }
+                    String category = text(itemMap.get("category"));
+                    BigDecimal confidence = parseConfidence(itemMap.get("confidence"));
+                    if (productId != null && StringUtils.hasText(category)) {
+                        safeUpdate("更新商品分类失败",
+                                "UPDATE mall_product SET category=?, ai_category_confidence=?, updated_time=NOW() " +
+                                        "WHERE id=? AND deleted=0",
+                                category, confidence, productId);
+                        updated++;
+                    } else {
+                        failed++;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("AI 批量分类失败, errorType={}", e.getClass().getSimpleName());
+            failed = total - updated;
+        }
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("total", total);
+        summary.put("updated", updated);
+        summary.put("failed", failed);
+        return summary;
+    }
+
+    // ==================== 辅助方法 ====================
+
+    private void attachStockInfo(Map<String, Object> product) {
+        Object idValue = product.get("id");
+        if (idValue == null) return;
+        long productId = storedLong(idValue, "商品 ID", 1, Long.MAX_VALUE);
+        Object typeValue = product.get("productType");
+        if (typeValue != null && "card".equals(text(typeValue))) {
+            Long stock = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM mall_card_key WHERE product_id=? AND status='available'",
+                    Long.class, productId);
+            product.put("stock", stock == null ? 0 : stock);
+        } else {
+            // 文本商品库存视为无限
+            product.put("stock", -1);
+        }
+    }
+
+    /**
+     * 查询用户是否已购买指定商城商品（已支付订单）。
+     */
+    public boolean hasUserPurchased(long userId, long productId) {
+        try {
+            Long count = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM payment_order WHERE user_id=? AND order_type='mall_product' " +
+                            "AND target_id=? AND status=1 AND deleted=0",
+                    Long.class, userId, productId);
+            return count != null && count > 0;
+        } catch (DataAccessException e) {
+            log.warn("查询用户购买状态失败, userId={}, productId={}, errorType={}", userId, productId, e.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    /**
+     * 批量为商品列表附加 purchased 字段（用户是否已购买）。
+     * 单个商品 ID 异常不影响整体列表，降级为 false。
+     */
+    public void attachPurchasedInfo(List<Map<String, Object>> products, long userId) {
+        if (products == null || products.isEmpty() || userId <= 0) return;
+        for (Map<String, Object> product : products) {
+            Object idValue = product.get("id");
+            if (idValue == null) {
+                product.put("purchased", false);
+                continue;
+            }
+            try {
+                long productId = storedLong(idValue, "商品 ID", 1, Long.MAX_VALUE);
+                product.put("purchased", hasUserPurchased(userId, productId));
+            } catch (BizException e) {
+                product.put("purchased", false);
+            }
+        }
+    }
+
+    /**
+     * 为单个商品附加 purchased 字段。
+     */
+    public void attachPurchasedInfo(Map<String, Object> product, long userId) {
+        if (product == null || userId <= 0) return;
+        Object idValue = product.get("id");
+        if (idValue == null) return;
+        try {
+            long productId = storedLong(idValue, "商品 ID", 1, Long.MAX_VALUE);
+            product.put("purchased", hasUserPurchased(userId, productId));
+        } catch (BizException e) {
+            product.put("purchased", false);
+        }
+    }
+
+    private String normalizeProductType(String value) {
+        if (!StringUtils.hasText(value)) return "";
+        String t = value.trim().toLowerCase(Locale.ROOT);
+        if ("text".equals(t) || "card".equals(t)) return t;
+        throw new BizException(400, "非法商品类型，仅支持 text 或 card");
+    }
+
+    private long parseMoneyCent(Map<String, Object> data) {
+        Object cent = first(data, "priceCent", "price_cent", "amountCent", "amount_cent");
+        if (cent != null && !String.valueOf(cent).isBlank()) {
+            return requireWholeNumber(cent, "价格（分）", 0, MAX_PRICE_CENT);
+        }
+        Object yuan = first(data, "priceYuan", "price", "amount");
+        if (yuan == null || String.valueOf(yuan).isBlank()) {
+            throw new BizException(400, "商品价格不能为空");
+        }
+        try {
+            String normalized = String.valueOf(yuan).replace("¥", "").replace("元", "").trim();
+            long cents = new BigDecimal(normalized).movePointRight(2).longValueExact();
+            if (cents < 0 || cents > MAX_PRICE_CENT) throw new BizException(400, "商品价格超出允许范围");
+            return cents;
+        } catch (BizException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new BizException(400, "商品价格最多保留两位小数");
+        }
+    }
+
+    private BigDecimal parseConfidence(Object value) {
+        if (value == null || String.valueOf(value).isBlank()) return BigDecimal.ZERO;
+        try {
+            BigDecimal decimal = value instanceof BigDecimal bd ? bd : new BigDecimal(String.valueOf(value).trim());
+            if (decimal.compareTo(BigDecimal.ZERO) < 0 || decimal.compareTo(new BigDecimal("100")) > 0) {
+                return BigDecimal.ZERO;
+            }
+            return decimal;
+        } catch (RuntimeException e) {
+            return BigDecimal.ZERO;
+        }
+    }
+
+    private Long queryCount(String sql, List<Object> args) {
+        try {
+            Long count = jdbcTemplate.queryForObject(sql, Long.class, args.toArray());
+            return count == null ? 0L : count;
+        } catch (DataAccessException e) {
+            throw new BizException(503, "数据统计暂时不可用，请稍后重试");
+        }
+    }
+
+    private Map<String, Object> queryOne(String sql, Object... args) {
+        try {
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, args);
+            return rows.isEmpty() ? null : rows.get(0);
+        } catch (DataAccessException e) {
+            throw new BizException(503, "数据暂时无法读取，请稍后重试");
+        }
+    }
+
+    private Long lastInsertId() {
+        try {
+            Long newId = jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
+            if (newId == null || newId <= 0) {
+                throw new BizException(503, "记录已写入但无法确认记录编号，请稍后核验");
+            }
+            return newId;
+        } catch (DataAccessException e) {
+            throw new BizException(503, "记录已写入但无法确认记录编号，请稍后核验");
+        }
+    }
+
+    private int safeUpdate(String unavailableMessage, String sql, Object... args) {
+        try {
+            return jdbcTemplate.update(sql, args);
+        } catch (DataAccessException e) {
+            throw new BizException(503, unavailableMessage + "，请稍后重试");
+        }
+    }
+
+    private Object first(Map<String, Object> data, String... keys) {
+        if (data == null) return null;
+        for (String k : keys) if (data.containsKey(k)) return data.get(k);
+        return null;
+    }
+
+    private String required(Map<String, Object> data, String key, String msg) {
+        Object value = first(data, key);
+        if (value == null || String.valueOf(value).isBlank()) throw new BizException(400, msg);
+        return String.valueOf(value).trim();
+    }
+
+    private String boundedRequired(Map<String, Object> data, String key, String msg, int maxLength) {
+        String value = required(data, key, msg);
+        if (value.length() > maxLength) throw new BizException(400, msg + "，且不能超过 " + maxLength + " 个字符");
+        return value;
+    }
+
+    private String boundedOptional(Map<String, Object> data, String key, int maxLength) {
+        Object value = first(data, key);
+        String text = value == null ? "" : String.valueOf(value).trim();
+        if (text.length() > maxLength) throw new BizException(400, key + " 不能超过 " + maxLength + " 个字符");
+        return text;
+    }
+
+    private String text(Object value) {
+        return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    private long requireWholeNumber(Object value, String field, long min, long max) {
+        if (value == null || String.valueOf(value).isBlank()) throw new BizException(400, field + "不能为空");
+        try {
+            BigDecimal decimal = value instanceof BigDecimal bd ? bd : new BigDecimal(String.valueOf(value).trim());
+            long parsed = decimal.longValueExact();
+            if (parsed < min || parsed > max) throw new BizException(400, field + "超出允许范围");
+            return parsed;
+        } catch (BizException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new BizException(400, field + "必须是合法整数");
+        }
+    }
+
+    private long storedLong(Object value, String field, long min, long max) {
+        try {
+            if (value == null || String.valueOf(value).isBlank()) throw new ArithmeticException();
+            BigDecimal decimal = value instanceof BigDecimal bd ? bd : new BigDecimal(String.valueOf(value).trim());
+            long parsed = decimal.longValueExact();
+            if (parsed < min || parsed > max) throw new ArithmeticException();
+            return parsed;
+        } catch (RuntimeException e) {
+            throw new BizException(503, field + "数据异常，请联系管理员核验");
+        }
+    }
+
+    private int storedInt(Object value, String field, int min, int max) {
+        return (int) storedLong(value, field, min, max);
+    }
+
+    private int optionalInt(Object value, String field, int min, int max, int defaultValue) {
+        if (value == null || String.valueOf(value).isBlank()) return defaultValue;
+        return (int) requireWholeNumber(value, field, min, max);
+    }
+
+    private int optionalEnabled(Object value, int defaultValue, String field) {
+        if (value == null || String.valueOf(value).isBlank()) return defaultValue;
+        String s = String.valueOf(value).trim().toLowerCase(Locale.ROOT);
+        if ("1".equals(s) || "true".equals(s) || "启用".equals(s) || "上架".equals(s)) return 1;
+        if ("0".equals(s) || "false".equals(s) || "禁用".equals(s) || "下架".equals(s)) return 0;
+        try {
+            int parsed = Integer.parseInt(s);
+            if (parsed == 0 || parsed == 1) return parsed;
+        } catch (NumberFormatException ignored) {}
+        throw new BizException(400, field + "只能为启用或禁用");
+    }
+
+    @SuppressWarnings("unused")
+    private boolean equalsText(Object a, Object b) {
+        return Objects.equals(text(a), text(b));
+    }
+}

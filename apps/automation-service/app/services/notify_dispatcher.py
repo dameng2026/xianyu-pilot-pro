@@ -82,6 +82,26 @@ _ACCOUNT_STATUS_NOTIFIED: dict[tuple[int, int, str], float] = {}
 _NEW_ORDER_NOTIFIED_TTL_SECONDS = 15 * 60
 _NEW_ORDER_NOTIFIED: dict[tuple[int, int, str], float] = {}
 
+# M3: 跨协程共享状态 lazy-initialized asyncio.Lock，避免模块加载时要求事件循环
+_account_status_notified_lock = None
+_new_order_notified_lock = None
+
+
+def _get_account_status_notified_lock() -> asyncio.Lock:
+    """lazy 初始化 _ACCOUNT_STATUS_NOTIFIED 的 asyncio.Lock。"""
+    global _account_status_notified_lock
+    if _account_status_notified_lock is None:
+        _account_status_notified_lock = asyncio.Lock()
+    return _account_status_notified_lock
+
+
+def _get_new_order_notified_lock() -> asyncio.Lock:
+    """lazy 初始化 _NEW_ORDER_NOTIFIED 的 asyncio.Lock。"""
+    global _new_order_notified_lock
+    if _new_order_notified_lock is None:
+        _new_order_notified_lock = asyncio.Lock()
+    return _new_order_notified_lock
+
 
 async def _check_account_status_notified(tenant_id: int, account_id: int, event_display_name: str) -> bool:
     """检查该账号的指定事件是否已经发送过通知（内存 + 数据库双层检查）。
@@ -89,8 +109,9 @@ async def _check_account_status_notified(tenant_id: int, account_id: int, event_
     内存未命中时回查数据库，DB 命中则回填内存缓存。
     """
     # 第一层：内存快速路径
-    if (tenant_id, account_id, event_display_name) in _ACCOUNT_STATUS_NOTIFIED:
-        return True
+    async with _get_account_status_notified_lock():
+        if (tenant_id, account_id, event_display_name) in _ACCOUNT_STATUS_NOTIFIED:
+            return True
 
     # 第二层：数据库持久化检查（进程重启后内存丢失，DB 仍保留记录）
     try:
@@ -105,7 +126,8 @@ async def _check_account_status_notified(tenant_id: int, account_id: int, event_
             )).first()
             if row:
                 # 回填内存缓存，后续直接走快速路径
-                _ACCOUNT_STATUS_NOTIFIED[(tenant_id, account_id, event_display_name)] = time.time()
+                async with _get_account_status_notified_lock():
+                    _ACCOUNT_STATUS_NOTIFIED[(tenant_id, account_id, event_display_name)] = time.time()
                 return True
     except Exception:
         logger.debug("查询 notification_dedup 失败，仅依赖内存去重", exc_info=True)
@@ -116,7 +138,8 @@ async def _check_account_status_notified(tenant_id: int, account_id: int, event_
 async def _mark_account_status_notified(tenant_id: int, account_id: int, event_display_name: str) -> None:
     """标记该账号的指定事件已发送通知（同时写入内存和数据库）。"""
     # 内存层
-    _ACCOUNT_STATUS_NOTIFIED[(tenant_id, account_id, event_display_name)] = time.time()
+    async with _get_account_status_notified_lock():
+        _ACCOUNT_STATUS_NOTIFIED[(tenant_id, account_id, event_display_name)] = time.time()
 
     # 数据库层（INSERT ... ON DUPLICATE KEY UPDATE 保证幂等）
     try:
@@ -142,12 +165,13 @@ async def clear_all_account_status_notifications(tenant_id: int, account_id: int
     """
     # 清除内存层
     try:
-        keys_to_remove = [
-            k for k in _ACCOUNT_STATUS_NOTIFIED
-            if k[0] == tenant_id and k[1] == account_id
-        ]
-        for k in keys_to_remove:
-            _ACCOUNT_STATUS_NOTIFIED.pop(k, None)
+        async with _get_account_status_notified_lock():
+            keys_to_remove = [
+                k for k in _ACCOUNT_STATUS_NOTIFIED
+                if k[0] == tenant_id and k[1] == account_id
+            ]
+            for k in keys_to_remove:
+                _ACCOUNT_STATUS_NOTIFIED.pop(k, None)
     except Exception:
         logger.debug("清除内存去重标记异常，忽略", exc_info=True)
 
@@ -167,6 +191,8 @@ async def clear_all_account_status_notifications(tenant_id: int, account_id: int
 
 
 def _purge_expired_new_order_notifications(now: Optional[float] = None) -> None:
+    # TODO: 跨协程共享状态，sync 访问点未加锁（_NEW_ORDER_NOTIFIED）
+    # 此 sync 函数被 async notify_new_order 调用；异步侧的 check-and-set 已加锁。
     now_ts = now if now is not None else time.time()
     expired_keys = [
         dedup_key
@@ -201,6 +227,8 @@ def _build_new_order_dedup_token(account_id: int, msg: dict) -> Optional[str]:
 
 def clear_new_order_state(tenant_id: int, account_id: int, msg: Optional[dict] = None) -> None:
     """清除新订单通知去重状态，通常仅用于测试或需要强制重新通知的场景。"""
+    # TODO: 跨协程共享状态，sync 访问点未加锁（_NEW_ORDER_NOTIFIED）
+    # 此 sync 函数主要用于测试场景；异步侧的 check-and-set 已加锁。
     try:
         if msg is not None:
             token = _build_new_order_dedup_token(account_id, msg)
@@ -768,15 +796,17 @@ async def notify_new_order(tenant_id: int, account_id: int, msg: dict) -> None:
     dedup_key = None
     if token:
         dedup_key = (tenant_id, account_id, token)
-        if dedup_key in _NEW_ORDER_NOTIFIED:
-            logger.info(
-                "新订单通知去重跳过: tenant=%d account=%d token=%s",
-                tenant_id,
-                account_id,
-                token,
-            )
-            return
-        _NEW_ORDER_NOTIFIED[dedup_key] = time.time()
+        # 原子 check-and-set：防止并发任务双写去重表
+        async with _get_new_order_notified_lock():
+            if dedup_key in _NEW_ORDER_NOTIFIED:
+                logger.info(
+                    "新订单通知去重跳过: tenant=%d account=%d token=%s",
+                    tenant_id,
+                    account_id,
+                    token,
+                )
+                return
+            _NEW_ORDER_NOTIFIED[dedup_key] = time.time()
 
     reminder = str(msg.get("reminderContent") or msg.get("reminder_content") or "")
     reminder_url = str(msg.get("reminderUrl") or msg.get("reminder_url") or "")
@@ -800,10 +830,12 @@ async def notify_new_order(tenant_id: int, account_id: int, msg: dict) -> None:
         )
     except Exception:
         if dedup_key:
-            _NEW_ORDER_NOTIFIED.pop(dedup_key, None)
+            async with _get_new_order_notified_lock():
+                _NEW_ORDER_NOTIFIED.pop(dedup_key, None)
         raise
     if dedup_key and not delivered:
-        _NEW_ORDER_NOTIFIED.pop(dedup_key, None)
+        async with _get_new_order_notified_lock():
+            _NEW_ORDER_NOTIFIED.pop(dedup_key, None)
 
 
 async def notify_account_offline(tenant_id: int, account_id: int, reason: str = "") -> None:
@@ -1022,14 +1054,15 @@ async def clear_token_low_balance_notifications(tenant_id: int, user_id: int) ->
     """
     # 用户级去重使用 account_id=0 占位
     try:
-        keys_to_remove = [
-            k for k in _ACCOUNT_STATUS_NOTIFIED
-            if k[0] == tenant_id
-            and k[1] == USER_LEVEL_ACCOUNT_PLACEHOLDER
-            and k[2] in (EVENT_TOKEN_LOW_BALANCE, EVENT_AUTO_REPLY_PAUSED)
-        ]
-        for k in keys_to_remove:
-            _ACCOUNT_STATUS_NOTIFIED.pop(k, None)
+        async with _get_account_status_notified_lock():
+            keys_to_remove = [
+                k for k in _ACCOUNT_STATUS_NOTIFIED
+                if k[0] == tenant_id
+                and k[1] == USER_LEVEL_ACCOUNT_PLACEHOLDER
+                and k[2] in (EVENT_TOKEN_LOW_BALANCE, EVENT_AUTO_REPLY_PAUSED)
+            ]
+            for k in keys_to_remove:
+                _ACCOUNT_STATUS_NOTIFIED.pop(k, None)
     except Exception:
         logger.debug("清除内存去重标记异常，忽略", exc_info=True)
 

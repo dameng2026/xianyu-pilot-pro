@@ -388,10 +388,12 @@ async function doHandleDynamicRoutes(
     closeLoading()
 
     // 401 错误：立即退出登录并跳转到登录页，避免重试循环
+    // 统一调用 logOut() 清理完整状态（HTTP 缓存、iframe 路由、工作台、锁屏密码等），
+    // 而不是只 setLoginStatus(false)+setToken('')，避免留下脏状态
     if (isUnauthorizedError(error)) {
       const userStore = useUserStore()
-      userStore.setLoginStatus(false)
-      userStore.setToken('')
+      // skipNavigate=true：由当前路由守卫用 next({ name: 'Login' }) 统一跳转，避免与 logOut 内部的 router.push 冲突
+      userStore.logOut({ skipNavigate: true })
       routeInitInProgress = false
       next({ name: 'Login', replace: true })
       return

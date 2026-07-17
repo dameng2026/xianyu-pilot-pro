@@ -268,6 +268,14 @@
           "sha256": "f7161ae2ac98f866f448c361f0acccf6009161d08db7cd0642dc324eb7028993",
           "risk": "rebuild",
           "rollback": "restore"
+        },
+        {
+          "version": "1.2",
+          "description": "add retrying status to goofish_crawl_jobs",
+          "path": "apps/crawler-service/migrations/V1.2__add_retrying_status_to_crawl_jobs.sql",
+          "sha256": "21faa312311ae36211197f3c812d269cb5522700798258e0889c1b63ea6d76b8",
+          "risk": "expand",
+          "rollback": "restore"
         }
       ],
       "quarantined": []

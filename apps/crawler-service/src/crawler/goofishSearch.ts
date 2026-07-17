@@ -1,4 +1,4 @@
-import { chromium, Browser, Page, BrowserContextOptions, Cookie } from 'playwright';
+import { chromium, Browser, Page, BrowserContextOptions, Cookie, Response } from 'playwright';
 import { isSafeBrowserResourceUrl, normalizeGoofishTargetUrl, safeErrorType } from '../policy.js';
 
 export interface SearchResultItem {
@@ -30,6 +30,19 @@ const BLOCK_KEYWORDS = [
 
 // MTOP 搜索 API 标识，用于精确匹配网络响应
 const SEARCH_API_MARKER = 'mtop.taobao.idlemtopsearch.pc.search';
+
+/**
+ * MTOP 响应竞速结果。
+ * - ok=true 表示成功解析到商品（items 为非空数组）
+ * - ok=false 表示 MTOP 返回非成功状态（如 Baxia 风控）或竞速超时，items 为空数组，error 携带原因
+ *
+ * 调用方仍可通过外部 networkItems 数组读取已捕获的商品（向后兼容）。
+ */
+interface MtopSettleResult {
+  ok: boolean;
+  items: SearchResultItem[];
+  error?: string;
+}
 
 /**
  * 从 MTOP 搜索 API 的响应中提取商品列表。
@@ -345,9 +358,13 @@ export async function crawlGoofishSearch(
   const networkItems: SearchResultItem[] = [];
   let networkTotal: number | undefined;
   let networkHasMore: boolean | undefined;
-  // 用于在拦截到 MTOP 响应后立即唤醒主流程，避免无谓的固定等待
-  let mtopResolve!: () => void;
-  const mtopDone = new Promise<void>((resolve) => {
+  // mtopSettled 防止多次 MTOP 响应并发修改 networkItems 或重复 resolve。
+  // 一旦 settle（成功或失败），后续 response 事件直接 no-op。
+  let mtopSettled = false;
+  // 用于在拦截到 MTOP 响应后立即唤醒主流程，避免无谓的固定等待。
+  // resolve 携带 ok/items/error，调用方仍可通过 networkItems 读取结果（向后兼容）。
+  let mtopResolve!: (value: MtopSettleResult) => void;
+  const mtopDone = new Promise<MtopSettleResult>((resolve) => {
     mtopResolve = resolve;
   });
 
@@ -412,8 +429,13 @@ export async function crawlGoofishSearch(
     const page = await context.newPage();
 
     // 监听网络响应，精确拦截 MTOP 搜索 API 响应。
-    // 一旦成功解析到商品，立即 resolve mtopDone，让主流程跳过后续等待。
-    page.on('response', async (response) => {
+    // 一旦成功解析到商品或检测到非成功状态（如 Baxia 风控），立即 resolve mtopDone，
+    // 让主流程跳过后续等待。提取为命名函数以便在 DOM 兜底前 page.off 移除监听，
+    // 避免 response 事件在 DOM 兜底阶段并发修改 networkItems。
+    const mtopResponseHandler = async (response: Response) => {
+      // 已 settle（成功/失败/超时），后续 response 事件直接 no-op，避免并发 push
+      if (mtopSettled) return;
+
       const req = response.request();
       const resourceType = req.resourceType();
       if (resourceType !== 'xhr' && resourceType !== 'fetch') {
@@ -437,6 +459,9 @@ export async function crawlGoofishSearch(
         const text = await response.text();
         if (!text || text.length < 50 || text.length > 2 * 1024 * 1024) return;
 
+        // 异步读取 response.text() 期间可能已被其他响应 settle，再次检查
+        if (mtopSettled) return;
+
         let json: unknown;
         try {
           json = JSON.parse(text);
@@ -450,7 +475,12 @@ export async function crawlGoofishSearch(
         const retMsg =
           Array.isArray(ret) && ret.length > 0 ? String(ret[0]) : String(ret || '');
         if (retMsg && !retMsg.includes('SUCCESS')) {
-          console.log('[SearchCrawler] MTOP 搜索返回非成功');
+          // MTOP 返回非成功（如 Baxia 风控 FAIL_SYS_USER_VALIDATE）：
+          // 立即 settle 为失败并唤醒主流程，避免空等 6 秒超时。
+          // 调用方据此进入 DOM 兜底路径（networkItems 仍为空）。
+          mtopSettled = true;
+          console.log(`[SearchCrawler] MTOP 搜索返回非成功: retMsg=${retMsg}`);
+          mtopResolve({ ok: false, items: [], error: retMsg });
           return;
         }
 
@@ -459,17 +489,20 @@ export async function crawlGoofishSearch(
         if (pagination.total !== undefined) networkTotal = pagination.total;
         if (pagination.hasMore !== undefined) networkHasMore = pagination.hasMore;
         if (parsed.length > 0) {
+          // 标记 settled 后再 push，避免与后续响应交叉修改 networkItems
+          mtopSettled = true;
           console.log(`[SearchCrawler] MTOP API 拦截成功: 提取 ${parsed.length} 个商品`);
           networkItems.push(...parsed);
           // 拦截到结果，立即唤醒主流程
-          mtopResolve();
+          mtopResolve({ ok: true, items: parsed });
         } else {
           console.log('[SearchCrawler] MTOP API 响应解析到 0 个商品');
         }
       } catch (err) {
         console.log(`[SearchCrawler] 读取 MTOP 响应失败: errorType=${safeErrorType(err)}`);
       }
-    });
+    };
+    page.on('response', mtopResponseHandler);
 
     // 打开搜索页面 - 使用 domcontentloaded 而非 networkidle，加速首屏
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
@@ -477,9 +510,11 @@ export async function crawlGoofishSearch(
     // 竞速等待：MTOP API 响应到达 vs. 最大 6 秒超时
     // 之前固定等待 4s + autoScroll 3s + 1.5s = 8.5s，现在改为事件驱动
     const maxWaitMs = 6000;
-    await Promise.race([
+    const mtopResult = await Promise.race([
       mtopDone,
-      new Promise<void>((resolve) => setTimeout(resolve, maxWaitMs)),
+      new Promise<MtopSettleResult>((resolve) =>
+        setTimeout(() => resolve({ ok: false, items: [], error: 'timeout' }), maxWaitMs),
+      ),
     ]);
 
     // 若已拿到 MTOP 结果，无需检测阻断/滚动/DOM，直接返回
@@ -503,8 +538,12 @@ export async function crawlGoofishSearch(
       };
     }
 
-    // 兜底：MTOP 拦截未拿到结果，再短等 1.5s 后做 DOM 检测
-    console.log(`[SearchCrawler] MTOP 快速路径未命中，做 1.5s 兜底等待后 DOM 提取`);
+    // 兜底：MTOP 拦截未拿到结果（含超时或 Baxia 风控 ok=false），做 DOM 提取。
+    // 先移除 response 监听，避免 DOM 兜底阶段 response 事件并发修改 networkItems。
+    page.off('response', mtopResponseHandler);
+    console.log(
+      `[SearchCrawler] MTOP 快速路径未命中: reason=${mtopResult.error || 'empty'}，做 1.5s 兜底等待后 DOM 提取`
+    );
     await page.waitForTimeout(1500);
 
     // 检测页面阻断

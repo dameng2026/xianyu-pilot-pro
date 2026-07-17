@@ -37,6 +37,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,6 +70,25 @@ public class AutomationProxyController {
     private static final int MAX_SSE_TICKETS = 10_000;
     private static final int MAX_SSE_TICKETS_PER_USER = 5;
     private static final ConcurrentHashMap<String, SseTicket> SSE_TICKETS = new ConcurrentHashMap<>();
+    // SSE 票据定期清理器：避免仅在新建 ticket 时才 evict，导致长期无新请求时过期票据常驻内存
+    private static final ScheduledExecutorService SSE_TICKET_CLEANER =
+        Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "sse-ticket-cleaner");
+            t.setDaemon(true);
+            return t;
+        });
+
+    static {
+        // 每 2 分钟清理一次过期 SSE 票据；TTL 60s，2 分钟足够覆盖
+        SSE_TICKET_CLEANER.scheduleAtFixedRate(() -> {
+            try {
+                long now = Instant.now().getEpochSecond();
+                SSE_TICKETS.entrySet().removeIf(e -> e.getValue().expiresAtEpochSecond() <= now);
+            } catch (Exception e) {
+                log.warn("SSE 票据定期清理异常: {}", e.getClass().getSimpleName());
+            }
+        }, 2, 2, TimeUnit.MINUTES);
+    }
 
     public AutomationProxyController(AutomationClient automationClient, JdbcTemplate jdbcTemplate, OperationAuditService auditService,
                                      AiProviderService aiProviderService, OpportunityDraftService opportunityDraftService,

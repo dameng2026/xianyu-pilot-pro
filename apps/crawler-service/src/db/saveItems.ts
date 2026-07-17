@@ -125,7 +125,16 @@ export async function markCrawlJobFailed(
 
 /**
  * 标记任务进入 BullMQ 自动重试等待态。
- * 注意：数据库 status 仍使用 pending，避免旧表枚举或前端状态判断不认识 retrying。
+ *
+ * 数据库 status 使用独立的字面量 'retrying'（而非 'pending'），原因：
+ *   1. 区分「BullMQ 自动重试中」与「新提交待执行」，避免 worker 的 claim SQL
+ *      误把新提交的任务当成正在重试的任务抢占；
+ *   2. 让 partial unique index uk_goofish_jobs_active_store 仍然把重试中的任务
+ *      视为「活跃」，从而阻止同店铺并发提交重复任务；
+ *   3. BullMQ 自身的 retry claim 仍能通过 worker 的 `status IN ('pending','retrying','running')`
+ *      找回自己的任务，避免重复执行窗口。
+ *
+ * error_message 中已编码 attempt_count 信息（第 N/M 次尝试），不新增数据库列以避免破坏性迁移。
  */
 export async function markCrawlJobRetrying(
   tenantId: string,
@@ -141,7 +150,7 @@ export async function markCrawlJobRetrying(
 
   const retrying = await pool.query(
     `UPDATE goofish_crawl_jobs
-     SET status = 'pending', error_message = $1, execution_token = NULL
+     SET status = 'retrying', error_message = $1, execution_token = NULL
      WHERE tenant_id = $2 AND bullmq_job_id = $3 AND status = 'running' AND execution_token = $4
      RETURNING bullmq_job_id`,
     [message, tenantId, bullmqJobId, executionToken]

@@ -26,7 +26,9 @@ test('crawler migration is file-backed, checksummed, transactional, and history-
     'utf8',
   );
 
-  assert.match(source, /readFile\(CRAWLER_MIGRATION\.url, 'utf8'\)/);
+  // Multiple migrations are now supported; the file-backed read still uses readFile
+  // with a migration descriptor's url and computes a sha256 checksum per file.
+  assert.match(source, /readFile\([A-Za-z_$.]+\.url, 'utf8'\)/);
   assert.match(source, /createHash\('sha256'\)/);
   assert.match(source, /xianyu_schema_history/);
   assert.match(source, /await client\.query\('BEGIN'\)/);

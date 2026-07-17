@@ -1,7 +1,7 @@
 import { closePool, runMigrations } from './db/index.js';
 import { isProductionLike, safeErrorType } from './policy.js';
 
-const REVIEWED_MANIFEST_SHA256 = '1def51a91fd3402852e17a8dadb4471e6a0e5bb4092b2a37948bd2385193adf0';
+const REVIEWED_MANIFEST_SHA256 = '1e4d7368a3c6353479f42997097f55db1945cebba3b20a335ed774e4408de4c0';
 
 function assertMaintenanceApproval(): void {
   const environment = process.env.NODE_ENV || process.env.APP_ENV || 'development';

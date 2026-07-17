@@ -143,7 +143,7 @@ export const useUserStore = defineStore(
      * 清空所有用户相关状态并跳转到登录页
      * 如果是同一账号重新登录，保留工作台标签页
      */
-    const logOut = () => {
+    const logOut = (options?: { skipNavigate?: boolean }) => {
       const mediaToken = accessToken.value
       if (mediaToken) {
         void revokeAdminSession(mediaToken).catch(() => {
@@ -181,12 +181,15 @@ export const useUserStore = defineStore(
       // 立即重置路由初始化失败标记，避免登录后被跳过动态路由注册
       resetRouteInitState()
       // 跳转到登录页，携带当前路由作为 redirect 参数
-      const currentRoute = router.currentRoute.value
-      const redirect = currentRoute.path.startsWith('/auth/') ? undefined : currentRoute.fullPath
-      router.push({
-        name: 'Login',
-        query: redirect ? { redirect } : undefined
-      })
+      // skipNavigate=true 时由调用方自行跳转（如路由守卫中用 next({ name: 'Login' }) 跳转，避免重复导航冲突）
+      if (!options?.skipNavigate) {
+        const currentRoute = router.currentRoute.value
+        const redirect = currentRoute.path.startsWith('/auth/') ? undefined : currentRoute.fullPath
+        router.push({
+          name: 'Login',
+          query: redirect ? { redirect } : undefined
+        })
+      }
     }
 
     /**

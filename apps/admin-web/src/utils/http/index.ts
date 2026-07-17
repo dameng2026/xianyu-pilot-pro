@@ -40,6 +40,8 @@ const RETRY_DELAY = 800
 const UNAUTHORIZED_DEBOUNCE_TIME = 3000
 /** GET 请求默认缓存时间（毫秒），0 表示不缓存 */
 const DEFAULT_CACHE_TTL = 0
+/** pending 请求兜底清理时长（毫秒）：比 axios timeout 长 3 倍，防止网络挂死导致相同 key 请求永久 await */
+const PENDING_REQUEST_MAX_TTL_MS = 30000
 
 /** 401防抖状态 */
 let isUnauthorizedErrorShown = false
@@ -353,6 +355,13 @@ async function request<T = any>(config: ExtendedAxiosRequestConfig): Promise<T> 
   // GET 请求注册到 pending（用于去重）
   if (method === 'GET' && !config.skipDedupe) {
     pendingRequests.set(requestKey, promise)
+    // 兜底清理：PENDING_REQUEST_MAX_TTL_MS 后强制从 pending 移除，防止网络挂死导致相同 key 的请求永久 await
+    // 正常请求在 finally 块中已删除；这里只处理异常挂死场景
+    const pendingCleanupTimer = setTimeout(() => {
+      pendingRequests.delete(requestKey)
+    }, PENDING_REQUEST_MAX_TTL_MS)
+    // promise 完成后清除定时器，避免内存泄漏
+    promise.finally(() => clearTimeout(pendingCleanupTimer))
   }
 
   return promise

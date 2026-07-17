@@ -73,6 +73,28 @@ _AUTO_SOLVE_LAST_TS: dict[int, float] = {}
 _AUTO_SOLVE_COOLDOWN_SEC = 1800
 _AUTO_SOLVE_GLOBAL_LOCK = None  # lazy asyncio.Lock
 
+# M3: 跨协程共享状态 lazy-initialized asyncio.Lock，避免模块加载时要求事件循环
+_recent_text_sends_lock = None
+_AUTO_SOLVE_LAST_TS_LOCK = None
+
+
+def _get_recent_text_sends_lock():
+    """lazy 初始化 _recent_text_sends 的 asyncio.Lock。"""
+    global _recent_text_sends_lock
+    if _recent_text_sends_lock is None:
+        import asyncio as _asyncio
+        _recent_text_sends_lock = _asyncio.Lock()
+    return _recent_text_sends_lock
+
+
+def _get_auto_solve_last_ts_lock():
+    """lazy 初始化 _AUTO_SOLVE_LAST_TS 的 asyncio.Lock。"""
+    global _AUTO_SOLVE_LAST_TS_LOCK
+    if _AUTO_SOLVE_LAST_TS_LOCK is None:
+        import asyncio as _asyncio
+        _AUTO_SOLVE_LAST_TS_LOCK = _asyncio.Lock()
+    return _AUTO_SOLVE_LAST_TS_LOCK
+
 
 async def _lookup_account_name_safe(tenant_id: int, account_id: int) -> str:
     """查询账号昵称，失败时回退为账号 ID 字符串。供通知文案使用。"""

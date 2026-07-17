@@ -37,6 +37,37 @@
           console.warn('Failed to apply initial theme:', e)
         }
       })()
+
+      // 紧急遮罩清理：防止初始化过程中残留的 loading/mask 遮挡页面
+      ;(function emergencyMaskCleanup() {
+        function cleanMasks() {
+          try {
+            if (!document.body) return
+            var badClasses = ['el-loading-mask', 'art-loading-fix', 'v-modal']
+            badClasses.forEach(function (cls) {
+              var nodes = document.querySelectorAll('.' + cls)
+              nodes.forEach(function (n) { n.remove() })
+            })
+            var overlays = document.querySelectorAll('.el-overlay')
+            overlays.forEach(function (o) {
+              if (!o.querySelector('.el-dialog, .el-message-box, .el-drawer, .el-message, .el-notification')) {
+                o.remove()
+              }
+            })
+            document.body.classList.remove('el-loading-parent--hidden', 'el-popup-parent--hidden')
+            document.body.style.overflow = ''
+          } catch {}
+        }
+        if (document.body) cleanMasks()
+        document.addEventListener('DOMContentLoaded', cleanMasks)
+        window.addEventListener('load', function () {
+          cleanMasks()
+          setTimeout(cleanMasks, 300)
+          setTimeout(cleanMasks, 1000)
+          setTimeout(cleanMasks, 2000)
+          setTimeout(cleanMasks, 4000)
+        })
+      })()
     </script>
   </head>
 

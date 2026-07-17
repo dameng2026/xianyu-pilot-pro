@@ -166,6 +166,9 @@ public class AutomationClient {
             String url = normalizeBase(automationBaseUrl) + ensureSlash(path) + toQuery(query);
             HttpRequest.Builder builder = HttpRequest.newBuilder()
                     .uri(URI.create(url))
+                    // SSE 流式响应兜底超时：30 分钟。正常 SSE 由客户端断开或心跳维持；
+                    // 若下游 Python 服务 hang 住，30 分钟后强制断开，防止 Java 线程/输出流无限期挂起。
+                    .timeout(Duration.ofMinutes(30))
                     .GET();
             applyInternalHeaders(builder, tenantId);
             HttpResponse<java.io.InputStream> resp = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());

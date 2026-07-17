@@ -47,7 +47,7 @@ async function start() {
       `UPDATE goofish_crawl_jobs
        SET status = 'running', started_at = NOW(), execution_token = $3
        WHERE tenant_id = $1 AND bullmq_job_id = $2
-         AND status IN ('pending', 'running')
+         AND status IN ('pending', 'retrying', 'running')
        RETURNING bullmq_job_id, store_user_id`,
       [tenantId, jobId, executionToken]
     );

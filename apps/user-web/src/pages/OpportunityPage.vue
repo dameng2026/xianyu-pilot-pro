@@ -462,7 +462,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import CardPanel from '../components/CardPanel.vue'
 import AppButton from '../components/AppButton.vue'
 import PublishAddressCascader from '../components/PublishAddressCascader.vue'
@@ -1160,7 +1160,7 @@ async function doCollectShop() {
         error.value = statusRes.error || '抓取任务状态查询失败'
         return
       }
-      if (!['pending', 'running', 'completed', 'failed'].includes(statusRes.status)) {
+      if (!['pending', 'running', 'retrying', 'completed', 'failed'].includes(statusRes.status)) {
         throw new Error('店铺抓取任务返回未知状态')
       }
       if (statusRes.status === 'completed') {
@@ -2089,6 +2089,14 @@ function saveDraftNow() {
 onMounted(async()=>{
   await Promise.all([loadAccounts(), refreshAiFeatureStatus(), loadAiCategoryStatus(), loadOppCategories()])
   loadSavedDrafts()
+})
+
+// 组件卸载时清理草稿自动保存定时器，避免 2 秒后仍读写已卸载组件的 reactive 状态
+onUnmounted(() => {
+  if (draftAutoSaveTimer) {
+    clearTimeout(draftAutoSaveTimer)
+    draftAutoSaveTimer = null
+  }
 })
 
 // 监听关键配置变更自动保存草稿（v-model 绑定无法直接调用 triggerAutoSave）
