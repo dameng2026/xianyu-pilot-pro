@@ -84,6 +84,8 @@ public class AuthService {
             throw new BizException(401, "用户名或密码错误");
         }
         if (!verifyPassword(password, storedHash)) {
+            // 保持与其他失败分支一致的密码校验耗时，避免成为账号枚举预言机
+            consumePasswordVerification(password);
             throw new BizException(401, "用户名或密码错误");
         }
 

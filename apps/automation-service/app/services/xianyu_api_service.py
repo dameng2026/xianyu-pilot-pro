@@ -203,6 +203,13 @@ def _persist_account_auth_cookies(account_id: int, cookie_str: str) -> None:
 
 
 def _get_account_auth_sync(account_id: int) -> Optional[dict]:
+    # 警告：在事件循环中调用同步版本会阻塞事件循环
+    try:
+        import asyncio
+        asyncio.get_running_loop()
+        logger.warning("_get_account_auth_sync 在运行中的事件循环中被调用，会阻塞事件循环 account_id=%d", account_id)
+    except RuntimeError:
+        pass
     try:
         connection = _open_sync_db_connection()
         try:
@@ -227,6 +234,13 @@ def _get_account_auth_sync(account_id: int) -> Optional[dict]:
 
 
 def _persist_account_auth_cookies_sync(account_id: int, cookie_str: str) -> None:
+    # 警告：在事件循环中调用同步版本会阻塞事件循环
+    try:
+        import asyncio
+        asyncio.get_running_loop()
+        logger.warning("_persist_account_auth_cookies_sync 在运行中的事件循环中被调用，会阻塞事件循环 account_id=%d", account_id)
+    except RuntimeError:
+        pass
     if not account_id or not cookie_str:
         return
     try:
@@ -255,6 +269,9 @@ def _persist_account_auth_cookies_sync(account_id: int, cookie_str: str) -> None
         log_service_failure(logger, exc, operation="persist_account_auth_cookie_sync", account_id=account_id, level=logging.WARNING)
 
 
+# sync 入口走同步版本：所有调用点均为 sync 调用（无 await），且调用方均在 sync 函数内。
+# 保留覆盖赋值以使用纯 sync DB 连接，避免 line 65/161 的“伪 async”版本在事件循环内调用时死锁。
+# 注意：sync 版本在事件循环中被调用时会阻塞事件循环（见函数内 warning）。
 _get_account_auth = _get_account_auth_sync
 _persist_account_auth_cookies = _persist_account_auth_cookies_sync
 

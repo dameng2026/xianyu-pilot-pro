@@ -3,6 +3,7 @@ package com.xianyu.admin.controller;
 import com.xianyu.admin.common.BizException;
 import com.xianyu.admin.common.Result;
 import com.xianyu.admin.security.TenantContext;
+import com.xianyu.admin.service.DeliveryStatementSessionService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,11 +29,14 @@ class DeliveryStatementControllerTest {
     @Mock
     private JdbcTemplate jdbcTemplate;
 
+    @Mock
+    private DeliveryStatementSessionService sessionService;
+
     private DeliveryStatementController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new DeliveryStatementController(jdbcTemplate);
+        controller = new DeliveryStatementController(jdbcTemplate, sessionService);
         TenantContext.setCurrentTenantId(1L);
     }
 

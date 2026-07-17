@@ -757,8 +757,17 @@ import Icon from '../components/Icon.vue'
 import { confirmAction } from '../utils/confirmAction.js'
 import { globalConfirm } from '../composables/confirmState.js'
 import { createWorkflowDefinition, deleteWorkflowDefinition, executeWorkflowDefinition, getWorkflow, getWorkflowExecution, getRecentRuns, getExecutionLogs, listWorkflowExecutions, listWorkflows, publishWorkflow, updateWorkflowDefinition, workflowOverview, aiRewriteGoods, aiGenerateImages, aiExtractKeywords, continueWorkflowExecution, terminateWorkflowExecution } from '../api/workflow.js'
+import { ensureAiTokenBalance } from '../utils/aiTokenGuard.js'
 import { getLiteAccounts } from '../api/accounts.js'
 import { getOpportunityImageModels } from '../api/opportunity.js'
+
+// 统一 toast 派发：替代失效的 window.$message，通过全局 xya-toast 事件由 App.vue 渲染
+function showToast(message, type = 'info') {
+  if (typeof window === 'undefined' || !window.dispatchEvent) return
+  window.dispatchEvent(new CustomEvent('xya-toast', {
+    detail: { message, isError: type === 'error' || type === 'warning' }
+  }))
+}
 import { getPublishAddressHistory, savePublishAddress } from '../api/publishAddress.js'
 import WorkflowAddressPicker from '../components/WorkflowAddressPicker.vue'
 import PublishAddressCascader from '../components/PublishAddressCascader.vue'
@@ -1474,12 +1483,12 @@ async function doExtractKeywords() {
   lastExtractCount.value = 0
   if (!text) {
     extractError.value = '请先粘贴要提取关键词的文本'
-    window.$message?.warning?.(extractError.value)
+    showToast(extractError.value, 'warning')
     return
   }
   if (text.length < 3) {
     extractError.value = '文本内容太短，至少3个字符'
-    window.$message?.warning?.(extractError.value)
+    showToast(extractError.value, 'warning')
     return
   }
   const node = selectedNode.value
@@ -1505,7 +1514,7 @@ async function doExtractKeywords() {
 
     if (!kws.length) {
       extractError.value = 'AI未能从文本中提取出关键词，请尝试换一段文本'
-      window.$message?.warning?.(extractError.value)
+      showToast(extractError.value, 'warning')
       return
     }
 
@@ -1524,19 +1533,19 @@ async function doExtractKeywords() {
     const savedWorkflowId = await saveDraft()
     if (!savedWorkflowId) {
       extractError.value = `已在当前页面提取 ${kws.length} 个关键词，但草稿保存失败；请重试保存后再离开页面。`
-      window.$message?.warning?.(extractError.value)
+      showToast(extractError.value, 'warning')
       return
     }
 
     if (added > 0) {
-      window.$message?.success?.(`AI已提取${kws.length}个关键词，新增${added}个到关键词列表`)
+      showToast(`AI已提取${kws.length}个关键词，新增${added}个到关键词列表`, 'success')
     } else {
-      window.$message?.info?.(`AI提取到${kws.length}个关键词，均已在列表中，无新增`)
+      showToast(`AI提取到${kws.length}个关键词，均已在列表中，无新增`, 'info')
     }
   } catch (e) {
     console.error('[ExtractKeywords] 提取失败:', e)
     extractError.value = e?.message || e?.msg || '关键词提取失败，请检查网络后重试'
-    window.$message?.error?.(extractError.value)
+    showToast(extractError.value, 'error')
   } finally {
     extractingKeywords.value = false
   }
@@ -1547,6 +1556,7 @@ async function doExtractKeywords() {
 async function testPolish() {
   const node = selectedNode.value
   if (!node || node.type !== 'PRODUCT_POLISH') return
+  if (!(await ensureAiTokenBalance({ sceneName: '工作流润色测试' }))) return
   testingPolish.value = true
   try {
     const fetchNode = nodes.value.find(n => n.type === 'PRODUCT_FETCH')
@@ -1576,7 +1586,7 @@ async function testGenerateImage() {
   if (!node || node.type !== 'IMAGE_GENERATE') return
   const loaded = await loadImageModels()
   if (!loaded || !isImageModelAvailable(node.config.modelKey)) {
-    window.$message?.error?.(imageModelsError.value || imageModelSelectionNotice.value || '请选择可用的生图模型')
+    showToast(imageModelsError.value || imageModelSelectionNotice.value || '请选择可用的生图模型', 'error')
     return
   }
   testingImage.value = true
@@ -1587,9 +1597,9 @@ async function testGenerateImage() {
       ? (Array.isArray(data.images) ? data.images : Array.isArray(data.urls) ? data.urls : null)
       : null
     if (!Array.isArray(images) || !images.length) throw new Error('生图测试响应未返回任何图片')
-    window.$message?.success?.(`测试生图成功，已返回 ${images.length} 张图片`)
+    showToast(`测试生图成功，已返回 ${images.length} 张图片`, 'success')
   } catch (e) {
-    window.$message?.error?.(friendlyError(e, '生图调用失败，请稍后重试'))
+    showToast(friendlyError(e, '生图调用失败，请稍后重试'), 'error')
   } finally {
     testingImage.value = false
   }
@@ -2002,12 +2012,113 @@ function formatTime(t) {
   try { return new Date(t).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) } catch { return String(t) }
 }
 
+/**
+ * 估算当前工作流执行所需消耗的通用模型 Token 总数。
+ *
+ * 估算规则：
+ * - 商品数量：取 PRODUCT_FETCH 节点的 targetCount（默认 5）
+ * - 单商品调用通用模型的次数：
+ *   - PRODUCT_FILTER 启用 → 1 次/商品
+ *   - PRODUCT_POLISH 启用 → 1 次/商品（按最坏情况 ×2 缓冲，含重试）
+ *   - IMAGE_GENERATE → 生图模型，不计入通用模型预估
+ * - 总调用次数 = 单商品调用次数 × 商品数量
+ * - 总 Token = 总调用次数 × perCallTokens（默认 3）
+ *
+ * @returns {{ totalTokens: number, callCount: number, productCount: number, perCallTokens: number, perCallPrice: number, balance: number, details: string[] } | null}
+ */
+async function estimateWorkflowTokenUsage() {
+  const { fetchTokenBalance } = await import('../utils/aiTokenGuard.js')
+  const info = await fetchTokenBalance()
+  const perCallTokens = info.perCallTokens || 3
+
+  const fetchNode = nodes.value.find(n => n.type === 'PRODUCT_FETCH')
+  const productCount = Math.max(1, Number(fetchNode?.config?.targetCount) || 5)
+
+  const filterEnabled = nodes.value.some(n => n.type === 'PRODUCT_FILTER' && n.config?.enabled !== false)
+  const polishEnabled = nodes.value.some(n => n.type === 'PRODUCT_POLISH' && n.config?.enabled !== false)
+
+  const callsPerProduct =
+    (filterEnabled ? 1 : 0) +
+    (polishEnabled ? 2 : 0) // 含重试缓冲 ×2
+
+  const details = []
+  if (filterEnabled) details.push(`商品筛选：1 次/商品`)
+  if (polishEnabled) details.push(`商品润色：1 次/商品（含重试缓冲按 2 次预估）`)
+
+  if (callsPerProduct === 0) {
+    return {
+      totalTokens: 0,
+      callCount: 0,
+      productCount,
+      perCallTokens,
+      perCallPrice: info.perCallPrice,
+      balance: info.balance,
+      details,
+    }
+  }
+
+  const callCount = callsPerProduct * productCount
+  const totalTokens = callCount * perCallTokens
+  return {
+    totalTokens,
+    callCount,
+    productCount,
+    perCallTokens,
+    perCallPrice: info.perCallPrice,
+    balance: info.balance,
+    details,
+  }
+}
+
+/**
+ * 工作流运行前的 Token 余额预估与弹窗确认。
+ * 当余额不足以支撑本次批量调用时，弹窗提示用户充值。
+ * @returns {Promise<boolean>} true 表示可以继续运行；false 表示余额不足已拦截
+ */
+async function preflightWorkflowTokenBalance() {
+  const estimate = await estimateWorkflowTokenUsage()
+  if (!estimate) return true
+  if (estimate.totalTokens <= 0) return true // 无通用模型调用节点
+
+  const { balance, totalTokens, callCount, productCount, perCallTokens, details } = estimate
+  if (balance >= totalTokens) return true
+
+  const deficit = totalTokens - balance
+  const detailLines = details.length
+    ? `\n\n调用明细：\n${details.map(d => `• ${d}`).join('\n')}`
+    : ''
+  const message =
+    `本次工作流预计需要消耗 ${totalTokens} Token（${callCount} 次调用 × ${perCallTokens} Token/次，商品数 ${productCount}）。` +
+    `\n当前 Token 余额：${balance}` +
+    `\n不足：${deficit} Token` +
+    `${detailLines}` +
+    `\n\n请前往「个人中心 → Token 充值」补充余额后再次运行。`
+
+  await globalConfirm.alert('Token 余额不足', message)
+  // 自动弹出充值 modal
+  if (typeof window !== 'undefined' && window.dispatchEvent) {
+    window.dispatchEvent(new CustomEvent('xya-open-payment', {
+      detail: {
+        source: 'workflow_preflight',
+        reason: 'insufficient_balance',
+        requiredTokens: totalTokens,
+        balance,
+        perCallTokens,
+      }
+    }))
+  }
+  return false
+}
+
 // ===================== 画布操作 =====================
 async function runCurrent() {
   if (workflowDetailError.value) return
   if (running.value) return
   if (!await ensureWorkflowImageModelsReady('运行')) return
   if (!await confirmAction({ title: '确认运行一次测试？', description: '运行测试会调用当前工作流节点，可能消耗 AI 或采集额度。' })) return
+
+  // 工作流批量调用前的 Token 预估价：估算总调用次数 × 单次扣费数，余额不足弹窗提示
+  if (!await preflightWorkflowTokenBalance()) return
 
   // 工作流地址预检：优先使用节点地址，否则从历史地址中选择或通过省市区联动新增。
   const publishNode = nodes.value.find(n => n.type === 'PUBLISH')

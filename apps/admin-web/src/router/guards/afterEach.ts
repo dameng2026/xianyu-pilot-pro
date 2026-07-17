@@ -6,28 +6,60 @@ import { useCommon } from '@/hooks/core/useCommon'
 import { loadingService } from '@/utils/ui'
 import { getPendingLoading, resetPendingLoading } from './beforeEach'
 
-/** 路由全局后置守卫 */
+function forceCleanupStuckMasks() {
+  try {
+    document
+      .querySelectorAll<HTMLElement>('.el-loading-mask, .art-loading-fix')
+      .forEach((mask) => mask.remove())
+
+    const hasVisibleOverlay = document.querySelector(
+      '.el-overlay .el-dialog:not([style*="display: none"]), ' +
+      '.el-overlay .el-message-box, ' +
+      '.el-overlay .el-drawer'
+    )
+    if (!hasVisibleOverlay) {
+      document.querySelectorAll<HTMLElement>('.v-modal').forEach((m) => m.remove())
+      document
+        .querySelectorAll<HTMLElement>('.el-overlay')
+        .forEach((o) => {
+          if (
+            !o.querySelector('.el-dialog, .el-message-box, .el-drawer, .el-message, .el-notification')
+          ) {
+            o.remove()
+          }
+        })
+    }
+
+    document.body.classList.remove('el-loading-parent--hidden', 'el-popup-parent--hidden')
+    document.body.style.overflow = ''
+  } catch {
+    // ignore cleanup errors
+  }
+}
+
 export function setupAfterEachGuard(router: Router) {
   const { scrollToTop } = useCommon()
 
   router.afterEach(() => {
     scrollToTop()
 
-    // 关闭进度条
     const settingStore = useSettingStore()
     if (settingStore.showNprogress) {
       NProgress.done()
-      // 确保进度条完全移除，避免残影（从 600ms 优化到 100ms）
       setTimeout(() => {
         NProgress.remove()
       }, 100)
     }
 
-    // 关闭 loading 效果
     if (getPendingLoading()) {
       nextTick(() => {
         loadingService.hideLoading()
         resetPendingLoading()
+        setTimeout(forceCleanupStuckMasks, 100)
+      })
+    } else {
+      nextTick(() => {
+        setTimeout(forceCleanupStuckMasks, 100)
       })
     }
   })

@@ -788,7 +788,13 @@ async def publish_item(
             return ResultObject.failed(result.get("message", "发布失败"), code=422)
 
     except RuntimeError as e:
-        return safe_route_failure(logger, e, operation="publish goods runtime", user_message="商品发布失败，请稍后重试")
+        # XianyuItemPublisher 抛出的 RuntimeError 均为预先编写的、面向用户的中文消息
+        # （cookie 失效、风控拦截、图片上传失败/超时等），不包含敏感信息。
+        # 直接透传消息让用户看到真实失败原因，避免笼统的"商品发布失败"误导。
+        # code=422 业务拒绝：Java 网关 assertBusinessSuccess() 会走"业务拒绝直接透传"分支，
+        # 不再前缀"依赖服务暂时不可用"，前端也不再附加请求编号噪音。
+        message = str(e).strip() or "商品发布失败，请稍后重试"
+        return safe_route_failure(logger, e, operation="publish goods runtime", user_message=message, code=422)
     except Exception as e:
         return safe_route_failure(logger, e, operation="publish goods", user_message="商品发布失败，请稍后重试")
 

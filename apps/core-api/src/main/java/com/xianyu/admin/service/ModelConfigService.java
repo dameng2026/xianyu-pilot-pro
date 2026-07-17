@@ -31,9 +31,11 @@ public class ModelConfigService {
 
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final SensitiveWordService sensitiveWordService;
 
-    public ModelConfigService(JdbcTemplate jdbcTemplate) {
+    public ModelConfigService(JdbcTemplate jdbcTemplate, SensitiveWordService sensitiveWordService) {
         this.jdbcTemplate = jdbcTemplate;
+        this.sensitiveWordService = sensitiveWordService;
     }
 
     public Map<String, Object> getConfig(String moduleKey) {
@@ -98,11 +100,13 @@ public class ModelConfigService {
     /**
      * 构建润色强限制提示词片段。
      *
-     * 读取通用模型配置中的「润色关键词」与「润色禁止关键词」。
-     * 禁止关键词默认包含「盗版、破解版、毕设」，即使后台未配置也始终生效；
-     * 管理员可在后台追加更多禁止词或必含词。前台用户不可见、不可改。
+     * 三个来源按顺序合并到禁止词列表（去重保序）：
+     *   1) 默认禁止词「盗版、破解版、毕设」（始终生效）
+     *   2) 通用模型配置中的「polishForbiddenKeywords」（管理员在模型配置中维护）
+     *   3) 后台「敏感词策略」模块中 scene=polish 或 scene=all 的敏感词
      *
-     * 返回可直接拼接到 system prompt 的字符串；无任何限制时返回空字符串。
+     * 必含词仅来自通用模型配置的「polishKeywords」。
+     * 前台用户不可见、不可改。返回可直接拼接到 system prompt 的字符串；无任何限制时返回空字符串。
      */
     public String buildPolishRestriction() {
         Map<String, Object> cfg = getGeneralConfig();
@@ -119,6 +123,16 @@ public class ModelConfigService {
                     if (!k.isEmpty() && !forbidden.contains(k)) forbidden.add(k);
                 }
             }
+        }
+
+        // 追加后台「敏感词策略」中 scene=polish 或 scene=all 的敏感词
+        try {
+            for (String w : sensitiveWordService.listWordsByScene(SensitiveWordService.SCENE_POLISH)) {
+                if (!forbidden.contains(w)) forbidden.add(w);
+            }
+        } catch (Exception e) {
+            log.warn("append sensitive words to polish restriction failed errorType={}",
+                    e.getClass().getSimpleName());
         }
 
         Object rawRequired = cfg.get("polishKeywords");

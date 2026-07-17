@@ -78,13 +78,99 @@
   onBeforeMount(() => {
     toggleTransition(true)
     initializeTheme()
+    forceCleanupOrphanMasks()
   })
 
   onMounted(() => {
     checkStorageCompatibility()
     toggleTransition(false)
     systemUpgrade()
+    startMaskGuard()
   })
 
-  onBeforeUnmount(clearMediaSessionTimer)
+  onBeforeUnmount(() => {
+    clearMediaSessionTimer()
+    stopMaskGuard()
+  })
+
+  function forceCleanupOrphanMasks() {
+    try {
+      document.querySelectorAll<HTMLElement>('.el-loading-mask, .art-loading-fix').forEach((el) => el.remove())
+      document.body.classList.remove(
+        'el-loading-parent--hidden',
+        'el-popup-parent--hidden'
+      )
+      document.body.style.overflow = ''
+    } catch {}
+  }
+
+  let maskObserver: MutationObserver | null = null
+  let maskCleanupTimer: ReturnType<typeof setTimeout> | null = null
+  let startupSafetyInterval: ReturnType<typeof setInterval> | null = null
+
+  function startMaskGuard() {
+    forceCleanupOrphanMasks()
+
+    if (maskObserver) return
+    maskObserver = new MutationObserver(() => {
+      if (maskCleanupTimer) return
+      maskCleanupTimer = setTimeout(() => {
+        maskCleanupTimer = null
+        cleanupOrphanMasksDeferred()
+      }, 500)
+    })
+    maskObserver.observe(document.body, { childList: true, subtree: false })
+
+    startupSafetyInterval = setInterval(() => {
+      cleanupOrphanMasksDeferred()
+    }, 1000)
+    setTimeout(() => {
+      if (startupSafetyInterval) {
+        clearInterval(startupSafetyInterval)
+        startupSafetyInterval = null
+      }
+      cleanupOrphanMasksDeferred()
+    }, 10000)
+  }
+
+  function stopMaskGuard() {
+    if (maskObserver) {
+      maskObserver.disconnect()
+      maskObserver = null
+    }
+    if (maskCleanupTimer) {
+      clearTimeout(maskCleanupTimer)
+      maskCleanupTimer = null
+    }
+    if (startupSafetyInterval) {
+      clearInterval(startupSafetyInterval)
+      startupSafetyInterval = null
+    }
+  }
+
+  function cleanupOrphanMasksDeferred() {
+    try {
+      const loadingMasks = document.querySelectorAll<HTMLElement>('.el-loading-mask, .art-loading-fix')
+      if (loadingMasks.length > 0) {
+        loadingMasks.forEach((m) => m.remove())
+        document.body.classList.remove('el-loading-parent--hidden', 'el-popup-parent--hidden')
+      }
+
+      const overlays = document.querySelectorAll<HTMLElement>('.el-overlay')
+      overlays.forEach((el) => {
+        const hasVisibleContent = el.querySelector(
+          '.el-dialog, .el-message-box, .el-drawer, .el-message, .el-notification'
+        )
+        if (!hasVisibleContent) {
+          el.remove()
+        }
+      })
+
+      const modals = document.querySelectorAll<HTMLElement>('.v-modal')
+      const hasLegitModal = document.querySelector('.el-overlay .el-dialog, .el-overlay .el-message-box, .el-overlay .el-drawer')
+      if (!hasLegitModal && modals.length > 0) {
+        modals.forEach((m) => m.remove())
+      }
+    } catch {}
+  }
 </script>

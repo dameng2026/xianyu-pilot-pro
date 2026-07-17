@@ -66,6 +66,11 @@ public class BusinessSettingsService {
                 if (AI_CS_SETTING_KEY.equals(settingKey)) {
                     normalizeAiCustomerServiceConfigInPlace(merged, defaults);
                 }
+                // data-sync-config 的连接信息必须在 putAll(saved) 之后再回填一次默认值，
+                // 否则 saved 中的空字符串会覆盖 mergeWithDefaults 已回填的默认值
+                if (DATA_SYNC_SETTING_KEY.equals(settingKey)) {
+                    backfillDataSyncDefaults(merged, defaults);
+                }
                 return merged;
             }
         } catch (EmptyResultDataAccessException e) {
@@ -104,10 +109,15 @@ public class BusinessSettingsService {
         }
         try {
             // 合并默认值，避免缺字段
-            Map<String, Object> merged = mergeWithDefaults(settingKey, config, defaultConfig(settingKey));
+            Map<String, Object> defaults = defaultConfig(settingKey);
+            Map<String, Object> merged = mergeWithDefaults(settingKey, config, defaults);
             merged.putAll(config);
             if (AI_CS_SETTING_KEY.equals(settingKey)) {
-                normalizeAiCustomerServiceConfigInPlace(merged, defaultConfig(settingKey));
+                normalizeAiCustomerServiceConfigInPlace(merged, defaults);
+            }
+            // data-sync-config 的连接信息由后端统一管理，saveConfig 时也需回填默认值
+            if (DATA_SYNC_SETTING_KEY.equals(settingKey)) {
+                backfillDataSyncDefaults(merged, defaults);
             }
             String json = objectMapper.writeValueAsString(merged);
             if (json.length() > MAX_CONFIG_JSON_LENGTH) {
@@ -217,7 +227,11 @@ public class BusinessSettingsService {
             case "data-sync-config" -> {
                 // 数据同步配置（本地 → 线上）
                 // 预配置连接信息：用户无需手动填写即可直接执行同步
-                config.put("targetBaseUrl", "http://1.12.66.249:18080");
+                // targetBaseUrl 必须是能从公网访问到线上 core-api 的地址
+                //   - 1.12.66.249:18080 端口对外不开放，不能用
+                //   - www.xianyupilot.com 已配置 Nginx 反代 /api/ 到后端
+                //   - /open-api/internal/sync/* 需要线上 Nginx 同步配置反代规则
+                config.put("targetBaseUrl", "http://www.xianyupilot.com");
                 config.put("targetUsername", "slfasd");
                 config.put("targetToken", "HIDpsuvrKSlWfczLiFTJa0Ydhqm8gx7Q");
                 config.put("sourceAccountId", null);
@@ -241,11 +255,29 @@ public class BusinessSettingsService {
             return merged;
         }
         merged.putAll(source);
+        // data-sync-config 的连接信息（targetBaseUrl/targetUsername/targetToken）由后端统一管理，
+        // 即使用户之前保存过空值，也必须保留默认值，避免前端拿到空配置无法执行同步
+        if (DATA_SYNC_SETTING_KEY.equals(settingKey)) {
+            backfillDataSyncDefaults(merged, defaults);
+        }
         if (AI_CS_SETTING_KEY.equals(settingKey)) {
             normalizeAiCustomerServiceConfigInPlace(merged, defaults);
             upgradeLegacyAiCustomerServiceCopyInPlace(merged, defaults);
         }
         return merged;
+    }
+
+    /**
+     * 数据同步配置的连接信息字段为空时，用默认值回填。
+     * 确保前端始终能拿到有效的 targetBaseUrl/targetUsername/targetToken。
+     */
+    private void backfillDataSyncDefaults(Map<String, Object> config, Map<String, Object> defaults) {
+        for (String key : new String[]{"targetBaseUrl", "targetUsername", "targetToken"}) {
+            Object v = config.get(key);
+            if (v == null || (v instanceof String s && s.isBlank())) {
+                config.put(key, defaults.get(key));
+            }
+        }
     }
 
     private void normalizeAiCustomerServiceConfigInPlace(Map<String, Object> config, Map<String, Object> defaults) {

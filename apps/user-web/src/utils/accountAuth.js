@@ -57,6 +57,14 @@ export function accountAuthUsable(account, wsState = null) {
   return resolveAccountAuthDisplayState(account, wsState).usable
 }
 
+// 明确判断账号 Cookie 是否已失效（cookieStatus=0 失效/需验证 或 cookieStatus=2 已过期）。
+// 用于页面 UI gating（发布商品/搜索商品前阻断 + 提示），与 accountAuthUsable 互补：
+// accountAuthUsable 还会考虑 WS 在线缓存，而本函数只看真实 Cookie 预检结果。
+export function isAccountCookieExpired(account, wsState = null) {
+  const { cookieStatus } = resolveAccountAuthDisplayState(account, wsState)
+  return cookieStatus === 0 || cookieStatus === 2
+}
+
 export function pickPreferredAccount(accounts, preferredId = null) {
   const list = Array.isArray(accounts) ? accounts : []
   if (!list.length) return null

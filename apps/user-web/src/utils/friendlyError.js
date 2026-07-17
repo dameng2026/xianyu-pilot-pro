@@ -30,6 +30,8 @@ const XIANYU_ERROR_MAP = {
 // 关键词 → 友好提示（用于模糊匹配）
 const KEYWORD_PATTERNS = [
   { pattern: /cookie.*过期|cookie.*invalid|登录已失效/i, message: '登录已失效，请重新扫码或更新 Cookie' },
+  // 图片上传类技术性错误：统一转为用户可理解的提示
+  { pattern: /图片上传.*无法解析|无法解析的响应|图片上传.*未返回|图片上传.*未能获取|图片上传.*无法识别/i, message: '图片上传失败，请稍后重试或更换图片' },
   { pattern: /network|econnrefused|etimedout|econnreset/i, message: '网络连接失败，请检查网络或服务状态' },
   { pattern: /timeout|超时/i, message: '请求超时，请稍后重试' },
   { pattern: /not found|404|资源不存在/i, message: '请求的资源不存在' },
@@ -73,7 +75,9 @@ export function friendlyError(err, fallback = '操作失败，请稍后重试') 
     ? err.requestId
     : raw.match(/错误编号：([^）\s]+)/)?.[1]
   const withRequestId = message => {
-    if (!requestId || message.includes('错误编号：')) return message
+    if (!requestId) return message
+    // 后端已附加"请求编号："或"错误编号："时不再重复附加，避免同一编号出现两次
+    if (message.includes('错误编号：') || message.includes('请求编号：')) return message
     return `${message}（错误编号：${requestId}）`
   }
   if (!raw) return withRequestId(fallback)

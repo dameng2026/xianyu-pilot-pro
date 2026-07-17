@@ -1542,6 +1542,8 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
   let browser: Browser | null = null;
   let context: any = null;
   let screenshotPath: string | undefined;
+  // 持久化上下文的 userDataDir，需在 finally 中清理以防 Cookie/缓存残留磁盘
+  let userDataDirForCleanup: string | null = null;
 
   try {
     const contextOptions: BrowserContextOptions = {
@@ -1571,6 +1573,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
     if (chromePath && !headless) {
       try {
         const userDataDir = path.join(process.env.TEMP || '/tmp', `chrome-slider-warm-${Date.now()}`);
+        userDataDirForCleanup = userDataDir;
         await fs.mkdir(userDataDir, { recursive: true });
         console.log(`[SliderSolver] launchPersistentContext 真实 Chrome: ${chromePath} hasProxy=${!!options.proxy?.server}`);
         context = await chromium.launchPersistentContext(userDataDir, {
@@ -2146,6 +2149,14 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       }
     } catch {
       // ignore
+    }
+    // 清理持久化上下文的 userDataDir，防止用户 Cookie/localStorage 残留磁盘
+    if (userDataDirForCleanup) {
+      try {
+        await fs.rm(userDataDirForCleanup, { recursive: true, force: true });
+      } catch {
+        // 清理失败不影响主流程，下次启动会创建新目录
+      }
     }
   }
 }

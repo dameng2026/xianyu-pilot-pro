@@ -54,10 +54,10 @@ public class CardController {
      * 创建卡片组
      */
     @PostMapping
-    public Result<Void> createGroup(@Valid @RequestBody CardGroupDTO dto) {
+    public Result<Long> createGroup(@Valid @RequestBody CardGroupDTO dto) {
         Long tenantId = TenantContext.getCurrentTenantId();
-        cardService.createGroup(tenantId, dto);
-        return Result.ok(null);
+        Long groupId = cardService.createGroup(tenantId, dto);
+        return Result.ok(groupId);
     }
 
     /**

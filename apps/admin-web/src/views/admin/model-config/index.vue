@@ -101,54 +101,13 @@
           passText: '校验通过'
         },
         {
-          prop: 'billingMode',
-          label: '计费方式',
-          type: 'select',
-          options: ['按Token计费（按输入/输出Token数量计费）', '按次计费（每次调用固定费用）', '按规格计费（按图片尺寸规格计费）'],
-          required: true,
-          passText: '校验通过'
-        },
-        {
-          prop: 'billingUnit',
-          label: '计费单位',
-          type: 'select',
-          options: ['1K Tokens', '百万Tokens', '一兆Tokens'],
-          required: true,
-          passText: '校验通过'
-        },
-        {
-          prop: 'inputPricePer1k',
-          label: '输入单价（元）',
-          placeholder: '按计费单位填写，例如 0.001 元/1K 或 3 元/百万Tokens',
-          type: 'number',
-          min: 0,
-          step: 0.0001,
-          passText: '校验通过'
-        },
-        {
-          prop: 'cachedInputPricePer1k',
-          label: '缓存命中输入单价（元）',
-          placeholder: 'DeepSeek 等支持上下文缓存时填写，0 表示与输入单价相同',
-          type: 'number',
-          min: 0,
-          step: 0.0001,
-          passText: '校验通过'
-        },
-        {
-          prop: 'outputPricePer1k',
-          label: '输出单价（元）',
-          placeholder: '按计费单位填写，例如 0.002 元/1K 或 6 元/百万Tokens',
-          type: 'number',
-          min: 0,
-          step: 0.0001,
-          passText: '校验通过'
-        },
-        {
           prop: 'perCallPrice',
-          label: '按次价格（元）',
+          label: '按次计费价格（元）',
+          placeholder: '通用模型统一按次计费，默认 0.03 元/次（兑换比例 100 时扣 3 Token）',
           type: 'number',
           min: 0,
           step: 0.0001,
+          required: true,
           passText: '校验通过'
         },
         {

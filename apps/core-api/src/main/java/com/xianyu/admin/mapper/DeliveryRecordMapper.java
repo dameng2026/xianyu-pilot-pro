@@ -19,6 +19,13 @@ public interface DeliveryRecordMapper {
     @Select("SELECT COUNT(*) FROM delivery_record WHERE tenant_id = #{tenantId} AND status = #{status} AND deleted = 0")
     int countByStatus(@Param("tenantId") Long tenantId, @Param("status") Integer status);
 
+    @Select("<script>" +
+            "SELECT COUNT(*) FROM delivery_record " +
+            "WHERE tenant_id = #{tenantId} AND status = #{status} AND deleted = 0 " +
+            "<if test='accountId != null'>AND account_id = #{accountId}</if>" +
+            "</script>")
+    int countByStatusAndAccount(@Param("tenantId") Long tenantId, @Param("accountId") Long accountId, @Param("status") Integer status);
+
     @Insert("INSERT INTO delivery_record(tenant_id, account_id, order_id, rule_id, delivery_type, content, status, retry_count, fail_reason, deleted, created_time, updated_time) " +
             "VALUES(#{tenantId}, #{accountId}, #{orderId}, #{ruleId}, #{deliveryType}, #{content}, #{status}, #{retryCount}, #{failReason}, 0, NOW(), NOW())")
     @Options(useGeneratedKeys = true, keyProperty = "id")
@@ -30,9 +37,34 @@ public interface DeliveryRecordMapper {
     @Select("SELECT COUNT(*) FROM delivery_record WHERE tenant_id = #{tenantId} AND deleted = 0 AND status = 0")
     int countPending(@Param("tenantId") Long tenantId);
 
+    @Select("<script>" +
+            "SELECT COUNT(*) FROM delivery_record " +
+            "WHERE tenant_id = #{tenantId} AND deleted = 0 AND status = 0 " +
+            "<if test='accountId != null'>AND account_id = #{accountId}</if>" +
+            "</script>")
+    int countPendingByAccount(@Param("tenantId") Long tenantId, @Param("accountId") Long accountId);
+
     @Select("SELECT DATE(created_time) AS stat_date, COUNT(*) AS count FROM delivery_record WHERE tenant_id = #{tenantId} AND deleted = 0 AND created_time >= #{startDate} GROUP BY DATE(created_time) ORDER BY stat_date ASC")
     List<Map<String, Object>> countDaily(@Param("tenantId") Long tenantId, @Param("startDate") LocalDate startDate);
 
+    @Select("<script>" +
+            "SELECT DATE(created_time) AS stat_date, COUNT(*) AS count " +
+            "FROM delivery_record " +
+            "WHERE tenant_id = #{tenantId} AND deleted = 0 AND created_time >= #{startDate} " +
+            "<if test='accountId != null'>AND account_id = #{accountId}</if>" +
+            "GROUP BY DATE(created_time) ORDER BY stat_date ASC" +
+            "</script>")
+    List<Map<String, Object>> countDailyByAccount(@Param("tenantId") Long tenantId, @Param("accountId") Long accountId, @Param("startDate") LocalDate startDate);
+
     @Select("SELECT DATE(created_time) AS stat_date, COUNT(*) AS count FROM delivery_record WHERE tenant_id = #{tenantId} AND deleted = 0 AND status = #{status} AND created_time >= #{startDate} GROUP BY DATE(created_time) ORDER BY stat_date ASC")
     List<Map<String, Object>> countDailyByStatus(@Param("tenantId") Long tenantId, @Param("status") Integer status, @Param("startDate") LocalDate startDate);
+
+    @Select("<script>" +
+            "SELECT DATE(created_time) AS stat_date, COUNT(*) AS count " +
+            "FROM delivery_record " +
+            "WHERE tenant_id = #{tenantId} AND deleted = 0 AND status = #{status} AND created_time >= #{startDate} " +
+            "<if test='accountId != null'>AND account_id = #{accountId}</if>" +
+            "GROUP BY DATE(created_time) ORDER BY stat_date ASC" +
+            "</script>")
+    List<Map<String, Object>> countDailyByStatusAndAccount(@Param("tenantId") Long tenantId, @Param("accountId") Long accountId, @Param("status") Integer status, @Param("startDate") LocalDate startDate);
 }

@@ -642,7 +642,7 @@
           <ElTableColumn v-if="canEdit || canDelete" type="selection" width="48" fixed />
           <ElTableColumn v-for="col in columns" :key="col.prop" :prop="col.prop" :label="col.label" :min-width="col.width || 120" show-overflow-tooltip>
             <template #default="scope">
-              <ElTag v-if="col.type === 'tag'" :type="tagType(scope.row[col.prop])">{{ scope.row[col.prop] }}</ElTag>
+              <ElTag v-if="col.type === 'tag'" :type="tagType(scope.row[col.prop])">{{ formatFieldValue(col, scope.row[col.prop]) }}</ElTag>
               <ElTag v-else-if="col.type === 'bool'" :type="normalizeBooleanValue(scope.row[col.prop]) ? 'success' : 'danger'">
                 {{ normalizeBooleanValue(scope.row[col.prop]) ? '启用' : '停用' }}
               </ElTag>
@@ -680,6 +680,15 @@
           <ElSelect v-if="isStatusField(col.prop)" v-model="drawer.form[col.prop]" style="width: 100%">
             <ElOption label="正常" value="正常" />
             <ElOption label="禁用" value="禁用" />
+          </ElSelect>
+          <ElSelect v-else-if="isSceneField(col.prop)" v-model="drawer.form[col.prop]" style="width: 100%" placeholder="请选择应用场景">
+            <ElOption label="AI润色" value="polish" />
+            <ElOption label="商品提取" value="product" />
+            <ElOption label="全部" value="all" />
+          </ElSelect>
+          <ElSelect v-else-if="isActionField(col.prop)" v-model="drawer.form[col.prop]" style="width: 100%" placeholder="请选择动作">
+            <ElOption label="拦截" value="拦截" />
+            <ElOption label="审核" value="审核" />
           </ElSelect>
           <ElSwitch v-else-if="isBooleanField(col)" v-model="drawer.form[col.prop]" inline-prompt active-text="启用" inactive-text="停用" />
           <ElInput
@@ -869,6 +878,16 @@ function isStatusField(prop: string) {
   return prop === 'status'
 }
 
+// 敏感词策略模块：scene 字段标识应用场景（polish=AI润色 / product=商品提取 / all=全部）
+function isSceneField(prop: string) {
+  return prop === 'scene'
+}
+
+// 敏感词策略模块：action 字段标识命中后动作（拦截 / 审核）
+function isActionField(prop: string) {
+  return prop === 'action'
+}
+
 function drawerDefaults() {
   return isImagePromptModule.value ? { status: '正常', enabled: true, sortOrder: 100 } : { status: '正常' }
 }
@@ -892,6 +911,11 @@ function normalizeDrawerForm(form: Record<string, any>) {
 function formatFieldValue(col: any, value: any) {
   if (col?.type === 'bool') {
     return normalizeBooleanValue(value) ? '启用' : '停用'
+  }
+  // 敏感词策略模块：scene 字段翻译为中文标签
+  if (col?.prop === 'scene') {
+    const sceneMap: Record<string, string> = { polish: 'AI润色', product: '商品提取', all: '全部' }
+    return sceneMap[String(value)] || (value == null || value === '' ? '-' : String(value))
   }
   if (value == null || value === '') return '-'
   // 识别 ISO 日期格式并格式化为 YYYY-MM-DD HH:mm:ss

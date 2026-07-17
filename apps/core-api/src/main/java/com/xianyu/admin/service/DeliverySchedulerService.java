@@ -20,8 +20,15 @@ import java.util.Map;
  * 2. 定时拉取 60s → autoScanPendingOrders 扫描本地库创建发货记录
  * 3. 定时拉取 600s → autoSyncOrdersFromXianyu 从闲鱼 MTOP 拉取最新订单入库
  * 4. 超时检测 60s → 由 autoScanPendingOrders 顺带覆盖（订单状态已落库）
+ * 5. 兜底补发货 300s → autoReplenishStuckDeliveries 复活卡死/死信记录（见下）
  *
  * 付款后发货：三条路径殊途同归到 /internal/orders/deliver，经过四重锁检查后取卡发货
+ *
+ * 兜底补发货（autoReplenishStuckDeliveries）覆盖的两类异常：
+ *   a) 处理中卡死：status=1 超 5 分钟未更新（服务崩溃/JVM 异常），无人重置
+ *   b) 死信复活：status=3 AND retry_count>=5，但订单仍待发货、未取消，距上次失败 >1 小时
+ * 两种场景都需通过"订单未取消 + 配置仍启用 + 货源仍可用 + 声明已确认"四重校验才会补发，
+ * 由 processPendingDeliveries 接力执行实际发货。
  */
 @Service
 public class DeliverySchedulerService {
@@ -30,12 +37,15 @@ public class DeliverySchedulerService {
     private final DeliveryExecutionService executionService;
     private final JdbcTemplate jdbcTemplate;
     private final AutomationClient automationClient;
+    private final DeliveryStatementCheckService statementCheckService;
 
     public DeliverySchedulerService(DeliveryExecutionService executionService, JdbcTemplate jdbcTemplate,
-                                    AutomationClient automationClient) {
+                                    AutomationClient automationClient,
+                                    DeliveryStatementCheckService statementCheckService) {
         this.executionService = executionService;
         this.jdbcTemplate = jdbcTemplate;
         this.automationClient = automationClient;
+        this.statementCheckService = statementCheckService;
     }
 
     /**
@@ -67,13 +77,342 @@ public class DeliverySchedulerService {
                             "WHERE deleted=0 AND status=3 AND retry_count < 5 " +
                             "AND updated_time < DATE_SUB(NOW(), INTERVAL 60 SECOND) " +
                             "AND fail_reason NOT LIKE '%未配置自动发货规则%' " +
-                            "AND fail_reason NOT LIKE '%未配置发货规则%'");
+                            "AND fail_reason NOT LIKE '%未配置发货规则%' " +
+                            "AND fail_reason NOT LIKE '%等待买家确认发货声明%'");
             if (reset > 0) {
                 log.info("自动重发: 重置 {} 个失败发货记录为待处理（将在下个周期重试）", reset);
             }
         } catch (Exception e) {
             log.error("自动重发扫描异常, errorType={}", e.getClass().getSimpleName());
         }
+    }
+
+    /**
+     * 兜底补发货：每 5 分钟扫描一次卡死/死信的发货记录，复活后由 processPendingDeliveries 接力执行。
+     *
+     * 覆盖两类现有机制无法处理的异常：
+     * 1) 处理中卡死（status=1 超 5 分钟未更新）：retryFailedDeliveries 只扫 status=3，
+     *    若 JVM 崩溃/网络中断导致记录卡在 status=1，会永久滞留。此处兜底重置。
+     * 2) 死信复活（status=3 AND retry_count>=5）：retryFailedDeliveries 因 retry_count<5 限制会跳过，
+     *    若订单仍待发货且未取消，每小时给一次"重新出发"的机会。
+     *
+     * 四重前置校验（任一不通过则跳过，不补发）：
+     *   - 订单未取消：order_status IN (1,2)（≠5 已关闭/退款）
+     *   - 配置仍启用：商品 delivery_goods_config 仍存在且 payDelivery.enabled=1
+     *   - 货源仍可用：text 模式 source 存在；card 模式 group 有 status=0 库存
+     *   - 声明已确认：声明开启时必须有 confirmed 会话
+     *
+     * 退避：
+     *   - 处理中卡死：保留 retry_count（避免无限重试），仅重置 status=0
+     *   - 死信复活：重置 retry_count=0（给一次新机会），要求 updated_time < NOW() - 1 小时
+     *   - 卡死记录若持锁卡密（card_item_id 非空且卡密状态=1），先释放卡密再重置
+     */
+    @Scheduled(fixedRate = 300000, initialDelay = 120000)
+    public void autoReplenishStuckDeliveries() {
+        // 一次查询捞取两类候选记录，避免多次扫表
+        String sql =
+                "SELECT dr.id AS record_id, dr.tenant_id, dr.account_id, dr.order_id, dr.status, " +
+                "dr.retry_count, dr.fail_reason, dr.delivery_mode, dr.card_item_id, dr.delivery_timing, " +
+                "dr.updated_time AS record_updated, " +
+                "o.order_status, o.external_order_id, o.account_id AS order_account_id, " +
+                "oi.goods_id AS item_goods_id, oi.external_goods_id AS item_external_goods_id " +
+                "FROM delivery_record dr " +
+                "JOIN xianyu_trade_order o ON o.id = dr.order_id AND o.deleted = 0 " +
+                "LEFT JOIN xianyu_trade_order_item oi ON oi.order_id = dr.order_id AND oi.deleted = 0 " +
+                "WHERE dr.deleted = 0 AND dr.tenant_id IS NOT NULL " +
+                "AND ( " +
+                // 1) 处理中卡死：status=1 超 5 分钟未更新
+                "  (dr.status = 1 AND dr.updated_time < DATE_SUB(NOW(), INTERVAL 5 MINUTE)) " +
+                "  OR " +
+                // 2) 死信复活：status=3 AND retry_count>=5，距上次失败 >1 小时
+                "  (dr.status = 3 AND dr.retry_count >= 5 " +
+                "   AND dr.updated_time < DATE_SUB(NOW(), INTERVAL 1 HOUR) " +
+                "   AND dr.fail_reason NOT LIKE '%未配置自动发货规则%' " +
+                "   AND dr.fail_reason NOT LIKE '%未配置发货规则%' " +
+                "   AND dr.fail_reason NOT LIKE '%等待买家确认发货声明%' " +
+                "   AND dr.fail_reason NOT LIKE '%商品未配置%' " +
+                "   AND dr.fail_reason NOT LIKE '%卡密库存不足%') " +
+                ") " +
+                "ORDER BY dr.updated_time ASC LIMIT 50";
+
+        List<Map<String, Object>> candidates;
+        try {
+            candidates = jdbcTemplate.queryForList(sql);
+        } catch (Exception e) {
+            log.warn("兜底补发货扫描查询失败, errorType={}", e.getClass().getSimpleName());
+            return;
+        }
+        if (candidates == null || candidates.isEmpty()) {
+            return;
+        }
+
+        int stuckReset = 0;
+        int deadRevived = 0;
+        int skipped = 0;
+        for (Map<String, Object> row : candidates) {
+            try {
+                int status = ((Number) row.get("status")).intValue();
+                Long recordId = ((Number) row.get("record_id")).longValue();
+                Long tenantId = ((Number) row.get("tenant_id")).longValue();
+                Long orderId = row.get("order_id") == null ? null : ((Number) row.get("order_id")).longValue();
+                Long accountId = row.get("order_account_id") == null
+                        ? (row.get("account_id") == null ? null : ((Number) row.get("account_id")).longValue())
+                        : ((Number) row.get("order_account_id")).longValue();
+
+                // 1) 订单未取消校验：order_status 必须仍是待发货（1=已付款 / 2=待发货）
+                //    order_status=5（已关闭/退款）即"用户取消"信号，跳过补发
+                Object orderStatusObj = row.get("order_status");
+                if (orderStatusObj == null) {
+                    skipped++;
+                    continue;
+                }
+                int orderStatus = ((Number) orderStatusObj).intValue();
+                if (orderStatus != 1 && orderStatus != 2) {
+                    skipped++;
+                    continue;
+                }
+
+                // 2) 商品配置仍启用 + 货源仍可用校验
+                Long itemGoodsId = row.get("item_goods_id") == null ? null
+                        : ((Number) row.get("item_goods_id")).longValue();
+                String itemExternalGoodsId = row.get("item_external_goods_id") == null ? null
+                        : String.valueOf(row.get("item_external_goods_id"));
+                ReplenishReadiness readiness = checkReplenishReadiness(
+                        tenantId, itemGoodsId, itemExternalGoodsId);
+                if (!readiness.ready) {
+                    skipped++;
+                    continue;
+                }
+
+                // 3) 发货声明校验（声明开启时必须有 confirmed 会话）
+                String externalOrderId = row.get("external_order_id") == null ? null
+                        : String.valueOf(row.get("external_order_id"));
+                if (!"after_statement_confirm".equals(String.valueOf(row.get("delivery_timing")))
+                        && externalOrderId != null && !externalOrderId.isBlank()
+                        && !statementCheckService.canDeliverAfterStatementCheck(
+                                tenantId, accountId, externalOrderId)) {
+                    log.info("兜底补发货跳过：声明未确认 tenantId={} orderId={} extOrderId={}",
+                            tenantId, orderId, externalOrderId);
+                    skipped++;
+                    continue;
+                }
+
+                // 4) 处理中卡死场景：若持锁卡密，先释放避免卡密永久占用
+                Long cardItemId = row.get("card_item_id") == null ? null
+                        : ((Number) row.get("card_item_id")).longValue();
+                if (cardItemId != null) {
+                    releaseStuckClaimedCard(tenantId, cardItemId);
+                }
+
+                // 5) 重置状态，由 processPendingDeliveries 接力执行
+                if (status == 1) {
+                    // 处理中卡死：保留 retry_count，仅重置 status
+                    jdbcTemplate.update(
+                            "UPDATE delivery_record SET status=0, delivery_status='pending', " +
+                                    "error_message=NULL, fail_reason=NULL, updated_time=NOW() " +
+                                    "WHERE id=? AND tenant_id=? AND deleted=0",
+                            recordId, tenantId);
+                    stuckReset++;
+                    log.info("兜底补发货：重置卡死记录 recordId={} tenantId={} orderId={}",
+                            recordId, tenantId, orderId);
+                } else {
+                    // 死信复活：重置 retry_count 给一次新机会
+                    jdbcTemplate.update(
+                            "UPDATE delivery_record SET status=0, delivery_status='pending', " +
+                                    "retry_count=0, error_message=NULL, fail_reason=NULL, updated_time=NOW() " +
+                                    "WHERE id=? AND tenant_id=? AND deleted=0",
+                            recordId, tenantId);
+                    deadRevived++;
+                    log.info("兜底补发货：复活死信记录 recordId={} tenantId={} orderId={} (retry_count 已重置)",
+                            recordId, tenantId, orderId);
+                }
+            } catch (Exception e) {
+                log.warn("兜底补发货行处理异常, errorType={}", e.getClass().getSimpleName());
+                skipped++;
+            }
+        }
+        if (stuckReset > 0 || deadRevived > 0) {
+            log.info("兜底补发货扫描完成: 卡死重置 {} 个, 死信复活 {} 个, 跳过 {} 个",
+                    stuckReset, deadRevived, skipped);
+        }
+    }
+
+    /**
+     * 释放卡死记录持有的卡密（仅当卡密仍处于已认领状态 status=1 时）
+     */
+    private void releaseStuckClaimedCard(Long tenantId, Long cardItemId) {
+        try {
+            int released = jdbcTemplate.update(
+                    "UPDATE card_item SET status=0, is_used=0, used_order_id=NULL, used_by_order_id=NULL, " +
+                            "used_time=NULL, updated_time=NOW() " +
+                            "WHERE id=? AND tenant_id=? AND deleted=0 AND status=1",
+                    cardItemId, tenantId);
+            if (released > 0) {
+                log.info("兜底补发货：释放卡死持锁卡密 cardItemId={} tenantId={}", cardItemId, tenantId);
+            }
+        } catch (Exception e) {
+            log.warn("释放卡死卡密失败 cardItemId={} tenantId={} errorType={}",
+                    cardItemId, tenantId, e.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * 兜底补发货行前校验：商品配置仍启用 + 货源仍可用
+     * 返回 readiness.ready=true 才允许补发，否则跳过
+     */
+    private ReplenishReadiness checkReplenishReadiness(Long tenantId, Long itemGoodsId, String itemExternalGoodsId) {
+        // 1) 解析内部 goodsId（兼容 oi.goods_id 存储闲鱼 external_goods_id 的情况）
+        Long internalGoodsId = resolveInternalGoodsIdForReplenish(tenantId, itemGoodsId, itemExternalGoodsId);
+        if (internalGoodsId == null) {
+            return ReplenishReadiness.notReady("商品未匹配到内部 goodsId");
+        }
+
+        // 2) 读取商品 payDelivery 配置
+        Map<String, Object> config;
+        try {
+            config = jdbcTemplate.queryForMap(
+                    "SELECT config_json FROM delivery_goods_config " +
+                            "WHERE tenant_id=? AND goods_id=? AND deleted=0 LIMIT 1",
+                    tenantId, internalGoodsId);
+        } catch (Exception e) {
+            return ReplenishReadiness.notReady("商品发货配置已删除");
+        }
+        String configJson = config.get("config_json") == null ? null : String.valueOf(config.get("config_json"));
+        if (configJson == null || configJson.isBlank()) {
+            return ReplenishReadiness.notReady("商品发货配置为空");
+        }
+
+        // 3) 解析 JSON 中 payDelivery.enabled 和货源字段
+        //    使用轻量字符串匹配，避免引入 Jackson 依赖
+        if (!configJson.contains("\"payDelivery\"")) {
+            return ReplenishReadiness.notReady("缺少 payDelivery 配置");
+        }
+        if (!configJson.contains("\"enabled\":1") && !configJson.contains("\"enabled\": 1")) {
+            return ReplenishReadiness.notReady("payDelivery 已禁用");
+        }
+
+        // 4) 货源可用性校验
+        if (configJson.contains("\"mode\":\"card\"") || configJson.contains("\"mode\": \"card\"")) {
+            // 卡密模式：解析 cardGroupId，校验分组仍有未使用卡密
+            Long cardGroupId = extractLongAfter(configJson, "\"cardGroupId\":");
+            if (cardGroupId == null) {
+                return ReplenishReadiness.notReady("卡密模式未绑定分组");
+            }
+            Integer available;
+            try {
+                available = jdbcTemplate.queryForObject(
+                        "SELECT COUNT(*) FROM card_item " +
+                                "WHERE tenant_id=? AND group_id=? AND deleted=0 AND status=0",
+                        Integer.class, tenantId, cardGroupId);
+            } catch (Exception e) {
+                return ReplenishReadiness.notReady("卡密库存查询失败");
+            }
+            if (available == null || available <= 0) {
+                return ReplenishReadiness.notReady("卡密库存为 0");
+            }
+        } else if (configJson.contains("\"mode\":\"text\"") || configJson.contains("\"mode\": \"text\"")) {
+            // 文本模式：解析 sourceId，校验文本货源仍存在
+            Long sourceId = extractLongAfter(configJson, "\"sourceId\":");
+            if (sourceId != null) {
+                Integer exists;
+                try {
+                    exists = jdbcTemplate.queryForObject(
+                            "SELECT COUNT(*) FROM delivery_text_source " +
+                                    "WHERE tenant_id=? AND id=? AND deleted=0",
+                            Integer.class, tenantId, sourceId);
+                } catch (Exception e) {
+                    return ReplenishReadiness.notReady("文本货源查询失败");
+                }
+                if (exists == null || exists <= 0) {
+                    return ReplenishReadiness.notReady("文本货源已删除");
+                }
+            }
+            // sourceId 为空时，content 可能为内联模板，视为可用
+        }
+        return ReplenishReadiness.ready();
+    }
+
+    /**
+     * 解析内部 goodsId：兼容 oi.goods_id 存储闲鱼 external_goods_id 的历史行为
+     */
+    private Long resolveInternalGoodsIdForReplenish(Long tenantId, Long itemGoodsId, String itemExternalGoodsId) {
+        if (itemGoodsId == null && (itemExternalGoodsId == null || itemExternalGoodsId.isBlank())) {
+            return null;
+        }
+        // 1) 先按主键查 xianyu_goods.id
+        if (itemGoodsId != null) {
+            try {
+                Long direct = jdbcTemplate.queryForObject(
+                        "SELECT id FROM xianyu_goods WHERE tenant_id=? AND id=? AND deleted=0 LIMIT 1",
+                        Long.class, tenantId, itemGoodsId);
+                if (direct != null) {
+                    return direct;
+                }
+            } catch (Exception ignored) {
+                // fall through to external_goods_id lookup
+            }
+        }
+        // 2) 用 oi.goods_id 当作 external_goods_id 查
+        if (itemGoodsId != null) {
+            try {
+                Long byExternal = jdbcTemplate.queryForObject(
+                        "SELECT id FROM xianyu_goods WHERE tenant_id=? AND external_goods_id=? AND deleted=0 LIMIT 1",
+                        Long.class, tenantId, String.valueOf(itemGoodsId));
+                if (byExternal != null) {
+                    return byExternal;
+                }
+            } catch (Exception ignored) {
+                // fall through
+            }
+        }
+        // 3) 用 oi.external_goods_id 字段查
+        if (itemExternalGoodsId != null && !itemExternalGoodsId.isBlank()) {
+            try {
+                return jdbcTemplate.queryForObject(
+                        "SELECT id FROM xianyu_goods WHERE tenant_id=? AND external_goods_id=? AND deleted=0 LIMIT 1",
+                        Long.class, tenantId, itemExternalGoodsId);
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 从 JSON 字符串中提取 "key":value 后的 long 值（轻量解析，避免引入 Jackson）
+     */
+    private Long extractLongAfter(String json, String key) {
+        if (json == null || key == null) return null;
+        int idx = json.indexOf(key);
+        if (idx < 0) return null;
+        int start = idx + key.length();
+        // 跳过空白
+        while (start < json.length() && Character.isWhitespace(json.charAt(start))) start++;
+        if (start >= json.length()) return null;
+        int end = start;
+        // 数字（含负号）
+        if (json.charAt(start) == '-') end++;
+        while (end < json.length() && Character.isDigit(json.charAt(end))) end++;
+        if (end == start || (json.charAt(start) == '-' && end == start + 1)) return null;
+        try {
+            return Long.parseLong(json.substring(start, end));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 补发货行前校验结果
+     */
+    private static final class ReplenishReadiness {
+        final boolean ready;
+        final String reason;
+        private ReplenishReadiness(boolean ready, String reason) {
+            this.ready = ready;
+            this.reason = reason;
+        }
+        static ReplenishReadiness ready() { return new ReplenishReadiness(true, null); }
+        static ReplenishReadiness notReady(String reason) { return new ReplenishReadiness(false, reason); }
     }
 
     /**
@@ -128,9 +467,25 @@ public class DeliverySchedulerService {
         int created = 0;
         // 主 SQL 已通过 NOT IN 排除已存在 delivery_record 的订单，此处无需重复 COUNT 校验
         List<Object[]> batchArgs = new ArrayList<>();
+        boolean statementEnabled = statementCheckService.isStatementEnabled(tenantId);
         for (Map<String, Object> order : orders) {
             Object orderId = order.get("order_id");
             Long orderIdLong = orderId instanceof Number ? ((Number) orderId).longValue() : Long.parseLong(orderId.toString());
+            // 发货声明开启时，Java 定时任务不直接创建发货记录：
+            // 由 Python WS 路径收到付款消息后发送声明、等待买家确认，确认后才触发发货。
+            // 这里跳过未确认声明的订单，避免 Java 路径绕过声明流程直接发货。
+            if (statementEnabled) {
+                Long accountId = order.get("account_id") instanceof Number
+                        ? ((Number) order.get("account_id")).longValue() : null;
+                String externalOrderId = queryExternalOrderId(tenantId, orderIdLong);
+                if (externalOrderId != null
+                        && !statementCheckService.canDeliverAfterStatementCheck(
+                                tenantId, accountId, externalOrderId)) {
+                    log.info("声明开启且未确认，Java 扫描跳过创建发货记录 tenantId={} accountId={} orderId={}",
+                            tenantId, accountId, externalOrderId);
+                    continue;
+                }
+            }
             batchArgs.add(new Object[]{tenantId, order.get("account_id"), orderIdLong});
         }
         if (!batchArgs.isEmpty()) {
@@ -224,5 +579,18 @@ public class DeliverySchedulerService {
             }
         }
         return synced;
+    }
+
+    /**
+     * 查询订单的 external_order_id（闲鱼订单号），用于声明会话匹配
+     */
+    private String queryExternalOrderId(Long tenantId, Long orderId) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    "SELECT external_order_id FROM xianyu_trade_order WHERE id=? AND tenant_id=? AND deleted=0 LIMIT 1",
+                    String.class, orderId, tenantId);
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

@@ -1,44 +1,118 @@
 <template>
-  <div class="grid wide-right">
+  <div class="cw-page">
     <div v-if="error" class="global-notice error">{{ error }}</div>
     <div v-if="success" class="global-notice success">{{ success }}</div>
+    <div class="cw-header">
+      <div>
+        <h2 class="cw-title">卡密仓库</h2>
+        <p class="cw-subtitle">管理卡密库存，支持批量导入、自动发货领取、库存预警</p>
+      </div>
+    </div>
+    <div class="grid wide-right cw-grid">
     <!-- Left -->
     <div>
-      <div class="grid stat-grid">
-        <StatCard title="卡密组" :value="groupMetric(groups.length)" :change="groupsAvailable ? '总分组数' : '状态不可用'" icon="product" />
-        <StatCard title="卡密总量" :value="groupMetric(stockStats.total)" :change="groupsAvailable ? '全部卡密' : '状态不可用'" icon="key" />
-        <StatCard title="未使用" :value="groupMetric(stockStats.remain)" :change="groupsAvailable ? '可用库存' : '状态不可用'" icon="key" color="green" />
-        <StatCard title="已使用" :value="groupMetric(stockStats.used)" :change="groupsAvailable ? '已消耗' : '状态不可用'" icon="account" />
-        <StatCard title="异常/作废" :value="groupMetric(stockStats.invalid)" :change="groupsAvailable ? '需关注' : '状态不可用'" icon="warning" color="orange" />
-        <StatCard title="低库存" :value="groupMetric(lowStockCount)" :change="groupsAvailable ? '低于预警阈值' : '状态不可用'" icon="warning" color="red" />
+      <div class="cw-stat-grid">
+        <div class="cw-stat-card">
+          <div class="cw-stat-icon cw-stat-blue">
+            <Icon name="product" />
+          </div>
+          <div class="cw-stat-info">
+            <span>卡密组</span>
+            <strong>{{ groupMetric(groups.length) }}</strong>
+            <em v-if="groupsAvailable">总分组数</em>
+            <em v-else class="text-danger">状态不可用</em>
+          </div>
+        </div>
+        <div class="cw-stat-card">
+          <div class="cw-stat-icon cw-stat-indigo">
+            <Icon name="key" />
+          </div>
+          <div class="cw-stat-info">
+            <span>卡密总量</span>
+            <strong>{{ groupMetric(stockStats.total) }}</strong>
+            <em v-if="groupsAvailable">全部卡密</em>
+            <em v-else class="text-danger">状态不可用</em>
+          </div>
+        </div>
+        <div class="cw-stat-card">
+          <div class="cw-stat-icon cw-stat-green">
+            <Icon name="key" />
+          </div>
+          <div class="cw-stat-info">
+            <span>未使用</span>
+            <strong class="text-success">{{ groupMetric(stockStats.remain) }}</strong>
+            <em v-if="groupsAvailable">可用库存</em>
+            <em v-else class="text-danger">状态不可用</em>
+          </div>
+        </div>
+        <div class="cw-stat-card">
+          <div class="cw-stat-icon cw-stat-gray">
+            <Icon name="account" />
+          </div>
+          <div class="cw-stat-info">
+            <span>已使用</span>
+            <strong>{{ groupMetric(stockStats.used) }}</strong>
+            <em v-if="groupsAvailable">已消耗</em>
+            <em v-else class="text-danger">状态不可用</em>
+          </div>
+        </div>
+        <div class="cw-stat-card">
+          <div class="cw-stat-icon cw-stat-orange">
+            <Icon name="warning" />
+          </div>
+          <div class="cw-stat-info">
+            <span>异常/作废</span>
+            <strong class="text-warning">{{ groupMetric(stockStats.invalid) }}</strong>
+            <em v-if="groupsAvailable">需关注</em>
+            <em v-else class="text-danger">状态不可用</em>
+          </div>
+        </div>
+        <div class="cw-stat-card">
+          <div class="cw-stat-icon cw-stat-red">
+            <Icon name="warning" />
+          </div>
+          <div class="cw-stat-info">
+            <span>低库存</span>
+            <strong class="text-danger">{{ groupMetric(lowStockCount) }}</strong>
+            <em v-if="groupsAvailable">低于预警阈值</em>
+            <em v-else class="text-danger">状态不可用</em>
+          </div>
+        </div>
       </div>
       <CardPanel>
         <div class="toolbar">
-          <input v-model="query.keyword" class="input large" placeholder="搜索卡密组名称" @keyup.enter="load">
-          <AppButton @click="load">搜索</AppButton>
-          <AppButton type="primary" :disabled="!groupsAvailable" @click="openCreateDialog">新建卡密组</AppButton>
+          <div class="toolbar-search">
+            <input v-model="query.keyword" class="input large" placeholder="搜索卡密组名称" @keyup.enter="load">
+            <AppButton @click="load">搜索</AppButton>
+          </div>
+          <AppButton type="primary" :disabled="!groupsAvailable" @click="openCreateDialog">+ 新建卡密组</AppButton>
         </div>
         <EmptyState v-if="groupsLoadError" variant="error" title="卡密分组暂时无法加载" :description="groupsLoadError">
           <template #actions><AppButton @click="load">重新加载</AppButton></template>
         </EmptyState>
         <BaseTable v-else :columns="groupCols" :rows="groupRows">
           <template #name="{row}">
-            <div><strong>{{ row.groupName }}</strong><em v-if="row.remark" class="subtle" style="margin-left:6px">{{ row.remark }}</em></div>
+            <div class="group-name-cell">
+              <strong>{{ row.groupName }}</strong>
+              <em v-if="row.remark" class="subtle group-remark">{{ row.remark }}</em>
+            </div>
           </template>
           <template #cardType="{row}">
             <Badge>{{ cardTypeLabel(row.cardType) }}</Badge>
           </template>
           <template #remain="{row}">
-            <b :style="{ color: row.remainCount < (row.alertThreshold || 10) ? '#ef4444' : '#16bf78' }">{{ row.remainCount }}</b>
+            <b :class="['remain-count', { low: row.remainCount < (row.alertThreshold || 10) }]">{{ row.remainCount }}</b>
           </template>
           <template #status="{row}">
             <Badge :type="row.status === 1 ? 'green' : 'orange'">{{ row.status === 1 ? '启用' : '禁用' }}</Badge>
           </template>
           <template #op="{row}">
-            <button class="link" @click="selectGroup(row.raw)">查看</button>
-            <button class="link" @click="openEditDialog(row.raw)">编辑</button>
-            <button class="link" @click="exportGroup(row.raw)">导出</button>
-            <button class="link danger-text" @click="removeGroup(row.raw.id)">删除</button>
+            <div class="row-actions">
+              <button class="link" @click="selectGroup(row.raw)">查看</button>
+              <button class="link" @click="openEditDialog(row.raw)">编辑</button>
+              <button class="link" @click="exportGroup(row.raw)">导出</button>
+              <button class="link danger-text" @click="removeGroup(row.raw.id)">删除</button>
+            </div>
           </template>
           <template #empty>
             <EmptyState icon="🔑" title="还没有卡密组" description="先创建卡密组，再批量导入卡密；自动发货规则会从这里安全领取库存。">
@@ -47,7 +121,7 @@
           </template>
         </BaseTable>
       </CardPanel>
-      <CardPanel title="导入卡密" style="margin-top:16px">
+      <CardPanel title="导入卡密" class="cw-import-panel">
         <div class="form-grid">
           <div class="form-row">
             <label>目标分组</label>
@@ -65,8 +139,8 @@
           </div>
           <div v-if="importMode === 'paste'" class="form-row">
             <label>每行一条卡密</label>
-            <textarea v-model="bulkText" class="input" rows="6" placeholder="CARD-AAAA-BBBB&#10;CARD-CCCC-DDDD&#10;支持格式：卡密内容&#10;卡号----密码（卡号+密码类型）"></textarea>
-            <span class="subtle" style="margin-top:4px">{{ bulkCount }} 条</span>
+            <textarea v-model="bulkText" class="input cw-textarea" rows="6" placeholder="CARD-AAAA-BBBB&#10;CARD-CCCC-DDDD&#10;支持格式：卡密内容&#10;卡号----密码（卡号+密码类型）"></textarea>
+            <span class="subtle count-hint">{{ bulkCount }} 条</span>
           </div>
           <div v-if="importMode === 'file'" class="form-row">
             <label>选择文件（TXT / CSV）</label>
@@ -75,9 +149,9 @@
               <span v-if="!importFileName">点击或拖拽 TXT/CSV 文件到此处</span>
               <span v-else class="file-name">{{ importFileName }}</span>
             </div>
-            <span class="subtle" style="margin-top:4px">文件每行一条卡密，支持逗号/制表符/----分隔卡号和密码</span>
+            <span class="subtle count-hint">文件每行一条卡密，支持逗号/制表符/----分隔卡号和密码</span>
           </div>
-          <div class="form-row" style="flex-direction:row;align-items:center;gap:12px">
+          <div class="form-row import-action-row">
             <AppButton type="primary" :disabled="!groupsAvailable || importing || !importGroupId" @click="submitImport">
               {{ importing ? '导入中...' : '确认导入' }}
             </AppButton>
@@ -92,7 +166,7 @@
     </div>
     <!-- Right -->
     <div>
-      <CardPanel :title="selected ? selected.groupName : '卡密详情'">
+      <CardPanel :title="selected ? selected.groupName : '卡密详情'" class="cw-detail-panel">
         <EmptyState v-if="!selected" icon="👈" title="请选择卡密分组" description="从左侧列表选择一个卡密组，查看卡密明细、使用记录和导入历史。" style="padding:40px 0" />
         <template v-else>
           <div class="tab-bar">
@@ -210,65 +284,34 @@
             <label>分组名称 <span class="required">*</span></label>
             <input v-model="editForm.groupName" class="input" placeholder="例如：月卡VIP" />
           </div>
-          <div class="form-row">
-            <label>卡密类型</label>
-            <select v-model="editForm.cardType" class="input">
-              <option value="unique">唯一卡密</option>
-              <option value="card_password">卡号+密码</option>
-              <option value="link_code">链接+提取码</option>
-              <option value="account_password">账号+密码</option>
-              <option value="custom">自定义文本</option>
-            </select>
+          <div v-if="!editForm.id" class="form-row cw-full-row">
+            <label>卡密 <span class="subtle">（每行一条，输入100行即100个卡密）</span></label>
+            <textarea v-model="editForm.cardKeys" class="input cw-textarea cw-textarea-lg" rows="10" placeholder="在此输入卡密，每行一条&#10;例如：&#10;VIP-AAAA-BBBB&#10;VIP-CCCC-DDDD&#10;支持格式：卡密内容&#10;卡号----密码&#10;卡号,密码"></textarea>
+            <span class="subtle count-hint">{{ editCardKeyCount }} 条卡密</span>
           </div>
-          <div class="form-row">
-            <label>卡号前缀（可选）</label>
-            <input v-model="editForm.cardPrefix" class="input" placeholder="例如：VIP-" />
-          </div>
-          <div class="form-row">
-            <label>密码前缀（可选）</label>
-            <input v-model="editForm.passwordPrefix" class="input" placeholder="例如：PWD-" />
-          </div>
-          <div class="form-row">
-            <label>成本单价</label>
-            <input v-model.number="editForm.costPrice" type="number" step="0.01" min="0" class="input" placeholder="0.00" />
-          </div>
-          <div class="form-row">
-            <label>售价建议</label>
-            <input v-model.number="editForm.suggestedPrice" type="number" step="0.01" min="0" class="input" placeholder="0.00" />
-          </div>
-          <div class="form-row">
-            <label>库存预警阈值</label>
-            <input v-model.number="editForm.alertThreshold" type="number" min="0" class="input" placeholder="10" />
-          </div>
-          <div class="form-row">
-            <label>状态</label>
-            <select v-model.number="editForm.status" class="input">
-              <option :value="1">启用</option>
-              <option :value="0">禁用</option>
-            </select>
-          </div>
-          <div class="form-row" style="grid-column:1/-1">
+          <div class="form-row cw-full-row">
             <label>备注</label>
-            <textarea v-model="editForm.remark" class="input" rows="3" placeholder="可选备注信息"></textarea>
+            <textarea v-model="editForm.remark" class="input cw-textarea" rows="3" placeholder="可选备注信息"></textarea>
           </div>
         </div>
-        <div class="toolbar" style="justify-content:flex-end;margin-top:20px">
+        <div class="toolbar modal-toolbar">
           <AppButton @click="closeEditDialog">取消</AppButton>
           <AppButton type="primary" :loading="saving" @click="saveGroup">{{ editForm.id ? '保存' : '创建' }}</AppButton>
         </div>
       </div>
+    </div>
     </div>
   </div>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import StatCard from '../components/StatCard.vue'
 import CardPanel from '../components/CardPanel.vue'
 import BaseTable from '../components/BaseTable.vue'
 import Badge from '../components/Badge.vue'
 import AppButton from '../components/AppButton.vue'
 import EmptyState from '../components/EmptyState.vue'
+import Icon from '../components/Icon.vue'
 import { confirmDelete, confirmAction } from '../utils/confirmAction.js'
 import {
   getCards,
@@ -335,14 +378,8 @@ const saving = ref(false)
 const editForm = reactive({
   id: null,
   groupName: '',
-  cardType: 'unique',
-  cardPrefix: '',
-  passwordPrefix: '',
-  costPrice: 0,
-  suggestedPrice: 0,
-  alertThreshold: 10,
-  remark: '',
-  status: 1
+  cardKeys: '',
+  remark: ''
 })
 
 // ─── Card Type Labels ───
@@ -424,6 +461,10 @@ const bulkCount = computed(() => {
   return bulkText.value.split(/\n+/).map(s => s.trim()).filter(Boolean).length
 })
 
+const editCardKeyCount = computed(() => {
+  return editForm.cardKeys.split(/\n+/).map(s => s.trim()).filter(Boolean).length
+})
+
 const itemPages = computed(() => Math.max(1, Math.ceil(itemTotal.value / pageSize)))
 const usagePages = computed(() => Math.max(1, Math.ceil(usageTotal.value / usagePageSize)))
 
@@ -479,14 +520,8 @@ function openCreateDialog() {
   if (!groupsAvailable.value) return
   editForm.id = null
   editForm.groupName = ''
-  editForm.cardType = 'unique'
-  editForm.cardPrefix = ''
-  editForm.passwordPrefix = ''
-  editForm.costPrice = 0
-  editForm.suggestedPrice = 0
-  editForm.alertThreshold = 10
+  editForm.cardKeys = ''
   editForm.remark = ''
-  editForm.status = 1
   editDialogVisible.value = true
 }
 
@@ -494,14 +529,8 @@ function openEditDialog(group) {
   if (!groupsAvailable.value) return
   editForm.id = group.id
   editForm.groupName = group.groupName || ''
-  editForm.cardType = group.cardType || 'unique'
-  editForm.cardPrefix = group.cardPrefix || ''
-  editForm.passwordPrefix = group.passwordPrefix || ''
-  editForm.costPrice = Number(group.costPrice || 0)
-  editForm.suggestedPrice = Number(group.suggestedPrice || 0)
-  editForm.alertThreshold = Number(group.alertThreshold || 10)
+  editForm.cardKeys = ''
   editForm.remark = group.remark || ''
-  editForm.status = group.status !== undefined ? group.status : 1
   editDialogVisible.value = true
 }
 
@@ -519,13 +548,46 @@ async function saveGroup() {
   error.value = ''
   success.value = ''
   try {
-    const data = { ...editForm }
+    const data = { groupName: editForm.groupName.trim(), remark: editForm.remark.trim() || null }
     if (editForm.id) {
       await updateCard(editForm.id, data)
       success.value = '卡密分组已更新'
     } else {
-      await createCard(data)
-      success.value = '卡密分组已创建'
+      const res = await createCard(data)
+      const groupId = res?.data
+      // 创建成功后，如果有卡密内容则批量导入
+      const lines = editForm.cardKeys.split(/\n+/).map(s => s.trim()).filter(Boolean)
+      if (lines.length > 0) {
+        if (!groupId) {
+          success.value = '卡密分组已创建，但卡密导入失败：未获取到分组ID'
+        } else {
+          const payload = lines.map(line => {
+            const sepIdx = line.indexOf('----')
+            if (sepIdx > 0) {
+              return { content: line, cardContent: line.slice(0, sepIdx), password: line.slice(sepIdx + 4) }
+            }
+            const commaIdx = line.indexOf(',')
+            if (commaIdx > 0) {
+              return { content: line, cardContent: line.slice(0, commaIdx), password: line.slice(commaIdx + 1) }
+            }
+            const tabIdx = line.indexOf('\t')
+            if (tabIdx > 0) {
+              return { content: line, cardContent: line.slice(0, tabIdx), password: line.slice(tabIdx + 1) }
+            }
+            return { content: line }
+          })
+          const importRes = await batchCreateCardItems(groupId, { items: payload })
+          const resultData = importRes?.data
+          const successCount = Number(resultData?.successCount ?? resultData?.success ?? 0)
+          const duplicateCount = Number(resultData?.duplicateCount ?? resultData?.duplicate ?? 0)
+          const failCount = Number(resultData?.failCount ?? resultData?.fail ?? 0)
+          success.value = `卡密分组已创建，成功导入 ${successCount} 条卡密` +
+            (duplicateCount > 0 ? `，重复 ${duplicateCount} 条` : '') +
+            (failCount > 0 ? `，失败 ${failCount} 条` : '')
+        }
+      } else {
+        success.value = '卡密分组已创建'
+      }
     }
     editDialogVisible.value = false
     await load({ preserveNotice: true })
@@ -821,57 +883,273 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.success { background: #ecfdf3; color: #067647; border-color: #abefc6; }
+.cw-page {
+  width: 100%;
+}
 
+.cw-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding: 2px 2px 0;
+}
+.cw-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 800;
+  color: #15213d;
+  letter-spacing: .3px;
+}
+.cw-subtitle {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: #7a879e;
+}
+
+.cw-grid {
+  gap: 18px;
+}
+
+/* ── 统计卡片 ── */
+.cw-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.cw-stat-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 16px;
+  box-shadow: var(--shadow);
+  transition: transform .2s, box-shadow .2s;
+}
+.cw-stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(31, 53, 94, .10);
+}
+.cw-stat-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 20px;
+}
+.cw-stat-icon.cw-stat-blue { background: linear-gradient(135deg, #e8f2ff, #d0e4ff); color: #0d6bff; }
+.cw-stat-icon.cw-stat-indigo { background: linear-gradient(135deg, #eef0ff, #dde1ff); color: #4f46e5; }
+.cw-stat-icon.cw-stat-green { background: linear-gradient(135deg, #e8fbf0, #d0f5df); color: #16bf78; }
+.cw-stat-icon.cw-stat-gray { background: linear-gradient(135deg, #f3f6fb, #e6eaf3); color: #6b7280; }
+.cw-stat-icon.cw-stat-orange { background: linear-gradient(135deg, #fef6e6, #fdecc8); color: #f59e0b; }
+.cw-stat-icon.cw-stat-red { background: linear-gradient(135deg, #fef0f0, #fde0e0); color: #ef4444; }
+.cw-stat-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.cw-stat-info span {
+  font-size: 12px;
+  color: #6b7a90;
+  font-weight: 600;
+}
+.cw-stat-info strong {
+  font-size: 22px;
+  font-weight: 800;
+  color: #15213d;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.cw-stat-info em {
+  font-style: normal;
+  font-size: 11px;
+  color: #98a2b3;
+  font-weight: 500;
+}
+.cw-stat-info strong.text-success { color: #16bf78; }
+.cw-stat-info strong.text-warning { color: #f59e0b; }
+.cw-stat-info strong.text-danger { color: #ef4444; }
+.cw-stat-info em.text-danger { color: #ef4444; }
+
+/* ── 工具栏 ── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 16px;
+}
+.toolbar-search {
+  display: flex;
+  gap: 10px;
+  margin-right: auto;
+}
+.toolbar-search .input.large {
+  width: 300px;
+  transition: border-color .18s, box-shadow .18s;
+}
+.toolbar-search .input.large:focus {
+  border-color: #0d6bff;
+  box-shadow: 0 0 0 3px rgba(13, 107, 255, .10);
+}
+
+/* ── 分组列表行 ── */
+.group-name-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.group-name-cell strong {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1a2742;
+}
+.group-remark {
+  font-style: normal;
+  font-size: 12px;
+  color: #98a2b3;
+  display: block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remain-count {
+  font-size: 18px;
+  font-weight: 800;
+  color: #16bf78;
+  font-variant-numeric: tabular-nums;
+}
+.remain-count.low {
+  color: #ef4444;
+}
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.link {
+  border: 0;
+  background: transparent;
+  color: #0d6bff;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+  margin: 0;
+}
+.link:hover {
+  background: #edf5ff;
+}
+.link.danger-text {
+  color: #ef4444;
+}
+.link.danger-text:hover {
+  background: #fff0f1;
+}
+
+/* ── 导入面板 ── */
+.cw-import-panel {
+  margin-top: 16px;
+}
+.cw-textarea {
+  min-height: 120px !important;
+  height: auto !important;
+  padding: 12px !important;
+  resize: vertical !important;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  border-color: var(--line);
+  border-radius: 10px;
+  transition: border-color .18s, box-shadow .18s;
+}
+.cw-textarea:focus {
+  border-color: #0d6bff;
+  box-shadow: 0 0 0 3px rgba(13, 107, 255, .10);
+  outline: none;
+}
+.cw-textarea-lg {
+  min-height: 220px !important;
+}
+.count-hint {
+  margin-top: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #7a879e;
+  font-weight: 600;
+}
+.import-action-row {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 14px !important;
+}
+
+/* ── 导入标签切换 ── */
 .import-tabs {
   display: flex;
   gap: 4px;
   background: #f5f6fa;
   border-radius: 10px;
-  padding: 3px;
+  padding: 4px;
 }
 .import-tab {
   flex: 1;
-  padding: 7px 12px;
+  padding: 9px 14px;
   border: none;
   border-radius: 8px;
   background: transparent;
   color: #526079;
   font-size: 13px;
   cursor: pointer;
-  font-weight: 500;
-  transition: all .15s;
+  font-weight: 600;
+  transition: all .18s;
+}
+.import-tab:hover:not(.active) {
+  color: #0d6bff;
+  background: rgba(13, 107, 255, .05);
 }
 .import-tab.active {
   background: #fff;
-  color: #2d5bff;
-  box-shadow: 0 1px 3px rgba(0,0,0,.08);
+  color: #0d6bff;
+  box-shadow: 0 2px 6px rgba(31, 53, 94, .08);
 }
-.import-tab:hover:not(.active) { color: #2d5bff; }
 
+/* ── 文件拖放区 ── */
 .file-drop-zone {
-  border: 1px dashed #b8c9e5;
-  border-radius: 10px;
-  background: #fbfdff;
-  padding: 24px 16px;
+  border: 2px dashed #c3d3ee;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fbfdff, #f4f8ff);
+  padding: 28px 16px;
   text-align: center;
   color: #0d6bff;
   font-weight: 600;
   cursor: pointer;
-  transition: all .15s;
+  transition: all .2s;
 }
 .file-drop-zone:hover {
   border-color: #0d6bff;
-  background: #f0f6ff;
+  background: linear-gradient(135deg, #f0f6ff, #e6f0ff);
 }
 .file-drop-zone .file-name {
   color: #16213e;
-  font-weight: 600;
+  font-weight: 700;
 }
 
+/* ── 导入结果 ── */
 .import-result {
   display: inline-flex;
-  gap: 12px;
+  gap: 14px;
   font-size: 13px;
   font-weight: 600;
 }
@@ -879,94 +1157,117 @@ onBeforeUnmount(() => {
 .import-duplicate { color: #f59e0b; }
 .import-fail { color: #ef4444; }
 
+/* ── 右侧详情面板 Tab ── */
 .tab-bar {
   display: flex;
   gap: 4px;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
   background: #f5f6fa;
   border-radius: 10px;
-  padding: 3px;
+  padding: 4px;
 }
 .tab-btn {
   flex: 1;
-  padding: 8px 12px;
+  padding: 10px 14px;
   border: none;
   border-radius: 8px;
   background: transparent;
   color: #526079;
   font-size: 13px;
   cursor: pointer;
-  font-weight: 500;
-  transition: all .15s;
+  font-weight: 600;
+  transition: all .18s;
+}
+.tab-btn:hover:not(.active) {
+  color: #0d6bff;
+  background: rgba(13, 107, 255, .05);
 }
 .tab-btn.active {
   background: #fff;
-  color: #2d5bff;
-  box-shadow: 0 1px 3px rgba(0,0,0,.08);
+  color: #0d6bff;
+  box-shadow: 0 2px 6px rgba(31, 53, 94, .08);
 }
-.tab-btn:hover:not(.active) { color: #2d5bff; }
 
+/* ── 表格信息 ── */
 .table-info {
   font-size: 14px;
   color: #526079;
+  font-weight: 600;
 }
 
+/* ── 卡密内容文本 ── */
 .card-content-text {
-  max-width: 280px;
+  max-width: 260px;
   display: inline-block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: middle;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: #1e3a6b;
+  background: #f6f9ff;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid #e8eef8;
 }
 
-/* Stock Stats */
+/* ── 库存统计 ── */
 .stock-stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 12px;
   padding: 4px 0;
 }
-.stat-item {
-  background: #f8faff;
+.stock-stats .stat-item {
+  background: linear-gradient(135deg, #f8faff, #f0f5ff);
   border: 1px solid #eef3fa;
   border-radius: 12px;
-  padding: 16px;
+  padding: 18px 12px;
   text-align: center;
+  transition: transform .18s, box-shadow .18s;
 }
-.stat-item .stat-label {
+.stock-stats .stat-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(31, 53, 94, .08);
+}
+.stock-stats .stat-item .stat-label {
   display: block;
-  font-size: 13px;
+  font-size: 12px;
   color: #667085;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
+  font-weight: 600;
 }
-.stat-item .stat-value {
-  font-size: 22px;
-  color: #16213e;
+.stock-stats .stat-item .stat-value {
+  font-size: 24px;
+  font-weight: 800;
+  color: #1a2742;
+  font-variant-numeric: tabular-nums;
 }
-.stat-item.green .stat-value { color: #16bf78; }
-.stat-item.orange .stat-value { color: #f59e0b; }
-.stat-item.gray .stat-value { color: #667085; }
-.stat-item.red .stat-value { color: #ef4444; }
+.stock-stats .stat-item.green .stat-value { color: #16bf78; }
+.stock-stats .stat-item.orange .stat-value { color: #f59e0b; }
+.stock-stats .stat-item.gray .stat-value { color: #667085; }
+.stock-stats .stat-item.red .stat-value { color: #ef4444; }
 
-/* Pagination */
+/* ── 分页 ── */
 .pagination {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  padding: 12px 0 4px;
+  padding: 14px 0 4px;
   font-size: 13px;
   color: #667085;
 }
 .page-info {
   margin-right: 8px;
+  font-weight: 600;
 }
 .page-no {
-  min-width: 32px;
-  height: 32px;
+  min-width: 34px;
+  height: 34px;
   border: 1px solid #e4ebf5;
-  border-radius: 6px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -974,44 +1275,108 @@ onBeforeUnmount(() => {
   cursor: pointer;
   font-size: 15px;
   color: #526079;
-  transition: all .15s;
+  transition: all .18s;
+  font-weight: 600;
 }
 .page-no:hover:not(:disabled) {
   border-color: #0d6bff;
   color: #0d6bff;
+  background: #f0f6ff;
 }
 .page-no:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 
-/* Modal */
+/* ── 弹窗 ── */
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,.35);
+  background: rgba(20, 36, 58, .50);
+  backdrop-filter: blur(3px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  animation: cw-fade-in .2s ease;
+}
+@keyframes cw-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 .modal-content {
   background: #fff;
   border-radius: 20px;
-  padding: 28px;
-  max-width: 540px;
+  padding: 30px;
+  max-width: 560px;
   width: 90%;
-  max-height: 80vh;
+  max-height: 82vh;
   overflow-y: auto;
-  box-shadow: 0 20px 60px rgba(0,0,0,.2);
+  box-shadow: 0 28px 80px rgba(17, 35, 67, .22);
+  animation: cw-modal-in .25s cubic-bezier(.2,1,.3,1);
+}
+@keyframes cw-modal-in {
+  from { opacity: 0; transform: translateY(12px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 .modal-content h3 {
-  margin: 0 0 16px;
-  font-size: 18px;
+  margin: 0 0 20px;
+  font-size: 20px;
+  font-weight: 800;
   color: #16213e;
 }
-
+.modal-toolbar {
+  justify-content: flex-end;
+  margin-top: 24px;
+  margin-bottom: 0;
+}
+.cw-full-row {
+  grid-column: 1 / -1;
+}
 .required { color: #ef4444; }
-
 .subtle { color: #98a2b3; font-size: 13px; }
+.text-success { color: #16bf78 !important; }
+.text-warning { color: #f59e0b !important; }
+.text-danger { color: #ef4444 !important; }
+
+/* ── 表单输入框统一焦点态 ── */
+:deep(.form-row input),
+:deep(.form-row select) {
+  transition: border-color .18s, box-shadow .18s;
+}
+:deep(.form-row input:focus),
+:deep(.form-row select:focus) {
+  border-color: #0d6bff;
+  box-shadow: 0 0 0 3px rgba(13, 107, 255, .10);
+  outline: none;
+}
+:deep(.form-row label) {
+  font-size: 13px;
+}
+
+/* ── 右侧详情面板固定 ── */
+.cw-detail-panel {
+  position: sticky;
+  top: 18px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+}
+.cw-detail-panel::-webkit-scrollbar {
+  width: 4px;
+}
+.cw-detail-panel::-webkit-scrollbar-thumb {
+  background: #dce5f2;
+  border-radius: 4px;
+}
+
+/* ── 响应式 ── */
+@media (max-width: 1500px) {
+  .cw-grid {
+    grid-template-columns: 1fr;
+  }
+  .cw-detail-panel {
+    position: static;
+    max-height: none;
+  }
+}
 </style>

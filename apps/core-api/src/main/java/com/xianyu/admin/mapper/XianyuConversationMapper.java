@@ -75,4 +75,13 @@ public interface XianyuConversationMapper {
 
     @Select("SELECT DATE(last_message_time) AS stat_date, COUNT(*) AS count FROM xianyu_conversation WHERE tenant_id = #{tenantId} AND deleted = 0 AND last_message_time >= #{startDate} GROUP BY DATE(last_message_time) ORDER BY stat_date ASC")
     List<Map<String, Object>> countDaily(@Param("tenantId") Long tenantId, @Param("startDate") LocalDate startDate);
+
+    @Select("<script>" +
+            "SELECT DATE(last_message_time) AS stat_date, COUNT(*) AS count " +
+            "FROM xianyu_conversation " +
+            "WHERE tenant_id = #{tenantId} AND deleted = 0 AND last_message_time >= #{startDate} " +
+            "<if test='accountId != null'>AND account_id = #{accountId}</if>" +
+            "GROUP BY DATE(last_message_time) ORDER BY stat_date ASC" +
+            "</script>")
+    List<Map<String, Object>> countDailyByAccount(@Param("tenantId") Long tenantId, @Param("accountId") Long accountId, @Param("startDate") LocalDate startDate);
 }

@@ -45,7 +45,7 @@ class AdminModuleServiceTruthfulStateTest {
     @ParameterizedTest
     @ValueSource(strings = {
             "licenses", "notify-channels", "notify-logs", "risk-events", "runtime",
-            "backups", "versions", "rag", "sensitive-words", "alerts", "files"
+            "backups", "versions", "rag", "alerts", "files"
     })
     void modulesWithoutRealBackendAreExplicitlyUnavailable(String moduleKey) {
         assertUnavailable(() -> service.page(moduleKey, 1, 10, null, null));

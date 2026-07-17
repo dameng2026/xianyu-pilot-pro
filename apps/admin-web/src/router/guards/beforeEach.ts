@@ -140,10 +140,8 @@ export function setupBeforeEachGuard(router: Router): void {
  * 关闭 loading 效果
  */
 function closeLoading(): void {
-  if (pendingLoading) {
-    loadingService.hideLoading()
-    pendingLoading = false
-  }
+  loadingService.hideLoading()
+  pendingLoading = false
 }
 
 /**
@@ -243,8 +241,11 @@ function handleLoginStatus(
     return true
   }
 
-  // 未登录且访问需要权限的页面，跳转到登录页并携带 redirect 参数
-  userStore.logOut()
+  // 未登录：清理可能残留的 loading 状态，避免遮罩残留
+  closeLoading()
+  resetRouteInitState()
+
+  // 重定向到登录页（不调用 logOut()，避免双重导航和路由注销时序问题）
   next({
     name: 'Login',
     query: { redirect: to.fullPath }
@@ -388,12 +389,10 @@ async function doHandleDynamicRoutes(
     closeLoading()
 
     // 401 错误：立即退出登录并跳转到登录页，避免重试循环
-    // 统一调用 logOut() 清理完整状态（HTTP 缓存、iframe 路由、工作台、锁屏密码等），
-    // 而不是只 setLoginStatus(false)+setToken('')，避免留下脏状态
     if (isUnauthorizedError(error)) {
       const userStore = useUserStore()
-      // skipNavigate=true：由当前路由守卫用 next({ name: 'Login' }) 统一跳转，避免与 logOut 内部的 router.push 冲突
-      userStore.logOut({ skipNavigate: true })
+      userStore.setLoginStatus(false)
+      userStore.setToken('')
       routeInitInProgress = false
       next({ name: 'Login', replace: true })
       return

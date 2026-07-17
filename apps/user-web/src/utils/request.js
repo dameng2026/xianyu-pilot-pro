@@ -174,30 +174,6 @@ request.interceptors.response.use(
         }))
       }
 
-      // 402 Token 余额不足：派发全局事件，顶部错误提示 + 自动弹出充值 modal
-      // 与 aiTokenGuard.js 的 notifyRecharge 保持一致的事件协议
-      if (status === 402) {
-        const paymentMessage = body?.msg || body?.message || publicMessage || 'Token 余额不足，请先充值后再使用 AI 功能'
-        if (typeof window !== 'undefined' && window.dispatchEvent) {
-          window.dispatchEvent(new CustomEvent('xya-toast', {
-            detail: { message: paymentMessage, isError: true }
-          }))
-          window.dispatchEvent(new CustomEvent('xya-open-payment', {
-            detail: {
-              source: 'http_402',
-              reason: 'insufficient_balance',
-            }
-          }))
-        }
-        return Promise.reject(createStructuredError(paymentMessage, requestId, {
-          code: 402,
-          data: body?.data,
-          raw: body,
-          status,
-          paymentRequired: true,
-        }))
-      }
-
       if (status >= 500) {
         return Promise.reject(createStructuredError(publicMessage, requestId, {
           code: status,

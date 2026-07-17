@@ -7,12 +7,23 @@ const { Pool } = pg;
 
 let pool: pg.Pool | null = null;
 
-const CRAWLER_MIGRATION = {
-  service: 'crawler-service',
-  version: '1.1',
-  description: 'crawler schema baseline and legacy data normalization',
-  url: new URL('../../migrations/V1.1__baseline_crawler_schema.sql', import.meta.url),
-};
+const CRAWLER_MIGRATIONS = [
+  {
+    service: 'crawler-service',
+    version: '1.1',
+    description: 'crawler schema baseline and legacy data normalization',
+    url: new URL('../../migrations/V1.1__baseline_crawler_schema.sql', import.meta.url),
+  },
+  {
+    service: 'crawler-service',
+    version: '1.2',
+    description: 'add retrying status to goofish_crawl_jobs',
+    url: new URL('../../migrations/V1.2__add_retrying_status_to_crawl_jobs.sql', import.meta.url),
+  },
+];
+
+// Backward-compat alias for tests that reference the baseline migration descriptor.
+const CRAWLER_MIGRATION = CRAWLER_MIGRATIONS[0];
 
 const REQUIRED_COLUMNS: Record<string, string[]> = {
   goofish_stores: ['id', 'tenant_id', 'user_id', 'store_url', 'last_crawled_at', 'created_at', 'updated_at'],
@@ -92,13 +103,20 @@ export function getPool(): pg.Pool {
 
 export async function runMigrations(options: { maintenanceMode?: boolean } = {}): Promise<void> {
   const p = getPool();
-  const sql = await readFile(CRAWLER_MIGRATION.url, 'utf8');
-  const checksum = createHash('sha256').update(sql, 'utf8').digest('hex');
   const environment = process.env.NODE_ENV || process.env.APP_ENV || 'development';
   const mutationsAllowed = options.maintenanceMode === true || runtimeSchemaMutationsAllowed(
       environment,
       process.env.SCHEMA_RUNTIME_MUTATIONS_ENABLED,
     );
+
+  // Pre-read all migration files and compute checksums so the hot path is I/O-freed.
+  const migrations = await Promise.all(
+    CRAWLER_MIGRATIONS.map(async (descriptor) => {
+      const sql = await readFile(descriptor.url, 'utf8');
+      const checksum = createHash('sha256').update(sql, 'utf8').digest('hex');
+      return { descriptor, sql, checksum };
+    }),
+  );
 
   const client = await p.connect();
   try {
@@ -119,22 +137,24 @@ export async function runMigrations(options: { maintenanceMode?: boolean } = {})
               PRIMARY KEY (service, version)
             )
           `);
-          const installed = await client.query(
-            'SELECT checksum, success FROM xianyu_schema_history WHERE service = $1 AND version = $2',
-            [CRAWLER_MIGRATION.service, CRAWLER_MIGRATION.version],
-          );
-          if (installed.rowCount === 1) {
-            const row = installed.rows[0];
-            if (row.checksum !== checksum || row.success !== true) {
-              throw new Error('crawler migration history checksum or success state is invalid');
-            }
-          } else {
-            await client.query(sql);
-            await client.query(
-              `INSERT INTO xianyu_schema_history(service, version, description, checksum, success)
-               VALUES ($1, $2, $3, $4, TRUE)`,
-              [CRAWLER_MIGRATION.service, CRAWLER_MIGRATION.version, CRAWLER_MIGRATION.description, checksum],
+          for (const { descriptor: CRAWLER_MIGRATION, sql, checksum } of migrations) {
+            const installed = await client.query(
+              'SELECT checksum, success FROM xianyu_schema_history WHERE service = $1 AND version = $2',
+              [CRAWLER_MIGRATION.service, CRAWLER_MIGRATION.version],
             );
+            if (installed.rowCount === 1) {
+              const row = installed.rows[0];
+              if (row.checksum !== checksum || row.success !== true) {
+                throw new Error(`crawler migration ${CRAWLER_MIGRATION.version} history checksum or success state is invalid`);
+              }
+            } else {
+              await client.query(sql);
+              await client.query(
+                `INSERT INTO xianyu_schema_history(service, version, description, checksum, success)
+                 VALUES ($1, $2, $3, $4, TRUE)`,
+                [CRAWLER_MIGRATION.service, CRAWLER_MIGRATION.version, CRAWLER_MIGRATION.description, checksum],
+              );
+            }
           }
           await client.query('COMMIT');
         } catch (error) {
@@ -148,14 +168,16 @@ export async function runMigrations(options: { maintenanceMode?: boolean } = {})
         if (!historyTable.rows[0]?.table_name) {
           throw new Error('crawler schema history is missing; run the reviewed migration maintenance window first');
         }
-        const installed = await client.query(
-          'SELECT checksum, success FROM xianyu_schema_history WHERE service = $1 AND version = $2',
-          [CRAWLER_MIGRATION.service, CRAWLER_MIGRATION.version],
-        );
-        if (installed.rowCount !== 1
-            || installed.rows[0]?.checksum !== checksum
-            || installed.rows[0]?.success !== true) {
-          throw new Error('crawler schema version or checksum does not match the reviewed release');
+        for (const { descriptor: CRAWLER_MIGRATION, checksum } of migrations) {
+          const installed = await client.query(
+            'SELECT checksum, success FROM xianyu_schema_history WHERE service = $1 AND version = $2',
+            [CRAWLER_MIGRATION.service, CRAWLER_MIGRATION.version],
+          );
+          if (installed.rowCount !== 1
+              || installed.rows[0]?.checksum !== checksum
+              || installed.rows[0]?.success !== true) {
+            throw new Error('crawler schema version or checksum does not match the reviewed release');
+          }
         }
       }
 
@@ -207,7 +229,8 @@ export async function runMigrations(options: { maintenanceMode?: boolean } = {})
   } finally {
     client.release();
   }
-  console.log(`[DB] schema ready version=${CRAWLER_MIGRATION.version} mutationsAllowed=${mutationsAllowed}`);
+  const latestVersion = CRAWLER_MIGRATIONS[CRAWLER_MIGRATIONS.length - 1].version;
+  console.log(`[DB] schema ready version=${latestVersion} mutationsAllowed=${mutationsAllowed}`);
 }
 
 export async function closePool(): Promise<void> {

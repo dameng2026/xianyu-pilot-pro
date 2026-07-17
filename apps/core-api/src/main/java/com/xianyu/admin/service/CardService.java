@@ -65,7 +65,7 @@ public class CardService {
      * 创建卡片组
      */
     @Transactional
-    public void createGroup(Long tenantId, CardGroupDTO dto) {
+    public Long createGroup(Long tenantId, CardGroupDTO dto) {
         CardGroup group = new CardGroup();
         group.setTenantId(tenantId);
         group.setGroupName(dto.getGroupName());
@@ -83,6 +83,7 @@ public class CardService {
         group.setStatus(dto.getStatus() != null ? dto.getStatus() : 1);
         groupMapper.insert(group);
         log.info("创建卡片组成功: id={}, tenantId={}", group.getId(), tenantId);
+        return group.getId();
     }
 
     /**

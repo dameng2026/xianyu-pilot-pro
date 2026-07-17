@@ -200,7 +200,7 @@ async function reconcileOrphanedCrawlJobs(): Promise<void> {
   const candidates = await pool.query(
     `SELECT tenant_id, bullmq_job_id
      FROM goofish_crawl_jobs
-     WHERE status IN ('pending', 'retrying', 'running') AND created_at < NOW() - INTERVAL '1 minute'
+     WHERE status IN ('pending', 'running') AND created_at < NOW() - INTERVAL '1 minute'
      ORDER BY created_at ASC LIMIT 500`,
   );
   let repaired = 0;
@@ -210,7 +210,7 @@ async function reconcileOrphanedCrawlJobs(): Promise<void> {
       `UPDATE goofish_crawl_jobs
        SET status = 'failed', error_message = '队列任务不存在，请重新提交',
            finished_at = NOW(), execution_token = NULL
-       WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'retrying', 'running')`,
+       WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'running')`,
       [row.tenant_id, row.bullmq_job_id],
     );
     repaired += result.rowCount || 0;
@@ -330,6 +330,10 @@ app.post('/api/goofish/item-detail', async (req, res) => {
     if (!releaseBrowser) return browserCapacityUnavailable(res);
     try {
       const detail = await fetchGoofishItemDetail(itemId, cookieStr);
+      if (detail.ok === false) {
+        // 采集超时或失败：返回 504 让调用方区分"商品无图"与"采集超时"
+        return res.status(504).json({ ok: false, error: detail.error || '获取商品详情超时', detail });
+      }
       return res.status(200).json({ ok: true, detail });
     } finally {
       releaseBrowser();
@@ -403,7 +407,7 @@ app.post('/api/import/goofish', async (req, res) => {
       `SELECT bullmq_job_id, status, item_count, created_at FROM goofish_crawl_jobs
        WHERE tenant_id = $1
          AND store_user_id = $2
-         AND status IN ('pending', 'retrying', 'running', 'completed')
+         AND status IN ('pending', 'running', 'completed')
          AND created_at > NOW() - INTERVAL '6 hours'
        ORDER BY created_at DESC
        LIMIT 1`,
@@ -422,7 +426,7 @@ app.post('/api/import/goofish', async (req, res) => {
           message: '该店铺 6 小时内已完成采集，直接读取缓存商品',
         });
       }
-      if (row.status === 'pending' || row.status === 'retrying' || row.status === 'running') {
+      if (row.status === 'pending' || row.status === 'running') {
         if (isFreshPublishingRow(row.created_at)) {
           return res.status(200).json({
             ok: true,
@@ -451,7 +455,7 @@ app.post('/api/import/goofish', async (req, res) => {
         await pool.query(
           `UPDATE goofish_crawl_jobs
            SET status = 'failed', error_message = '队列任务不存在，请重新提交', finished_at = NOW(), execution_token = NULL
-           WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'retrying', 'running')`,
+           WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'running')`,
           [tenantId, row.bullmq_job_id],
         );
       }
@@ -461,7 +465,7 @@ app.post('/api/import/goofish', async (req, res) => {
       `UPDATE goofish_crawl_jobs
        SET status = 'failed', error_message = '采集任务超时，请重新提交', finished_at = NOW()
        WHERE tenant_id = $1 AND store_user_id = $2
-         AND status IN ('pending', 'retrying', 'running')
+         AND status IN ('pending', 'running')
          AND created_at <= NOW() - INTERVAL '6 hours'`,
       [tenantId, userId],
     );
@@ -481,7 +485,7 @@ app.post('/api/import/goofish', async (req, res) => {
       const active = await pool.query(
         `SELECT bullmq_job_id, status, created_at
          FROM goofish_crawl_jobs
-         WHERE tenant_id = $1 AND store_user_id = $2 AND status IN ('pending', 'retrying', 'running')
+         WHERE tenant_id = $1 AND store_user_id = $2 AND status IN ('pending', 'running')
          ORDER BY created_at DESC LIMIT 1`,
         [tenantId, userId],
       );
@@ -509,7 +513,7 @@ app.post('/api/import/goofish', async (req, res) => {
         await pool.query(
           `UPDATE goofish_crawl_jobs
            SET status = 'failed', error_message = '队列任务不存在，请重新提交', finished_at = NOW(), execution_token = NULL
-           WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'retrying', 'running')`,
+           WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'running')`,
           [tenantId, active.rows[0].bullmq_job_id],
         );
         reservation = await pool.query(
@@ -590,14 +594,14 @@ app.get('/api/crawl-jobs/:id', async (req, res) => {
     }
 
     const row = result.rows[0];
-    if ((row.status === 'pending' || row.status === 'retrying' || row.status === 'running') && !isFreshPublishingRow(row.created_at)) {
+    if ((row.status === 'pending' || row.status === 'running') && !isFreshPublishingRow(row.created_at)) {
       try {
         if (!await isQueueJobActive(String(row.bullmq_job_id || ''))) {
           await pool.query(
             `UPDATE goofish_crawl_jobs
              SET status = 'failed', error_message = '队列任务不存在，请重新提交',
                  finished_at = NOW(), execution_token = NULL
-             WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'retrying', 'running')`,
+             WHERE tenant_id = $1 AND bullmq_job_id = $2 AND status IN ('pending', 'running')`,
             [tenantId, id],
           );
           row.status = 'failed';
@@ -973,6 +977,15 @@ app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
 
 // 启动
 async function start() {
+  // 全局未捕获异常处理器：防止异步回调异常导致进程静默退出
+  process.on('unhandledRejection', (reason) => {
+    console.error('[Server] unhandledRejection:', reason);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error('[Server] uncaughtException:', err);
+    // 不主动退出进程，避免 BullMQ 定时器/Playwright 回调的偶发异常导致服务中断
+  });
+
   if (!internalTokenPolicy.ready) {
     throw new Error(internalTokenPolicy.reason || 'internal authentication configuration is invalid');
   }

@@ -4,6 +4,7 @@ import com.xianyu.admin.common.MaskUtil;
 import com.xianyu.admin.common.PageResult;
 import com.xianyu.admin.common.Result;
 import com.xianyu.admin.service.SysUserService;
+import com.xianyu.admin.service.UserAuthService;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -22,6 +23,7 @@ import java.util.Map;
  * <p>当前前端实际使用的端点：
  * <ul>
  *   <li>POST /{id}/reset-password — 重置用户密码</li>
+ *   <li>POST /{id}/login-token — 管理员代登：为指定前台用户签发登录 token（仅辅助调试）</li>
  *   <li>PUT /{id}/token-balance — 更新 Token 余额（已合并到 update，保留兼容）</li>
  *   <li>PUT /{id}/vip-level — 更新 VIP 等级（已合并到 update，保留兼容）</li>
  * </ul></p>
@@ -31,9 +33,11 @@ import java.util.Map;
 public class SysUserController {
 
     private final SysUserService sysUserService;
+    private final UserAuthService userAuthService;
 
-    public SysUserController(SysUserService sysUserService) {
+    public SysUserController(SysUserService sysUserService, UserAuthService userAuthService) {
         this.sysUserService = sysUserService;
+        this.userAuthService = userAuthService;
     }
 
     /**
@@ -159,6 +163,16 @@ public class SysUserController {
         String newPassword = String.valueOf(data.getOrDefault("newPassword", ""));
         sysUserService.resetPassword(id, newPassword);
         return Result.ok(null);
+    }
+
+    /**
+     * 管理员代登：为指定前台用户签发登录 token，用于辅助调试。
+     * 调用方需持有 R_SUPER 角色（由 AdminRbacFilter 在 /admin-api/system/* 路径上强制校验）。
+     * 不校验密码、不消费密码失败计数；不变更 security_version（不吊销用户已有会话）。
+     */
+    @PostMapping("/{id}/login-token")
+    public Result<Map<String, Object>> issueLoginToken(@PathVariable long id) {
+        return Result.ok(userAuthService.generateLoginTokenForUser(id));
     }
 
     /**

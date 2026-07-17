@@ -60,38 +60,56 @@ public class DeliveryTextSourceService {
         listArgs.add(offset);
         listArgs.add(safeSize);
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT id, source_type AS sourceType, title, content, remark, created_time AS createdTime, updated_time AS updatedTime " +
-                        "FROM delivery_text_source WHERE tenant_id=? AND deleted=0" + filter +
-                        " ORDER BY updated_time DESC, id DESC LIMIT ?, ?",
+                "SELECT s.id, s.source_type AS sourceType, s.delivery_mode AS deliveryMode, s.card_group_id AS cardGroupId, " +
+                        "s.title, s.content, s.remark, s.created_time AS createdTime, s.updated_time AS updatedTime, " +
+                        "g.group_name AS cardGroupName, g.remain_count AS cardRemainCount " +
+                        "FROM delivery_text_source s " +
+                        "LEFT JOIN card_group g ON g.id=s.card_group_id AND g.tenant_id=s.tenant_id AND g.deleted=0 " +
+                        "WHERE s.tenant_id=? AND s.deleted=0" + filter +
+                        " ORDER BY s.updated_time DESC, s.id DESC LIMIT ?, ?",
                 listArgs.toArray()
         );
         enrichUsageStats(tenantId, rows);
+        for (Map<String, Object> row : rows) {
+            row.put("stockLabel", buildStockLabel(row));
+        }
         return new PageResult<>(rows, safeCurrent, safeSize, total == null ? 0 : total);
     }
 
     public Map<String, Object> detail(Long tenantId, Long sourceId) {
         Map<String, Object> source = jdbcTemplate.queryForMap(
-                "SELECT id, source_type AS sourceType, title, content, remark, created_time AS createdTime, updated_time AS updatedTime " +
-                        "FROM delivery_text_source WHERE tenant_id=? AND id=? AND deleted=0",
+                "SELECT s.id, s.source_type AS sourceType, s.delivery_mode AS deliveryMode, s.card_group_id AS cardGroupId, " +
+                        "s.title, s.content, s.remark, s.created_time AS createdTime, s.updated_time AS updatedTime, " +
+                        "g.group_name AS cardGroupName, g.remain_count AS cardRemainCount " +
+                        "FROM delivery_text_source s " +
+                        "LEFT JOIN card_group g ON g.id=s.card_group_id AND g.tenant_id=s.tenant_id AND g.deleted=0 " +
+                        "WHERE s.tenant_id=? AND s.id=? AND s.deleted=0",
                 tenantId, sourceId
         );
         source.put("configuredGoods", listConfiguredGoods(tenantId, sourceId));
         source.put("usageCount", ((List<?>) source.get("configuredGoods")).size());
+        source.put("stockLabel", buildStockLabel(source));
         return source;
     }
 
     public Long create(Long tenantId, Map<String, Object> body) {
+        String deliveryMode = normalizeDeliveryMode(body.get("deliveryMode"));
+        Long cardGroupId = "card".equals(deliveryMode) ? asLong(body.get("cardGroupId")) : null;
         jdbcTemplate.update(
-                "INSERT INTO delivery_text_source(tenant_id, source_type, title, content, remark, created_time, updated_time, deleted) VALUES(?, 'text', ?, ?, ?, NOW(), NOW(), 0)",
-                tenantId, text(body.get("title")), text(body.get("content")), text(body.get("remark"))
+                "INSERT INTO delivery_text_source(tenant_id, source_type, delivery_mode, card_group_id, title, content, remark, created_time, updated_time, deleted) " +
+                        "VALUES(?, 'text', ?, ?, ?, ?, ?, NOW(), NOW(), 0)",
+                tenantId, deliveryMode, cardGroupId, text(body.get("title")), text(body.get("content")), text(body.get("remark"))
         );
         return jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
     }
 
     public void update(Long tenantId, Long sourceId, Map<String, Object> body) {
+        String deliveryMode = normalizeDeliveryMode(body.get("deliveryMode"));
+        Long cardGroupId = "card".equals(deliveryMode) ? asLong(body.get("cardGroupId")) : null;
         jdbcTemplate.update(
-                "UPDATE delivery_text_source SET title=?, content=?, remark=?, updated_time=NOW() WHERE tenant_id=? AND id=? AND deleted=0",
-                text(body.get("title")), text(body.get("content")), text(body.get("remark")), tenantId, sourceId
+                "UPDATE delivery_text_source SET delivery_mode=?, card_group_id=?, title=?, content=?, remark=?, updated_time=NOW() " +
+                        "WHERE tenant_id=? AND id=? AND deleted=0",
+                deliveryMode, cardGroupId, text(body.get("title")), text(body.get("content")), text(body.get("remark")), tenantId, sourceId
         );
     }
 
@@ -136,13 +154,17 @@ public class DeliveryTextSourceService {
 
     public void applySourceToGoods(Long tenantId, Long sourceId, List<Long> goodsIds, String timing) {
         Map<String, Object> source = detail(tenantId, sourceId);
+        String deliveryMode = normalizeDeliveryMode(source.get("deliveryMode"));
         Map<String, Object> patch = new LinkedHashMap<>();
         patch.put("timing", normalizeTiming(timing));
         patch.put("enabled", 1);
-        patch.put("mode", "text");
+        patch.put("mode", deliveryMode);
         patch.put("sourceId", sourceId);
         patch.put("sourceTitle", source.get("title"));
         patch.put("content", text(source.get("content")));
+        if ("card".equals(deliveryMode)) {
+            patch.put("cardGroupId", asLong(source.get("cardGroupId")));
+        }
         goodsConfigService.apply(tenantId, goodsIds, patch);
     }
 
@@ -369,6 +391,23 @@ public class DeliveryTextSourceService {
             case "reviewDelivery", "after_review" -> "reviewDelivery";
             default -> "payDelivery";
         };
+    }
+
+    private String normalizeDeliveryMode(Object value) {
+        if (value == null) return "text";
+        String mode = String.valueOf(value).trim().toLowerCase(Locale.ROOT);
+        return "card".equals(mode) ? "card" : "text";
+    }
+
+    private String buildStockLabel(Map<String, Object> row) {
+        String mode = normalizeDeliveryMode(row.get("deliveryMode"));
+        if ("card".equals(mode)) {
+            Object remain = row.get("cardRemainCount");
+            int remainCount = remain instanceof Number number ? number.intValue() : 0;
+            String groupName = text(row.get("cardGroupName"));
+            return groupName.isBlank() ? ("剩余 " + remainCount) : (groupName + " · 剩余 " + remainCount);
+        }
+        return "文本";
     }
 
     private Long asLong(Object value) {

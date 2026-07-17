@@ -1,32 +1,35 @@
 <template>
   <article class="mall-card">
-    <div class="mall-cover" :style="{ background: product.coverBg || `linear-gradient(135deg, ${product.coverFrom}, ${product.coverTo})` }">
-      <div class="cover-decor"></div>
+    <div class="mall-cover" :style="coverStyle">
+      <img v-if="product.coverUrl" :src="product.coverUrl" class="cover-img" alt="" />
+      <template v-else>
+        <div class="cover-decor"></div>
+        <div class="cover-title-wrap">
+          <span class="cover-title">{{ product.shortTitle || product.title }}</span>
+        </div>
+        <div class="cover-shine"></div>
+      </template>
       <span v-if="product.tag" class="mall-cover-tag" :class="tagClass">{{ product.tag }}</span>
-      <div class="cover-title-wrap">
-        <span class="cover-title">{{ product.shortTitle || product.title }}</span>
-      </div>
-      <div class="cover-shine"></div>
     </div>
     <div class="mall-body">
       <h3 class="mall-title" :title="product.title">{{ product.title }}</h3>
-      <p class="mall-intro">{{ product.intro }}</p>
-      <div v-if="type === 'card'" class="mall-stock" :class="stockTone">库存 {{ product.stock }} 件</div>
+      <p class="mall-intro">{{ product.subtitle || product.intro || product.content }}</p>
+      <div v-if="type === 'card'" class="mall-stock" :class="stockTone">库存 {{ stockDisplay }} 件</div>
       <div class="mall-meta">
         <span class="mall-bought">
           <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-          {{ product.boughtCount }} 人已购买
+          {{ boughtDisplay }} 人已购买
         </span>
         <span class="mall-time">
           <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-          {{ product.publishTime }}
+          {{ timeDisplay }}
         </span>
       </div>
       <div class="mall-footer">
         <span class="mall-price"><em>¥</em>{{ priceNum }}</span>
         <div class="mall-actions">
-          <button class="mall-btn-outline" type="button">查看详情</button>
-          <button class="mall-btn-buy" type="button">立即购买</button>
+          <button class="mall-btn-outline" type="button" @click="$emit('detail')">上架该商品</button>
+          <button class="mall-btn-buy" type="button" @click="$emit('buy')">立即购买</button>
         </div>
       </div>
     </div>
@@ -41,16 +44,61 @@ const props = defineProps({
   type: { type: String, default: 'text' }
 })
 
+defineEmits(['detail', 'buy'])
+
+const coverStyle = computed(() => {
+  if (props.product.coverUrl) return {}
+  return {
+    background: props.product.coverBg || `linear-gradient(135deg, ${props.product.coverFrom}, ${props.product.coverTo})`
+  }
+})
+
+const stockValue = computed(() => {
+  const p = props.product || {}
+  if (p.stockCount != null) return Number(p.stockCount) || 0
+  if (p.stock != null) return Number(p.stock) || 0
+  return 0
+})
+
+const stockDisplay = computed(() => stockValue.value)
+
 const stockTone = computed(() => {
-  const stock = Number(props.product.stock) || 0
+  const stock = stockValue.value
   if (stock <= 0) return 'none'
   if (stock < 50) return 'low'
   return 'enough'
 })
 
 const priceNum = computed(() => {
-  const p = String(props.product.price || '')
-  return p.replace(/^¥\s*/, '')
+  const p = props.product || {}
+  if (p.priceYuan != null) return String(p.priceYuan)
+  if (p.priceCent != null) {
+    const n = Number(p.priceCent)
+    if (!Number.isNaN(n)) return (n / 100).toFixed(2)
+  }
+  return String(p.price || '').replace(/^¥\s*/, '')
+})
+
+const boughtDisplay = computed(() => {
+  const raw = props.product?.boughtCount
+  if (raw == null || raw === '') return '0'
+  if (typeof raw === 'number') return raw.toLocaleString('zh-CN')
+  const num = Number(String(raw).replace(/[^0-9]/g, ''))
+  if (!Number.isNaN(num)) return num.toLocaleString('zh-CN')
+  return raw
+})
+
+const timeDisplay = computed(() => {
+  const raw = props.product?.createTime || props.product?.publishTime
+  if (!raw) return props.product?.publishTime || ''
+  if (props.product?.publishTime && !props.product?.createTime) return props.product.publishTime
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return String(raw)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mi = String(d.getMinutes()).padStart(2, '0')
+  return `${mm}-${dd} ${hh}:${mi}`
 })
 
 const tagClass = computed(() => {
@@ -84,6 +132,13 @@ const tagClass = computed(() => {
   aspect-ratio: 16 / 9;
   position: relative;
   overflow: hidden;
+}
+
+.cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .cover-decor {

@@ -154,6 +154,20 @@ export function fetchResetUserPassword(id: number, newPassword: string) {
   })
 }
 
+// 管理员代登：为指定前台用户签发登录 token（用于辅助调试）
+// 返回 { token, username, userId, tenantId, nickname }
+export function fetchUserLoginToken(id: number) {
+  return request.post<{
+    token: string
+    username: string
+    userId: number
+    tenantId: number
+    nickname?: string
+  }>({
+    url: `/system/user/${id}/login-token`
+  })
+}
+
 // 导出用户列表为 CSV（按当前搜索条件导出，最多 5000 条；phone/email 已在后端脱敏）
 // 使用原生 fetch 绕过封装的响应拦截器（拦截器会解包 res.data.data，对 blob 响应不适用）
 export async function exportUsersCsv(keyword: string, status: string) {

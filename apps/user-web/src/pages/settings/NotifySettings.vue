@@ -570,6 +570,30 @@
           </div>
         </section>
 
+        <section class="notify-panel notify-token-threshold-card">
+          <div class="notify-panel-head">
+            <div>
+              <h3>Token 余额预警阈值</h3>
+              <p>当 Token 余额低于此值时，触发「Token 余额预警」通知。默认 100，可按业务需要调整。</p>
+            </div>
+          </div>
+          <div class="notify-threshold-row">
+            <label class="notify-threshold-label">预警阈值</label>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              class="notify-threshold-input"
+              v-model.number="tokenBalanceThreshold"
+              placeholder="100"
+            />
+            <span class="notify-threshold-hint">Token</span>
+          </div>
+          <p class="notify-threshold-tip">
+            提示：余额低于阈值时仅发一次预警，充值恢复后将自动清除预警状态，下次余额再次低于阈值会重新预警。
+          </p>
+        </section>
+
         <section class="notify-panel notify-logs-card">
           <div class="notify-panel-head">
             <div>
@@ -1003,6 +1027,13 @@ const EVENT_GROUPS = [
     events: ['账号掉线', 'Cookie 到期', '人机验证', '人机验证成功']
   },
   {
+    key: 'ai',
+    label: 'AI 与 Token',
+    icon: 'notifyRisk',
+    tone: 'amber',
+    events: ['Token 余额预警', '自动回复暂停']
+  },
+  {
     key: 'ops',
     label: '经营与汇总',
     icon: 'notifyReport',
@@ -1022,6 +1053,8 @@ const deliveryLogsLoadError = ref(false)
 const selectedKey = ref('webhook')
 const sendMode = ref('single')
 const inAppEnabled = ref(true)
+// Token 余额预警阈值：余额 < 该值时触发预警通知（默认 100，可由用户自定义）
+const tokenBalanceThreshold = ref(100)
 const error = ref('')
 const success = ref('')
 const saving = ref(false)
@@ -1468,6 +1501,11 @@ function applySettings(data) {
   events.value = normalizeEvents(data?.events)
   sendMode.value = String(data?.sendMode || 'single')
   inAppEnabled.value = toBool(data?.inApp, true)
+  // 读取用户自定义的 Token 余额预警阈值（默认 100，最小 1）
+  const rawThreshold = Number(data?.tokenBalanceThreshold)
+  tokenBalanceThreshold.value = Number.isFinite(rawThreshold) && rawThreshold > 0
+    ? Math.floor(rawThreshold)
+    : 100
   ensureSelectedChannel()
 }
 
@@ -1573,7 +1611,8 @@ async function save() {
       inApp: inAppEnabled.value,
       sendMode: sendMode.value,
       channels: serializeChannels(),
-      events: serializeEvents()
+      events: serializeEvents(),
+      tokenBalanceThreshold: Math.max(1, Number(tokenBalanceThreshold.value) || 100)
     })
     success.value = '通知设置已保存'
     await load(false)
@@ -2842,6 +2881,57 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 8px;
   padding: 16px 18px 18px;
+}
+
+/* Token 余额预警阈值卡片 */
+.notify-token-threshold-card {
+  padding-bottom: 18px;
+}
+
+.notify-threshold-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 18px 0;
+}
+
+.notify-threshold-label {
+  font-size: 14px;
+  color: #4a5568;
+  font-weight: 500;
+}
+
+.notify-threshold-input {
+  width: 120px;
+  padding: 8px 12px;
+  border: 1px solid #d8e1f3;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #1a202c;
+  background: #fff;
+  outline: none;
+  transition: border-color 0.18s, box-shadow 0.18s;
+}
+
+.notify-threshold-input:focus {
+  border-color: #0d6bff;
+  box-shadow: 0 0 0 3px rgba(13, 107, 255, 0.12);
+}
+
+.notify-threshold-hint {
+  font-size: 13px;
+  color: #718096;
+}
+
+.notify-threshold-tip {
+  margin: 12px 18px 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #718096;
+  background: #f7fafc;
+  border-radius: 8px;
+  border-left: 3px solid #0d6bff;
 }
 
 .notify-log-list {

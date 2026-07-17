@@ -30,11 +30,13 @@ from .ai_billing import (
     AiBillingUnavailable,
     build_request_id,
     build_stable_request_id,
+    build_text_charge_payload,
     charge_image_usage,
     charge_text_usage,
     estimate_text_tokens,
     precheck_ai_usage,
 )
+from .pending_billing import enqueue_pending_billing, ensure_pending_billing_table
 from .ai_provider import generate_text, get_polish_keywords_restriction, get_polish_forbidden_keywords, enforce_polish_restriction, validate_polish_output
 from .ws_storage import save_chat_message
 from .xianyu_goods_sync import (
@@ -385,6 +387,109 @@ def _find_first_key(d: dict, keys: list[str]) -> str:
 
 def _text(value: Any) -> str:
     return "" if value is None else str(value)
+
+
+# ============================================================
+# ★ 敏感词过滤：商品获取节点提取完成后，调用 Java core-api 的敏感词策略
+#   过滤命中敏感词的商品，避免发布含敏感词的文案导致闲鱼账号封禁。
+#   scene=product 的敏感词由后台「敏感词策略」模块维护。
+# ============================================================
+
+async def _fetch_product_sensitive_words() -> list[str]:
+    """从 Java core-api 拉取 scene=product 的敏感词列表。
+
+    失败时返回空列表并记录警告（不阻塞主流程，但调用方需意识到过滤未生效）。
+    """
+    import httpx as _httpx
+    base = (settings.core_api_base_url or "").rstrip("/")
+    if not base:
+        logger.warning("[SENSITIVE] core_api_base_url 未配置，敏感词过滤跳过")
+        return []
+    headers = {"Accept": "application/json"}
+    if settings.effective_internal_api_token:
+        headers["X-Internal-Token"] = settings.effective_internal_api_token
+    try:
+        async with _httpx.AsyncClient(timeout=8.0, follow_redirects=False, trust_env=False) as client:
+            resp = await client.get(
+                f"{base}/open-api/internal/sensitive-words",
+                headers=headers,
+                params={"scene": "product"},
+            )
+            if resp.status_code != 200:
+                logger.warning("[SENSITIVE] 拉取敏感词失败 status=%s", resp.status_code)
+                return []
+            data = resp.json()
+    except Exception as e:
+        _log_runtime_failure("fetch_sensitive_words", e)
+        return []
+    # Result 包装：{code, msg, data:{scene,count,words,records}}
+    payload = data.get("data") if isinstance(data, dict) and isinstance(data.get("data"), dict) else data
+    if not isinstance(payload, dict):
+        return []
+    words = payload.get("words") or []
+    if not isinstance(words, list):
+        return []
+    # 规范化：去空白、去重（小写）、仅保留非空字符串
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for w in words:
+        ws = _text(w).strip()
+        if ws and ws.lower() not in seen:
+            seen.add(ws.lower())
+            normalized.append(ws)
+    logger.info("[SENSITIVE] 拉取敏感词成功 count=%d", len(normalized))
+    return normalized
+
+
+def _item_hits_sensitive_word(item: dict, words: list[str]) -> str | None:
+    """检查商品标题/描述/卖家是否命中敏感词。命中返回敏感词原文，否则返回 None。
+
+    大小写不敏感，子串包含即命中（与 Java SensitiveWordService.findHits 行为一致）。
+    """
+    if not words:
+        return None
+    title = _text(item.get("title", "")).lower()
+    desc = _text(item.get("description", "")).lower()
+    seller = _text(item.get("seller", "")).lower()
+    for w in words:
+        wl = w.lower()
+        if not wl:
+            continue
+        if wl in title or wl in desc or wl in seller:
+            return w
+    return None
+
+
+def _filter_items_by_sensitive_words(
+    items: list[dict], words: list[str], *, tag: str = "PRODUCT_FETCH",
+) -> tuple[list[dict], list[dict]]:
+    """从商品列表中过滤掉命中敏感词的商品。返回 (kept, removed)。
+
+    words 为空时直接返回原列表（不变更），不记录日志。
+    """
+    if not words:
+        return list(items), []
+    kept: list[dict] = []
+    removed: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        hit = _item_hits_sensitive_word(item, words)
+        if hit:
+            removed.append(item)
+            logger.warning(
+                "[%s/SENSITIVE] 移除命中敏感词的商品 title=%r hitWord=%s itemId=%s",
+                tag,
+                _text(item.get("title", ""))[:80],
+                hit,
+                _text(item.get("itemId", "")),
+            )
+        else:
+            kept.append(item)
+    if removed:
+        logger.info("[%s/SENSITIVE] 敏感词过滤完成 输入=%d 保留=%d 移除=%d",
+                    tag, len(items), len(kept), len(removed))
+    return kept, removed
 
 
 def _normalize_external_uid(value: Any) -> str:
@@ -2298,37 +2403,45 @@ async def _workflow_shop_fetch(
         len(already_fetched_ids),
     )
 
-    # 7) 过滤已提取商品，取前 5 个
-    new_items_raw: list[dict] = []
+    # 7) 过滤已提取商品 + 敏感词过滤，取前 shop_target_count 个合规商品
+    #    ★ 敏感词过滤：命中后台 scene=product 敏感词的商品直接移除，并写入去重表避免下次重复考察。
+    #      若首批候选全部命中敏感词，会继续向后取更多候选，直到凑够目标数或耗尽店铺商品池。
+    sensitive_words = await _fetch_product_sensitive_words()
+    new_items: list[dict] = []              # 保留的合规商品（标准化后）
+    considered_items: list[dict] = []       # 本次考察过的所有商品（含命中敏感词的），统一写入去重表
+    considered_ids: set[str] = set()        # 本次已考察的 itemId（避免同批内重复）
+    sensitive_removed = 0
+
     for raw_item in raw_items:
         if not isinstance(raw_item, dict):
             continue
         item_id = _text(raw_item.get("itemId"))
         if item_id and item_id in already_fetched_ids:
             continue
-        new_items_raw.append(raw_item)
-        if len(new_items_raw) >= shop_target_count:
+        if item_id and item_id in considered_ids:
+            continue
+        if item_id:
+            considered_ids.add(item_id)
+        normalized = _normalize_shop_item(raw_item)
+        considered_items.append(normalized)
+        # 敏感词检查（与 Java SensitiveWordService.findHits 行为一致：大小写不敏感、子串包含即命中）
+        if sensitive_words:
+            hit = _item_hits_sensitive_word(normalized, sensitive_words)
+            if hit:
+                sensitive_removed += 1
+                logger.warning(
+                    "[PRODUCT_FETCH/SHOP/SENSITIVE] 移除命中敏感词的商品 title=%r hitWord=%s itemId=%s",
+                    _text(normalized.get("title", ""))[:80], hit, item_id,
+                )
+                continue
+        new_items.append(normalized)
+        if len(new_items) >= shop_target_count:
             break
 
-    if not new_items_raw:
-        steps.append({"step": "去重过滤", "status": "warn", "detail": "所有商品已提取过，无新商品可取"})
-        state["all_fetched_items"] = []
-        state["product_fetch_page"] = 1
-        return {
-            "ok": False, "errorCode": "SHOP_EXHAUSTED", "message": "该店铺商品已全部提取",
-            "count": 0, "items": [], "keyword": shop_url,
-            "artifactType": "goods", "artifactTitle": "商品获取(店铺)",
-            "artifact": {"count": 0, "items": [], "keyword": shop_url},
-            "steps": steps,
-        }
-
-    # 8) 标准化商品
-    new_items = [_normalize_shop_item(raw) for raw in new_items_raw]
-
-    # 9) 写入去重表
+    # 8) 将本次考察过的所有商品（含命中敏感词的）写入去重表，避免下次重复考察
     workflow_id = context.get("__workflow_id__")
     execution_id = context.get("__execution_id__")
-    for item in new_items:
+    for item in considered_items:
         item_id = item.get("itemId", "")
         if not item_id:
             continue
@@ -2344,11 +2457,44 @@ async def _workflow_shop_fetch(
             _log_runtime_failure("record_shop_item_dedup", e)
     await db.commit()
 
+    if sensitive_removed > 0:
+        steps.append({
+            "step": "敏感词过滤",
+            "status": "warn" if new_items else "error",
+            "detail": f"命中敏感词移除 {sensitive_removed} 个商品",
+        })
+
+    if not new_items:
+        # 所有候选均已被提取或命中敏感词
+        if considered_items:
+            # 本轮有候选但全部命中敏感词，已写入去重表，下次会取不同候选
+            steps.append({"step": "去重过滤", "status": "warn", "detail": f"本次候选 {len(considered_items)} 个全部命中敏感词"})
+            state["all_fetched_items"] = []
+            state["product_fetch_page"] = 1
+            return {
+                "ok": False, "errorCode": "SHOP_SENSITIVE_FILTERED", "message": "本次候选商品全部命中敏感词，请重新执行工作流以提取下一批",
+                "count": 0, "items": [], "keyword": shop_url,
+                "artifactType": "goods", "artifactTitle": "商品获取(店铺)",
+                "artifact": {"count": 0, "items": [], "keyword": shop_url},
+                "steps": steps,
+            }
+        steps.append({"step": "去重过滤", "status": "warn", "detail": "所有商品已提取过，无新商品可取"})
+        state["all_fetched_items"] = []
+        state["product_fetch_page"] = 1
+        return {
+            "ok": False, "errorCode": "SHOP_EXHAUSTED", "message": "该店铺商品已全部提取",
+            "count": 0, "items": [], "keyword": shop_url,
+            "artifactType": "goods", "artifactTitle": "商品获取(店铺)",
+            "artifact": {"count": 0, "items": [], "keyword": shop_url},
+            "steps": steps,
+        }
+
     logger.info(
-        "[PRODUCT_FETCH/SHOP] 完成 storeRefPresent=%s 本次提取=%d 累计已提取=%d",
+        "[PRODUCT_FETCH/SHOP] 完成 storeRefPresent=%s 本次提取=%d 累计已提取=%d sensitiveRemoved=%d",
         bool(store_user_id),
         len(new_items),
-        len(already_fetched_ids) + len(new_items),
+        len(already_fetched_ids) + len(considered_items),
+        sensitive_removed,
     )
 
     # 10) 更新状态（与关键词搜索保持一致的状态变量）
@@ -2356,15 +2502,16 @@ async def _workflow_shop_fetch(
     state["product_fetch_page"] = 1
     state["selected_keywords"] = [shop_url]
 
+    extra_msg = f"，命中敏感词移除 {sensitive_removed} 个" if sensitive_removed > 0 else ""
     steps.append({
         "step": "提取商品",
         "status": "success",
-        "detail": f"店铺共 {len(raw_items)} 个商品，已提取 {len(already_fetched_ids)} 个，本次取 {len(new_items)} 个",
+        "detail": f"店铺共 {len(raw_items)} 个商品，已提取 {len(already_fetched_ids)} 个，本次取 {len(new_items)} 个{extra_msg}",
     })
 
     return {
         "ok": len(new_items) > 0,
-        "message": f"成功从店铺提取 {len(new_items)} 个商品（店铺共 {len(raw_items)} 个，已提取过 {len(already_fetched_ids)} 个）",
+        "message": f"成功从店铺提取 {len(new_items)} 个商品（店铺共 {len(raw_items)} 个，已提取过 {len(already_fetched_ids)} 个{extra_msg}）",
         "items": new_items, "count": len(new_items),
         "keyword": shop_url,
         "artifactType": "goods", "artifactTitle": "商品获取(店铺)",
@@ -4712,6 +4859,17 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
             await _insert_auto_reply_failure(db, tenant_id, account_id, conversation_db_id, rule, content,
                                               "AI_BALANCE_INSUFFICIENT")
             await db.commit()
+            # Token 余额不足，发送"自动回复暂停"用户级通知（去重，每个用户只发一次）
+            try:
+                from .notify_dispatcher import notify_auto_reply_paused
+                await notify_auto_reply_paused(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    account_id=account_id,
+                    reason="AI Token 余额为 0，自动回复已暂停",
+                )
+            except Exception as notify_exc:
+                _log_runtime_failure("notify_auto_reply_paused_on_precheck", notify_exc)
             return {"ok": False, "errorCode": "AI_BALANCE_INSUFFICIENT", "matched": True, "conversationId": conversation_db_id,
                     "messageId": trigger_message_id, "message": "AI Token 余额不足，请充值后重试"}
         except AiBillingUnavailable as exc:
@@ -4793,12 +4951,50 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
         except AiBillingPaymentRequired:
             await _insert_auto_reply_failure(db, tenant_id, account_id, conversation_db_id, rule, content, "AI_BALANCE_INSUFFICIENT")
             await db.commit()
+            # 兜底：precheck 通过但 charge 时余额被扣干（理论上不会发生，但兜底通知）
+            try:
+                from .notify_dispatcher import notify_auto_reply_paused
+                await notify_auto_reply_paused(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    account_id=account_id,
+                    reason="AI Token 余额为 0，自动回复已暂停",
+                )
+            except Exception as notify_exc:
+                _log_runtime_failure("notify_auto_reply_paused_on_charge", notify_exc)
             return {"ok": False, "errorCode": "AI_BALANCE_INSUFFICIENT", "matched": True, "conversationId": conversation_db_id, "messageId": trigger_message_id, "message": "AI Token 余额不足，请充值后重试"}
         except AiBillingUnavailable as exc:
-            # 计费服务暂不可用时降级：回复已生成，跳过扣费，继续发送回复
+            # 计费服务暂不可用时降级：回复已生成，暂存计费请求待后续补扣，继续发送回复
             _log_runtime_failure("charge_auto_reply_usage_degraded", exc)
-            logger.warning("[AI_REPLY] 计费服务暂不可用，降级跳过扣费，继续发送自动回复 tenantId=%d accountId=%d",
+            logger.warning("[AI_REPLY] 计费服务暂不可用，降级暂存计费请求待补扣，继续发送自动回复 tenantId=%d accountId=%d",
                            tenant_id, account_id)
+            # 暂存计费请求，由 pending_billing 定时任务在 Java 恢复后补扣
+            try:
+                await ensure_pending_billing_table()
+                pending_payload = build_text_charge_payload(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    scene="auto_reply",
+                    provider_name=provider_name,
+                    model_name=model_name,
+                    model_type="chat",
+                    prompt=prompt_text + "\n买家消息：" + content,
+                    completion=reply_content,
+                    request_id=billing_request_id,
+                    raw_usage=raw_usage,
+                )
+                await enqueue_pending_billing(
+                    db,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    account_id=account_id,
+                    scene="auto_reply",
+                    request_id=billing_request_id,
+                    payload=pending_payload,
+                    error=str(exc),
+                )
+            except Exception as enqueue_exc:
+                _log_runtime_failure("enqueue_pending_auto_reply_billing", enqueue_exc)
         except AiBillingError as exc:
             _log_runtime_failure("charge_auto_reply_usage", exc)
             await _insert_auto_reply_failure(db, tenant_id, account_id, conversation_db_id, rule, content, "AI_BILLING_FAILED")
@@ -6804,6 +7000,31 @@ async def _publish_single_item(
             "idx": idx,
         }
 
+    # ★ 价格校验：价格 <= 0 直接跳过发布，避免发送到闲鱼后被 FAIL_BIZ_SKU_PRICE_ILLEGAL 拒绝
+    #   搜索结果可能未携带 price 字段，需在调用 publisher 前防御
+    try:
+        _price_num = float(price) if price not in ("", None) else 0.0
+    except (ValueError, TypeError):
+        _price_num = 0.0
+    if _price_num <= 0:
+        logger.warning("[PUBLISH-INLINE] 跳过发布(价格<=0) account=%d title=%s price=%r",
+                       acct_id, title[:20], price)
+        return {
+            "goods_id": "",
+            "title": title,
+            "image_url": img_url,
+            "platform": platform,
+            "status": "skipped",
+            "errorCode": "PUBLISH_PRICE_INVALID",
+            "error": "商品价格未设置或为 0，已阻止发布",
+            "account_id": acct_id,
+            "category": category,
+            "addressText": address_text,
+            "address": address,
+            "source_item_id": source_item_id,
+            "idx": idx,
+        }
+
     # 账号 Cookie 失败
     if not account_pub.get("publisher"):
         return {
@@ -7201,6 +7422,22 @@ async def _execute_workflow_node(
 
         # 6) 汇总所有商品，随机打乱后选取 target_count 个
         combined_pool = previous_items + new_items
+
+        # ★ 敏感词过滤：命中后台 scene=product 敏感词的商品直接移除。
+        #   过滤后的池写回 state["all_fetched_items"]，确保重试时不会再次选中坏商品；
+        #   若过滤后池大小 < target_count，PRODUCT_FILTER 节点会触发重试，自动从下一页补充新商品。
+        sensitive_words = await _fetch_product_sensitive_words()
+        if sensitive_words:
+            combined_pool, _sensitive_removed = _filter_items_by_sensitive_words(
+                combined_pool, sensitive_words, tag="PRODUCT_FETCH",
+            )
+            if _sensitive_removed:
+                steps.append({
+                    "step": "敏感词过滤",
+                    "status": "warn",
+                    "detail": f"命中敏感词移除 {len(_sensitive_removed)} 个商品，剩余 {len(combined_pool)} 个",
+                })
+
         state["all_fetched_items"] = combined_pool  # 保留完整池供重试追加
         state["product_fetch_page"] = current_page + 1  # 下次获取下一页
 
@@ -9048,6 +9285,29 @@ async def _execute_workflow_node(
                         "account_id": acct_id, "category": category,
                         "addressText": address_text, "address": address,
                     })
+                    continue
+
+                # ★ 价格校验：价格 <= 0 直接跳过发布，避免发送到闲鱼后被 FAIL_BIZ_SKU_PRICE_ILLEGAL 拒绝
+                try:
+                    _price_num = float(price) if price not in ("", None) else 0.0
+                except (ValueError, TypeError):
+                    _price_num = 0.0
+                if _price_num <= 0:
+                    publish_results.append({
+                        "goods_id": "",
+                        "title": title,
+                        "image_url": img_url,
+                        "platform": platform,
+                        "status": "skipped",
+                        "errorCode": "PUBLISH_PRICE_INVALID",
+                        "error": "商品价格未设置或为 0，已阻止发布",
+                        "interval_seconds": publish_interval,
+                        "account_id": acct_id, "category": category,
+                        "addressText": address_text, "address": address,
+                        "source_item_id": source_item_id,
+                    })
+                    logger.warning("[PUBLISH] 跳过发布(价格<=0) account=%d title=%s price=%r",
+                                   acct_id, title[:20], price)
                     continue
 
                 # ★ 约束2：跨次运行去重（按账号+itemId/标题），已发布过的商品跳过

@@ -8,6 +8,8 @@ import com.google.zxing.BarcodeFormat;
 import com.google.zxing.client.j2se.MatrixToImageWriter;
 import com.google.zxing.common.BitMatrix;
 import com.google.zxing.qrcode.QRCodeWriter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,6 +37,7 @@ import java.util.stream.Collectors;
  */
 @Service
 public class PaymentService {
+    private static final Logger log = LoggerFactory.getLogger(PaymentService.class);
     private static final long MAX_PAYMENT_AMOUNT_CENT = 100_000_000L;
     private static final long MAX_TOKEN_AMOUNT = 1_000_000_000_000L;
     private static final int MAX_TITLE_LENGTH = 200;
@@ -307,6 +310,17 @@ public class PaymentService {
             amountCent = storedPositiveLong(plan.get("price_cent"), "会员套餐价格");
             if (amountCent > MAX_PAYMENT_AMOUNT_CENT) throw new BizException(503, "会员套餐价格配置超出系统允许范围");
             title = boundedText("会员充值-" + text(plan.get("plan_name")), MAX_TITLE_LENGTH);
+        } else if ("mall_product".equals(orderType)) {
+            targetType = "mall_product";
+            targetId = parseNullableLong(first(data, "targetId", "target_id", "productId", "product_id"));
+            if (targetId == null) throw new BizException(400, "请选择要购买的商城商品");
+            Map<String, Object> product = queryOne(
+                    "SELECT id, title, price_cent, product_type, status FROM mall_product WHERE id=? AND deleted=0 AND status=1",
+                    targetId);
+            if (product == null) throw new BizException(404, "商品不存在或已下架");
+            amountCent = storedPositiveLong(product.get("price_cent"), "商城商品价格");
+            if (amountCent > MAX_PAYMENT_AMOUNT_CENT) throw new BizException(503, "商城商品价格配置超出系统允许范围");
+            title = boundedText("货源商城-" + text(product.get("title")), MAX_TITLE_LENGTH);
         } else {
             targetType = "user_account";
             targetId = null;
@@ -556,6 +570,8 @@ public class PaymentService {
             activateVip(order, source);
         } else if ("token".equals(order.get("order_type"))) {
             rechargeToken(order, source);
+        } else if ("mall_product".equals(order.get("order_type"))) {
+            fulfillMallProduct(order, source);
         } else if (!"ad".equals(order.get("order_type"))) {
             throw new BizException(503, "支付订单类型配置异常，无法发放权益");
         }
@@ -614,6 +630,38 @@ public class PaymentService {
                 "INSERT INTO token_balance_ledger(tenant_id, user_id, change_type, change_amount, before_balance, after_balance, ref_type, ref_id, ref_no, remark, created_time) VALUES(?,?,?,?,?,?,?,?,?,?,NOW())",
                 tenantId, userId, "recharge", tokenAmount, before, after, "payment_order", orderId,
                 boundedText(text(order.get("order_no")), 120), "支付充值");
+    }
+
+    /**
+     * 商城商品支付成功后处理：更新购买人数，卡密商品自动分配一张可用卡密。
+     */
+    private void fulfillMallProduct(Map<String, Object> order, String source) {
+        Long productIdRaw = storedNullablePositiveLong(order.get("target_id"), "商城商品 ID");
+        if (productIdRaw == null || productIdRaw <= 0) {
+            throw new BizException(409, "支付订单缺少商品 ID，请人工核验支付订单");
+        }
+        long productId = productIdRaw;
+        Map<String, Object> product = queryOne(
+                "SELECT id, product_type, status FROM mall_product WHERE id=? AND deleted=0", productId);
+        if (product == null) {
+            throw new BizException(409, "商品不存在或已删除，请人工核验支付订单");
+        }
+        // 更新购买人数
+        safeUpdate("更新购买人数失败",
+                "UPDATE mall_product SET bought_count=bought_count+1, updated_time=NOW() WHERE id=? AND deleted=0",
+                productId);
+        // 卡密商品自动分配一张可用卡密
+        String productType = text(product.get("product_type"));
+        if ("card".equals(productType)) {
+            String orderNo = text(order.get("order_no"));
+            int assigned = safeUpdate("分配卡密失败",
+                    "UPDATE mall_card_key SET status='sold', order_no=?, sold_time=NOW() " +
+                            "WHERE product_id=? AND status='available' ORDER BY id ASC LIMIT 1",
+                    orderNo, productId);
+            if (assigned != 1) {
+                log.error("卡密商品无可用卡密可分配（用户已付款），需人工补发卡密或退款, productId={}, orderNo={}", productId, orderNo);
+            }
+        }
     }
 
     private Map<String, Object> buildPayPayload(String orderNo, String title, long amountCent, String channel, String provider, Map<String, Object> config, LocalDateTime expireAt) {
@@ -889,6 +937,7 @@ public class PaymentService {
         if ("vip".equals(t) || "member".equals(t)) return "vip";
         if ("token".equals(t) || "tokens".equals(t)) return "token";
         if ("ad".equals(t) || "advertisement".equals(t) || "advertising".equals(t)) return "ad";
+        if ("mall_product".equals(t) || "mallproduct".equals(t)) return "mall_product";
         throw new BizException(400, "非法订单类型");
     }
 
@@ -912,6 +961,7 @@ public class PaymentService {
         String orderPrefix = switch (normalized) {
             case "vip" -> "VIP";
             case "ad", "advertisement", "advertising" -> "ADP";
+            case "mall_product" -> "MAL";
             default -> "TOK";
         };
         return orderPrefix + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))

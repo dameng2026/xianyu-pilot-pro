@@ -41,6 +41,7 @@ class DeliveryExecutionServiceFailureBoundaryTest {
     @Mock private CookieCryptoService cookieCryptoService;
     @Mock private UserNotificationService userNotificationService;
     @Mock private DeliveryGoodsConfigService goodsConfigService;
+    @Mock private DeliveryStatementCheckService statementCheckService;
     @Mock private PlatformTransactionManager transactionManager;
 
     private DeliveryExecutionService service;
@@ -61,6 +62,7 @@ class DeliveryExecutionServiceFailureBoundaryTest {
                 cookieCryptoService,
                 userNotificationService,
                 goodsConfigService,
+                statementCheckService,
                 transactionManager
         );
     }

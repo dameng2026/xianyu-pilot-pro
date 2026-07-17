@@ -24,9 +24,9 @@ public class DashboardController {
      * 仪表盘汇总统计
      */
     @GetMapping("/summary")
-    public Result<DashboardSummaryVO> summary() {
+    public Result<DashboardSummaryVO> summary(@RequestParam(value = "accountId", required = false) Long accountId) {
         Long tenantId = TenantContext.getCurrentTenantId();
-        DashboardSummaryVO result = dashboardService.summary(tenantId);
+        DashboardSummaryVO result = dashboardService.summary(tenantId, accountId);
         return Result.ok(result);
     }
 
@@ -35,9 +35,10 @@ public class DashboardController {
      */
     @GetMapping("/sales-trend")
     public Result<SalesTrendVO> salesTrend(
-            @RequestParam(defaultValue = "7") int days) {
+            @RequestParam(defaultValue = "7") int days,
+            @RequestParam(value = "accountId", required = false) Long accountId) {
         Long tenantId = TenantContext.getCurrentTenantId();
-        SalesTrendVO result = dashboardService.salesTrend(tenantId, days);
+        SalesTrendVO result = dashboardService.salesTrend(tenantId, accountId, days);
         return Result.ok(result);
     }
 
@@ -46,9 +47,10 @@ public class DashboardController {
      */
     @GetMapping("/order-message-trend")
     public Result<SalesTrendVO> orderMessageTrend(
-            @RequestParam(defaultValue = "7") int days) {
+            @RequestParam(defaultValue = "7") int days,
+            @RequestParam(value = "accountId", required = false) Long accountId) {
         Long tenantId = TenantContext.getCurrentTenantId();
-        SalesTrendVO result = dashboardService.orderMessageTrend(tenantId, days);
+        SalesTrendVO result = dashboardService.orderMessageTrend(tenantId, accountId, days);
         return Result.ok(result);
     }
 

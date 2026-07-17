@@ -214,6 +214,11 @@ public class UserProfileService {
         } catch (DataAccessException e) {
             throw unavailable("Token 明细", e);
         }
+        // 统一根据 changeType 覆盖 remark 文案，避免历史数据因数据库字符集问题出现乱码
+        for (Map<String, Object> row : records) {
+            String changeType = row.get("changeType") == null ? "" : String.valueOf(row.get("changeType"));
+            row.put("remark", remarkForChangeType(changeType, row.get("remark")));
+        }
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("records", records);
@@ -535,5 +540,30 @@ public class UserProfileService {
     private BizException unavailable(String feature, Exception cause) {
         log.warn("{}查询失败, errorType={}", feature, cause.getClass().getSimpleName());
         return new BizException(503, feature + "暂时不可用，请稍后重试");
+    }
+
+    /**
+     * 根据 changeType 返回标准 remark 文案。
+     * 用于覆盖数据库中可能因字符集问题产生的乱码 remark，保证前端展示一致。
+     * 仅对已知 changeType 覆盖；未知类型保留原 remark。
+     */
+    private String remarkForChangeType(String changeType, Object rawRemark) {
+        if (changeType == null) changeType = "";
+        switch (changeType) {
+            case "ai_charge":
+                return "AI 调用扣费";
+            case "ai_image_charge":
+                return "商机发掘生图扣费";
+            case "recharge":
+                return "Token 充值";
+            case "refund":
+                return "退款返还";
+            case "admin_adjust":
+                return "管理员调整";
+            case "system":
+                return "系统调整";
+            default:
+                return rawRemark == null ? "" : String.valueOf(rawRemark);
+        }
     }
 }

@@ -237,3 +237,141 @@ async def test_execute_text_delivery_updates_local_state_without_calling_xianyu_
 
     assert any("UPDATE xianyu_trade_order" in sql for sql, _ in db.calls)
     auto_confirm.assert_awaited_once()
+
+
+def _reset_order_sync_throttle():
+    """清理订单同步节流状态，确保测试之间相互独立。"""
+    ws_delivery_handler._order_sync_last_run.clear()
+    ws_delivery_handler._order_sync_tasks.clear()
+
+
+@pytest.mark.asyncio
+async def test_trigger_account_orders_sync_invokes_sync_sold_orders(monkeypatch):
+    """收到付款消息触发的账号订单同步应调用 sync_sold_orders_for_account。"""
+    _reset_order_sync_throttle()
+
+    sync_mock = AsyncMock(return_value={
+        "ok": True,
+        "processed": 1,
+        "inserted": 1,
+        "updated": 0,
+        "failed": 0,
+        "message": "订单同步完成",
+    })
+    monkeypatch.setattr(
+        "app.services.automation_runtime.sync_sold_orders_for_account",
+        sync_mock,
+    )
+
+    ws_delivery_handler._trigger_account_orders_sync(tenant_id=1, account_id=42)
+
+    # 等待后台任务执行完毕
+    task = ws_delivery_handler._order_sync_tasks.get(42)
+    assert task is not None
+    await task
+
+    sync_mock.assert_awaited_once()
+    call_kwargs = sync_mock.await_args
+    assert call_kwargs.args[1] == 1   # tenant_id
+    assert call_kwargs.args[2] == 42  # account_id
+
+
+@pytest.mark.asyncio
+async def test_trigger_account_orders_sync_throttles_repeated_calls(monkeypatch):
+    """同一账号节流窗口内的重复调用应被跳过，只触发一次实际同步。"""
+    _reset_order_sync_throttle()
+
+    sync_mock = AsyncMock(return_value={
+        "ok": True, "processed": 0, "inserted": 0, "updated": 0, "failed": 0,
+        "message": "",
+    })
+    monkeypatch.setattr(
+        "app.services.automation_runtime.sync_sold_orders_for_account",
+        sync_mock,
+    )
+
+    ws_delivery_handler._trigger_account_orders_sync(tenant_id=1, account_id=7)
+    task1 = ws_delivery_handler._order_sync_tasks.get(7)
+    assert task1 is not None
+
+    # 节流窗口内再次调用，不应创建新任务
+    ws_delivery_handler._trigger_account_orders_sync(tenant_id=1, account_id=7)
+    task2 = ws_delivery_handler._order_sync_tasks.get(7)
+    assert task2 is task1
+
+    await task1
+    sync_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_message_for_delivery_triggers_order_sync_on_payment(monkeypatch):
+    """handle_incoming_message_for_delivery 收到付款消息时应触发账号订单同步。"""
+    _reset_order_sync_throttle()
+
+    trigger_spy = AsyncMock()
+    captured: dict = {}
+
+    def _capture(tenant_id, account_id):
+        captured["tenant_id"] = tenant_id
+        captured["account_id"] = account_id
+        return None
+
+    monkeypatch.setattr(ws_delivery_handler, "_trigger_account_orders_sync", _capture)
+    monkeypatch.setattr(
+        ws_delivery_handler,
+        "_should_send_statement",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        ws_delivery_handler,
+        "_process_delivery",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "app.services.notify_dispatcher.notify_new_order",
+        AsyncMock(),
+    )
+
+    msg = {
+        "contentType": 26,
+        "sId": "62965262020",
+        "reminderContent": "[我已付款，等待你发货]",
+        "xyGoodsId": "1060794911332",
+    }
+
+    await ws_delivery_handler.handle_incoming_message_for_delivery(
+        tenant_id=1,
+        account_id=99,
+        msg=msg,
+    )
+
+    assert captured == {"tenant_id": 1, "account_id": 99}
+    trigger_spy.assert_not_awaited()  # _trigger_account_orders_sync 不是 async，不会被 await
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_message_for_delivery_does_not_trigger_sync_on_irrelevant_message(monkeypatch):
+    """非付款/小刀成功消息不应触发账号订单同步。"""
+    _reset_order_sync_throttle()
+
+    captured: list = []
+
+    def _capture(tenant_id, account_id):
+        captured.append((tenant_id, account_id))
+
+    monkeypatch.setattr(ws_delivery_handler, "_trigger_account_orders_sync", _capture)
+
+    # 普通文本消息，既非付款也非小刀成功
+    msg = {
+        "contentType": 1,
+        "sId": "62965262020",
+        "msgContent": "你好",
+    }
+
+    await ws_delivery_handler.handle_incoming_message_for_delivery(
+        tenant_id=1,
+        account_id=99,
+        msg=msg,
+    )
+
+    assert captured == []

@@ -5,7 +5,6 @@ export const navGroups = [
   ]},
   { title: '账号与商品', items: [
     { key: 'accounts', label: '闲鱼账号', icon: 'account' },
-    { key: 'connections', label: '连接管理', icon: 'link' },
     { key: 'products', label: '商品管理', icon: 'product' },
     { key: 'orders', label: '订单管理', icon: 'record' },
     { key: 'product-publish', label: '发布商品', icon: 'publish', child: true },
@@ -21,7 +20,7 @@ export const navGroups = [
     { key: 'delivery-source-library', label: '货源库', icon: 'document', child: true },
     { key: 'delivery-statement', label: '发货声明', icon: 'document', child: true },
     { key: 'delivery-mall', label: '货源商城', icon: 'product', child: true },
-    { key: 'card-warehouse', label: '卡密仓库', icon: 'key' },
+    { key: 'card-warehouse', label: '卡密仓库', icon: 'key', child: true },
     { key: 'delivery-records', label: '发货记录', icon: 'record' },
     { key: 'scheduled-tasks', label: '定时任务', icon: 'clock' },
     { key: 'auto-reply', label: '自动回复', icon: 'reply' }
@@ -50,7 +49,6 @@ export const pageTitles = {
   dashboard: ['导航面板', '系统导航中心，帮助你快速进入常用功能'],
   data: ['数据面板', '实时查看运营数据、发货情况与业务趋势'],
   accounts: ['闲鱼账号', '管理账号状态、登录情况与连接健康度'],
-  connections: ['连接管理', '统一查看账号连接、WebSocket 与 Cookie 状态'],
   products: ['商品管理', '管理商品信息、同步状态、自动发货与自动回复配置'],
   orders: ['订单管理', '集中查看订单状态、买家信息、发货情况与异常提醒'],
   'product-publish': ['发布商品', '创建并发布闲鱼商品'],

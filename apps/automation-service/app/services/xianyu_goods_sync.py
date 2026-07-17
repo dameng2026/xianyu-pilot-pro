@@ -243,6 +243,7 @@ PUBLISH_REJECT_CODE_MAP = {
     "FAIL_BIZ_ITEM_DESC_REQUIRED": "商品描述不能为空",
     "FAIL_BIZ_ITEM_PRICE_REQUIRED": "商品价格不能为空",
     "FAIL_BIZ_ITEM_PRICE_INVALID": "商品价格异常，请检查价格区间",
+    "FAIL_BIZ_SKU_PRICE_ILLEGAL": "商品价格未设置或为 0，请检查商品来源是否带价格",
     "FAIL_BIZ_ITEM_IMAGE_REQUIRED": "请至少上传一张商品图片",
     "FAIL_BIZ_ITEM_EDIT_INVALID_MAP_LOCATION": "发布地址信息不完整，请补全省市区、GPS 和 POI 信息",
     "FAIL_BIZ_ITEM_CATEGORY_NOT_MATCH": "商品分类与内容不匹配，请重新选择分类",
@@ -599,10 +600,25 @@ def _refresh_m_h5_tk(cookie_str: str) -> str:
             "data": data_str,
         }, timeout=15)
 
-        # 将会话中的所有 cookie 合并到 cookie 字符串
+        # 仅合并签名/会话关键字段，禁止用空值或无关 cookie 覆盖原登录态。
+        # 历史实现会遍历 session.cookies 全量覆盖，容易把 unb/cookie2/sgcookie 等
+        # 覆盖成空或不完整值：MTOP 搜索仍可用，但 stream-upload 发布上传鉴权失败。
         updated_cookies = _parse_cookie(cookie_str)
-        for c in session.cookies:
-            updated_cookies[c.name] = c.value
+        for name in (
+            "_m_h5_tk",
+            "_m_h5_tk_enc",
+            "cookie2",
+            "_tb_token_",
+            "sgcookie",
+            "unb",
+            "cna",
+            "t",
+            "isg",
+            "tfstk",
+        ):
+            value = session.cookies.get(name)
+            if value:
+                updated_cookies[name] = value
 
         new_cookie_str = "; ".join(f"{k}={v}" for k, v in updated_cookies.items())
         logger.info("_m_h5_tk 已刷新 tokenPresent=%s cookieLen=%d", bool(token), len(new_cookie_str))
@@ -1199,7 +1215,7 @@ async def sync_goods_for_account(
     try:
         # Step 0: 刷新 _m_h5_tk 令牌，确保同步时使用有效令牌
         logger.info("开始同步商品: account_id=%d, 正在刷新令牌...", account_id)
-        cookie_str = _refresh_m_h5_tk(cookie_str)
+        cookie_str = await asyncio.to_thread(_refresh_m_h5_tk, cookie_str)
 
         # Step 1: 直接按最小模型分页获取商品列表
         all_items = await asyncio.to_thread(fetch_goods_list, cookie_str)
@@ -2331,13 +2347,13 @@ class XianyuItemPublisher:
             normalized_url = raw_url if raw_url.startswith("/") else f"/{raw_url}"
             parsed = urlsplit(normalized_url)
             if parsed.query or parsed.fragment or parsed.netloc or parsed.scheme:
-                raise ValueError("local publish image URL is invalid")
+                raise RuntimeError("商品图片地址无效，请重新上传图片后再发布")
             decoded_path = unquote(parsed.path)
             if decoded_path != parsed.path or "\\" in decoded_path:
-                raise ValueError("encoded local publish image paths are not allowed")
+                raise RuntimeError("商品图片地址无效，请重新上传图片后再发布")
             expected_prefix = f"/uploads/images/tenant-{self.tenant_id}/"
             if not decoded_path.startswith(expected_prefix):
-                raise ValueError("local publish image belongs to another tenant")
+                raise RuntimeError("商品图片不属于当前租户，请重新上传图片后再发布")
 
             uploads_root = os.path.realpath(
                 os.path.join(os.path.dirname(__file__), "../../uploads")
@@ -2346,124 +2362,344 @@ class XianyuItemPublisher:
             asset_storage_key = decoded_path[len("/uploads/images/"):]
             local_path = os.path.realpath(os.path.join(uploads_root, *filesystem_key.split("/")))
             if os.path.commonpath([uploads_root, local_path]) != uploads_root:
-                raise ValueError("local publish image path escapes the uploads root")
-            expected_size = self._asset_verifier(
-                self.tenant_id, decoded_path, asset_storage_key
-            )
+                raise RuntimeError("商品图片路径非法，请重新上传图片后再发布")
+            try:
+                expected_size = self._asset_verifier(
+                    self.tenant_id, decoded_path, asset_storage_key
+                )
+            except ValueError as exc:
+                # 资产校验失败（未入库/已清理/不属于租户）
+                logger.warning(
+                    "publish image asset verification failed errorType=%s",
+                    type(exc).__name__,
+                )
+                raise RuntimeError("商品图片已失效或不存在，请重新上传图片后再发布") from exc
+            except Exception as exc:
+                log_service_failure(logger, exc, operation="verify_publish_image_asset", level=logging.WARNING)
+                raise RuntimeError("商品图片校验失败，请稍后重试或重新上传图片") from exc
             if not os.path.isfile(local_path):
-                raise ValueError("local publish image file does not exist")
+                raise RuntimeError("商品图片文件不存在，请重新上传图片后再发布")
             with open(local_path, "rb") as file:
                 img_data = file.read(MAX_IMAGE_BYTES + 1)
             if len(img_data) != expected_size:
-                raise ValueError("local publish image does not match its storage record")
-            return validate_image_bytes(img_data).content
+                raise RuntimeError("商品图片与存储记录不一致，请重新上传图片后再发布")
+            try:
+                return validate_image_bytes(img_data).content
+            except ValueError as exc:
+                raise RuntimeError("商品图片内容无效，请更换图片后重试") from exc
 
-        return self._remote_image_loader(raw_url)
+        try:
+            return self._remote_image_loader(raw_url)
+        except ValueError as exc:
+            raise RuntimeError("远程商品图片无法安全下载，请改用本地上传后再发布") from exc
 
     # ---- 图片上传到闲鱼 CDN ----
+
+    @staticmethod
+    def _extract_publish_cdn_url(response: Any) -> str:
+        """
+        从 stream-upload 响应中提取 CDN URL。
+
+        兼容多种返回格式，并正确处理 Python 条件表达式优先级
+        （`a or b if c else d` 不等于 `a or (b if c else d)`）。
+        """
+        def _pick_url(node: Any) -> str:
+            if isinstance(node, str):
+                text = node.strip()
+                return text if text.startswith(("http://", "https://", "//")) else ""
+            if not isinstance(node, dict):
+                return ""
+            for key in ("url", "cdnUrl", "cdn_url", "fileUrl", "file_url", "picUrl", "imageUrl"):
+                value = node.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            return ""
+
+        if isinstance(response, list) and response:
+            for item in response:
+                found = _pick_url(item)
+                if found:
+                    return found
+            return ""
+
+        if not isinstance(response, dict):
+            return ""
+
+        # 顶层 url / 常见嵌套容器（必须给三元表达式加括号，避免 or/if 优先级吞掉顶层 url）
+        data = response.get("data")
+        obj = response.get("object")
+        result = response.get("result")
+        found = (
+            _pick_url(response)
+            or (_pick_url(data) if isinstance(data, dict) else "")
+            or (_pick_url(obj) if isinstance(obj, dict) else "")
+            or (_pick_url(result) if isinstance(result, dict) else "")
+        )
+        if found:
+            return found
+
+        # 任意一层 list 容器
+        for value in response.values():
+            if isinstance(value, list) and value and isinstance(value[0], dict):
+                found = _pick_url(value[0])
+                if found:
+                    return found
+
+        # 兜底：从整段 JSON 里捞 alicdn / goofish 图片地址
+        response_str = json.dumps(response, ensure_ascii=False)
+        match = re.search(
+            r'https?://(?:img|gw|g\.|pic)\.alicdn\.com[^"\'\\\s,]+|'
+            r'https?://[^"\'\\\s,]*\.(?:alicdn|goofish)\.com[^"\'\\\s,]+|'
+            r'//(?:img|gw)\.alicdn\.com[^"\'\\\s,]+',
+            response_str,
+        )
+        return match.group(0) if match else ""
+
+    @staticmethod
+    def _normalize_cdn_url(cdn_url: str) -> str:
+        """将协议相对地址规范为 https，并拒绝非公网 CDN。"""
+        text = str(cdn_url or "").strip()
+        if not text:
+            raise RuntimeError("图片上传未返回 CDN 地址")
+        if text.startswith("//"):
+            text = "https:" + text
+        elif text.startswith("http://"):
+            text = "https://" + text[len("http://"):]
+        parsed = urlsplit(text)
+        if parsed.scheme.lower() != "https" or not parsed.netloc:
+            raise RuntimeError("图片上传返回了不安全的 CDN 地址")
+        host = (parsed.hostname or "").lower()
+        # 闲鱼/淘宝 CDN 常见域名；其它 https 公网地址也允许（部分账号返回自定义加速域）
+        if not host or " " in host:
+            raise RuntimeError("图片上传返回了不安全的 CDN 地址")
+        return text
+
+    @staticmethod
+    def _response_host(resp: requests.Response) -> str:
+        final_url = str(getattr(resp, "url", "") or "")
+        location = str((getattr(resp, "headers", None) or {}).get("Location") or "")
+        for candidate in (final_url, location):
+            host = (urlsplit(candidate).hostname or "").lower()
+            if host:
+                return host
+        return ""
+
+    @classmethod
+    def _is_passport_redirect(cls, resp: requests.Response) -> bool:
+        """仅当明确落到 passport 登录域时才视为登录跳转（禁止用 /login 子串误判）。"""
+        host = cls._response_host(resp)
+        return host in {
+            "passport.goofish.com",
+            "passport.taobao.com",
+            "login.taobao.com",
+            "login.m.taobao.com",
+        }
+
+    def _apply_refreshed_cookie(self, cookie_str: str) -> None:
+        self.cookie_str = cookie_str
+        refreshed_token = extract_token_from_cookie(cookie_str)
+        if refreshed_token:
+            self.token = refreshed_token
+
+    def _mtop_session_alive(self) -> bool:
+        """
+        用轻量 MTOP 探测当前 cookie 是否仍可用于平台业务。
+
+        商机搜索/账号页 Cookie 状态都走 MTOP；stream-upload 失败时不能单凭 HTTP 状态
+        判定“登录已失效”，否则会出现搜索正常却提示重新登录的矛盾。
+        """
+        try:
+            t_ms = str(int(time.time() * 1000))
+            data_json = "{}"
+            sign = self._build_sign(t_ms, data_json)
+            url = self._build_url(
+                "mtop.taobao.idlemessage.pc.loginuser.get",
+                "1.0",
+                t_ms,
+                sign,
+            )
+            headers = self._get_headers()
+            resp = requests.post(url, headers=headers, data={"data": data_json}, timeout=15)
+            if resp.status_code >= 500:
+                # 平台抖动：无法证明登录失效
+                return True
+            result = resp.json()
+            ret = result.get("ret", [])
+            ret_msg = str(ret[0] if isinstance(ret, list) and ret else ret)
+            if any(
+                code in ret_msg
+                for code in (TOKEN_EXPIRED, TOKEN_EXPIRED_ALIAS, SESSION_EXPIRED, "FAIL_SYS_USER_VALIDATE")
+            ):
+                return False
+            # SUCCESS 或其它业务码都视为 cookie 仍可用；只有明确过期才算失效
+            return True
+        except Exception as exc:
+            log_service_failure(
+                logger, exc, operation="probe_mtop_session_for_upload", level=logging.WARNING
+            )
+            # 探测失败时默认“未证明失效”，避免误伤正常账号
+            return True
+
+    def _raise_upload_failure(self, technical: str) -> None:
+        """上传失败时结合 MTOP 探活给出准确中文错误，避免误报登录失效。"""
+        if self._mtop_session_alive():
+            raise RuntimeError(
+                "闲鱼图片上传失败，但账号登录状态正常（搜索等功能可用）。"
+                "请稍后重试或更换图片；若持续失败请检查网络/代理后重试"
+            )
+        raise RuntimeError("闲鱼登录已失效，请到「账号管理」重新登录后再发布")
 
     def upload_image_to_xianyu(self, image_url: str) -> str:
         """
         上传单张图片到闲鱼 CDN。
-        使用 stream-upload API，只需 Cookie 鉴权，无需复杂签名。
-        上传前自动压缩图片（缩放/转 JPEG/控制文件大小）。
-        如果 Cookie 过期（302 重定向），自动尝试刷新后重试。
+
+        实现与自动分类/聊天发图共用同一 stream-upload 通道；
+        不再把 401/403 或 HTML 里出现 login 字样直接判成 Cookie 失效。
         """
         cookie_for_upload = self.cookie_str
+        last_error: Exception | None = None
+        configured_upload_url = (settings.xianyu_mtop_upload_url or "").strip()
+        default_upload_url = (
+            f"{self.IMAGE_UPLOAD_URL}?floderId=0&appkey={self.IMAGE_UPLOAD_APPKEY}"
+        )
+        upload_url = configured_upload_url or default_upload_url
 
-        for attempt in range(2):  # 最多 2 次（Cookie 过期时重试一次）
+        for attempt in range(2):
             try:
-                # 1. 读取图片数据
-                img_data = self._read_publish_image(image_url)
-
-                # 2. 压缩图片
-                img_data = self._compress_image(img_data)
-
-                # 3. 构建 multipart 请求体
-                boundary = "----WebKitFormBoundary" + hashlib.md5(str(time.time()).encode()).hexdigest()[:16]
-                filename = f"publish_{int(time.time())}.jpg"
-                body = (
-                    f"--{boundary}\r\n"
-                    f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-                    f"Content-Type: image/jpeg\r\n\r\n"
-                ).encode("utf-8")
-                body += img_data
-                body += f"\r\n--{boundary}--\r\n".encode("utf-8")
-
-                # 4. 上传到闲鱼 CDN
-                upload_url = f"{self.IMAGE_UPLOAD_URL}?floderId=0&appkey={self.IMAGE_UPLOAD_APPKEY}"
+                img_data = self._compress_image(self._read_publish_image(image_url))
+                filename = f"publish_{int(time.time() * 1000)}.jpg"
                 headers = {
-                    "Cookie": cookie_for_upload,
-                    "Content-Type": f"multipart/form-data; boundary={boundary}",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0.0.0 Safari/537.36"
+                    ),
+                    "Accept": "application/json, text/plain, */*",
+                    "Accept-Language": "zh-CN,zh;q=0.9",
+                    "Origin": "https://www.goofish.com",
                     "Referer": "https://www.goofish.com/",
-                    "x-requested-with": "XMLHttpRequest",
-                    "Accept": "application/json",
+                    # Cookie 头完整透传：与浏览器一致，避免 CookieJar domain 漏带
+                    "Cookie": cookie_for_upload,
                 }
 
-                resp = requests.post(upload_url, data=body, headers=headers, timeout=30, allow_redirects=False)
-
-                # 5. Cookie 过期检测（302 重定向）
-                if resp.status_code in (302, 301):
-                    if attempt == 0:
-                        logger.warning("图片上传 Cookie 已过期，尝试刷新...")
-                        cookie_for_upload = _refresh_m_h5_tk(self.cookie_str)
+                session = requests.Session()
+                for part in cookie_for_upload.split(";"):
+                    part = part.strip()
+                    if "=" not in part:
                         continue
-                    else:
-                        logger.error("图片上传 Cookie 刷新后仍然过期")
-                        raise RuntimeError("图片上传登录状态不可用")
+                    key, _, value = part.partition("=")
+                    key = key.strip()
+                    value = value.strip()
+                    if key and value:
+                        session.cookies.set(key, value, domain=".goofish.com")
 
-                resp.raise_for_status()
+                resp = session.post(
+                    upload_url,
+                    headers=headers,
+                    files={"file": (filename, img_data, "image/jpeg")},
+                    timeout=60,
+                    allow_redirects=True,
+                )
 
-                # 6. 解析响应获取 CDN URL
-                result = resp.json()
+                logger.info(
+                    "图片上传 HTTP 返回 status=%s finalHost=%s contentType=%s",
+                    resp.status_code,
+                    self._response_host(resp) or "-",
+                    (resp.headers or {}).get("Content-Type", ""),
+                )
+
+                # 明确跳到 passport：先刷新 _m_h5_tk 重试；仍失败再结合 MTOP 探活报错
+                if self._is_passport_redirect(resp):
+                    if attempt == 0:
+                        logger.warning("图片上传跳转到 passport，尝试刷新 _m_h5_tk 后重试")
+                        cookie_for_upload = _refresh_m_h5_tk(cookie_for_upload)
+                        self._apply_refreshed_cookie(cookie_for_upload)
+                        continue
+                    self._raise_upload_failure("passport_redirect")
+
+                if resp.status_code >= 400:
+                    # 401/403 可能是 stream-upload 风控/签名，不一定是 Cookie 全局失效
+                    if attempt == 0 and resp.status_code in (401, 403):
+                        cookie_for_upload = _refresh_m_h5_tk(cookie_for_upload)
+                        self._apply_refreshed_cookie(cookie_for_upload)
+                        continue
+                    logger.warning(
+                        "图片上传 HTTP 失败 status=%s bodyLen=%d",
+                        resp.status_code,
+                        len(resp.text or ""),
+                    )
+                    self._raise_upload_failure(f"http_{resp.status_code}")
+
+                try:
+                    result = resp.json()
+                except ValueError as exc:
+                    logger.warning(
+                        "图片上传响应不是 JSON status=%s contentType=%s bodyLen=%d",
+                        resp.status_code,
+                        (resp.headers or {}).get("Content-Type", ""),
+                        len(resp.text or ""),
+                    )
+                    if attempt == 0:
+                        time.sleep(1)
+                        continue
+                    raise RuntimeError("图片上传失败，闲鱼服务返回了无法识别的内容，请稍后重试或更换图片") from exc
+
                 logger.info(
                     "图片上传响应 responseType=%s responseKeys=%s",
                     type(result).__name__,
                     sorted(str(key) for key in result.keys()) if isinstance(result, dict) else [],
                 )
 
-                # 兼容多种响应格式
-                cdn_url = ""
-                if isinstance(result, dict):
-                    cdn_url = (
-                        result.get("url", "")
-                        or result.get("data", {}).get("url", "") if isinstance(result.get("data"), dict) else ""
-                        or result.get("object", {}).get("url", "") if isinstance(result.get("object"), dict) else ""
-                        or result.get("result", {}).get("url", "") if isinstance(result.get("result"), dict) else ""
+                cdn_url = self._extract_publish_cdn_url(result)
+                if not cdn_url:
+                    logger.warning(
+                        "图片上传未解析到 CDN URL responseKeys=%s",
+                        sorted(str(key) for key in result.keys()) if isinstance(result, dict) else [],
                     )
-                elif isinstance(result, list) and len(result) > 0 and isinstance(result[0], dict):
-                    cdn_url = result[0].get("url", "")
+                    if attempt == 0:
+                        time.sleep(1)
+                        continue
+                    raise RuntimeError("图片上传失败，未能获取闲鱼图片地址，请稍后重试或更换图片")
 
-                if cdn_url:
-                    cdn_url = cdn_url.strip()
-                    parsed_cdn = urlsplit(cdn_url)
-                    if parsed_cdn.scheme.lower() != "https" or not parsed_cdn.netloc:
-                        raise RuntimeError("图片上传返回了不安全的 CDN 地址")
-                    logger.info("图片上传到闲鱼 CDN 成功")
-                    return cdn_url
+                normalized = self._normalize_cdn_url(cdn_url)
+                logger.info("图片上传到闲鱼 CDN 成功")
+                return normalized
 
-                logger.warning(
-                    "图片上传返回成功但未解析到 CDN URL "
-                    "responseType=%s responseKeys=%s",
-                    type(result).__name__,
-                    sorted(str(key) for key in result.keys()) if isinstance(result, dict) else [],
-                )
-                raise RuntimeError("图片上传未返回 CDN 地址")
-
-            except requests.exceptions.Timeout:
+            except requests.exceptions.Timeout as e:
+                last_error = e
                 logger.warning("图片上传超时 (attempt %d/2)", attempt + 1)
                 if attempt == 0:
                     time.sleep(1)
                     continue
-                raise RuntimeError("图片上传超时")
+                raise RuntimeError("图片上传超时") from e
+            except RuntimeError as e:
+                last_error = e
+                log_service_failure(logger, e, operation="upload_publish_image", level=logging.WARNING)
+                message = str(e)
+                # 已分类的用户错误直接抛出
+                if any(token in message for token in (
+                    "登录已失效",
+                    "登录状态正常",
+                    "商品图片",
+                    "远程商品图片",
+                    "图片上传失败",
+                    "超时",
+                )):
+                    raise
+                if attempt == 0:
+                    time.sleep(1)
+                    continue
+                raise
             except Exception as e:
+                last_error = e
                 log_service_failure(logger, e, operation="upload_publish_image", level=logging.WARNING)
                 if attempt == 0:
                     time.sleep(1)
                     continue
-                raise RuntimeError("图片上传失败") from e
+                self._raise_upload_failure(type(e).__name__)
 
+        if last_error is not None:
+            raise RuntimeError("图片上传失败") from last_error
         raise RuntimeError("图片上传失败")
 
     def upload_images_to_xianyu(self, image_urls: list[str]) -> list[str]:
@@ -2702,6 +2938,12 @@ class XianyuItemPublisher:
         }
 
         # ---- SKU（至少一个空属性 SKU） ----
+        # ★ 防御：价格 <= 0 时直接抛出本地错误，避免发送到平台后被 FAIL_BIZ_SKU_PRICE_ILLEGAL 拒绝
+        #   单规格商品也会构造一个空属性 SKU，priceInCent=0 会被闲鱼判定为多规格价格非法
+        if price_in_cent <= 0:
+            raise ValueError(
+                "商品价格未设置或为 0，无法发布（闲鱼会以 FAIL_BIZ_SKU_PRICE_ILLEGAL 拒绝）"
+            )
         item_sku_list = []
         sku_list = item_data.get("skuList", [])
         if sku_list:

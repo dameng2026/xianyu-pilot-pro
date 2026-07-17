@@ -102,8 +102,14 @@ public class DataSyncController {
             return saved;
         }
         // body 覆盖 saved（允许临时覆盖配置进行测试）
+        // 注意：跳过 body 中的空字符串/ null 值，避免覆盖 saved 中的有效配置
         Map<String, Object> merged = new LinkedHashMap<>(saved);
-        merged.putAll(body);
+        for (Map.Entry<String, Object> e : body.entrySet()) {
+            Object v = e.getValue();
+            if (v == null) continue;
+            if (v instanceof String s && s.isBlank()) continue;
+            merged.put(e.getKey(), v);
+        }
         return merged;
     }
 

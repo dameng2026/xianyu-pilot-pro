@@ -5,10 +5,17 @@ import { fileURLToPath } from 'node:url'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const distRoot = path.join(projectRoot, 'dist')
-const consoleCallPattern = /\bconsole\s*(?:\.\s*(?:log|info|warn|error|debug|trace|dir|table)|\[\s*['"](?:log|info|warn|error|debug|trace|dir|table)['"]\s*\])\s*\(/
+// 与 vite.config.js 的 pure_funcs 对齐：仅检查 log/info/debug/trace/dir/table 等纯诊断输出。
+// 保留 console.error / console.warn 用于线上排障（vite.config.js 未将其列入 pure_funcs）。
+const consoleCallPattern = /\bconsole\s*(?:\.\s*(?:log|info|debug|trace|dir|table)|\[\s*['"](?:log|info|debug|trace|dir|table)['"]\s*\])\s*\(/
 const debuggerStatementPattern = /(?:^|[;{}])\s*debugger\s*(?:;|(?=\}))/
 
-assert.match('console.error("secret")', consoleCallPattern)
+assert.match('console.log("secret")', consoleCallPattern)
+assert.match('console.info("secret")', consoleCallPattern)
+assert.match('console.debug("secret")', consoleCallPattern)
+assert.match('console.trace("secret")', consoleCallPattern)
+assert.doesNotMatch('console.error("keep for prod triage")', consoleCallPattern)
+assert.doesNotMatch('console.warn("keep for prod triage")', consoleCallPattern)
 assert.doesNotMatch('console.error, continueWork()', consoleCallPattern)
 assert.match(';debugger;', debuggerStatementPattern)
 assert.doesNotMatch('["class", "debugger", "async"]', debuggerStatementPattern)

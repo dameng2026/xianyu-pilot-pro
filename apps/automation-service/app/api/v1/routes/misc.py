@@ -260,8 +260,8 @@ async def _precheck_ws_token(db: AsyncSession, tenant_id: int, account_id: int, 
         return False, ("creds_error", error)
     try:
         from app.services.ws_token import get_ws_token_with_refreshed_m_h5_tk
-        access_token, effective_m_h5_tk, error_type, refreshed_cookie = get_ws_token_with_refreshed_m_h5_tk(
-            creds["cookie_str"], creds["m_h5_tk"]
+        access_token, effective_m_h5_tk, error_type, refreshed_cookie = await asyncio.to_thread(
+            get_ws_token_with_refreshed_m_h5_tk, creds["cookie_str"], creds["m_h5_tk"]
         )
         if access_token:
             return True, None

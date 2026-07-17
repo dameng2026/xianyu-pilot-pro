@@ -67,6 +67,66 @@ class TestExplainPublishRejection:
         assert "商品图片涉嫌违规" in msg
         assert "FAIL_BIZ_ITEM_PICTURE_VIOLATION" in msg
 
+    def test_sku_price_illegal_code_translates(self):
+        """FAIL_BIZ_SKU_PRICE_ILLEGAL 错误码应翻译为友好提示"""
+        msg = _explain_publish_rejection(
+            "FAIL_BIZ_SKU_PRICE_ILLEGAL::多规格价格至少大于0元",
+            None,
+        )
+        assert "商品价格未设置或为 0" in msg
+        assert "FAIL_BIZ_SKU_PRICE_ILLEGAL" in msg
+
+
+class TestBuildPublishDataPriceGuard:
+    """_build_publish_data 价格防御测试"""
+
+    def _make_publisher(self):
+        from app.services.xianyu_goods_sync import XianyuItemPublisher
+        return XianyuItemPublisher(cookie_str="unb=1; _m_h5_tk=t_1", tenant_id=1)
+
+    def test_price_zero_raises_before_calling_platform(self):
+        """price=0 时应在调用平台 API 之前抛出本地 ValueError"""
+        pub = self._make_publisher()
+        with pytest.raises(ValueError, match="FAIL_BIZ_SKU_PRICE_ILLEGAL"):
+            pub._build_publish_data(
+                item_data={"title": "t", "desc": "d", "price": 0, "quantity": 1},
+                category_info={},
+                xianyu_image_urls=["https://example.com/x.png"],
+            )
+
+    def test_price_empty_string_raises_before_calling_platform(self):
+        """price='' 时应在调用平台 API 之前抛出本地 ValueError"""
+        pub = self._make_publisher()
+        with pytest.raises(ValueError, match="FAIL_BIZ_SKU_PRICE_ILLEGAL"):
+            pub._build_publish_data(
+                item_data={"title": "t", "desc": "d", "price": "", "quantity": 1},
+                category_info={},
+                xianyu_image_urls=["https://example.com/x.png"],
+            )
+
+    def test_price_missing_raises_before_calling_platform(self):
+        """price 字段缺失时应在调用平台 API 之前抛出本地 ValueError"""
+        pub = self._make_publisher()
+        with pytest.raises(ValueError, match="FAIL_BIZ_SKU_PRICE_ILLEGAL"):
+            pub._build_publish_data(
+                item_data={"title": "t", "desc": "d", "quantity": 1},
+                category_info={},
+                xianyu_image_urls=["https://example.com/x.png"],
+            )
+
+    def test_valid_price_does_not_raise(self):
+        """price>0 时 _build_publish_data 不应抛出 ValueError"""
+        pub = self._make_publisher()
+        data = pub._build_publish_data(
+            item_data={"title": "t", "desc": "d", "price": "9.9", "quantity": 1},
+            category_info={},
+            xianyu_image_urls=["https://example.com/x.png"],
+        )
+        # 单规格商品应包含一个空属性 SKU，priceInCent 大于 0
+        sku_list = data.get("itemSkuList", [])
+        assert sku_list, "应至少包含一个 SKU 条目"
+        assert int(sku_list[0]["priceInCent"]) == 990
+
 
 class TestBuildSign:
     """签名算法测试"""

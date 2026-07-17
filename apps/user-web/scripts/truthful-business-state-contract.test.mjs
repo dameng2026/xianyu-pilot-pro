@@ -109,13 +109,6 @@ const topbar = read('src', 'components', 'Topbar.vue')
 assert.match(topbar, /状态未知/)
 assert.doesNotMatch(topbar, /\[props\.sseStatus\] \|\| '在线'/)
 
-const connections = read('src', 'pages', 'ConnectionsPage.vue')
-assert.match(connections, /connectionsAvailable/)
-assert.match(connections, /连接列表加载失败/)
-assert.doesNotMatch(connections, /系统运行正常，无告警信息/)
-assert.doesNotMatch(connections, /auto:true/)
-assert.doesNotMatch(connections, /<ToggleSwitch/)
-
 const accountAuth = read('src', 'utils', 'accountAuth.js')
 assert.match(accountAuth, /function accountWsConnectionState/)
 assert.match(accountAuth, /return '状态未知'/)

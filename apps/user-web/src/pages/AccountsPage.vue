@@ -318,14 +318,6 @@
 
         <button
           type="button"
-          @click="emit('navigate', 'connections')"
-        >
-          <span>⇄</span>
-          连接管理
-        </button>
-
-        <button
-          type="button"
           @click="emit('navigate', 'messages')"
         >
           <span>✉</span>
@@ -401,7 +393,6 @@
           <button type="button" @click="moreActionNavigate('products')">同步商品</button>
           <button type="button" @click="moreActionNavigate('auto-reply')">自动回复</button>
           <button type="button" @click="moreActionNavigate('auto-delivery')">自动发货</button>
-          <button type="button" @click="moreActionNavigate('connections')">连接管理</button>
           <button type="button" @click="moreActionNavigate('messages')">在线消息</button>
         </div>
         </template>
@@ -866,9 +857,6 @@ const unifiedConfigSuccess = ref('')
 const unifiedConfigTaskText = ref('')
 let polishTimer = null
 let polishTaskId = ''
-// 擦亮轮询兜底超时定时器：5 分钟后强制停止轮询，防止后端持续返回 running 导致永久轮询
-let polishPollTimeoutTimer = null
-const MAX_POLISH_POLL_DURATION_MS = 5 * 60 * 1000
 const polishingAccountId = ref(null)  // 正在擦亮的账号ID
 const pendingDeleteId = ref(null)     // 待删除的账号ID
 
@@ -1730,6 +1718,37 @@ async function refreshUncachedWsStatus() {
   }
 }
 
+// 进入页面时主动校验当前页账号的 cookie 实时状态。
+// 仅依赖 DB 缓存的 cookie_status 会导致 cookie 已失效但 DB 未更新时账号卡片仍显示"正常"，
+// 用户必须点击发布/搜索才被动发现问题。这里在 onMounted 后异步批量调用 /check-auth
+// 实时探活，把最新结果直接更新到 accounts / selected，让 UI 立即反映真实状态。
+// 失败静默处理（不阻塞页面加载、不弹错误），仅刷新成功的账号。
+async function refreshVisibleAccountsAuthOnPageEnter() {
+  if (!accountsAvailable.value || !accounts.value.length) return
+  const targets = accounts.value.slice()
+  const batchSize = 5
+  for (let i = 0; i < targets.length; i += batchSize) {
+    const batch = targets.slice(i, i + batchSize)
+    await Promise.allSettled(batch.map(async (account) => {
+      try {
+        const data = accountAuthStatusOf(await checkAccountAuth(account.id))
+        const target = accounts.value.find(item => item.id === account.id)
+        if (!target) return
+        target.cookieStatus = data.cookieStatus
+        target.authUsable = data.usable
+        target.loginStatusCode = data.loginStatusCode
+        target.loginStatusMessage = data.loginStatusMessage
+        target.loginCheckTime = data.checkedAt
+        if (selected.value?.id === target.id) {
+          selected.value = { ...selected.value, ...target }
+        }
+      } catch {
+        // 单个账号校验失败不阻塞其他账号；UI 仍显示 DB 缓存状态
+      }
+    }))
+  }
+}
+
 function goPage(p) {
   current.value = p
   loadAccounts()
@@ -1946,10 +1965,6 @@ function stopPolishPolling(resetTaskId = true) {
     clearInterval(polishTimer)
     polishTimer = null
   }
-  if (polishPollTimeoutTimer) {
-    clearTimeout(polishPollTimeoutTimer)
-    polishPollTimeoutTimer = null
-  }
   if (resetTaskId) polishTaskId = ''
 }
 
@@ -2020,12 +2035,6 @@ function startPolishPolling(accountId, taskId) {
   polishingAccountId.value = accountId
   polishTimer = setInterval(() => { void poll() }, 1500)
   setTimeout(() => { void poll() }, 300)
-  // 兜底超时：5 分钟后强制停止轮询，提示用户稍后查看结果
-  polishPollTimeoutTimer = setTimeout(() => {
-    stopPolishPolling()
-    polishingAccountId.value = null
-    error.value = '擦亮超时，请稍后在商品列表中查看结果'
-  }, MAX_POLISH_POLL_DURATION_MS)
 }
 
 const handleItemPolishWithProgress = async (account) => {
@@ -2275,7 +2284,12 @@ function handleSseEvent(e) {
 onMounted(() => {
   window.addEventListener('xya-header-action', handleHeaderAction)
   window.addEventListener('xya-sse-event', handleSseEvent)
-  loadAccounts().then(() => refreshUncachedWsStatus())
+  loadAccounts().then(() => {
+    refreshUncachedWsStatus()
+    // 进入页面时主动校验当前页账号的 cookie 实时状态，
+    // 避免 DB 中 cookie_status 仍是"正常"但 cookie 实际已失效时 UI 显示假"正常"。
+    refreshVisibleAccountsAuthOnPageEnter()
+  })
 })
 onBeforeUnmount(() => {
   window.removeEventListener('xya-header-action', handleHeaderAction)

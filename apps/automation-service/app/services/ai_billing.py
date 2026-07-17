@@ -151,6 +151,39 @@ async def charge_text_usage(
     request_id: Optional[str] = None,
     raw_usage: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    payload = build_text_charge_payload(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        scene=scene,
+        provider_name=provider_name,
+        model_name=model_name,
+        model_type=model_type,
+        prompt=prompt,
+        completion=completion,
+        request_id=request_id,
+        raw_usage=raw_usage,
+    )
+    return await charge_ai_usage(payload)
+
+
+def build_text_charge_payload(
+    *,
+    tenant_id: int,
+    user_id: int,
+    scene: str,
+    provider_name: str = "default",
+    model_name: str = "default",
+    model_type: str = "chat",
+    prompt: str = "",
+    completion: str = "",
+    request_id: Optional[str] = None,
+    raw_usage: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """构建文本调用计费 payload（不实际调用 Java）。
+
+    供 charge_text_usage 和 pending_billing 暂存时复用，保证暂存的 payload
+    与实时扣费的 payload 完全一致。
+    """
     usage = raw_usage or {}
     prompt_tokens = _non_negative_int(
         usage.get("prompt_tokens") or usage.get("promptTokens"),
@@ -164,7 +197,7 @@ async def charge_text_usage(
     # 缓存命中数不能超过输入 token 总数
     if cached_tokens > prompt_tokens:
         cached_tokens = prompt_tokens
-    return await charge_ai_usage({
+    return {
         "tenantId": tenant_id,
         "userId": user_id,
         "scene": scene,
@@ -181,7 +214,7 @@ async def charge_text_usage(
         ),
         "requestId": request_id or build_request_id(scene),
         "rawUsage": usage,
-    })
+    }
 
 
 async def charge_image_usage(

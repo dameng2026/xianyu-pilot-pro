@@ -90,7 +90,7 @@
 <script setup lang="ts">
   import ArtButtonMore from '@/components/core/forms/art-button-more/index.vue'
   import { useTable } from '@/hooks/core/useTable'
-  import { fetchGetUserList, fetchDeleteUser, fetchBatchDeleteUser, fetchUpdateUserStatus, fetchBatchUpdateUserStatus, fetchResetUserPassword, exportUsersCsv } from '@/api/system-manage'
+  import { fetchGetUserList, fetchDeleteUser, fetchBatchDeleteUser, fetchUpdateUserStatus, fetchBatchUpdateUserStatus, fetchResetUserPassword, fetchUserLoginToken, exportUsersCsv } from '@/api/system-manage'
   import UserSearch from './modules/user-search.vue'
   import UserDialog from './modules/user-dialog.vue'
   import { ElTag, ElMessageBox, ElAvatar } from 'element-plus'
@@ -224,6 +224,7 @@
             h(ArtButtonMore, {
               list: [
                 { key: 'edit', label: '编辑', icon: 'ri:edit-2-line' },
+                { key: 'login', label: '登录前台', icon: 'ri:login-circle-line', disabled: row.status !== '正常' },
                 {
                   key: row.status === '正常' ? 'disable' : 'enable',
                   label: row.status === '正常' ? '禁用' : '启用',
@@ -263,6 +264,7 @@
   const handleMoreAction = (item: ButtonMoreItem, row: UserListItem) => {
     switch (item.key) {
       case 'edit': showDialog('edit', row); break
+      case 'login': handleLoginAsUser(row); break
       case 'enable': handleToggleStatus(row, 1); break
       case 'disable': handleToggleStatus(row, 0); break
       case 'resetPassword': handleResetPassword(row); break
@@ -377,6 +379,49 @@
         }
       })
       .catch(() => ElMessage.info('已取消操作'))
+  }
+
+  // 管理员代登：为指定前台用户签发 token 并在新标签页打开前台
+  // 该操作仅用于辅助调试，需先二次确认；token 通过 URL hash 传递给前台，前台写入 localStorage 后立即清除 URL
+  const handleLoginAsUser = (row: UserListItem) => {
+    ElMessageBox.confirm(
+      `确定要以用户"${row.username}"的身份登录前台吗？\n\n该操作会签发一个有效的登录凭证并在新标签页打开前台，仅用于辅助调试问题。`,
+      '代登确认',
+      {
+        confirmButtonText: '确定登录',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+      .then(async () => {
+        try {
+          const res = await fetchUserLoginToken(row.id)
+          const token = res?.token
+          if (!token) {
+            ElMessage.error('后端未返回有效凭证')
+            return
+          }
+          const params = new URLSearchParams()
+          params.set('token', token)
+          if (res.username) params.set('username', res.username)
+          const userWebUrl = (import.meta.env.VITE_USER_WEB_URL || '').replace(/\/+$/, '')
+          if (!userWebUrl) {
+            ElMessage.error('未配置前台地址（VITE_USER_WEB_URL），无法打开前台')
+            return
+          }
+          // 使用 hash 路由 + query 携带 token，避免 token 进入服务器访问日志的 path
+          const url = `${userWebUrl}#/auto-login?${params.toString()}`
+          const win = window.open(url, '_blank')
+          if (!win) {
+            ElMessage.warning('浏览器拦截了新窗口，请允许弹窗后重试')
+          } else {
+            ElMessage.success(`已在新标签页以 ${row.username} 身份登录前台`)
+          }
+        } catch (error: any) {
+          ElMessage.error(error?.data?.msg || error?.message || '代登失败')
+        }
+      })
+      .catch(() => ElMessage.info('已取消代登'))
   }
 
   const handleResetPassword = (row: UserListItem) => {

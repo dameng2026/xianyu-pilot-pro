@@ -38,7 +38,7 @@
 
         <!-- 图片上传区域 -->
         <div style="margin-top:18px">
-          <b>宝贝图片（{{ form.imageUrls.length }}/10 张，拖拽可调整顺序）</b>
+          <b>宝贝图片（{{ form.imageUrls.length }}/10 张，拖拽可调整顺序，支持 Ctrl+V 粘贴）</b>
           <div class="image-strip" style="margin-top:12px">
             <div
               v-for="(img, idx) in form.imageUrls"
@@ -69,6 +69,28 @@
               @change="onFileSelect"
             >
           </div>
+          <!-- URL 导入封面图 -->
+          <div class="image-url-bar">
+            <input
+              v-model="imageUrlInput"
+              type="url"
+              class="image-url-input"
+              placeholder="粘贴图片 URL（http:// 或 https://）也可导入封面图"
+              :disabled="imageUrlLoading"
+              @keydown.enter.prevent="addImageFromUrl"
+            >
+            <button
+              type="button"
+              class="image-url-btn"
+              :disabled="imageUrlLoading || !imageUrlInput.trim()"
+              @click="addImageFromUrl"
+            >
+              {{ imageUrlLoading ? '导入中...' : 'URL 导入' }}
+            </button>
+          </div>
+          <p class="image-hint subtle">
+            支持 Ctrl+V 直接粘贴剪贴板里的图片，也可在上方输入图片 URL 后点击「URL 导入」。仅支持 JPEG/PNG/GIF/WebP，单张 ≤ 5MB。
+          </p>
         </div>
       </CardPanel>
 
@@ -183,6 +205,46 @@
         </div>
       </CardPanel>
 
+      <CardPanel title="自动发货" style="margin-top:16px">
+        <div class="auto-delivery-section">
+          <div class="auto-delivery-toggle">
+            <div class="auto-delivery-toggle-info">
+              <span class="auto-delivery-title">开启自动发货</span>
+              <span class="subtle">本功能为项目内置自动发货，非闲鱼发布功能。开启后，买家付款将自动发送所选货源的发货内容</span>
+            </div>
+            <ToggleSwitch :on="autoDelivery.enabled" @click="toggleAutoDelivery" />
+          </div>
+          <div v-if="autoDelivery.enabled" class="auto-delivery-source-row">
+            <label>关联货源库</label>
+            <select v-model="autoDelivery.sourceId" class="input" :disabled="!sourcesAvailable || sourcesLoading">
+              <option value="">请选择货源</option>
+              <option v-for="source in deliverySources" :key="source.id" :value="source.id">
+                {{ source.title }}<span v-if="source.usageCount != null">（已绑 {{ source.usageCount }} 件）</span>
+              </option>
+            </select>
+            <!-- 加载中 -->
+            <div v-if="sourcesLoading" class="subtle">货源库加载中...</div>
+            <!-- 加载失败：提供重试 -->
+            <div v-else-if="sourcesError" class="auto-delivery-msg error">
+              <span>{{ sourcesError }}</span>
+              <button type="button" class="ad-action-btn" @click="reloadDeliverySources">重试</button>
+              <button type="button" class="ad-action-btn" @click="goToSourceLibrary">前往货源库</button>
+            </div>
+            <!-- 已选货源：显示已绑数量 -->
+            <div v-else-if="autoDelivery.sourceId" class="subtle">
+              已选货源：{{ selectedSourceTitle }}<span v-if="selectedSourceUsageCount != null">（已绑 {{ selectedSourceUsageCount }} 件）</span>
+            </div>
+            <!-- 暂无货源：引导前往货源库创建 -->
+            <div v-else-if="sourcesAvailable && !deliverySources.length" class="auto-delivery-empty">
+              <span class="subtle warn">暂无货源，请先到「货源库」创建</span>
+              <button type="button" class="ad-action-btn primary" @click="goToSourceLibrary">前往货源库创建</button>
+            </div>
+            <!-- 已有货源但未选 -->
+            <div v-else class="subtle warn">请选择要绑定的货源</div>
+          </div>
+        </div>
+      </CardPanel>
+
       <CardPanel title="发货设置" style="margin-top:16px">
         <div class="shipping-grid">
           <div class="shipping-item">
@@ -247,22 +309,25 @@ import CardPanel from '../components/CardPanel.vue'
 import AppButton from '../components/AppButton.vue'
 import ToggleSwitch from '../components/ToggleSwitch.vue'
 import PublishAddressCascader from '../components/PublishAddressCascader.vue'
-import { getLiteAccounts } from '../api/accounts.js'
-import { createGoods } from '../api/goods.js'
+import { getLiteAccounts, checkAccountAuth } from '../api/accounts.js'
+import { createGoods, getGoods } from '../api/goods.js'
+import { getDeliverySources, applyDeliverySourceToGoods } from '../api/autoDelivery.js'
 import { publishItem, autoCategory } from '../api/items.js'
-import { uploadImage } from '../api/misc.js'
+import { uploadImage, uploadImageFromUrl } from '../api/misc.js'
 import { accountName } from '../utils/format.js'
 import { accountAuthUsable, pickPreferredAccount } from '../utils/accountAuth.js'
 import { confirmAction } from '../utils/confirmAction.js'
 import { getAiProviderStatus, suggestCategoryByAi } from '../api/aiProvider.js'
 import { fetchCategories } from '../api/categories.js'
 import { aiRewriteGoods } from '../api/workflow.js'
+import { ensureAiTokenBalance } from '../utils/aiTokenGuard.js'
 import { isPublishAddressComplete, normalizePublishAddress } from '../utils/publishAddress.js'
 import { imageUploadValidationMessage } from '../utils/imageUploadPolicy.js'
 import { createRequestGate } from '../utils/requestLifecycle.js'
 import { loadPublishDraft, savePublishDraft, clearPublishDraft } from '../utils/publishDraft.js'
 import { setNavigationGuard, clearNavigationGuard } from '../utils/navigationGuard.js'
 import { promptDraftChoice } from '../composables/draftGuardState.js'
+import { friendlyError } from '../utils/friendlyError.js'
 
 const emit = defineEmits(['navigate'])
 const accounts = ref([])
@@ -697,6 +762,93 @@ const shippingLabel = computed(() => {
   return map[shippingMode.value] || '包邮'
 })
 
+// ---- 自动发货（项目内置功能，发布成功后绑定货源到本地商品） ----
+const autoDelivery = reactive({ enabled: false, sourceId: '' })
+const deliverySources = ref([])
+const sourcesAvailable = ref(false)
+const sourcesLoaded = ref(false)
+const sourcesLoading = ref(false)
+const sourcesError = ref('')
+
+const selectedSourceTitle = computed(() => {
+  const src = deliverySources.value.find(s => String(s.id) === String(autoDelivery.sourceId))
+  return src ? src.title : ''
+})
+
+const selectedSourceUsageCount = computed(() => {
+  const src = deliverySources.value.find(s => String(s.id) === String(autoDelivery.sourceId))
+  return src ? (src.usageCount ?? null) : null
+})
+
+// force=true 时强制重新拉取（用于重试、绑定后刷新 usageCount）
+async function loadDeliverySources(force = false) {
+  if (sourcesLoading.value) return
+  if (!force && sourcesLoaded.value) return
+  sourcesLoading.value = true
+  sourcesError.value = ''
+  try {
+    const res = await getDeliverySources({ current: 1, size: 200 })
+    const data = res?.data
+    const list = Array.isArray(data) ? data : (data?.records || [])
+    if (!Array.isArray(list)) throw new Error('货源库响应格式异常')
+    deliverySources.value = list
+    sourcesAvailable.value = true
+    sourcesLoaded.value = true
+    // 刷新后校验已选货源是否仍存在（可能被用户在货源库页删除）
+    if (autoDelivery.sourceId && !list.some(s => String(s.id) === String(autoDelivery.sourceId))) {
+      autoDelivery.sourceId = ''
+    }
+  } catch (e) {
+    deliverySources.value = []
+    sourcesAvailable.value = false
+    sourcesError.value = e?.message || '货源库加载失败，当前不能选择货源'
+  } finally {
+    sourcesLoading.value = false
+  }
+}
+
+function reloadDeliverySources() {
+  loadDeliverySources(true)
+}
+
+function goToSourceLibrary() {
+  emit('navigate', 'delivery-source-library')
+}
+
+function toggleAutoDelivery() {
+  autoDelivery.enabled = !autoDelivery.enabled
+  if (autoDelivery.enabled) {
+    if (!sourcesLoaded.value) loadDeliverySources()
+    if (!autoDelivery.sourceId && deliverySources.value.length === 1) {
+      autoDelivery.sourceId = deliverySources.value[0].id
+    }
+  }
+}
+
+// 发布成功后绑定自动发货货源：查询本地商品按 externalGoodsId 找到内部 id，再调用货源 apply 接口
+// 绑定失败不影响发布结果（商品已发布到闲鱼），仅提示用户到「自动发货」页面手动配置
+// 绑定成功后强制刷新货源库，同步 usageCount
+async function bindAutoDeliverySource(itemId) {
+  try {
+    const goodsRes = await getGoods({ accountId: Number(form.accountId), size: 50 })
+    const list = goodsRes?.data?.records || goodsRes?.data || []
+    const created = (Array.isArray(list) ? list : []).find(g => String(g.externalGoodsId) === String(itemId))
+    if (!created || !created.id) {
+      success.value = '发布成功！自动发货绑定待商品同步后生效，请稍后到「自动发货」页面确认。'
+      return
+    }
+    await applyDeliverySourceToGoods(autoDelivery.sourceId, {
+      goodsIds: [created.id],
+      timing: 'payDelivery',
+    })
+    success.value = `发布成功！已绑定自动发货货源：${selectedSourceTitle.value || '已选货源'}（买家付款后自动发货）`
+    // 绑定成功后刷新货源库数据，同步 usageCount
+    loadDeliverySources(true)
+  } catch (bindErr) {
+    success.value = `发布成功！自动发货绑定失败：${bindErr?.message || '请稍后到「自动发货」页面手动配置'}`
+  }
+}
+
 // ---- 地址字典（省市区三级联动，本地数据）----
 const selectedAddress = ref(null)
 
@@ -720,6 +872,7 @@ const checks = computed(() => [
   { text: '已完成省、市、区选择', ok: isPublishAddressComplete(selectedAddress.value) },
   { text: '价格已填写', ok: Number(form.price) > 0 },
   { text: '库存数大于 0', ok: totalStock.value > 0 },
+  { text: '自动发货货源已选择', ok: !autoDelivery.enabled || !!autoDelivery.sourceId },
 ])
 
 // 触发文件选择
@@ -753,16 +906,114 @@ async function onFileSelect(e) {
       if (res.code === 200 && res.data?.url) {
         form.imageUrls.push(res.data.url)
       } else {
-        error.value = res.msg || '图片上传失败'
+        error.value = friendlyError({ message: res.msg || '图片上传失败', requestId: res?.requestId }, '图片上传失败，请稍后重试')
       }
     } catch (err) {
-      error.value = err.message || '图片上传失败'
+      error.value = friendlyError(err, '图片上传失败，请稍后重试')
     }
   }
   e.target.value = ''
   // 上传完成后，如果是第一次上传图片（刚有了封面图），触发自动分类
   if (hadNoImages && form.imageUrls.length > 0) {
     await triggerAutoCategory()
+  }
+}
+
+// 粘贴图片：监听页面 paste 事件，从剪贴板提取图片文件后调用通用上传逻辑
+async function onPaste(e) {
+  const items = e.clipboardData?.items
+  if (!items || !items.length) return
+  const imageItems = Array.from(items).filter(it => it.type && it.type.startsWith('image/'))
+  if (!imageItems.length) return
+  // 若剪贴板里同时含文本，且当前焦点在输入框/文本域，则放行让浏览器粘贴文本
+  const hasText = Array.from(items).some(it => it.type === 'text/plain' || it.type === 'text/html')
+  const target = e.target
+  const tag = target?.tagName?.toLowerCase?.()
+  const inEditable = tag === 'input' || tag === 'textarea'
+  if (hasText && inEditable) return
+  if (!accountAvailable.value || !form.accountId) {
+    error.value = '请先选择闲鱼账号再粘贴图片'
+    return
+  }
+  if (form.imageUrls.length >= 10) {
+    error.value = '宝贝图片已满 10 张，无法继续粘贴'
+    return
+  }
+  // 拦截粘贴，避免图片被当作文本插入到其他输入框
+  e.preventDefault()
+  const hadNoImages = form.imageUrls.length === 0
+  for (const item of imageItems) {
+    if (form.imageUrls.length >= 10) {
+      error.value = '宝贝图片已满 10 张，已停止粘贴后续图片'
+      break
+    }
+    const rawFile = item.getAsFile()
+    if (!rawFile) continue
+    // 剪贴板图片常无文件名，统一补上扩展名以便校验工具识别
+    const ext = (rawFile.type.split('/')[1] || 'png').toLowerCase()
+    const fileName = rawFile.name || `paste_${Date.now()}.${ext}`
+    const file = new File([rawFile], fileName, { type: rawFile.type })
+    const validationMessage = imageUploadValidationMessage(file)
+    if (validationMessage) {
+      error.value = `粘贴图片 ${file.name} ${validationMessage}`
+      continue
+    }
+    try {
+      const res = await uploadImage(form.accountId || 0, file)
+      if (res.code === 200 && res.data?.url) {
+        form.imageUrls.push(res.data.url)
+      } else {
+        error.value = friendlyError({ message: res.msg || '粘贴图片上传失败', requestId: res?.requestId }, '图片上传失败，请稍后重试')
+      }
+    } catch (err) {
+      error.value = friendlyError(err, '图片上传失败，请稍后重试')
+    }
+  }
+  if (hadNoImages && form.imageUrls.length > 0) {
+    await triggerAutoCategory()
+  }
+}
+
+// URL 导入封面图：用户输入图片 URL，后端下载后保存到 uploads/images/
+const imageUrlInput = ref('')
+const imageUrlLoading = ref(false)
+
+async function addImageFromUrl() {
+  const url = imageUrlInput.value.trim()
+  if (!url) {
+    error.value = '请输入图片 URL'
+    return
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    error.value = '图片 URL 必须以 http:// 或 https:// 开头'
+    return
+  }
+  if (!accountAvailable.value || !form.accountId) {
+    error.value = '请先选择闲鱼账号再导入图片'
+    return
+  }
+  if (form.imageUrls.length >= 10) {
+    error.value = '宝贝图片已满 10 张，无法继续导入'
+    return
+  }
+  imageUrlLoading.value = true
+  error.value = ''
+  const hadNoImages = form.imageUrls.length === 0
+  try {
+    const res = await uploadImageFromUrl({ url })
+    if (res.code === 200 && res.data?.url) {
+      form.imageUrls.push(res.data.url)
+      imageUrlInput.value = ''
+    } else {
+      error.value = res.msg || 'URL 图片导入失败'
+    }
+  } catch (err) {
+    error.value = err.message || 'URL 图片导入失败'
+  } finally {
+    imageUrlLoading.value = false
+    if (hadNoImages && form.imageUrls.length > 0) {
+      await triggerAutoCategory()
+    }
   }
 }
 
@@ -841,6 +1092,7 @@ async function aiDesc() {
     error.value = '请先填写商品标题或基础描述'
     return
   }
+  if (!(await ensureAiTokenBalance({ sceneName: 'AI 生成描述' }))) return
   aiDescLoading.value = true
   error.value = ''
   try {
@@ -872,6 +1124,43 @@ function validate() {
   return true
 }
 
+// 发布前主动调用 /check-auth 实时探活选中账号 cookie 状态。
+// 仅依赖 accounts 列表中的缓存 cookieStatus 会导致 cookie 实际已失效但 DB 未更新时
+// validate() 通过、submit() 才被闲鱼接口报错"账号已失效"拦截，用户体验差。
+// 这里在发布前主动 check-auth，若失效则直接阻断并提示"该账号 Cookie 已经失效"，
+// 同时刷新本地账号状态，让用户立即看到需要重新登录的提示。
+async function ensureSelectedAccountCookieValid() {
+  if (!form.accountId) return false
+  let data
+  try {
+    const res = await checkAccountAuth(form.accountId)
+    data = res?.data
+  } catch {
+    // 接口异常时阻断发布并提示用户，避免带着未校验的账号直接调用发布接口
+    error.value = '无法确认账号登录状态，请检查网络后重试'
+    return false
+  }
+  if (!data || typeof data !== 'object' || typeof data.usable !== 'boolean') {
+    error.value = '账号登录状态响应异常，请稍后重试'
+    return false
+  }
+  // 同步刷新本地账号缓存，让账号选择框旁边也能反映真实状态
+  const account = accounts.value.find(a => String(a.id) === String(form.accountId))
+  if (account) {
+    account.cookieStatus = data.cookieStatus
+    account.authUsable = data.usable
+    account.loginStatusCode = data.loginStatusCode
+    account.loginStatusMessage = data.loginStatusMessage
+    account.loginCheckTime = data.checkedAt
+  }
+  if (!data.usable) {
+    const accountLabel = account ? accountName(account) : '当前账号'
+    error.value = `${accountLabel} Cookie 已经失效（${data.loginStatusMessage || '请重新登录闲鱼账号'}），请到「账号管理」重新登录后再发布`
+    return false
+  }
+  return true
+}
+
 async function submit() {
   error.value = ''
   success.value = ''
@@ -880,9 +1169,11 @@ async function submit() {
     return
   }
   if (!validate()) return
+  // 发布前主动校验 cookie 实时状态，避免 cookie 已失效时被动等闲鱼接口报错
+  if (!(await ensureSelectedAccountCookieValid())) return
   const ok = await confirmAction({
     title: '确认立即发布到闲鱼？',
-    description: `账号：${selectedAccount.value || '-'}\n分类：${selectedCategoryPath.value || '-'}\n价格：¥${displayPrice.value}\n库存：${totalStock.value}\n发布成功后会同步保存到本地商品库。`,
+    description: `账号：${selectedAccount.value || '-'}\n分类：${selectedCategoryPath.value || '-'}\n价格：¥${displayPrice.value}\n库存：${totalStock.value}\n自动发货：${autoDelivery.enabled && autoDelivery.sourceId ? `已绑定「${selectedSourceTitle.value || '货源'}」` : '未开启'}\n发布成功后会同步保存到本地商品库。`,
     dangerous: true
   })
   if (!ok) return
@@ -934,6 +1225,11 @@ async function submit() {
         status: 0,
       })
       success.value = '发布成功！'
+      // 自动发货货源绑定（发布成功且本地商品已保存后执行）
+      // createGoods 返回 void，需查询本地商品列表按 externalGoodsId 找到内部 id 再绑定
+      if (autoDelivery.enabled && autoDelivery.sourceId) {
+        await bindAutoDeliverySource(itemId)
+      }
       // 发布成功后清除草稿并解除导航守卫，避免跳转时再弹草稿询问
       clearPublishDraft()
       clearNavigationGuard()
@@ -941,12 +1237,12 @@ async function submit() {
       localStorage.setItem('xianyu_pending_sync', 'true')
       setTimeout(() => emit('navigate', 'products'), 1000)
     } else {
-      error.value = publishRes.msg || '发布到闲鱼失败'
+      error.value = friendlyError({ message: publishRes.msg || '发布到闲鱼失败', requestId: publishRes?.requestId }, '发布到闲鱼失败，请稍后重试')
     }
   } catch (e) {
     error.value = publishedItemId
-      ? `商品已发布到闲鱼（ID：${publishedItemId}），但本地商品记录保存失败：${e.message || '服务异常'}。请勿重复发布，先到商品管理执行同步。`
-      : (e.message || '发布失败')
+      ? `商品已发布到闲鱼（ID：${publishedItemId}），但本地商品记录保存失败：${friendlyError(e, '服务异常')}。请勿重复发布，先到商品管理执行同步。`
+      : friendlyError(e, '发布失败，请稍后重试')
     if (publishedItemId) localStorage.setItem('xianyu_pending_sync', 'true')
   } finally {
     submitting.value = false
@@ -965,7 +1261,8 @@ const hasDraftData = computed(() => {
     || form.price
     || form.stock
     || selectedCategoryName.value
-    || isPublishAddressComplete(selectedAddress.value))
+    || isPublishAddressComplete(selectedAddress.value)
+    || autoDelivery.enabled)
 })
 
 function serializeCurrentDraft() {
@@ -986,6 +1283,7 @@ function serializeCurrentDraft() {
       pathIds: [level1Id.value, level2Id.value, level3Id.value].filter(Boolean),
     },
     address: selectedAddress.value ? JSON.parse(JSON.stringify(selectedAddress.value)) : null,
+    autoDelivery: { enabled: autoDelivery.enabled, sourceId: autoDelivery.sourceId },
   }
 }
 
@@ -1020,6 +1318,11 @@ function restoreDraft(draft) {
       selectedCategoryPath.value = cat.path || ''
     }
     if (draft.address) selectedAddress.value = draft.address
+    // 自动发货恢复
+    const ad = draft.autoDelivery || {}
+    autoDelivery.enabled = !!ad.enabled
+    autoDelivery.sourceId = ad.sourceId || ''
+    if (autoDelivery.enabled && !sourcesLoaded.value) loadDeliverySources()
   } finally {
     nextTick(() => { isRestoring.value = false })
   }
@@ -1048,6 +1351,7 @@ watch(
 watch(shippingMode, scheduleAutoSave)
 watch(selectedCategoryName, scheduleAutoSave)
 watch(selectedAddress, scheduleAutoSave, { deep: true })
+watch(() => [autoDelivery.enabled, autoDelivery.sourceId], scheduleAutoSave)
 
 function flushDraftBeforeUnload() {
   if (saveTimer) {
@@ -1106,6 +1410,8 @@ async function clearAllData() {
     autoCategoryMessage.value = ''
     autoSelectedCatId.value = null
     aiCategoryMessage.value = ''
+    autoDelivery.enabled = false
+    autoDelivery.sourceId = ''
     error.value = ''
     success.value = ''
     clearPublishDraft()
@@ -1117,6 +1423,8 @@ async function clearAllData() {
 onMounted(async () => {
   setNavigationGuard(navigationGuardFn)
   window.addEventListener('beforeunload', flushDraftBeforeUnload)
+  // 监听全局 paste 事件，支持用户直接 Ctrl+V 粘贴图片作为宝贝图片
+  window.addEventListener('paste', onPaste)
   await load()
   // 尝试恢复草稿
   try {
@@ -1138,6 +1446,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   clearNavigationGuard()
   window.removeEventListener('beforeunload', flushDraftBeforeUnload)
+  window.removeEventListener('paste', onPaste)
   if (saveTimer) {
     clearTimeout(saveTimer)
     saveTimer = null
@@ -1197,6 +1506,58 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+/* URL 导入封面图 */
+.image-url-bar {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  align-items: stretch;
+}
+.image-url-input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  outline: none;
+  font-size: 13px;
+  transition: border-color 0.15s;
+  background: #fbfdff;
+}
+.image-url-input:focus {
+  border-color: var(--primary, #1677ff);
+  background: #fff;
+}
+.image-url-input:disabled {
+  background: #f3f4f6;
+  cursor: not-allowed;
+}
+.image-url-btn {
+  flex-shrink: 0;
+  padding: 0 18px;
+  border: 1px solid var(--primary, #1677ff);
+  background: var(--primary, #1677ff);
+  color: #fff;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.15s;
+}
+.image-url-btn:hover:not(:disabled) {
+  opacity: 0.92;
+}
+.image-url-btn:disabled {
+  background: #cbd5e1;
+  border-color: #cbd5e1;
+  cursor: not-allowed;
+}
+.image-hint {
+  margin: 8px 2px 0;
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.6;
 }
 /* ---- 分类级联选择器 ---- */
 .category-selector {
@@ -1401,5 +1762,104 @@ onBeforeUnmount(() => {
 .clear-draft-btn:hover {
   background: #fee2e2;
   border-color: #fca5a5;
+}
+/* ---- 自动发货板块 ---- */
+.auto-delivery-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.auto-delivery-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 0;
+}
+.auto-delivery-toggle-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+.auto-delivery-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+}
+.auto-delivery-source-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+.auto-delivery-source-row label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+.auto-delivery-source-row .input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  outline: none;
+  font-size: 13px;
+  background: #fff;
+  transition: border-color 0.15s;
+}
+.auto-delivery-source-row .input:focus {
+  border-color: var(--primary, #1677ff);
+}
+.auto-delivery-source-row .input:disabled {
+  background: #f3f4f6;
+  cursor: not-allowed;
+}
+.auto-delivery-msg.error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: #dc2626;
+  font-weight: 600;
+}
+.auto-delivery-empty {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.ad-action-btn {
+  border: 1px solid #dbe3ef;
+  background: #fff;
+  color: #2563eb;
+  border-radius: 8px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.ad-action-btn:hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+.ad-action-btn.primary {
+  border-color: var(--primary, #1677ff);
+  background: var(--primary, #1677ff);
+  color: #fff;
+}
+.ad-action-btn.primary:hover {
+  opacity: 0.92;
+}
+.subtle.warn {
+  color: #b45309;
+  font-weight: 600;
 }
 </style>

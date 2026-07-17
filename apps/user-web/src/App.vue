@@ -61,6 +61,12 @@
   </div>
   <ConfirmModal />
   <DraftGuardModal />
+  <PaymentModal
+    :visible="paymentVisible"
+    order-type="token"
+    @close="paymentVisible = false"
+    @paid="handleTokenPaid"
+  />
 </template>
 
 <script setup>
@@ -71,6 +77,7 @@ import PageHeader from './components/PageHeader.vue'
 import AppButton from './components/AppButton.vue'
 import ConfirmModal from './components/ConfirmModal.vue'
 import DraftGuardModal from './components/DraftGuardModal.vue'
+import PaymentModal from './components/PaymentModal.vue'
 import MobileLite from './components/MobileLite.vue'
 import { pageTitles } from './data/nav.js'
 import { createMediaSession, logout as logoutApi } from './api/auth.js'
@@ -116,7 +123,6 @@ const pageMap = {
   dashboard: DashboardPage,
   data: asyncPage(() => import('./pages/DataPage.vue')),
   accounts: asyncPage(() => import('./pages/AccountsPage.vue')),
-  connections: asyncPage(() => import('./pages/ConnectionsPage.vue')),
   products: asyncPage(() => import('./pages/ProductsPage.vue')),
   orders: asyncPage(() => import('./pages/OrdersPage.vue')),
   'product-publish': asyncPage(() => import('./pages/ProductPublishPage.vue')),
@@ -155,7 +161,7 @@ const settingsKeys = [
 const authPages = ['login', 'register', 'forgot-password']
 const defaultPage = 'dashboard'
 const profileEntryStorageKey = 'xya_profile_initial_tab'
-const pagesWithEmbeddedTitle = new Set(['messages', 'message-center', 'delivery-statement', 'delivery-mall', 'feature-unavailable'])
+const pagesWithEmbeddedTitle = new Set(['messages', 'message-center', 'delivery-statement', 'delivery-mall', 'feature-unavailable', 'card-warehouse', 'auto-delivery'])
 // 功能开关检查跳过的页面：登录/注册/忘记密码/占位页/工作台（避免登录后卡死）
 const featureSwitchSkipPages = new Set(['login', 'register', 'forgot-password', 'feature-unavailable', 'dashboard'])
 const profileEntryTabs = new Set(['overview', 'security', 'token'])
@@ -182,6 +188,8 @@ const active = ref(getHash())
 const currentUserInfo = ref(buildDefaultUserInfo())
 const displaySseStatus = ref('disconnected')
 const globalNotice = ref(null)
+// 全局充值弹窗（由 xya-open-payment 事件触发，供 aiTokenGuard 等 Token 不足场景使用）
+const paymentVisible = ref(false)
 const isMobile = ref(false)
 const mobileDesktopOverride = ref(localStorage.getItem('xya_mobile_desktop_override') === '1')
 // 功能开关拦截信息（传递给 FeatureUnavailablePage）
@@ -246,6 +254,34 @@ function showNotice(text, type = 'info') {
   noticeTimer = setTimeout(() => {
     globalNotice.value = null
   }, 4500)
+}
+
+// 全局 xya-toast 事件监听：将各页面派发的 toast 事件统一渲染为顶部 global-notice。
+// 事件 detail 形如 { message, isError }，isError=true 时使用 error 色调，否则 info。
+function onGlobalToast(event) {
+  const detail = event?.detail || {}
+  const message = typeof detail === 'string' ? detail : detail.message
+  if (!message) return
+  const type = detail.isError ? 'error' : (detail.type || 'info')
+  showNotice(message, type)
+}
+
+// 全局 xya-open-payment 事件监听：打开 Token 充值弹窗（用于 Token 余额不足时的引导充值）。
+function onOpenPayment() {
+  paymentVisible.value = true
+}
+
+// 充值成功回调：关闭弹窗并提示。
+async function handleTokenPaid() {
+  paymentVisible.value = false
+  showNotice('支付成功，Token 余额已刷新', 'success')
+  // 刷新当前用户信息（包含 token 余额），失败不阻塞
+  try {
+    invalidateCurrentUserCache()
+    await loadCurrentUser(true)
+  } catch (_e) {
+    // 忽略刷新失败
+  }
 }
 
 /**
@@ -501,6 +537,18 @@ async function handleLogout() {
 async function boot() {
   booting.value = true
   try {
+    // 优先处理代登路由：URL 形如 #/auto-login?token=xxx&username=xxx
+    // 由后台管理员代登跳转过来，token 一次性使用后立即从 URL 中清除
+    const autoLogin = consumeAutoLoginHash()
+    if (autoLogin) {
+      bootMessage.value = '正在以指定账号登录'
+      invalidateCurrentUserCache()
+      invalidateFeatureSwitchCache()
+      setAuth(autoLogin.token, autoLogin.username || '')
+      // URL 已由 consumeAutoLoginHash 清理，active 已设为 dashboard
+      // 继续走下方已登录分支完成会话初始化
+    }
+
     if (getToken()) {
       bootMessage.value = '正在恢复登录会话'
       if (authPages.includes(active.value)) active.value = defaultPage
@@ -536,6 +584,28 @@ async function boot() {
   } finally {
     booting.value = false
   }
+}
+
+/**
+ * 消费代登 hash：检测 location.hash 是否为 #/auto-login?token=xxx&username=yyy，
+ * 若是则返回 {token, username} 并立即清除 URL（避免 token 泄露到 history/referer）。
+ * 由后台管理员代登跳转触发，token 仅一次性使用。
+ */
+function consumeAutoLoginHash() {
+  const rawHash = location.hash || ''
+  // 严格匹配前缀，避免误消费其他以 auto-login 开头的页面（当前 pageMap 不存在此键）
+  if (!rawHash.startsWith('#/auto-login')) return null
+  const queryIndex = rawHash.indexOf('?')
+  if (queryIndex < 0) return null
+  const params = new URLSearchParams(rawHash.slice(queryIndex + 1))
+  const token = (params.get('token') || '').trim()
+  const username = (params.get('username') || '').trim()
+  if (!token) return null
+  // 立即用 history.replaceState 清除 URL 中的 token，避免被浏览器历史/Referer/日志泄露
+  history.replaceState(null, '', '#/dashboard')
+  // 同步更新 active，避免 boot 流程误判
+  active.value = defaultPage
+  return { token, username }
 }
 
 function onAuthExpired() {
@@ -577,6 +647,10 @@ onMounted(() => {
   window.addEventListener('xya-auth-expired', onAuthExpired)
   window.addEventListener('xya-captcha-required', onCaptchaRequired)
   window.addEventListener('xya-sse-event', onSseEventForSound)
+  // 全局 toast 事件监听：将各页面派发的 xya-toast 统一渲染为顶部 global-notice
+  window.addEventListener('xya-toast', onGlobalToast)
+  // 全局充值弹窗事件监听：Token 余额不足时由 aiTokenGuard 等模块派发，弹出充值 modal
+  window.addEventListener('xya-open-payment', onOpenPayment)
   // 初始化滑块求解 SSE 监听
   import('./composables/useCaptchaSolver.js').then(({ useCaptchaSolver }) => {
     useCaptchaSolver().initCaptchaSolverListener()
@@ -594,6 +668,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('xya-auth-expired', onAuthExpired)
   window.removeEventListener('xya-captcha-required', onCaptchaRequired)
   window.removeEventListener('xya-sse-event', onSseEventForSound)
+  window.removeEventListener('xya-toast', onGlobalToast)
+  window.removeEventListener('xya-open-payment', onOpenPayment)
   import('./composables/useCaptchaSolver.js').then(({ useCaptchaSolver }) => {
     useCaptchaSolver().destroyCaptchaSolverListener()
   })
@@ -632,10 +708,6 @@ const headerActions = computed(() => {
       { text: '扫码加账号', type: 'primary', event: 'open-scan-account' },
       { text: '手动添加', type: 'ghost', event: 'open-manual-account' },
       { text: '批量刷新', type: 'ghost', event: 'refresh-accounts' }
-    ],
-    connections: [
-      { text: '批量连接', type: 'primary', event: 'connections-batch-start' },
-      { text: '批量断开', type: 'danger', event: 'connections-batch-stop', confirm: { title: '确认批量断开连接？', description: '断开后会暂停接收这些账号的实时消息。' } }
     ],
     products: [
       { text: '同步闲鱼商品', type: 'primary', event: 'sync-products' },

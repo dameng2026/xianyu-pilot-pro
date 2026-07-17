@@ -34,9 +34,8 @@ const SEARCH_API_MARKER = 'mtop.taobao.idlemtopsearch.pc.search';
 /**
  * MTOP 响应竞速结果。
  * - ok=true 表示成功解析到商品（items 为非空数组）
- * - ok=false 表示 MTOP 返回非成功状态（如 Baxia 风控）或竞速超时，items 为空数组，error 携带原因
- *
- * 调用方仍可通过外部 networkItems 数组读取已捕获的商品（向后兼容）。
+ * - ok=false 表示 MTOP 返回非成功状态（如 Baxia 风控），items 为空数组，error 携带 retMsg
+ * 调用方仍可通过外部 networkItems 数组读取已捕获的商品（向后兼容）
  */
 interface MtopSettleResult {
   ok: boolean;
@@ -358,11 +357,10 @@ export async function crawlGoofishSearch(
   const networkItems: SearchResultItem[] = [];
   let networkTotal: number | undefined;
   let networkHasMore: boolean | undefined;
-  // mtopSettled 防止多次 MTOP 响应并发修改 networkItems 或重复 resolve。
-  // 一旦 settle（成功或失败），后续 response 事件直接 no-op。
+  // mtopSettled 防止多次 MTOP 响应并发修改 networkItems / 重复 resolve
   let mtopSettled = false;
-  // 用于在拦截到 MTOP 响应后立即唤醒主流程，避免无谓的固定等待。
-  // resolve 携带 ok/items/error，调用方仍可通过 networkItems 读取结果（向后兼容）。
+  // 用于在拦截到 MTOP 响应后立即唤醒主流程，避免无谓的固定等待
+  // resolve 携带 ok/items/error 字段，调用方仍可通过 networkItems 读取结果（向后兼容）
   let mtopResolve!: (value: MtopSettleResult) => void;
   const mtopDone = new Promise<MtopSettleResult>((resolve) => {
     mtopResolve = resolve;
@@ -429,11 +427,10 @@ export async function crawlGoofishSearch(
     const page = await context.newPage();
 
     // 监听网络响应，精确拦截 MTOP 搜索 API 响应。
-    // 一旦成功解析到商品或检测到非成功状态（如 Baxia 风控），立即 resolve mtopDone，
-    // 让主流程跳过后续等待。提取为命名函数以便在 DOM 兜底前 page.off 移除监听，
-    // 避免 response 事件在 DOM 兜底阶段并发修改 networkItems。
+    // 一旦成功解析到商品，立即 resolve mtopDone，让主流程跳过后续等待。
+    // 提取为命名函数，便于在 DOM 兜底前 page.off 移除监听器，避免并发修改 networkItems。
     const mtopResponseHandler = async (response: Response) => {
-      // 已 settle（成功/失败/超时），后续 response 事件直接 no-op，避免并发 push
+      // 已 settle 后忽略后续响应，避免并发 push / 重复 resolve
       if (mtopSettled) return;
 
       const req = response.request();
@@ -459,9 +456,6 @@ export async function crawlGoofishSearch(
         const text = await response.text();
         if (!text || text.length < 50 || text.length > 2 * 1024 * 1024) return;
 
-        // 异步读取 response.text() 期间可能已被其他响应 settle，再次检查
-        if (mtopSettled) return;
-
         let json: unknown;
         try {
           json = JSON.parse(text);
@@ -475,11 +469,10 @@ export async function crawlGoofishSearch(
         const retMsg =
           Array.isArray(ret) && ret.length > 0 ? String(ret[0]) : String(ret || '');
         if (retMsg && !retMsg.includes('SUCCESS')) {
-          // MTOP 返回非成功（如 Baxia 风控 FAIL_SYS_USER_VALIDATE）：
-          // 立即 settle 为失败并唤醒主流程，避免空等 6 秒超时。
-          // 调用方据此进入 DOM 兜底路径（networkItems 仍为空）。
-          mtopSettled = true;
+          // MTOP 返回非成功（如 Baxia 风控）：立即 settle 为失败，唤醒主流程走 DOM 兜底，
+          // 避免主流程等满 6 秒超时。不抛出异常，保持向后兼容（调用方读取 items 仍为空数组）。
           console.log(`[SearchCrawler] MTOP 搜索返回非成功: retMsg=${retMsg}`);
+          mtopSettled = true;
           mtopResolve({ ok: false, items: [], error: retMsg });
           return;
         }
@@ -489,7 +482,8 @@ export async function crawlGoofishSearch(
         if (pagination.total !== undefined) networkTotal = pagination.total;
         if (pagination.hasMore !== undefined) networkHasMore = pagination.hasMore;
         if (parsed.length > 0) {
-          // 标记 settled 后再 push，避免与后续响应交叉修改 networkItems
+          // 异步读取响应后再次校验，防止与并发响应竞争
+          if (mtopSettled) return;
           mtopSettled = true;
           console.log(`[SearchCrawler] MTOP API 拦截成功: 提取 ${parsed.length} 个商品`);
           networkItems.push(...parsed);
@@ -510,7 +504,7 @@ export async function crawlGoofishSearch(
     // 竞速等待：MTOP API 响应到达 vs. 最大 6 秒超时
     // 之前固定等待 4s + autoScroll 3s + 1.5s = 8.5s，现在改为事件驱动
     const maxWaitMs = 6000;
-    const mtopResult = await Promise.race([
+    await Promise.race([
       mtopDone,
       new Promise<MtopSettleResult>((resolve) =>
         setTimeout(() => resolve({ ok: false, items: [], error: 'timeout' }), maxWaitMs),
@@ -538,12 +532,10 @@ export async function crawlGoofishSearch(
       };
     }
 
-    // 兜底：MTOP 拦截未拿到结果（含超时或 Baxia 风控 ok=false），做 DOM 提取。
-    // 先移除 response 监听，避免 DOM 兜底阶段 response 事件并发修改 networkItems。
+    // 兜底：MTOP 拦截未拿到结果，先移除 response 监听器避免并发修改 networkItems，
+    // 再短等 1.5s 后做 DOM 检测
     page.off('response', mtopResponseHandler);
-    console.log(
-      `[SearchCrawler] MTOP 快速路径未命中: reason=${mtopResult.error || 'empty'}，做 1.5s 兜底等待后 DOM 提取`
-    );
+    console.log(`[SearchCrawler] MTOP 快速路径未命中，做 1.5s 兜底等待后 DOM 提取`);
     await page.waitForTimeout(1500);
 
     // 检测页面阻断

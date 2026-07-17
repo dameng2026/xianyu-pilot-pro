@@ -82,11 +82,36 @@ public interface XianyuTradeOrderMapper {
     @Select("SELECT COUNT(*) FROM xianyu_trade_order WHERE tenant_id = #{tenantId} AND deleted = 0 AND DATE(COALESCE(create_time, created_time)) = CURDATE()")
     int countToday(@Param("tenantId") Long tenantId);
 
+    @Select("<script>" +
+            "SELECT COUNT(*) FROM xianyu_trade_order " +
+            "WHERE tenant_id = #{tenantId} AND deleted = 0 " +
+            "AND DATE(COALESCE(create_time, created_time)) = CURDATE() " +
+            "<if test='accountId != null'>AND account_id = #{accountId}</if>" +
+            "</script>")
+    int countTodayByAccount(@Param("tenantId") Long tenantId, @Param("accountId") Long accountId);
+
     @Select("SELECT COALESCE(SUM(total_amount), 0) FROM xianyu_trade_order WHERE tenant_id = #{tenantId} AND deleted = 0 AND order_status IN (1, 2, 3, 4) AND DATE(COALESCE(pay_time, create_time, created_time)) = CURDATE()")
     BigDecimal sumTodayAmount(@Param("tenantId") Long tenantId);
 
+    @Select("<script>" +
+            "SELECT COALESCE(SUM(total_amount), 0) FROM xianyu_trade_order " +
+            "WHERE tenant_id = #{tenantId} AND deleted = 0 AND order_status IN (1, 2, 3, 4) " +
+            "AND DATE(COALESCE(pay_time, create_time, created_time)) = CURDATE() " +
+            "<if test='accountId != null'>AND account_id = #{accountId}</if>" +
+            "</script>")
+    BigDecimal sumTodayAmountByAccount(@Param("tenantId") Long tenantId, @Param("accountId") Long accountId);
+
     @Select("SELECT DATE(COALESCE(create_time, created_time)) AS stat_date, COUNT(*) AS count FROM xianyu_trade_order WHERE tenant_id = #{tenantId} AND deleted = 0 AND COALESCE(create_time, created_time) >= #{startDate} GROUP BY DATE(COALESCE(create_time, created_time)) ORDER BY stat_date ASC")
     List<Map<String, Object>> countDaily(@Param("tenantId") Long tenantId, @Param("startDate") java.time.LocalDate startDate);
+
+    @Select("<script>" +
+            "SELECT DATE(COALESCE(create_time, created_time)) AS stat_date, COUNT(*) AS count " +
+            "FROM xianyu_trade_order " +
+            "WHERE tenant_id = #{tenantId} AND deleted = 0 AND COALESCE(create_time, created_time) >= #{startDate} " +
+            "<if test='accountId != null'>AND account_id = #{accountId}</if>" +
+            "GROUP BY DATE(COALESCE(create_time, created_time)) ORDER BY stat_date ASC" +
+            "</script>")
+    List<Map<String, Object>> countDailyByAccount(@Param("tenantId") Long tenantId, @Param("accountId") Long accountId, @Param("startDate") java.time.LocalDate startDate);
 
     @Update("UPDATE xianyu_trade_order SET delivery_status = #{deliveryStatus}, delivery_time = NOW(), ship_time = NOW(), order_status = #{orderStatus}, updated_time = NOW() WHERE tenant_id = #{tenantId} AND id = #{id} AND deleted = 0")
     int updateDeliveryStatus(@Param("tenantId") Long tenantId, @Param("id") Long id, @Param("deliveryStatus") Integer deliveryStatus, @Param("orderStatus") Integer orderStatus);

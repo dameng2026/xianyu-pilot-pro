@@ -30,7 +30,6 @@ for (const expected of [
   '定时补发货',
   '自动回复',
   '自动发货',
-  '连接管理',
   '在线消息',
   '统一配置',
   "modal==='faceVerify'",

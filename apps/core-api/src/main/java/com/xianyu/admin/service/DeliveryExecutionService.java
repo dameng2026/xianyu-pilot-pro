@@ -43,6 +43,7 @@ public class DeliveryExecutionService {
     private final CookieCryptoService cookieCryptoService;
     private final UserNotificationService userNotificationService;
     private final DeliveryGoodsConfigService goodsConfigService;
+    private final DeliveryStatementCheckService statementCheckService;
     private final TransactionTemplate transactionTemplate;
 
     public DeliveryExecutionService(JdbcTemplate jdbcTemplate,
@@ -55,6 +56,7 @@ public class DeliveryExecutionService {
                                     CookieCryptoService cookieCryptoService,
                                     UserNotificationService userNotificationService,
                                     DeliveryGoodsConfigService goodsConfigService,
+                                    DeliveryStatementCheckService statementCheckService,
                                     PlatformTransactionManager transactionManager) {
         this.jdbcTemplate = jdbcTemplate;
         this.automationClient = automationClient;
@@ -66,7 +68,10 @@ public class DeliveryExecutionService {
         this.cookieCryptoService = cookieCryptoService;
         this.userNotificationService = userNotificationService;
         this.goodsConfigService = goodsConfigService;
+        this.statementCheckService = statementCheckService;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        // 事务超时：发货流程内含 HTTP 调用（最长 60s），设置 90s 超时防止长事务耗尽连接池
+        this.transactionTemplate.setTimeout(90);
     }
 
     /**
@@ -206,19 +211,25 @@ public class DeliveryExecutionService {
                 if ("card".equals(mode)) {
                     Object cardGroupIdObj = timingConfig.get("cardGroupId");
                     if (cardGroupIdObj == null) {
-                        throw new BizException(422, "卡密模式未绑定卡密分组");
+                        throw new BizException(422, "卡密模式未绑定卡密分组，请在商品发货配置中绑定卡密分组");
                     }
                     Long cardGroupId = ((Number) cardGroupIdObj).longValue();
                     claimedCardGroupId = cardGroupId;
                     CardItem claimed = claimCard(tenantId, cardGroupId, orderId);
                     if (claimed == null) {
-                        throw new BizException(409, "卡密库存不足，请补充库存后重试");
+                        throw new BizException(409, "卡密库存不足，请及时补充库存后系统将自动重试");
                     }
                     claimedCardItemId = claimed.getId();
                     cardContent = claimed.getCardContent();
-                    // 解析卡密内容
+                    // 解析卡密内容（对异常格式做兜底，避免发送空卡号给买家）
                     String raw = claimed.getCardContent();
-                    if (raw != null) {
+                    if (raw == null || raw.isBlank()) {
+                        // 卡密内容为空：回滚认领并报错，避免发送无效卡密
+                        releaseClaimedCard(tenantId, claimedCardGroupId, claimedCardItemId);
+                        claimedCardItemId = null;
+                        throw new BizException(409, "认领的卡密内容为空，请检查卡密仓库数据完整性");
+                    }
+                    try {
                         String[] parts = raw.split("----", 2);
                         cardNumber = parts[0].trim();
                         cardPassword = parts.length > 1 ? parts[1].trim() : "";
@@ -227,16 +238,35 @@ public class DeliveryExecutionService {
                             cardLink = cardNumber;
                         }
                         cardCode = raw;
+                        // 校验解析后的卡号非空（避免 ----密码 这种异常格式）
+                        if (cardNumber.isEmpty() && cardPassword.isEmpty()) {
+                            releaseClaimedCard(tenantId, claimedCardGroupId, claimedCardItemId);
+                            claimedCardItemId = null;
+                            throw new BizException(409, "卡密格式异常（卡号和密码均为空），请检查卡密数据");
+                        }
+                    } catch (BizException e) {
+                        throw e;
+                    } catch (Exception e) {
+                        log.error("解析卡密内容异常 tenantId={} cardItemId={} error={}", tenantId, claimedCardItemId, e.getMessage());
+                        releaseClaimedCard(tenantId, claimedCardGroupId, claimedCardItemId);
+                        claimedCardItemId = null;
+                        throw new BizException(409, "卡密内容解析失败，请检查卡密数据格式");
                     }
                     // 使用卡密模板
                     String cardTemplate = (String) timingConfig.getOrDefault("cardTemplate", "");
                     if (!cardTemplate.isBlank()) {
-                        cardContent = cardTemplate
-                                .replace("{卡号}", cardNumber != null ? cardNumber : "")
-                                .replace("{密码}", cardPassword != null ? cardPassword : "")
-                                .replace("{链接}", cardLink != null ? cardLink : "")
-                                .replace("{提取码}", cardPassword)
-                                .replace("{卡密}", cardCode != null ? cardCode : "");
+                        try {
+                            cardContent = cardTemplate
+                                    .replace("{卡号}", cardNumber != null ? cardNumber : "")
+                                    .replace("{密码}", cardPassword != null ? cardPassword : "")
+                                    .replace("{链接}", cardLink != null ? cardLink : "")
+                                    .replace("{提取码}", cardPassword)
+                                    .replace("{卡密}", cardCode != null ? cardCode : "");
+                        } catch (Exception e) {
+                            log.error("卡密模板替换异常 tenantId={} cardItemId={} error={}", tenantId, claimedCardItemId, e.getMessage());
+                            // 模板替换失败时回退到原始卡密内容，避免发送失败
+                            cardContent = raw;
+                        }
                     }
                 }
             }
@@ -254,6 +284,19 @@ public class DeliveryExecutionService {
             String orderIdStr = order.getExternalOrderId() != null ? order.getExternalOrderId() : String.valueOf(orderId);
             String shopName = ""; // 可以从店铺信息获取
             MessageTarget target = resolveMessageTarget(tenantId, accountId, firstItem, buyerId);
+
+            // 6.5 发货声明前置校验：
+            // 声明开关开启时，必须存在该订单的 confirmed 会话才能发货。
+            // 例外：delivery_timing='after_statement_confirm' 的记录是声明确认后创建的，
+            //       本身就是声明流程的产物，无需再次校验。
+            if (!"after_statement_confirm".equals(timing)
+                    && !statementCheckService.canDeliverAfterStatementCheck(tenantId, accountId, orderIdStr)) {
+                // 标记失败但不计入重试（fail_reason 含"等待买家确认发货声明"会被 retryFailedDeliveries 排除）
+                markRecordFailed(recordId, tenantId, "等待买家确认发货声明，暂不发货");
+                log.info("发货声明拦截：订单未确认声明，跳过发货 tenantId={} accountId={} orderId={}",
+                        tenantId, accountId, orderIdStr);
+                return;
+            }
 
             // 7. 构建消息内容
             String resolvedContent = resolveContent(mode, header, content, footer, cardContent,
@@ -390,6 +433,10 @@ public class DeliveryExecutionService {
      * 相同 account_id+cid+to_id+text 的重复调用会被自动去重。
      */
     private void sendMessage(Long tenantId, Long accountId, MessageTarget target, String content) {
+        // 校验发送内容非空，避免发送空消息给买家
+        if (content == null || content.isBlank()) {
+            throw new BizException(422, "发货内容为空，无法发送给买家");
+        }
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("tenantId", tenantId);
         payload.put("xianyuAccountId", accountId);
@@ -408,6 +455,9 @@ public class DeliveryExecutionService {
         try {
             automationClient.postInternalForData("/api/websocket/sendMessage", payload, DELIVERY_MESSAGE_TIMEOUT_SECONDS, tenantId);
             log.debug("消息发送完成 accountId={}", accountId);
+        } catch (BizException e) {
+            // 已是 BizException 直接抛出
+            throw e;
         } catch (Exception e) {
             log.warn("消息发送失败 accountId={}, errorType={}, message={}",
                     accountId,
@@ -415,6 +465,11 @@ public class DeliveryExecutionService {
                     e.getMessage());
             // 不再降级到 /api/msg/send（该端点不存在且会导致重复发送）
             // Python 端 send_text_message 已内置 60 秒去重缓存，重复调用会自动跳过
+            // 区分超时类和其他异常，提供更精准的错误消息
+            String errorMsg = e.getMessage() == null ? "" : e.getMessage().toLowerCase();
+            if (errorMsg.contains("timeout") || errorMsg.contains("超时") || errorMsg.contains("timed out")) {
+                throw new BizException(503, "发送消息超时，系统将自动重试");
+            }
             throw new BizException(503, "闲鱼消息发送服务暂时不可用，请稍后重试");
         }
     }
@@ -513,9 +568,9 @@ public class DeliveryExecutionService {
         }
 
         if (normalizedBuyerId == null) {
-            throw new BizException(409, "无法解析买家会话：订单缺少买家标识");
+            throw new BizException(409, "订单缺少买家标识，无法定位聊天会话，请确认订单数据完整后重试");
         }
-        throw new BizException(409, "无法解析买家会话，请先确保该商品与买家存在可发送的聊天记录");
+        throw new BizException(409, "未找到与买家的聊天会话，请等待买家主动咨询后再触发自动发货");
     }
 
     private MessageTarget toMessageTarget(List<Map<String, Object>> rows, String preferredBuyerId, String goodsId) {

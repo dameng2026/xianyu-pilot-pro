@@ -58,6 +58,7 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
         ensureWorkflowTables();
         ensureMiscTables();
         ensureOpenSourceBridgeTables();
+        ensureMallTables();
         ensureCompatibilityColumns();
         backfillCompatibilityData();
         if (!failures.isEmpty()) {
@@ -649,13 +650,16 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
                     id BIGINT PRIMARY KEY AUTO_INCREMENT,
                     tenant_id BIGINT NOT NULL,
                     source_type VARCHAR(30) DEFAULT 'text',
+                    delivery_mode VARCHAR(20) NOT NULL DEFAULT 'text',
+                    card_group_id BIGINT DEFAULT NULL,
                     title VARCHAR(200) NOT NULL,
                     content TEXT NOT NULL,
                     remark VARCHAR(500),
                     created_time DATETIME,
                     updated_time DATETIME,
                     deleted TINYINT DEFAULT 0,
-                    INDEX idx_dts_tenant(tenant_id, deleted, updated_time)
+                    INDEX idx_dts_tenant(tenant_id, deleted, updated_time),
+                    INDEX idx_dts_card_group(tenant_id, delivery_mode, card_group_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """, "delivery_text_source");
 
@@ -1564,7 +1568,67 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
                 """, "open_source_ad_application");
     }
 
+    private void ensureMallTables() {
+        createTable("""
+                CREATE TABLE IF NOT EXISTS mall_product (
+                    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+                    tenant_id BIGINT NOT NULL DEFAULT 0 COMMENT '租户ID(0=全局共享)',
+                    product_type VARCHAR(10) NOT NULL DEFAULT 'text' COMMENT '商品类型: text=文本商品, card=卡密商品',
+                    title VARCHAR(200) NOT NULL COMMENT '商品标题',
+                    subtitle VARCHAR(200) NOT NULL DEFAULT '' COMMENT '副标题(卡密商品)',
+                    content TEXT COMMENT '商品正文/描述',
+                    copy TEXT COMMENT '商品文案(供AI改写使用)',
+                    price_cent BIGINT NOT NULL DEFAULT 0 COMMENT '价格(分)',
+                    delivery_content TEXT COMMENT '发货内容(文本商品)',
+                    cover_url VARCHAR(500) NOT NULL DEFAULT '' COMMENT '封面图URL',
+                    status TINYINT NOT NULL DEFAULT 1 COMMENT '状态: 0=下架, 1=上架',
+                    category VARCHAR(50) NOT NULL DEFAULT '' COMMENT 'AI自动分类',
+                    ai_category_confidence DECIMAL(5,2) NOT NULL DEFAULT 0 COMMENT 'AI分类置信度',
+                    sort_order INT NOT NULL DEFAULT 0 COMMENT '排序',
+                    bought_count INT NOT NULL DEFAULT 0 COMMENT '已购买人数',
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                    updated_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                    deleted TINYINT NOT NULL DEFAULT 0 COMMENT '软删除',
+                    PRIMARY KEY (id),
+                    INDEX idx_mall_product_type (product_type, status, deleted),
+                    INDEX idx_mall_product_category (category, status, deleted),
+                    INDEX idx_mall_product_tenant (tenant_id, deleted)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """, "mall_product");
+
+        createTable("""
+                CREATE TABLE IF NOT EXISTS mall_card_key (
+                    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+                    product_id BIGINT NOT NULL COMMENT '商品ID',
+                    card_content TEXT NOT NULL COMMENT '卡密内容',
+                    status VARCHAR(15) NOT NULL DEFAULT 'available' COMMENT '状态: available=可用, sold=已售, disabled=已禁用',
+                    order_no VARCHAR(64) NOT NULL DEFAULT '' COMMENT '售出订单号',
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                    sold_time DATETIME NULL COMMENT '售出时间',
+                    PRIMARY KEY (id),
+                    INDEX idx_card_key_product (product_id, status),
+                    INDEX idx_card_key_order (order_no)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """, "mall_card_key");
+
+        createTable("""
+                CREATE TABLE IF NOT EXISTS mall_faq (
+                    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+                    tenant_id BIGINT NOT NULL DEFAULT 0 COMMENT '租户ID',
+                    question VARCHAR(500) NOT NULL COMMENT '问题',
+                    answer TEXT NOT NULL COMMENT '答案',
+                    sort_order INT NOT NULL DEFAULT 0 COMMENT '排序',
+                    status TINYINT NOT NULL DEFAULT 1 COMMENT '状态: 0=禁用, 1=启用',
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                    updated_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                    deleted TINYINT NOT NULL DEFAULT 0 COMMENT '软删除',
+                    PRIMARY KEY (id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """, "mall_faq");
+    }
+
     private void ensureCompatibilityColumns() {
+        addColumnIfMissing("mall_product", "copy", "TEXT NULL");
         addColumnIfMissing("xianyu_account", "created_by_user_id", "BIGINT NULL");
         addColumnIfMissing("xianyu_account", "risk_level", "TINYINT DEFAULT 0");
         addColumnIfMissing("xianyu_account", "disabled_by_admin", "TINYINT DEFAULT 0");
@@ -1737,6 +1801,8 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
         addColumnIfMissing("delivery_rule", "delivery_type", "VARCHAR(50) NULL");
         addColumnIfMissing("delivery_rule", "deleted", "TINYINT DEFAULT 0");
         addColumnIfMissing("delivery_text_source", "source_type", "VARCHAR(30) DEFAULT 'text'");
+        addColumnIfMissing("delivery_text_source", "delivery_mode", "VARCHAR(20) NOT NULL DEFAULT 'text'");
+        addColumnIfMissing("delivery_text_source", "card_group_id", "BIGINT NULL");
         addColumnIfMissing("delivery_text_source", "title", "VARCHAR(200) NULL");
         addColumnIfMissing("delivery_text_source", "content", "TEXT NULL");
         addColumnIfMissing("delivery_text_source", "remark", "VARCHAR(500) NULL");
@@ -1768,6 +1834,9 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
         addColumnIfMissing("delivery_record", "delivery_method", "VARCHAR(50) NULL");
         addColumnIfMissing("delivery_record", "delivery_fail_reason", "TEXT NULL");
         addColumnIfMissing("delivery_record", "quantity_requested", "INT DEFAULT 0");
+
+        // mall_product 表补列（兼容早期版本）
+        addColumnIfMissing("mall_product", "delivery_content", "TEXT NULL");
         addColumnIfMissing("delivery_record", "quantity_sent", "INT DEFAULT 0");
         addColumnIfMissing("delivery_record", "platform_sync_time", "DATETIME NULL");
         addColumnIfMissing("delivery_record", "completed_time", "DATETIME NULL");

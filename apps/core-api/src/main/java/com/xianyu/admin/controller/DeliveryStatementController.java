@@ -3,6 +3,7 @@ package com.xianyu.admin.controller;
 import com.xianyu.admin.common.BizException;
 import com.xianyu.admin.common.Result;
 import com.xianyu.admin.security.TenantContext;
+import com.xianyu.admin.service.DeliveryStatementSessionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -15,18 +16,24 @@ import java.util.Set;
 /**
  * 发货声明配置控制器
  * 对应前端 DeliveryStatementPage
+ * 同时提供声明会话查询/手动确认/手动取消端点（供 DeliveryRecordsPage 使用）
  */
 @RestController
 @RequestMapping("/api/auto-delivery/statement")
 public class DeliveryStatementController {
     private static final Logger log = LoggerFactory.getLogger(DeliveryStatementController.class);
     private static final Set<String> ALLOWED_SCOPES = Set.of("all", "specific");
+    private static final Set<String> ALLOWED_SESSION_STATUSES =
+            Set.of("", "declaring", "waiting", "confirmed", "cancelled");
 
     private final JdbcTemplate jdbcTemplate;
+    private final DeliveryStatementSessionService sessionService;
     private static final String TABLE = "delivery_statement";
 
-    public DeliveryStatementController(JdbcTemplate jdbcTemplate) {
+    public DeliveryStatementController(JdbcTemplate jdbcTemplate,
+                                       DeliveryStatementSessionService sessionService) {
         this.jdbcTemplate = jdbcTemplate;
+        this.sessionService = sessionService;
     }
 
     /**
@@ -209,5 +216,72 @@ public class DeliveryStatementController {
     private String stringValue(Object value, String field) {
         if (value instanceof String text) return text;
         throw new BizException(400, field + " 必须为字符串");
+    }
+
+    // ============================================================
+    // 声明会话（sessions）端点：供发货记录页"等待确认"标签使用
+    // ============================================================
+
+    /**
+     * 分页查询声明会话列表
+     *
+     * @param status  状态过滤：declaring/waiting/confirmed/cancelled，为空查全部
+     * @param accountId 账号 ID 过滤（可选）
+     */
+    @GetMapping("/sessions")
+    public Result<Map<String, Object>> listSessions(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Long accountId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        Long tenantId = requireTenant();
+        String normalizedStatus = status == null ? "" : status.trim();
+        if (!ALLOWED_SESSION_STATUSES.contains(normalizedStatus)) {
+            throw new BizException(400, "status 仅支持 declaring/waiting/confirmed/cancelled");
+        }
+        try {
+            return Result.ok(sessionService.listSessions(tenantId, accountId, normalizedStatus, page, size));
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("查询声明会话列表失败 tenantId={} errorType={}", tenantId, e.getClass().getSimpleName());
+            throw new BizException(503, "声明会话列表暂时无法加载，请稍后重试");
+        }
+    }
+
+    /**
+     * 卖家手动确认声明 → 触发该订单发货
+     */
+    @PostMapping("/sessions/{id}/confirm")
+    public Result<Void> manualConfirm(@PathVariable("id") Long sessionId) {
+        Long tenantId = requireTenant();
+        try {
+            sessionService.manualConfirm(tenantId, sessionId);
+            return Result.ok(null);
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("卖家手动确认声明失败 tenantId={} sessionId={} errorType={}",
+                    tenantId, sessionId, e.getClass().getSimpleName());
+            throw new BizException(503, "确认操作暂时无法完成，请稍后重试");
+        }
+    }
+
+    /**
+     * 卖家手动取消声明 → 通知买家+不发货
+     */
+    @PostMapping("/sessions/{id}/cancel")
+    public Result<Void> manualCancel(@PathVariable("id") Long sessionId) {
+        Long tenantId = requireTenant();
+        try {
+            sessionService.manualCancel(tenantId, sessionId);
+            return Result.ok(null);
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("卖家手动取消声明失败 tenantId={} sessionId={} errorType={}",
+                    tenantId, sessionId, e.getClass().getSimpleName());
+            throw new BizException(503, "取消操作暂时无法完成，请稍后重试");
+        }
     }
 }

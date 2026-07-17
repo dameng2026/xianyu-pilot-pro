@@ -17,9 +17,10 @@ import java.security.MessageDigest;
 import java.util.Set;
 
 /**
- * 数据同步接收端鉴权过滤器：保护 /open-api/internal/sync/* 系列接口。
+ * 数据同步接收端鉴权过滤器：保护 /api/sync/* 系列接口。
  * <p>
- * 该路径段不经过 UserJwtAuthFilter（仅作用于 /api/*），因此需要独立鉴权。
+ * 路径走 /api/sync/* 以复用线上 Nginx 已有的 /api/ 反代规则（/open-api/ 走 SPA fallback 不可达）。
+ * UserJwtAuthFilter 在 shouldNotFilter 中跳过 /api/sync/，由本过滤器独立鉴权。
  * 采用 fail-closed 策略：若 xianyu.sync.token 未配置，直接返回 503 拒绝所有请求。
  * Token 比较使用 MessageDigest.isEqual 实现常量时间比较，避免时序攻击。
  */
@@ -27,8 +28,8 @@ import java.util.Set;
 @Order(3)
 public class SyncAuthFilter extends OncePerRequestFilter {
     private static final Set<String> PROTECTED_PATHS = Set.of(
-            "/open-api/internal/sync/ping",
-            "/open-api/internal/sync/receive"
+            "/api/sync/ping",
+            "/api/sync/receive"
     );
     private static final ObjectMapper JSON = new ObjectMapper();
 

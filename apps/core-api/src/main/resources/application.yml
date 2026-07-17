@@ -1,5 +1,9 @@
 server:
   port: 18080
+  servlet:
+    encoding:
+      charset: UTF-8
+      force-response: true
 
 spring:
   application:
@@ -32,7 +36,9 @@ spring:
     password: 123456
     hikari:
       minimum-idle: 2
-      maximum-pool-size: 10
+      maximum-pool-size: 20
+      connection-timeout: 10000
+      max-lifetime: 1800000
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -165,3 +171,9 @@ spring:
 admin:
   seed:
     enabled: ${ADMIN_SEED_ENABLED:false}
+
+# 生产环境强制开启安全门禁：所有弱密钥/默认值/不安全配置将导致启动失败（fail-closed）
+# 部署前必须通过环境变量注入符合强度要求的 INTERNAL_API_TOKEN/ADMIN_JWT_SECRET/COOKIE_CRYPTO_SECRET 等
+xianyu:
+  security-guard:
+    enabled: true

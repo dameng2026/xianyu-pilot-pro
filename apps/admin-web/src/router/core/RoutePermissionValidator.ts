@@ -107,8 +107,7 @@ export class RoutePermissionValidator {
 
       if (
         routePath === targetPath ||
-        this.isDynamicRouteMatch(targetPath, routePath) ||
-        targetPath.startsWith(`${routePath}/`)
+        this.isDynamicRouteMatch(targetPath, routePath)
       ) {
         return true
       }

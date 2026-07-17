@@ -16,6 +16,14 @@ import {
 } from './policy.js';
 
 async function start() {
+  // 全局未捕获异常处理器：防止异步回调异常导致进程静默退出
+  process.on('unhandledRejection', (reason) => {
+    console.error('[Worker] unhandledRejection:', reason);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error('[Worker] uncaughtException:', err);
+  });
+
   const environment = process.env.NODE_ENV || process.env.APP_ENV || 'development';
   const redisPasswordPolicy = resolveRedisPasswordPolicy(process.env.REDIS_PASSWORD, environment);
   if (!redisPasswordPolicy.ready) {
@@ -47,7 +55,7 @@ async function start() {
       `UPDATE goofish_crawl_jobs
        SET status = 'running', started_at = NOW(), execution_token = $3
        WHERE tenant_id = $1 AND bullmq_job_id = $2
-         AND status IN ('pending', 'retrying', 'running')
+         AND status IN ('pending', 'running')
        RETURNING bullmq_job_id, store_user_id`,
       [tenantId, jobId, executionToken]
     );

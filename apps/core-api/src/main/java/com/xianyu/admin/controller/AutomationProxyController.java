@@ -37,9 +37,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -70,25 +67,6 @@ public class AutomationProxyController {
     private static final int MAX_SSE_TICKETS = 10_000;
     private static final int MAX_SSE_TICKETS_PER_USER = 5;
     private static final ConcurrentHashMap<String, SseTicket> SSE_TICKETS = new ConcurrentHashMap<>();
-    // SSE 票据定期清理器：避免仅在新建 ticket 时才 evict，导致长期无新请求时过期票据常驻内存
-    private static final ScheduledExecutorService SSE_TICKET_CLEANER =
-        Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "sse-ticket-cleaner");
-            t.setDaemon(true);
-            return t;
-        });
-
-    static {
-        // 每 2 分钟清理一次过期 SSE 票据；TTL 60s，2 分钟足够覆盖
-        SSE_TICKET_CLEANER.scheduleAtFixedRate(() -> {
-            try {
-                long now = Instant.now().getEpochSecond();
-                SSE_TICKETS.entrySet().removeIf(e -> e.getValue().expiresAtEpochSecond() <= now);
-            } catch (Exception e) {
-                log.warn("SSE 票据定期清理异常: {}", e.getClass().getSimpleName());
-            }
-        }, 2, 2, TimeUnit.MINUTES);
-    }
 
     public AutomationProxyController(AutomationClient automationClient, JdbcTemplate jdbcTemplate, OperationAuditService auditService,
                                      AiProviderService aiProviderService, OpportunityDraftService opportunityDraftService,
@@ -925,6 +903,30 @@ public class AutomationProxyController {
         }
     }
 
+    // ========== URL 导入图片代理（JSON → Python automation-service） ==========
+    // 前端 uploadImageFromUrl() 调用 POST /api/image/uploadFromUrl，Java 网关代理到 Python /api/image/uploadFromUrl
+    // Python 端下载远端图片并保存到 uploads/images/，返回 {url, name, assetId, size, message}
+    @PostMapping("/image/uploadFromUrl")
+    public Result<Object> imageUploadFromUrl(@RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> payload = body == null ? new LinkedHashMap<>() : new LinkedHashMap<>(body);
+        injectTenantId(payload);
+        // 用户私有图片导入：强制 visibility=private，避免被误标为公开资源
+        payload.put("visibility", "private");
+        payload.putIfAbsent("purpose", "url-import");
+        Object urlValue = payload.get("url");
+        if (urlValue == null || String.valueOf(urlValue).isBlank()) {
+            throw new BizException(400, "图片地址不能为空");
+        }
+        try {
+            Object result = automationClient.postInternalForData("/api/image/uploadFromUrl", payload);
+            return Result.ok(result);
+        } catch (Exception ex) {
+            if (ex instanceof BizException bizException) throw bizException;
+            log.error("URL 图片导入失败, errorType={}", ex.getClass().getSimpleName());
+            throw new BizException(503, "图片暂时无法通过 URL 导入，请稍后重试");
+        }
+    }
+
     // ========== 分类树管理 ==========
 
     @GetMapping("/xianyu/categories")
@@ -1024,7 +1026,11 @@ public class AutomationProxyController {
             return Result.ok(automationClient.postInternalForDataOrThrow("/api/item/publish", body));
         } catch (Exception ex) {
             if (ex instanceof BizException bizException) throw bizException;
-            log.error("商品发布失败, errorType={}", ex.getClass().getSimpleName());
+            // 兜底路径（AutomationClient 已把下游业务错误转成 BizException 透传，一般不会到这里）。
+            // 日志带上原始异常消息便于服务端排查，但不向前端暴露可能含敏感信息的细节。
+            log.error("商品发布失败, errorType={}, message={}",
+                    ex.getClass().getSimpleName(),
+                    ex.getMessage() == null ? "" : ex.getMessage().replaceAll("[\\r\\n]+", " "));
             throw new BizException(503, "商品暂时无法发布，请稍后重试");
         }
     }

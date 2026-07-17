@@ -21,10 +21,10 @@
   import '@wangeditor/editor/dist/css/style.css'
   import { onBeforeUnmount, onMounted, shallowRef, computed } from 'vue'
   import { Editor, Toolbar } from '@wangeditor/editor-for-vue'
-  import { useUserStore } from '@/store/modules/user'
   import EmojiText from '@/utils/ui/emojo'
   import { IDomEditor, IToolbarConfig, IEditorConfig } from '@wangeditor/editor'
   import request from '@/utils/http'
+  import { sanitizeHtml } from '@/utils/sanitizeHtml'
 
   defineOptions({ name: 'ArtWangEditor' })
 
@@ -68,7 +68,6 @@
 
   // 编辑器实例
   const editorRef = shallowRef<IDomEditor>()
-  const userStore = useUserStore()
 
   // 常量配置
   const DEFAULT_UPLOAD_CONFIG = {
@@ -111,8 +110,8 @@
     return config
   })
 
-  // 编辑器配置
-  const editorConfig: Partial<IEditorConfig> = {
+  // 编辑器配置 - computed 确保响应式；customUpload 在每次上传时经 http 拦截器读取最新 token 并自动添加 Bearer 前缀
+  const editorConfig = computed<Partial<IEditorConfig>>(() => ({
     placeholder: props.placeholder,
     MENU_CONF: {
       uploadImage: {
@@ -121,8 +120,36 @@
         maxNumberOfFiles: mergedUploadConfig.value.maxNumberOfFiles,
         allowedFileTypes: mergedUploadConfig.value.allowedFileTypes,
         server: uploadServer.value,
-        headers: {
-          Authorization: userStore.accessToken
+        customUpload: async (file: File, insertFn: InsertFnType) => {
+          try {
+            const formData = new FormData()
+            formData.append(mergedUploadConfig.value.fieldName, file)
+
+            const server =
+              props.uploadConfig?.isCustomUpload && props.uploadConfig?.server
+                ? props.uploadConfig.server
+                : uploadServer.value
+
+            const response = await request.post<{ url: string; alt: string; href: string }>({
+              url: server,
+              data: formData,
+              headers: {
+                'Content-Type': 'multipart/form-data'
+              }
+            })
+
+            const { url, alt, href } = response
+
+            if (!url) {
+              throw new Error('上传失败，请检查服务端配置')
+            }
+
+            insertFn(url, alt, href)
+            ElMessage.success(`图片上传成功 ${EmojiText[200]}`)
+          } catch (error) {
+            console.error('图片上传失败:', error)
+            ElMessage.error(`图片上传失败 ${EmojiText[500]}`)
+          }
         },
         onSuccess() {
           ElMessage.success(`图片上传成功 ${EmojiText[200]}`)
@@ -133,38 +160,7 @@
         }
       }
     }
-  }
-
-  // 自定义上传
-  if (props.uploadConfig?.isCustomUpload && props.uploadConfig?.server && editorConfig.MENU_CONF) {
-    editorConfig.MENU_CONF.uploadImage.customUpload = async (file: File, insertFn: InsertFnType) => {
-      try {
-        const formData = new FormData()
-        formData.append(mergedUploadConfig.value.fieldName, file)
-
-        const response = await request.post<{ url: string; alt: string; href: string }>({
-          url: props.uploadConfig?.server,
-          data: formData,
-          headers: {
-            'Content-Type':'multipart/form-data',
-            Authorization: userStore.accessToken
-          }
-        })
-
-        const { url, alt, href } = response
-
-        if (!url) {
-          throw new Error('上传失败，请检查服务端配置')
-        }
-
-        insertFn(url, alt, href)
-        ElMessage.success(`图片上传成功 ${EmojiText[200]}`)
-      } catch (error) {
-        console.error('图片上传失败:', error)
-        ElMessage.error(`图片上传失败 ${EmojiText[500]}`)
-      }
-    }
-  }
+  }))
 
   // 编辑器创建回调
   const onCreateEditor = (editor: IDomEditor) => {
@@ -229,10 +225,10 @@
   defineExpose({
     /** 获取编辑器实例 */
     getEditor: () => editorRef.value,
-    /** 设置编辑器内容 */
-    setHtml: (html: string) => editorRef.value?.setHtml(html),
-    /** 获取编辑器内容 */
-    getHtml: () => editorRef.value?.getHtml(),
+    /** 设置编辑器内容（输入前 sanitize 防止 XSS） */
+    setHtml: (html: string) => editorRef.value?.setHtml(sanitizeHtml(html)),
+    /** 获取编辑器内容（输出前 sanitize 防止 XSS） */
+    getHtml: () => sanitizeHtml(editorRef.value?.getHtml()),
     /** 清空编辑器 */
     clear: () => editorRef.value?.clear(),
     /** 聚焦编辑器 */

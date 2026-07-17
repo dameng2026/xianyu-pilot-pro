@@ -180,17 +180,22 @@ def upload_image_to_xianyu(
     img = Image.open(io.BytesIO(compressed))
     width, height = img.size
 
-    # 构建 multipart 请求
+    # 构建 multipart 请求：Cookie 头完整透传 + CookieJar 跟随子域
     session = requests.Session()
     for part in cookie_str.split(";"):
         part = part.strip()
         if "=" in part:
             key, _, value = part.partition("=")
-            session.cookies.set(key.strip(), value.strip(), domain=".goofish.com")
+            key = key.strip()
+            value = value.strip()
+            if key and value:
+                session.cookies.set(key, value, domain=".goofish.com")
 
     files = {
         "file": ("image.jpg", compressed, "image/jpeg"),
     }
+    headers = dict(UPLOAD_HEADERS)
+    headers["Cookie"] = cookie_str
 
     logger.info(
         "正在上传图片到闲鱼 CDN, 压缩后大小=%dKB, 尺寸=%dx%d",
@@ -199,7 +204,7 @@ def upload_image_to_xianyu(
 
     resp = session.post(
         UPLOAD_URL,
-        headers=UPLOAD_HEADERS,
+        headers=headers,
         files=files,
         timeout=60,
     )

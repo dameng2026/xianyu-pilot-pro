@@ -8,64 +8,7 @@
     </div>
     <div v-else class="sync-grid">
       <div class="sync-main">
-        <!-- CardPanel 1: 连接配置 -->
-        <CardPanel title="连接配置" desc="目标线上服务器的连接信息">
-          <div class="sync-form">
-            <div class="sync-row">
-              <label class="sync-label">目标服务器地址</label>
-              <input
-                v-model="form.targetBaseUrl"
-                type="text"
-                class="sync-input"
-                placeholder="https://api.example.com"
-                :disabled="!settingsAvailable"
-              />
-              <p class="sync-hint">线上 core-api 的 baseURL（需以 https:// 开头）</p>
-            </div>
-
-            <div class="sync-row">
-              <label class="sync-label">目标账号用户名</label>
-              <input
-                v-model="form.targetUsername"
-                type="text"
-                class="sync-input"
-                placeholder="slfasd"
-                :disabled="!settingsAvailable"
-              />
-              <p class="sync-hint">线上 sys_user.username，同步数据将写入该账号名下</p>
-            </div>
-
-            <div class="sync-row">
-              <label class="sync-label">同步 API Token</label>
-              <input
-                v-model="form.targetToken"
-                type="password"
-                class="sync-input"
-                placeholder="线上 DATA_SYNC_API_TOKEN 环境变量值"
-                :disabled="!settingsAvailable"
-                autocomplete="off"
-              />
-              <p class="sync-hint">线上服务器配置的同步鉴权 token（至少 32 字符）</p>
-            </div>
-
-            <div class="sync-actions">
-              <button
-                type="button"
-                class="sync-save-btn"
-                :disabled="saving || !settingsAvailable"
-                @click="save"
-              >{{ saving ? '保存中...' : '保存配置' }}</button>
-              <button
-                type="button"
-                class="sync-ping-btn"
-                :disabled="pinging || !settingsAvailable"
-                @click="ping"
-              >{{ pinging ? '测试中...' : '测试连接' }}</button>
-            </div>
-          </div>
-        </CardPanel>
-
-        <!-- CardPanel 2: 同步范围 -->
+        <!-- CardPanel 1: 同步范围 -->
         <CardPanel title="同步范围" desc="以下配置将全量覆盖到目标账号">
           <div class="sync-scope">
             <div class="sync-scope-section">
@@ -94,7 +37,7 @@
           </div>
         </CardPanel>
 
-        <!-- CardPanel 3: 同步动作 -->
+        <!-- CardPanel 2: 同步动作 -->
         <CardPanel title="同步动作" desc="一键将本地配置推送到线上">
           <div class="sync-action">
             <div v-if="form.lastSyncAt || form.lastSyncStatus" class="sync-last">
@@ -118,11 +61,10 @@
               <button
                 type="button"
                 class="sync-execute-btn"
-                :disabled="executing || !settingsAvailable || !form.targetBaseUrl || !form.targetUsername || !form.targetToken"
+                :disabled="executing || !settingsAvailable"
                 @click="execute"
               >{{ executing ? '同步中...' : '立即同步到线上' }}</button>
-              <p v-if="!settingsAvailable" class="sync-action-hint">请先保存配置后再执行同步</p>
-              <p v-else-if="!form.targetBaseUrl || !form.targetUsername || !form.targetToken" class="sync-action-hint">请先完整填写连接配置</p>
+              <p v-if="!settingsAvailable" class="sync-action-hint">配置未就绪，无法执行同步</p>
             </div>
 
             <div v-if="executeResult" class="sync-result">
@@ -147,19 +89,17 @@ import { onMounted, reactive, ref } from 'vue'
 import CardPanel from '../../components/CardPanel.vue'
 import {
   getDataSyncConfig,
-  saveDataSyncConfig,
-  pingDataSyncRemote,
   executeDataSync
 } from '../../api/dataSync.js'
 
 const loading = ref(true)
 const loadError = ref('')
 const settingsAvailable = ref(false)
-const saving = ref(false)
-const pinging = ref(false)
 const executing = ref(false)
 const executeResult = ref(null)
 
+// 连接信息（targetBaseUrl/targetUsername/targetToken）由后端预填，
+// 前端不再展示配置表单，仅读取后端默认值用于执行同步
 const form = reactive({
   targetBaseUrl: '',
   targetUsername: '',
@@ -189,46 +129,6 @@ async function load() {
     loadError.value = `${e.message || '网络异常'}；配置成功加载前不会执行任何同步操作。`
   } finally {
     loading.value = false
-  }
-}
-
-async function save() {
-  if (!settingsAvailable.value) return
-  saving.value = true
-  try {
-    const payload = {
-      targetBaseUrl: form.targetBaseUrl,
-      targetUsername: form.targetUsername,
-      targetToken: form.targetToken,
-      sourceAccountId: form.sourceAccountId
-    }
-    await saveDataSyncConfig(payload)
-    showToast('数据同步配置已保存')
-  } catch (e) {
-    showToast('保存失败：' + (e.message || '网络错误'), true)
-  } finally {
-    saving.value = false
-  }
-}
-
-async function ping() {
-  if (!settingsAvailable.value) return
-  pinging.value = true
-  try {
-    const res = await pingDataSyncRemote({
-      targetBaseUrl: form.targetBaseUrl,
-      targetToken: form.targetToken
-    })
-    const status = res?.data?.status || 0
-    if (status >= 200 && status < 300) {
-      showToast('连接测试成功（HTTP ' + status + '）')
-    } else {
-      showToast('连接测试失败（HTTP ' + status + '）', true)
-    }
-  } catch (e) {
-    showToast('连接测试失败：' + (e.message || '网络错误'), true)
-  } finally {
-    pinging.value = false
   }
 }
 
@@ -323,79 +223,6 @@ onMounted(load)
   display: flex;
   flex-direction: column;
   gap: 16px;
-}
-.sync-form {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-.sync-row {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.sync-label {
-  font-size: 14px;
-  font-weight: 600;
-  color: #374151;
-}
-.sync-input {
-  padding: 8px 12px;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  font-size: 14px;
-  transition: border-color 0.15s;
-  background: #fff;
-  color: #111827;
-}
-.sync-input:focus {
-  outline: none;
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-}
-.sync-input:disabled {
-  background: #f3f4f6;
-  cursor: not-allowed;
-}
-.sync-hint {
-  margin: 0;
-  font-size: 12px;
-  color: #6b7280;
-}
-.sync-actions {
-  display: flex;
-  gap: 12px;
-  margin-top: 8px;
-}
-.sync-save-btn,
-.sync-ping-btn {
-  padding: 8px 20px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 500;
-  transition: background 0.15s;
-}
-.sync-save-btn {
-  background: #3b82f6;
-  color: #fff;
-}
-.sync-save-btn:hover:not(:disabled) {
-  background: #2563eb;
-}
-.sync-ping-btn {
-  background: #f3f4f6;
-  color: #374151;
-  border: 1px solid #d1d5db;
-}
-.sync-ping-btn:hover:not(:disabled) {
-  background: #e5e7eb;
-}
-.sync-save-btn:disabled,
-.sync-ping-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 .sync-scope {
   display: flex;

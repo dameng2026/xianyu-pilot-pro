@@ -3,7 +3,7 @@
     <div class="page-head">
       <div>
         <h1>发货声明</h1>
-        <p>配置发货声明文案与生效范围，买家确认声明后进入正式发货流程</p>
+        <p>开启后，买家付款后系统先发送声明文案，买家回复"确认"后才进入自动发货流程</p>
       </div>
     </div>
 
@@ -22,7 +22,7 @@
             <span>启用发货声明</span>
             <ToggleSwitch :on="enabled" />
           </div>
-          <p class="field-desc">开启后，买家付款后系统先发送声明文案，买家确认后再进入自动发货流程</p>
+          <p class="field-desc">开启后，买家付款后系统先发送声明文案，买家回复"确认"后才进入自动发货流程；回复"取消"则转人工客服</p>
 
           <div class="form-row" style="margin-top:16px">
             <label>生效范围</label>
@@ -33,32 +33,23 @@
           </div>
 
           <div class="form-row" style="margin-top:16px">
-            <label>声明文案</label>
+            <label>声明文案（固定，不可修改）</label>
             <textarea
               ref="textareaRef"
               v-model="content"
-              placeholder="请输入发货声明内容，支持插入变量..."
               rows="8"
-              :disabled="!enabled"
+              readonly
+              class="readonly-textarea"
             ></textarea>
           </div>
 
-          <div class="var-buttons">
-            <span class="var-label">插入变量：</span>
-            <button
-              v-for="v in variables"
-              :key="v.key"
-              class="var-chip"
-              :disabled="!enabled"
-              @click="insertVariable(v.key)"
-            >
-{{ v.key }}
-</button>
+          <div class="readonly-notice">
+            <span class="readonly-icon">🔒</span>
+            <span>声明文案为系统固定模板，发送时会自动替换 <code>{订单编号}</code> 和 <code>{商品标题}</code> 为实际值。如需调整，请联系开发人员。</span>
           </div>
 
           <div class="form-actions">
             <AppButton type="primary" :loading="saving" :disabled="!settingsAvailable" @click="save">保存配置</AppButton>
-            <AppButton :disabled="saving || !enabled || !settingsAvailable" @click="reset">恢复默认</AppButton>
           </div>
         </CardPanel>
       </div>
@@ -67,19 +58,58 @@
         <CardPanel title="预览">
           <div class="preview-box">
             <div v-if="!enabled" class="subtle" style="text-align:center;padding:20px 0">发货声明已禁用，启用后可预览效果</div>
-            <div v-else-if="!previewText" class="subtle" style="text-align:center;padding:20px 0">点击下方按钮预览声明效果</div>
             <pre v-else class="preview-content">{{ previewText }}</pre>
-          </div>
-          <div style="margin-top:12px">
-            <AppButton :disabled="!enabled || !settingsAvailable || previewing" @click="refreshPreview">{{ previewing ? '预览中...' : '预览声明' }}</AppButton>
           </div>
         </CardPanel>
 
-        <CardPanel title="变量说明" style="margin-top:16px">
-          <div class="var-desc-list">
-            <div v-for="v in variables" :key="v.key" class="var-desc-item">
-              <code class="var-desc-key">{{ v.key }}</code>
-              <span class="var-desc-text">{{ v.desc }}</span>
+        <CardPanel title="流程说明" style="margin-top:16px">
+          <div class="flow-steps">
+            <div class="flow-step">
+              <span class="step-num">1</span>
+              <span>买家付款，系统收到待发货消息</span>
+            </div>
+            <div class="flow-step">
+              <span class="step-num">2</span>
+              <span>系统自动发送声明文案给买家</span>
+            </div>
+            <div class="flow-step">
+              <span class="step-num">3</span>
+              <span>买家回复"确认" → 系统自动发货</span>
+            </div>
+            <div class="flow-step">
+              <span class="step-num">4</span>
+              <span>买家回复"取消" → 转人工客服，不发货</span>
+            </div>
+            <div class="flow-step">
+              <span class="step-num">5</span>
+              <span>卖家可在发货记录页"等待确认"标签手动处理</span>
+            </div>
+          </div>
+        </CardPanel>
+
+        <CardPanel title="支持的关键词" style="margin-top:16px">
+          <div class="keyword-list">
+            <div class="keyword-group">
+              <div class="keyword-label">买家确认</div>
+              <div class="keyword-tags">
+                <span class="keyword-tag">确认</span>
+                <span class="keyword-tag">确定</span>
+                <span class="keyword-tag">好的</span>
+                <span class="keyword-tag">好</span>
+                <span class="keyword-tag">可以</span>
+                <span class="keyword-tag">同意</span>
+              </div>
+            </div>
+            <div class="keyword-group">
+              <div class="keyword-label">买家取消</div>
+              <div class="keyword-tags">
+                <span class="keyword-tag cancel">取消</span>
+                <span class="keyword-tag cancel">不要了</span>
+                <span class="keyword-tag cancel">退款</span>
+                <span class="keyword-tag cancel">退货</span>
+                <span class="keyword-tag cancel">拒绝</span>
+                <span class="keyword-tag cancel">不同意</span>
+              </div>
             </div>
           </div>
         </CardPanel>
@@ -89,12 +119,12 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import CardPanel from '../components/CardPanel.vue'
 import AppButton from '../components/AppButton.vue'
 import ToggleSwitch from '../components/ToggleSwitch.vue'
 import EmptyState from '../components/EmptyState.vue'
-import { getDeliveryStatement, previewDeliveryStatement, saveDeliveryStatement, toggleDeliveryStatement } from '../api/autoDelivery.js'
+import { getDeliveryStatement, saveDeliveryStatement, toggleDeliveryStatement } from '../api/autoDelivery.js'
 
 const error = ref('')
 const success = ref('')
@@ -102,26 +132,23 @@ const loading = ref(true)
 const loadError = ref('')
 const settingsAvailable = ref(false)
 const saving = ref(false)
-const previewing = ref(false)
 const textareaRef = ref(null)
-const previewText = ref('')
 
 const enabled = ref(false)
 const content = ref('')
 const scope = ref('all')
 
-const variables = [
-  { key: '{订单编号}', desc: '订单编号' },
-  { key: '{商品标题}', desc: '商品标题' },
-  { key: '{买家昵称}', desc: '买家昵称' },
-  { key: '{发货确认链接}', desc: '发货确认链接' }
-]
+// 固定声明文案模板（仅 {订单编号} 和 {商品标题} 会被替换）
+const FIXED_STATEMENT_CONTENT = `订单编号：{订单编号}
 
-const defaultContent = `订单编号：{订单编号}
+您好，该订单包含的商品为虚拟商品，发货后不支持退换。如无异议，请回复【确认】。
 
-您好，该订单包含的商品为虚拟商品，发货后不支持退换。如无异议，请点击下方链接确认发货。
+如有异议，请回复【取消】，这边帮您转人工客服，进行退款操作`
 
-{发货确认链接}`
+// 预览文案（变量替换为示例值）
+const previewText = FIXED_STATEMENT_CONTENT
+  .replace('{订单编号}', '2025071712345678')
+  .replace('{商品标题}', '示例商品标题')
 
 async function load() {
   error.value = ''
@@ -137,10 +164,9 @@ async function load() {
       throw new Error('发货声明启用状态响应格式异常')
     }
     if (!['all', 'specific'].includes(data.scope)) throw new Error('发货声明生效范围响应格式异常')
-    if (data.content != null && typeof data.content !== 'string') throw new Error('发货声明内容响应格式异常')
     enabled.value = enabledValue === true || enabledValue === 1
-    content.value = data.content || defaultContent
     scope.value = data.scope
+    content.value = FIXED_STATEMENT_CONTENT
     settingsAvailable.value = true
   } catch (e) {
     loadError.value = `${e.message || '声明内容加载失败'}；配置成功加载前不会应用或覆盖任何设置。`
@@ -156,7 +182,6 @@ async function toggleEnabled() {
   success.value = ''
   const newVal = !enabled.value
   enabled.value = newVal
-  previewText.value = ''
   try {
     await toggleDeliveryStatement(newVal)
     success.value = newVal ? '发货声明已启用' : '发货声明已禁用'
@@ -166,63 +191,17 @@ async function toggleEnabled() {
   }
 }
 
-function insertVariable(key) {
-  const textarea = textareaRef.value
-  if (!textarea) return
-  const start = textarea.selectionStart
-  const end = textarea.selectionEnd
-  const text = content.value
-  content.value = text.substring(0, start) + key + text.substring(end)
-  nextTick(() => {
-    textarea.focus()
-    textarea.selectionStart = textarea.selectionEnd = start + key.length
-  })
-}
-
-async function refreshPreview() {
-  if (!settingsAvailable.value) return
-  if (!content.value.trim()) {
-    error.value = '请先输入声明文案'
-    return
-  }
-  if (previewing.value) return
-  error.value = ''
-  previewing.value = true
-  try {
-    const res = await previewDeliveryStatement({ content: content.value, scope: scope.value })
-    const preview = res?.data?.preview
-    if (typeof preview !== 'string' || !preview.trim()) throw new Error('预览响应格式异常，未覆盖当前预览')
-    previewText.value = preview
-  } catch (e) {
-    error.value = e.message || '预览失败'
-  } finally {
-    previewing.value = false
-  }
-}
-
-function reset() {
-  if (!settingsAvailable.value) return
-  content.value = defaultContent
-  scope.value = 'all'
-  success.value = ''
-  error.value = ''
-  previewText.value = ''
-}
-
 async function save() {
   if (!settingsAvailable.value) return
   if (saving.value) return
   error.value = ''
   success.value = ''
-  if (!content.value.trim()) {
-    error.value = '请输入声明文案'
-    return
-  }
   saving.value = true
   try {
+    // 始终保存固定文案（后端校验时会接收，但实际发送时使用固定模板）
     await saveDeliveryStatement({
       enabled: enabled.value,
-      content: content.value,
+      content: FIXED_STATEMENT_CONTENT,
       scope: scope.value
     })
     success.value = '发货声明配置已保存'
@@ -235,7 +214,6 @@ async function save() {
 
 function onHeaderAction(event) {
   if (event.detail === 'statement-save') save()
-  if (event.detail === 'statement-preview') refreshPreview()
 }
 
 onMounted(() => {
@@ -392,6 +370,110 @@ onBeforeUnmount(() => {
 .form-row textarea:focus {
   border-color: #0d6bff;
   box-shadow: 0 0 0 3px rgba(13,107,255,.1);
+}
+.form-row textarea.readonly-textarea {
+  background: #f5f7fa;
+  color: #344054;
+  cursor: not-allowed;
+  resize: none;
+  line-height: 1.7;
+  font-size: 14px;
+  white-space: pre-wrap;
+}
+.form-row textarea.readonly-textarea:focus {
+  border-color: #e7edf7;
+  box-shadow: none;
+}
+.readonly-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #fff7e6;
+  border: 1px solid #ffe7ba;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #7a5a18;
+  line-height: 1.5;
+}
+.readonly-notice .readonly-icon {
+  font-size: 14px;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+.readonly-notice code {
+  background: #fff;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid #ffe0a3;
+  color: #b06f00;
+  font-size: 12px;
+  font-family: inherit;
+}
+.flow-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.flow-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  color: #344054;
+  line-height: 1.5;
+}
+.flow-step .step-num {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #0d6bff;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.keyword-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.keyword-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.keyword-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #667085;
+}
+.keyword-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.keyword-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 13px;
+  font-size: 12px;
+  font-weight: 600;
+  background: #e6f4ff;
+  color: #0d6bff;
+  border: 1px solid #bae0ff;
+}
+.keyword-tag.cancel {
+  background: #fff1f0;
+  color: #d4380d;
+  border-color: #ffccc7;
 }
 .form-actions {
   margin-top: 20px;

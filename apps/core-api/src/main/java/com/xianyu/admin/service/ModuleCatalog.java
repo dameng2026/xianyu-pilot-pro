@@ -62,7 +62,15 @@ public class ModuleCatalog {
         add("ai-usage", "AI 调用日志", "真实 AI 调用 usage、人民币成本、Token 扣费和余额变动", cols("id:ID:80", "providerName:提供商:150", "modelName:模型:180", "username:用户:130", "scene:场景:120:tag", "promptTokens:输入Token:110", "completionTokens:输出Token:110", "chargeTokens:扣费Token:120", "cost:费用:90", "statusText:状态:90:tag", "createdTime:时间:170"));
         add("ai-token", "Token 流水", "按用户展示充值、AI 扣费等余额变动流水", cols("id:ID:80", "username:用户:140", "changeType:类型:110:tag", "changeAmount:变动Token:120", "beforeBalance:变动前:110", "afterBalance:变动后:110", "refNo:关联单号:170", "remark:备注:180", "createdTime:时间:170"));
         add("rag", "RAG 知识库", "RAG 文档上传和向量化管理", cols("id:ID:80", "knowledgeName:知识库名:180", "docCount:文档数:90", "vectorCount:向量数:90", "storageSize:存储大小:100", "status:状态:100:tag", "createdTime:创建时间:170"));
-        add("sensitive-words", "敏感词策略", "交易类敏感词拦截和审核策略", cols("id:ID:80", "word:敏感词:180", "category:分类:140", "action:动作:90:tag", "status:状态:100:tag", "createdTime:创建时间:170"));
+        add("sensitive-words", "敏感词策略", "AI 润色文案与工作流商品提取的敏感词拦截策略；命中即拦截/移除，避免账号封禁", cols(
+                "id:ID:80",
+                "word:敏感词:200",
+                "scene:应用场景:140:tag",
+                "category:分类:140",
+                "action:动作:90:tag",
+                "status:状态:100:tag",
+                "createdTime:创建时间:170"
+        ));
 
         add("hot-goods", "数据统计", "热销商品统计，筛选当日销量大于5件的商品数据，用于模型训练和爆款文案分析", cols(
                 "id:ID:80",

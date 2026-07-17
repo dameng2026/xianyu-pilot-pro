@@ -101,13 +101,7 @@
             <template #price="{row}"><div class="cell-price">{{ row.price }}</div></template>
             <template #stock="{row}"><div class="cell-center cell-muted">{{ row.stock }}</div></template>
             <template #status="{row}"><div class="cell-center"><Badge :type="row.statusType">{{ row.status }}</Badge></div></template>
-            <template #type="{row}">
-              <span v-if="row.type === '暂未配置'" class="delivery-type-configurable" @click.stop="goToAutoDelivery">
-                <Badge type="orange">暂未配置</Badge>
-                <span class="config-hint">去配置</span>
-              </span>
-              <Badge v-else :type="row.deliveryTypeBadge">{{ row.type }}</Badge>
-            </template>
+            <template #delivery="{row}"><div class="cell-center"><ToggleSwitch :on="row.deliveryOn === true" @click.stop="goToAutoDelivery" /></div></template>
             <template #reply="{row}"><div class="cell-center"><Badge v-if="row.replyOn === null" type="gray">未知</Badge><ToggleSwitch v-else :on="row.replyOn" @click.stop="toggleReply(row)" /></div></template>
             <template #onsale="{row}"><div class="cell-center"><AppButton v-if="row.isLocalDraft" type="primary" @click.stop="publishDraft(row)">发布</AppButton><Badge v-else-if="row.statusCode === null" type="gray">未知</Badge><ToggleSwitch v-else :on="row.statusCode===0" @click.stop="toggleOnShelf(row)" /></div></template>
             <template #op="{row}">
@@ -261,7 +255,7 @@ const selected = ref(null)
 const query = reactive({ xianyuAccountId: '', status: '', keyword: '', pageNum: 1, pageSize: 50 })
 // 每页条数可选项，默认 50
 const pageSizes = [50, 100, 200, 300, 500, 1000]
-const cols=[{key:'info',title:'商品信息'},{key:'price',title:'价格'},{key:'stock',title:'库存'},{key:'status',title:'状态'},{key:'type',title:'发货类型'},{key:'reply',title:'自动回复'},{key:'onsale',title:'在售'},{key:'time',title:'更新时间'},{key:'op',title:'操作'}]
+const cols=[{key:'info',title:'商品信息'},{key:'price',title:'价格'},{key:'stock',title:'库存'},{key:'status',title:'状态'},{key:'delivery',title:'自动发货'},{key:'reply',title:'自动回复'},{key:'onsale',title:'在售'},{key:'time',title:'更新时间'},{key:'op',title:'操作'}]
 const syncCols=[{key:'createdTime',title:'创建时间'},{key:'status',title:'状态'},{key:'progress',title:'进度'},{key:'summary',title:'统计'},{key:'durationSeconds',title:'耗时(s)'},{key:'error',title:'错误'}]
 let syncPollCanceled = false
 const statusMap = { 0: '在售', 1: '下架/草稿', 2: '已售出', 3: '已删除' }
@@ -299,16 +293,6 @@ const products = computed(() => items.value.map(w => {
     statusCode: Number.isFinite(statusCode) ? statusCode : null,
     status: isLocalDraft ? '草稿/待发布' : (Number.isFinite(statusCode) ? (statusMap[statusCode] || String(statusCode)) : '状态未知'),
     statusType: isLocalDraft ? 'orange' : (statusCode === 0 ? 'green' : statusCode === 3 ? 'red' : Number.isFinite(statusCode) ? 'orange' : 'gray'),
-    type: w.autoDeliveryType === 0
-      ? '卡密'
-      : w.autoDeliveryType === 1
-        ? '文本'
-        : w.autoDeliveryType === 2
-          ? '自定义'
-          : w.autoDeliveryType == null
-            ? '暂未配置'
-            : '未知类型',
-    deliveryTypeBadge: w.autoDeliveryType === 0 ? 'purple' : w.autoDeliveryType === 2 ? 'blue' : w.autoDeliveryType === 1 ? 'green' : 'gray',
     deliveryOn: normalizeSwitchState(w.xianyuAutoDeliveryOn),
     replyOn: normalizeSwitchState(w.xianyuAutoReplyOn),
     time: item.updatedTime || item.createdTime || '-',
@@ -1393,25 +1377,6 @@ onBeforeUnmount(()=>{ syncPollCanceled = true; window.removeEventListener('xya-h
   text-overflow: ellipsis;
 }
 
-.delivery-type-configurable {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 6px;
-  transition: background 0.15s;
-  white-space: nowrap;
-}
-.delivery-type-configurable:hover {
-  background: rgba(255, 125, 0, 0.1);
-}
-.delivery-type-configurable .config-hint {
-  font-size: 12px;
-  color: #f59e0b;
-  font-weight: 500;
-  white-space: nowrap;
-}
 
 .pagination {
   display: flex;

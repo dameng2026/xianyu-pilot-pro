@@ -208,6 +208,12 @@ public class AiBillingService {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
                 "SELECT l.id, l.tenant_id AS tenantId, l.user_id AS userId, u.username, l.change_type AS changeType, l.change_amount AS changeAmount, l.before_balance AS beforeBalance, l.after_balance AS afterBalance, l.ref_type AS refType, l.ref_id AS refId, l.ref_no AS refNo, l.remark, l.created_time AS createdTime " +
                         "FROM token_balance_ledger l LEFT JOIN sys_user u ON u.id=l.user_id" + where + " ORDER BY l.id DESC LIMIT ? OFFSET ?", pageArgs.toArray());
+        // 统一根据 changeType 覆盖 remark 文案，避免历史数据因数据库字符集问题出现乱码
+        for (Map<String, Object> row : rows) {
+            Object ct = row.get("changeType");
+            String ctStr = ct == null ? "" : String.valueOf(ct);
+            row.put("remark", remarkForLedger(ctStr, row.get("remark")));
+        }
         return new PageResult<>(rows, safeCurrent, safeSize, total == null ? 0 : total);
     }
 
@@ -234,7 +240,55 @@ public class AiBillingService {
         Map<String, Object> res = new LinkedHashMap<>();
         res.put("userId", user.get("id"));
         res.put("username", user.get("username"));
-        res.put("tokenBalance", number(user.get("token_balance")));
+        long tokenBalance = number(user.get("token_balance"));
+        res.put("tokenBalance", tokenBalance);
+        res.put("balance", tokenBalance); // 兼容旧前端字段
+        // 附带通用模型（model-config-general）单次扣费信息，便于前端做"余额是否够单次调用"校验
+        Map<String, Object> generalPricing = generalModelPerCallPricing(UserContext.getTenantId());
+        res.putAll(generalPricing);
+        return res;
+    }
+
+    /**
+     * 计算通用模型（model-config-general）的单次扣费信息。
+     *
+     * 默认：perCallPrice=0.03 元、tokenExchangeRate=100、perCallTokens=3 Token。
+     * 若后台未配置或配置为 0，使用默认值；若调用方 tenantId 为空（如内部 API），仅返回默认值。
+     */
+    public Map<String, Object> generalModelPerCallPricing(Long tenantId) {
+        BigDecimal perCallPrice = BigDecimal.ZERO;
+        BigDecimal exchangeRate = DEFAULT_TOKEN_EXCHANGE_RATE;
+        long tokensPerCallCfg = 0L;
+        String moduleKey = "model-config-general";
+        try {
+            if (tenantId != null) {
+                Map<String, Object> price = jdbcTemplate.queryForList(
+                        "SELECT * FROM ai_model_price_config WHERE deleted=0 AND enabled=1 AND module_key='model-config-general' " +
+                                "AND (tenant_id IS NULL OR tenant_id=?) ORDER BY CASE WHEN tenant_id IS NULL THEN 1 ELSE 0 END, id DESC LIMIT 1",
+                        tenantId).stream().findFirst().orElse(null);
+                if (price != null) {
+                    perCallPrice = decimal(price.get("per_call_price"));
+                    exchangeRate = decimal(price.get("token_exchange_rate"));
+                    if (exchangeRate.compareTo(BigDecimal.ZERO) <= 0) exchangeRate = DEFAULT_TOKEN_EXCHANGE_RATE;
+                    tokensPerCallCfg = number(price.get("tokens_per_call"));
+                    moduleKey = text(price.get("module_key"));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("查询通用模型单次扣费配置失败，使用默认值: {}", e.getMessage());
+        }
+        if (perCallPrice.compareTo(BigDecimal.ZERO) <= 0) perCallPrice = new BigDecimal("0.03");
+        long perCallTokens;
+        if (tokensPerCallCfg > 0) {
+            perCallTokens = tokensPerCallCfg;
+        } else {
+            perCallTokens = perCallPrice.multiply(exchangeRate).setScale(0, RoundingMode.CEILING).longValue();
+        }
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("perCallPrice", perCallPrice);
+        res.put("tokenExchangeRate", exchangeRate);
+        res.put("perCallTokens", perCallTokens);
+        res.put("moduleKey", moduleKey);
         return res;
     }
 
@@ -311,7 +365,7 @@ public class AiBillingService {
     @Transactional
     public Map<String, Object> charge(Map<String, Object> usage) {
         Long userId = parseNullableLong(first(usage, "userId", "user_id"));
-        if (userId == null || userId <= 0) throw new BizException(400, "userId 涓嶈兘涓虹┖");
+        if (userId == null || userId <= 0) throw new BizException(400, "userId 不能为空");
         Long tenantId = parseNullableLong(first(usage, "tenantId", "tenant_id"));
         if (tenantId == null || tenantId <= 0) throw new BizException(400, "tenantId 不能为空");
         Map<String, Object> estimate = estimateUsage(usage, false);
@@ -406,6 +460,10 @@ public class AiBillingService {
 
         Map<String, Object> price = findPriceConfig(tenantId, providerName, modelName, modelType);
         if (!StringUtils.hasText(billingMode)) billingMode = defaultText(price.get("billing_mode"), "token");
+        // 通用模型（model-config-general）强制按次计费：忽略调用方传入的 billingMode，统一按次扣费
+        if ("model-config-general".equals(price.get("module_key"))) {
+            billingMode = "per_call";
+        }
         billingMode = normalizeBillingMode(billingMode);
 
         BigDecimal costYuan;
@@ -426,6 +484,10 @@ public class AiBillingService {
             costYuan = effectivePerImage.multiply(BigDecimal.valueOf(imageCount));
         } else if ("per_call".equals(billingMode) || "spec".equals(billingMode)) {
             BigDecimal perCall = decimal(price.get("per_call_price"));
+            // 通用模型按次价格未配置时默认 0.03 元/次（兑换比例 100 时扣 3 Token）
+            if (perCall.compareTo(BigDecimal.ZERO) <= 0 && "model-config-general".equals(price.get("module_key"))) {
+                perCall = new BigDecimal("0.03");
+            }
             if ("spec".equals(billingMode) && StringUtils.hasText(specKey)) {
                 BigDecimal specPrice = specPrice(price.get("spec_price_json"), specKey);
                 if (specPrice.compareTo(BigDecimal.ZERO) > 0) perCall = specPrice;
@@ -564,6 +626,17 @@ public class AiBillingService {
             String provider = defaultText(first(data, "providerName", "provider_name"), "default");
             String model = defaultText(first(data, "modelName", "defaultModel", "model_name"), "default");
             String modelType = normalizeModelType(defaultText(first(data, "modelType", "model_type"), inferModelType(moduleKey)));
+            // 通用模型强制按次计费：清零输入/输出/缓存命中单价，按次价格默认 0.03 元
+            if ("model-config-general".equals(moduleKey)) {
+                data.put("billingMode", "per_call");
+                data.put("inputPricePer1k", BigDecimal.ZERO);
+                data.put("outputPricePer1k", BigDecimal.ZERO);
+                data.put("cachedInputPricePer1k", BigDecimal.ZERO);
+                BigDecimal perCall = nonNegativeMoney(first(data, "perCallPrice", "per_call_price"), "单次调用价格");
+                if (perCall.compareTo(BigDecimal.ZERO) <= 0) {
+                    data.put("perCallPrice", new BigDecimal("0.03"));
+                }
+            }
             List<Map<String, Object>> exists = jdbcTemplate.queryForList("SELECT id FROM ai_model_price_config WHERE deleted=0 AND module_key=? AND provider_name=? AND model_name=? AND model_type=? ORDER BY id DESC LIMIT 1", moduleKey, provider, model, modelType);
             if (exists.isEmpty()) {
                 saveModelPrice(data);
@@ -902,6 +975,31 @@ public class AiBillingService {
 
     private String text(Object value) {
         return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    /**
+     * 根据 changeType 返回标准 remark 文案。
+     * 用于覆盖数据库中可能因字符集问题产生的乱码 remark，保证前端展示一致。
+     * 仅对已知 changeType 覆盖；未知类型保留原 remark。
+     */
+    private String remarkForLedger(String changeType, Object rawRemark) {
+        if (changeType == null) changeType = "";
+        switch (changeType) {
+            case "ai_charge":
+                return "AI 调用扣费";
+            case "ai_image_charge":
+                return "商机发掘生图扣费";
+            case "recharge":
+                return "Token 充值";
+            case "refund":
+                return "退款返还";
+            case "admin_adjust":
+                return "管理员调整";
+            case "system":
+                return "系统调整";
+            default:
+                return rawRemark == null ? "" : String.valueOf(rawRemark);
+        }
     }
 
     private String defaultText(Object value, String def) {

@@ -55,40 +55,76 @@ public class DashboardService {
      * 仪表盘汇总统计
      */
     public DashboardSummaryVO summary(Long tenantId) {
+        return summary(tenantId, null);
+    }
+
+    /**
+     * 仪表盘汇总统计（支持按账号过滤）
+     */
+    public DashboardSummaryVO summary(Long tenantId, Long accountId) {
         DashboardSummaryVO vo = new DashboardSummaryVO();
 
-        // 账号数
-        Map<String, Object> accountSummary = accountMapper.selectSummary(tenantId);
-        vo.setAccountCount(getInt(accountSummary, "total"));
+        if (accountId == null) {
+            // 账号数
+            Map<String, Object> accountSummary = accountMapper.selectSummary(tenantId);
+            vo.setAccountCount(getInt(accountSummary, "total"));
 
-        // 商品总数/在售/已售
-        vo.setGoodsCount(goodsMapper.countAll(tenantId));
-        vo.setSellingGoodsCount(goodsMapper.countSelling(tenantId));
-        vo.setTotalSoldCount(goodsMapper.countSold(tenantId));
+            // 商品总数/在售/已售
+            vo.setGoodsCount(goodsMapper.countAll(tenantId));
+            vo.setSellingGoodsCount(goodsMapper.countSelling(tenantId));
+            vo.setTotalSoldCount(goodsMapper.countSold(tenantId));
 
-        // 今日订单/销售额
-        vo.setTodayOrderCount(orderMapper.countToday(tenantId));
-        vo.setTodaySalesAmount(orderMapper.sumTodayAmount(tenantId));
+            // 今日订单/销售额
+            vo.setTodayOrderCount(orderMapper.countToday(tenantId));
+            vo.setTodaySalesAmount(orderMapper.sumTodayAmount(tenantId));
 
-        // 消息数（会话数）
-        vo.setMessageCount(conversationMapper.countAll(tenantId));
+            // 消息数（会话数）
+            vo.setMessageCount(conversationMapper.countAll(tenantId));
 
-        // 今日自动回复命中
-        vo.setAutoReplyCount(autoReplyLogMapper.countTodayHits(tenantId));
+            // 今日自动回复命中
+            vo.setAutoReplyCount(autoReplyLogMapper.countTodayHits(tenantId));
 
-        // WebSocket在线率
-        int totalAccounts = vo.getAccountCount();
-        if (totalAccounts > 0) {
-            int wsOnline = runtimeMapper.countByWsStatus(tenantId, 1);
-            vo.setWsOnlineRate((double) wsOnline / totalAccounts * 100);
+            // WebSocket在线率
+            int totalAccounts = vo.getAccountCount();
+            if (totalAccounts > 0) {
+                int wsOnline = runtimeMapper.countByWsStatus(tenantId, 1);
+                vo.setWsOnlineRate((double) wsOnline / totalAccounts * 100);
+            } else {
+                vo.setWsOnlineRate(0.0);
+            }
+
+            // 发货统计
+            vo.setDeliverySuccessCount(deliveryRecordMapper.countByStatus(tenantId, 1));
+            vo.setDeliveryFailCount(deliveryRecordMapper.countByStatus(tenantId, 0));
+            vo.setPendingDeliveryCount(deliveryRecordMapper.countPending(tenantId));
         } else {
-            vo.setWsOnlineRate(0.0);
-        }
+            // 单账号视图
+            vo.setAccountCount(1);
 
-        // 发货统计
-        vo.setDeliverySuccessCount(deliveryRecordMapper.countByStatus(tenantId, 1));
-        vo.setDeliveryFailCount(deliveryRecordMapper.countByStatus(tenantId, 0));
-        vo.setPendingDeliveryCount(deliveryRecordMapper.countPending(tenantId));
+            // 商品总数/在售/已售
+            vo.setGoodsCount(goodsMapper.count(tenantId, accountId, null, null, null, 0));
+            vo.setSellingGoodsCount(goodsMapper.count(tenantId, accountId, null, 1, null, 0));
+            vo.setTotalSoldCount(goodsMapper.count(tenantId, accountId, null, 2, null, 0));
+
+            // 今日订单/销售额
+            vo.setTodayOrderCount(orderMapper.countTodayByAccount(tenantId, accountId));
+            vo.setTodaySalesAmount(orderMapper.sumTodayAmountByAccount(tenantId, accountId));
+
+            // 消息数（会话数，按账号过滤）
+            vo.setMessageCount(conversationMapper.count(tenantId, accountId, null));
+
+            // 今日自动回复命中
+            vo.setAutoReplyCount(autoReplyLogMapper.countTodayHitsByAccount(tenantId, accountId));
+
+            // WebSocket在线率（单账号直接看 ws_status）
+            XianyuAccountRuntime runtime = runtimeMapper.findByAccountId(tenantId, accountId);
+            vo.setWsOnlineRate(runtime != null && runtime.getWsStatus() != null && runtime.getWsStatus() == 1 ? 100.0 : 0.0);
+
+            // 发货统计
+            vo.setDeliverySuccessCount(deliveryRecordMapper.countByStatusAndAccount(tenantId, accountId, 1));
+            vo.setDeliveryFailCount(deliveryRecordMapper.countByStatusAndAccount(tenantId, accountId, 0));
+            vo.setPendingDeliveryCount(deliveryRecordMapper.countPendingByAccount(tenantId, accountId));
+        }
 
         return vo;
     }
@@ -97,34 +133,49 @@ public class DashboardService {
      * 销售趋势（优先查daily_stat，无数据时实时聚合）
      */
     public SalesTrendVO salesTrend(Long tenantId, int days) {
+        return salesTrend(tenantId, null, days);
+    }
+
+    /**
+     * 销售趋势（支持按账号过滤，accountId 非空时实时聚合）
+     */
+    public SalesTrendVO salesTrend(Long tenantId, Long accountId, int days) {
         LocalDate endDate = LocalDate.now();
         LocalDate startDate = endDate.minusDays(days - 1);
 
-        // 尝试从daily_stat获取
-        List<DashboardDailyStat> stats = dailyStatMapper.findByDateRange(tenantId, startDate, endDate);
-        if (stats != null && !stats.isEmpty()) {
-            return buildTrendFromDailyStat(stats, startDate, endDate, days);
+        // 单账号视图或 daily_stat 无数据时实时聚合
+        if (accountId == null) {
+            List<DashboardDailyStat> stats = dailyStatMapper.findByDateRange(tenantId, startDate, endDate);
+            if (stats != null && !stats.isEmpty()) {
+                return buildTrendFromDailyStat(stats, startDate, endDate, days);
+            }
         }
 
-        // 实时聚合
-        return buildTrendFromRawData(tenantId, startDate, endDate, days);
+        return buildTrendFromRawData(tenantId, accountId, startDate, endDate, days);
     }
 
     /**
      * 订单消息趋势
      */
     public SalesTrendVO orderMessageTrend(Long tenantId, int days) {
+        return orderMessageTrend(tenantId, null, days);
+    }
+
+    /**
+     * 订单消息趋势（支持按账号过滤）
+     */
+    public SalesTrendVO orderMessageTrend(Long tenantId, Long accountId, int days) {
         LocalDate endDate = LocalDate.now();
         LocalDate startDate = endDate.minusDays(days - 1);
 
         SalesTrendVO vo = new SalesTrendVO();
 
         // 订单趋势
-        List<Map<String, Object>> orderDaily = orderMapper.countDaily(tenantId, startDate);
+        List<Map<String, Object>> orderDaily = orderMapper.countDailyByAccount(tenantId, accountId, startDate);
         Map<String, Integer> orderMap = toDailyMap(orderDaily);
 
         // 消息趋势
-        List<Map<String, Object>> messageDaily = conversationMapper.countDaily(tenantId, startDate);
+        List<Map<String, Object>> messageDaily = conversationMapper.countDailyByAccount(tenantId, accountId, startDate);
         Map<String, Integer> messageMap = toDailyMap(messageDaily);
 
         // 填充所有日期
@@ -244,29 +295,29 @@ public class DashboardService {
         return vo;
     }
 
-    private SalesTrendVO buildTrendFromRawData(Long tenantId, LocalDate startDate, LocalDate endDate, int days) {
+    private SalesTrendVO buildTrendFromRawData(Long tenantId, Long accountId, LocalDate startDate, LocalDate endDate, int days) {
         SalesTrendVO vo = new SalesTrendVO();
 
         // 订单
-        List<Map<String, Object>> orderDaily = orderMapper.countDaily(tenantId, startDate);
+        List<Map<String, Object>> orderDaily = orderMapper.countDailyByAccount(tenantId, accountId, startDate);
         Map<String, Integer> orderMap = toDailyMap(orderDaily);
 
         // 消息
-        List<Map<String, Object>> messageDaily = conversationMapper.countDaily(tenantId, startDate);
+        List<Map<String, Object>> messageDaily = conversationMapper.countDailyByAccount(tenantId, accountId, startDate);
         Map<String, Integer> messageMap = toDailyMap(messageDaily);
 
         // 发货
-        List<Map<String, Object>> deliveryDaily = deliveryRecordMapper.countDaily(tenantId, startDate);
+        List<Map<String, Object>> deliveryDaily = deliveryRecordMapper.countDailyByAccount(tenantId, accountId, startDate);
         Map<String, Integer> deliveryMap = toDailyMap(deliveryDaily);
 
         // 发货成功/失败分拆
-        List<Map<String, Object>> deliverySuccessDaily = deliveryRecordMapper.countDailyByStatus(tenantId, 1, startDate);
+        List<Map<String, Object>> deliverySuccessDaily = deliveryRecordMapper.countDailyByStatusAndAccount(tenantId, accountId, 1, startDate);
         Map<String, Integer> deliverySuccessMap = toDailyMap(deliverySuccessDaily);
-        List<Map<String, Object>> deliveryFailDaily = deliveryRecordMapper.countDailyByStatus(tenantId, 0, startDate);
+        List<Map<String, Object>> deliveryFailDaily = deliveryRecordMapper.countDailyByStatusAndAccount(tenantId, accountId, 0, startDate);
         Map<String, Integer> deliveryFailMap = toDailyMap(deliveryFailDaily);
 
         // AI回复
-        List<Map<String, Object>> replyDaily = autoReplyLogMapper.countDaily(tenantId, startDate);
+        List<Map<String, Object>> replyDaily = autoReplyLogMapper.countDailyByAccount(tenantId, accountId, startDate);
         Map<String, Integer> replyMap = toDailyMap(replyDaily);
 
         for (int i = 0; i < days; i++) {

@@ -9,6 +9,10 @@ export interface GoofishItemDetail {
   desc?: string;
   userNickName?: string;
   area?: string;
+  /** 采集是否成功（超时/失败时为 false，用于区分"商品无图"与"采集超时"） */
+  ok?: boolean;
+  /** 失败原因（ok=false 时填充） */
+  error?: string;
 }
 
 const ITEM_DETAIL_API_MARKER = 'mtop.taobao.idle.pc.detail';
@@ -152,6 +156,7 @@ export async function fetchGoofishItemDetail(
           desc: String(itemDO?.desc || '').trim(),
           userNickName: String(seller?.userNickName || seller?.nickName || '').trim(),
           area: String(itemDO?.area || item?.area || '').trim(),
+          ok: true,
         };
 
         // 尝试从 imageUrls 列表提取封面图（如果 picUrl 为空）
@@ -178,7 +183,7 @@ export async function fetchGoofishItemDetail(
     const result = await Promise.race([
       detailPromise,
       new Promise<GoofishItemDetail>((resolve) =>
-        setTimeout(() => resolve({ itemId }), 10000)
+        setTimeout(() => resolve({ itemId, ok: false, error: 'detail timeout' }), 10000)
       ),
     ]);
 
@@ -251,7 +256,7 @@ export async function fetchGoofishItemDetail(
 
         if (domDetail.picUrl) {
           console.log(`[ItemDetailCrawler] DOM 兜底提取封面图: itemId=${itemId} picUrl=${domDetail.picUrl.substring(0, 60)}`);
-          return { ...result, ...domDetail };
+          return { ...result, ...domDetail, ok: true };
         }
       } catch (domErr) {
         console.debug(`[ItemDetailCrawler] DOM 提取失败: itemId=${itemId} err=${domErr}`);
@@ -261,7 +266,7 @@ export async function fetchGoofishItemDetail(
     return result;
   } catch (error) {
     console.error(`[ItemDetailCrawler] 获取商品详情失败: itemId=${itemId} err=${error}`);
-    return { itemId };
+    return { itemId, ok: false, error: 'detail fetch failed' };
   } finally {
     if (browser) {
       try {

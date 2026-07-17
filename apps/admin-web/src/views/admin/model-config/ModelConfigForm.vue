@@ -271,6 +271,9 @@
     if (field.prop === 'billingUnit') {
       return '1K Tokens'
     }
+    if (field.prop === 'perCallPrice' && props.section.key === 'general') {
+      return 0.03
+    }
     if (field.prop === 'cost') {
       return 0
     }

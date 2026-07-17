@@ -190,6 +190,55 @@ public class UserAuthService {
     }
 
     /**
+     * 管理员代登：为指定前台用户生成一个登录 token，用于辅助调试。
+     *
+     * <p>仅校验用户存在、未删除、状态正常（status=1）、且关联了合法的 tenant_id。
+     * 不会校验密码，也不会消费密码失败计数；调用方必须经过 AdminRbacFilter 校验为 R_SUPER 角色。
+     * 调用此方法会更新 last_login_time，但不会变更 security_version（避免吊销用户已有会话）。</p>
+     *
+     * @param userId 前台用户 id（sys_user.id）
+     * @return 与正常登录一致的结构：{token, username, userId, tenantId, nickname}
+     */
+    public Map<String, Object> generateLoginTokenForUser(Long userId) {
+        if (userId == null || userId <= 0) {
+            throw new BizException(400, "用户标识无效");
+        }
+        Map<String, Object> user;
+        try {
+            user = jdbcTemplate.queryForMap(
+                    "SELECT id, username, nickname, tenant_id, status, security_version, deleted " +
+                            "FROM sys_user WHERE id=? AND deleted=0", userId);
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new BizException(404, "用户不存在或已删除");
+        }
+        Object statusObj = user.get("status");
+        if (statusObj == null || !"1".equals(String.valueOf(statusObj))) {
+            throw new BizException(403, "目标账号已被禁用，无法代登");
+        }
+        Long tenantId = user.get("tenant_id") != null
+                ? ((Number) user.get("tenant_id")).longValue() : null;
+        requireTenantForLogin(tenantId);
+
+        long id = ((Number) user.get("id")).longValue();
+        String username = String.valueOf(user.get("username"));
+        String token = jwtUtil.createUserToken(
+                id, username, tenantId, securityVersion(user.get("security_version")));
+
+        // 代登也记录最后登录时间，便于审计追溯；不动 security_version 以免吊销用户已有会话
+        jdbcTemplate.update("UPDATE sys_user SET last_login_time=NOW() WHERE id=?", id);
+        log.warn("管理员代登已签发前台用户 token: userId={}, username={}, tenantId={}",
+                id, maskTarget(username), tenantId);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("token", token);
+        result.put("username", username);
+        result.put("userId", id);
+        result.put("tenantId", tenantId);
+        result.put("nickname", user.getOrDefault("nickname", username));
+        return result;
+    }
+
+    /**
      * 获取当前登录用户信息（包含租户信息）。
      */
     public Map<String, Object> currentUser() {

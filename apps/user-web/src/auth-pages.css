@@ -1188,3 +1188,17 @@
     line-height: 1.5;
   }
 }
+
+/* 字段级错误提示（用于 RegisterPage 失焦校验） */
+.auth-field-error {
+  display: block;
+  margin: -4px 2px 8px;
+  color: #d4380d;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.auth-field.has-error {
+  border-color: #ff4d4f;
+  box-shadow: 0 0 0 4px rgba(255, 77, 79, .12);
+}

@@ -262,6 +262,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import CardPanel from '../../components/CardPanel.vue'
 import { getBusinessSettings, saveBusinessSettings, testAiCustomerService, getAiCsDefaults, uploadKnowledgeBase } from '../../api/businessSettings.js'
+import { ensureAiTokenBalance } from '../../utils/aiTokenGuard.js'
 import { confirmAction } from '../../utils/confirmAction.js'
 import { createRequestGate } from '../../utils/requestLifecycle.js'
 
@@ -439,6 +440,7 @@ function openTestPanel() {
 
 async function runTest() {
   if (!testMessage.value.trim()) return
+  if (!(await ensureAiTokenBalance({ sceneName: 'AI 客服测试' }))) return
   testing.value = true
   testError.value = ''
   testReply.value = ''

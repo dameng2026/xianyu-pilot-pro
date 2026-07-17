@@ -25,9 +25,12 @@ class ModelConfigServiceTest {
     @Mock
     private JdbcTemplate jdbcTemplate;
 
+    @Mock
+    private SensitiveWordService sensitiveWordService;
+
     @Test
     void matchImagePromptCategoryShouldPreferKeywordHit() {
-        ModelConfigService service = new ModelConfigService(jdbcTemplate);
+        ModelConfigService service = new ModelConfigService(jdbcTemplate, sensitiveWordService);
 
         Map<String, Object> matched = service.matchImagePromptCategory(
                 "优酷 svip 会员 7天 周卡 自动发货",
@@ -44,7 +47,7 @@ class ModelConfigServiceTest {
 
     @Test
     void resolveImagePromptShouldUseCategoryTemplateInDefaultMode() {
-        ModelConfigService service = new ModelConfigService(jdbcTemplate);
+        ModelConfigService service = new ModelConfigService(jdbcTemplate, sensitiveWordService);
 
         String prompt = service.resolveImagePrompt(
                 "default",
@@ -61,7 +64,7 @@ class ModelConfigServiceTest {
 
     @Test
     void resolveImagePromptShouldPreferCustomPromptInCustomMode() {
-        ModelConfigService service = new ModelConfigService(jdbcTemplate);
+        ModelConfigService service = new ModelConfigService(jdbcTemplate, sensitiveWordService);
 
         String prompt = service.resolveImagePrompt(
                 "custom",
@@ -77,7 +80,7 @@ class ModelConfigServiceTest {
 
     @Test
     void getImagePromptConfigsShouldSortBySortOrderThenId() {
-        ModelConfigService service = new ModelConfigService(jdbcTemplate);
+        ModelConfigService service = new ModelConfigService(jdbcTemplate, sensitiveWordService);
 
         when(jdbcTemplate.queryForList(anyString(), eq(ModelConfigService.PROMPT))).thenReturn(List.of(
                 promptDbRow(8L, "generic_virtual", 999),
@@ -94,7 +97,7 @@ class ModelConfigServiceTest {
 
     @Test
     void databaseFailureIsUnavailableInsteadOfLookingLikeMissingConfiguration() {
-        ModelConfigService service = new ModelConfigService(jdbcTemplate);
+        ModelConfigService service = new ModelConfigService(jdbcTemplate, sensitiveWordService);
         when(jdbcTemplate.queryForList(anyString(), eq(ModelConfigService.GENERAL)))
                 .thenThrow(new DataAccessResourceFailureException("database unavailable"));
 

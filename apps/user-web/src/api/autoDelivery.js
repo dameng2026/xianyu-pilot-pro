@@ -71,6 +71,25 @@ export function previewDeliveryStatement(data) {
   return request({ url: '/auto-delivery/statement/preview', method: 'post', data })
 }
 
+// ─── 发货声明会话（卖家手动处理） ───
+// 后端 DeliveryStatementController 期望 page/size 参数（非 current/size）
+export function listDeliveryStatementSessions(params = {}) {
+  const page = params.current ?? params.page ?? 1
+  const size = params.size ?? 20
+  const query = { page, size }
+  if (params.status) query.status = params.status
+  if (params.accountId) query.accountId = params.accountId
+  return request({ url: '/auto-delivery/statement/sessions', method: 'get', params: query })
+}
+
+export function confirmDeliveryStatementSession(id) {
+  return request({ url: `/auto-delivery/statement/sessions/${id}/confirm`, method: 'post' })
+}
+
+export function cancelDeliveryStatementSession(id) {
+  return request({ url: `/auto-delivery/statement/sessions/${id}/cancel`, method: 'post' })
+}
+
 // ─── 发货模板 ───
 export function getDeliveryTemplates(params = {}) {
   return request({ url: '/auto-delivery/templates', method: 'get', params: pageParams(params) })

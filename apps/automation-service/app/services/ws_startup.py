@@ -352,9 +352,21 @@ async def on_message_callback(tenant_id: int, account_id: int, msg: dict) -> Non
     # 从同账号最近的有 sId 的消息推断当前消息属于哪个会话。
     await _infer_missing_session_info(tenant_id, account_id, msg, seller_external_uid)
 
+    # 发货声明回复识别：买家回复"确认/取消"时，更新声明会话状态并触发发货/通知。
+    # 已处理的回复抑制 AI 自动回复（系统已响应，避免 AI 再发无关回复）。
+    # 未匹配声明会话的回复静默忽略，AI 自动回复照常。
+    statement_handled = False
+    try:
+        from .ws_statement_handler import handle_buyer_statement_reply
+        result = await handle_buyer_statement_reply(tenant_id, account_id, dict(msg))
+        statement_handled = result is not None
+    except Exception as exc:
+        logger.debug("声明回复处理异常 tenantId=%d accountId=%d: %s", tenant_id, account_id, exc)
+
     # Offload heavy follow-up work so the WS loop can continue syncing new messages.
     asyncio.create_task(_run_delivery_after_message_saved(tenant_id, account_id, dict(msg)))
-    asyncio.create_task(_queue_ai_auto_reply_after_message_saved(tenant_id, account_id, dict(msg), seller_external_uid))
+    if not statement_handled:
+        asyncio.create_task(_queue_ai_auto_reply_after_message_saved(tenant_id, account_id, dict(msg), seller_external_uid))
 
 
 async def _infer_missing_session_info(

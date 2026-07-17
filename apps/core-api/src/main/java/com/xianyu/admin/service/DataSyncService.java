@@ -10,6 +10,7 @@ import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.net.InetAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -80,6 +81,9 @@ public class DataSyncService {
             throw new IllegalArgumentException("targetUsername is required");
         }
 
+        // SSRF 防护：校验目标地址不是内网/云元数据地址
+        validateTargetUrl(targetBaseUrl);
+
         // 1. 读取本地数据并组装 SyncPackage
         Map<String, Object> pkg = buildSyncPackage(tenantId, userId, sourceAccountId, targetUsername);
         log.info("数据同步包已组装: tenantId={}, userId={}, targetUsername={}, modules={}",
@@ -102,7 +106,10 @@ public class DataSyncService {
             throw new IllegalArgumentException("targetToken is required");
         }
 
-        String url = normalizeUrl(targetBaseUrl) + "/open-api/internal/sync/ping";
+        // SSRF 防护：校验目标地址不是内网/云元数据地址
+        validateTargetUrl(targetBaseUrl);
+
+        String url = normalizeUrl(targetBaseUrl) + "/api/sync/ping";
         try {
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(url))
@@ -465,7 +472,7 @@ public class DataSyncService {
     // ==================== HTTP 推送 ====================
 
     private Map<String, Object> pushToRemote(String targetBaseUrl, String targetToken, Map<String, Object> pkg) {
-        String url = normalizeUrl(targetBaseUrl) + "/open-api/internal/sync/receive";
+        String url = normalizeUrl(targetBaseUrl) + "/api/sync/receive";
         String body;
         try {
             body = JSON.writeValueAsString(pkg);
@@ -499,8 +506,19 @@ public class DataSyncService {
                 log.error("数据同步推送失败: url={}, status={}, body={}", url, resp.statusCode(), resp.body());
             }
             return result;
+        } catch (java.net.ConnectException ce) {
+            // ConnectException 的 getMessage() 常为 null，需明确提示
+            String msg = ce.getMessage();
+            if (msg == null || msg.isBlank()) {
+                msg = "无法连接到目标服务器 " + url + "（连接被拒绝或超时，请检查地址/端口/防火墙）";
+            }
+            throw new RuntimeException("推送数据同步包失败: " + msg, ce);
         } catch (Exception e) {
-            throw new RuntimeException("推送数据同步包失败: " + e.getMessage(), e);
+            String msg = e.getMessage();
+            if (msg == null || msg.isBlank()) {
+                msg = e.getClass().getSimpleName() + "（无详细错误信息）";
+            }
+            throw new RuntimeException("推送数据同步包失败: " + msg, e);
         }
     }
 
@@ -509,6 +527,50 @@ public class DataSyncService {
         String trimmed = url.trim();
         while (trimmed.endsWith("/")) trimmed = trimmed.substring(0, trimmed.length() - 1);
         return trimmed;
+    }
+
+    /**
+     * SSRF 防护：校验目标 URL 不是内网/保留/云元数据地址。
+     * 允许 localhost（本地联调场景）和公网地址；拦截 10/172.16-31/192.168/169.254/127（非localhost）/fc00::/7 等。
+     */
+    private static void validateTargetUrl(String targetBaseUrl) {
+        URI uri;
+        try {
+            uri = URI.create(normalizeUrl(targetBaseUrl));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("targetBaseUrl 格式无效");
+        }
+        String scheme = uri.getScheme();
+        if (scheme == null || (!scheme.equalsIgnoreCase("http") && !scheme.equalsIgnoreCase("https"))) {
+            throw new IllegalArgumentException("targetBaseUrl 必须是 http 或 https 协议");
+        }
+        String host = uri.getHost();
+        if (host == null || host.isBlank()) {
+            throw new IllegalArgumentException("targetBaseUrl 缺少有效的 host");
+        }
+        String hostLower = host.toLowerCase(java.util.Locale.ROOT);
+        // 允许 localhost（本地联调）
+        if (hostLower.equals("localhost") || hostLower.equals("127.0.0.1") || hostLower.equals("::1")) {
+            return;
+        }
+        // 云元数据地址一律拦截
+        if (hostLower.equals("169.254.169.254") || hostLower.equals("metadata.google.internal")
+                || hostLower.endsWith(".internal") || hostLower.endsWith(".local")) {
+            throw new IllegalArgumentException("目标地址不允许指向云元数据或内部地址");
+        }
+        // 如果 host 是 IP 字面量，校验是否为私网/保留段
+        if (hostLower.matches("^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$")) {
+            try {
+                InetAddress addr = InetAddress.getByName(hostLower);
+                if (addr.isSiteLocalAddress() || addr.isLinkLocalAddress()
+                        || addr.isLoopbackAddress() || addr.isAnyLocalAddress()
+                        || addr.isMulticastAddress()) {
+                    throw new IllegalArgumentException("目标地址不允许指向内网/保留 IP 段");
+                }
+            } catch (java.net.UnknownHostException e) {
+                // 不会发生，因为已经是 IP 字面量
+            }
+        }
     }
 
     // ==================== 工具方法 ====================

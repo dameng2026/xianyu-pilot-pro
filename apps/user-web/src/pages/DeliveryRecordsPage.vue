@@ -5,6 +5,114 @@
     <div v-if="detailLoadError" class="global-notice error">发货详情加载失败：{{ detailLoadError }}</div>
     <div v-if="success" class="global-notice success">{{ success }}</div>
 
+    <!-- 顶层标签切换：发货记录 / 等待确认 -->
+    <div class="top-tabs">
+      <button
+        class="top-tab"
+        :class="{ active: activeTab === 'records' }"
+        @click="switchTab('records')"
+      >发货记录</button>
+      <button
+        class="top-tab"
+        :class="{ active: activeTab === 'sessions' }"
+        @click="switchTab('sessions')"
+      >
+        等待确认
+        <span v-if="waitingCount > 0" class="tab-badge">{{ waitingCount }}</span>
+      </button>
+    </div>
+
+    <!-- ============ 等待确认（声明会话） ============ -->
+    <template v-if="activeTab === 'sessions'">
+      <CardPanel title="声明会话筛选">
+        <div class="toolbar wrap">
+          <select v-model="sessionQuery.status" class="input narrow">
+            <option value="">全部状态</option>
+            <option value="declaring">发送中</option>
+            <option value="waiting">等待买家确认</option>
+            <option value="confirmed">已确认</option>
+            <option value="cancelled">已取消</option>
+          </select>
+          <AppButton type="primary" @click="searchSessions">搜索</AppButton>
+          <AppButton @click="resetSessionFilters">重置</AppButton>
+        </div>
+      </CardPanel>
+
+      <CardPanel title="声明会话列表" style="margin-top: 16px">
+        <div v-if="sessionsLoading" class="table-loading" role="status">声明会话加载中...</div>
+        <EmptyState
+          v-else-if="!sessionsAvailable"
+          icon="⚠"
+          title="声明会话不可用"
+          :description="sessionsLoadError || '正在加载声明会话，请稍候。'"
+        />
+        <BaseTable
+          v-else
+          :columns="sessionColumns"
+          :rows="sessionRows"
+          :row-key="row => row.id"
+        >
+          <template #status="{ row }">
+            <Badge :type="row.statusBadgeType">{{ row.statusText }}</Badge>
+          </template>
+          <template #goodsTitle="{ row }">
+            <span class="cell-ellipsis" :title="row.goodsTitle || ''">{{ row.goodsTitle || '-' }}</span>
+          </template>
+          <template #statementContent="{ row }">
+            <span class="cell-ellipsis" :title="row.statementContent || ''">{{ row.statementContent || '-' }}</span>
+          </template>
+          <template #sentAt="{ row }">
+            {{ row.sentAtText }}
+          </template>
+          <template #confirmedAt="{ row }">
+            {{ row.confirmedAtText }}
+          </template>
+          <template #op="{ row }">
+            <div class="inline-actions">
+              <button
+                v-if="row.status === 'waiting'"
+                class="link"
+                @click.stop="confirmSession(row)"
+              >确认发货</button>
+              <button
+                v-if="row.status === 'waiting'"
+                class="link danger"
+                @click.stop="cancelSession(row)"
+              >取消订单</button>
+              <button class="link" @click.stop="viewStatement(row)">查看声明</button>
+            </div>
+          </template>
+        </BaseTable>
+        <Pagination
+          v-if="sessionsAvailable"
+          :total="sessionsTotal"
+          :current="sessionQuery.current"
+          :page-size="sessionQuery.size"
+          @page-change="goSessionPage"
+        />
+      </CardPanel>
+
+      <CardPanel v-if="statementView" title="声明文案详情" style="margin-top: 16px">
+        <div class="detail-grid">
+          <div><b>会话 ID：</b> {{ statementView.id || '-' }}</div>
+          <div><b>订单号：</b> {{ statementView.orderId || '-' }}</div>
+          <div><b>商品：</b> {{ statementView.goodsTitle || '-' }}</div>
+          <div><b>买家：</b> {{ statementView.buyerNick || statementView.buyerId || '-' }}</div>
+          <div><b>状态：</b> {{ statementView.statusText || statementView.status || '-' }}</div>
+          <div><b>发送时间：</b> {{ statementView.sentAtText || '-' }}</div>
+        </div>
+        <div class="panel-block">
+          <div class="section-title">声明文案</div>
+          <div class="content-box">{{ statementView.statementContent || '-' }}</div>
+        </div>
+        <div class="inline-actions" style="margin-top: 12px">
+          <AppButton @click="closeStatementView">关闭</AppButton>
+        </div>
+      </CardPanel>
+    </template>
+
+    <!-- ============ 发货记录（原有内容） ============ -->
+    <template v-else>
     <CardPanel title="发货记录筛选">
       <div class="toolbar wrap">
         <select v-model="query.status" class="input narrow">
@@ -158,6 +266,7 @@
         <AppButton @click="closeSchedule">取消</AppButton>
       </div>
     </CardPanel>
+    </template>
   </div>
 </template>
 
@@ -169,7 +278,15 @@ import Badge from '../components/Badge.vue'
 import AppButton from '../components/AppButton.vue'
 import Pagination from '../components/Pagination.vue'
 import EmptyState from '../components/EmptyState.vue'
-import { getDeliveryRecordDetail, getDeliveryRecords, retryDeliveryRecord, scheduleRedelivery } from '../api/autoDelivery.js'
+import {
+  cancelDeliveryStatementSession,
+  confirmDeliveryStatementSession,
+  getDeliveryRecordDetail,
+  getDeliveryRecords,
+  listDeliveryStatementSessions,
+  retryDeliveryRecord,
+  scheduleRedelivery
+} from '../api/autoDelivery.js'
 import { camelizeKeys, totalOf } from '../utils/apiData.js'
 import {
   buildDeliveryRecordDetailViewModel,
@@ -189,6 +306,74 @@ const detailLoadError = ref('')
 const recordsAvailable = ref(false)
 const loading = ref(false)
 const scheduling = ref(false)
+
+// ─── 顶层标签切换 ───
+const activeTab = ref('records')
+
+// ─── 声明会话（sessions）相关状态 ───
+const sessions = ref([])
+const sessionsTotal = ref(0)
+const sessionsAvailable = ref(false)
+const sessionsLoading = ref(false)
+const sessionsLoadError = ref('')
+const statementView = ref(null)
+const sessionQuery = reactive({
+  status: '',
+  current: 1,
+  size: 20
+})
+
+const sessionColumns = [
+  { key: 'id', title: 'ID' },
+  { key: 'orderId', title: '订单号' },
+  { key: 'goodsTitle', title: '商品' },
+  { key: 'buyerNick', title: '买家' },
+  { key: 'status', title: '状态' },
+  { key: 'sentAt', title: '声明发送时间' },
+  { key: 'confirmedAt', title: '确认/取消时间' },
+  { key: 'statementContent', title: '声明文案' },
+  { key: 'op', title: '操作' }
+]
+
+const SESSION_STATUS_TEXT = {
+  declaring: '发送中',
+  waiting: '等待买家确认',
+  confirmed: '已确认',
+  cancelled: '已取消'
+}
+
+const SESSION_STATUS_BADGE = {
+  declaring: 'blue',
+  waiting: 'orange',
+  confirmed: 'green',
+  cancelled: 'red'
+}
+
+function formatDateTime(value) {
+  if (!value) return '-'
+  const str = String(value).replace('T', ' ').replace(/\..*$/, '')
+  return str || '-'
+}
+
+const sessionRows = computed(() =>
+  sessions.value.map(row => {
+    const r = camelizeKeys(row)
+    return {
+      ...r,
+      statusText: SESSION_STATUS_TEXT[r.status] || r.status || '-',
+      statusBadgeType: SESSION_STATUS_BADGE[r.status] || 'info',
+      sentAtText: formatDateTime(r.sentAt),
+      confirmedAtText: formatDateTime(r.confirmedAt || r.cancelledAt)
+    }
+  })
+)
+
+const waitingCount = computed(() =>
+  sessions.value.filter(s => {
+    const r = camelizeKeys(s)
+    return r.status === 'waiting'
+  }).length
+)
 
 const query = reactive({
   status: '',
@@ -490,9 +675,102 @@ async function exportCsv() {
 }
 
 function onHeaderAction(event) {
-  if (event.detail === 'delivery-records-refresh') load()
+  if (event.detail === 'delivery-records-refresh') {
+    if (activeTab.value === 'sessions') loadSessions()
+    else load()
+  }
   if (event.detail === 'delivery-records-retry') batchRetry()
   if (event.detail === 'delivery-records-export') exportCsv()
+}
+
+// ============================================================
+// 声明会话（sessions）相关函数
+// ============================================================
+
+function switchTab(tab) {
+  if (activeTab.value === tab) return
+  activeTab.value = tab
+  clearNotice()
+  if (tab === 'sessions' && !sessionsAvailable.value && !sessionsLoading.value) {
+    loadSessions()
+  }
+}
+
+async function loadSessions() {
+  clearNotice()
+  sessionsLoadError.value = ''
+  sessionsAvailable.value = false
+  sessions.value = []
+  sessionsTotal.value = 0
+  statementView.value = null
+  sessionsLoading.value = true
+  try {
+    const res = await listDeliveryStatementSessions({
+      status: sessionQuery.status || undefined,
+      current: sessionQuery.current,
+      size: sessionQuery.size
+    })
+    const data = res?.data
+    const list = Array.isArray(data) ? data : data?.list || data?.records || data?.rows || data?.items
+    if (!Array.isArray(list)) throw new Error('声明会话响应格式异常')
+    sessions.value = list
+    sessionsTotal.value = totalOf(res.data, sessions.value.length)
+    sessionsAvailable.value = true
+    return true
+  } catch (requestError) {
+    sessionsLoadError.value = requestError?.message || '加载声明会话失败'
+    return false
+  } finally {
+    sessionsLoading.value = false
+  }
+}
+
+function searchSessions() {
+  sessionQuery.current = 1
+  loadSessions()
+}
+
+function resetSessionFilters() {
+  sessionQuery.status = ''
+  sessionQuery.current = 1
+  loadSessions()
+}
+
+function goSessionPage(page) {
+  sessionQuery.current = page
+  loadSessions()
+}
+
+function viewStatement(row) {
+  statementView.value = row
+}
+
+function closeStatementView() {
+  statementView.value = null
+}
+
+async function confirmSession(row) {
+  clearNotice()
+  if (!window.confirm(`确认发货？将立即为订单 ${row.orderId || ''} 触发自动发货流程`)) return
+  try {
+    await confirmDeliveryStatementSession(row.id)
+    success.value = `已确认会话 #${row.id}，已触发发货`
+    await loadSessions()
+  } catch (requestError) {
+    error.value = requestError.message || '确认会话失败'
+  }
+}
+
+async function cancelSession(row) {
+  clearNotice()
+  if (!window.confirm(`取消订单 ${row.orderId || ''} 的发货声明？将通知买家转人工客服，且不会发货`)) return
+  try {
+    await cancelDeliveryStatementSession(row.id)
+    success.value = `已取消会话 #${row.id}，已通知买家`
+    await loadSessions()
+  } catch (requestError) {
+    error.value = requestError.message || '取消会话失败'
+  }
 }
 
 onMounted(() => {
@@ -508,6 +786,63 @@ onBeforeUnmount(() => {
 <style scoped>
 .wrap {
   flex-wrap: wrap;
+}
+
+.top-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #e6ecf5;
+  padding-left: 4px;
+}
+
+.top-tab {
+  position: relative;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #667085;
+  cursor: pointer;
+  transition: all .15s;
+  margin-bottom: -1px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.top-tab:hover {
+  color: #0d6bff;
+}
+
+.top-tab.active {
+  color: #0d6bff;
+  border-bottom-color: #0d6bff;
+}
+
+.tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: #ff6b6b;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.link.danger {
+  color: #d4380d;
+}
+
+.link.danger:hover {
+  color: #ff4d4f;
 }
 
 .narrow {

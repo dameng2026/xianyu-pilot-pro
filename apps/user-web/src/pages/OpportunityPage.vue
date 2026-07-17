@@ -462,12 +462,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import CardPanel from '../components/CardPanel.vue'
 import AppButton from '../components/AppButton.vue'
 import PublishAddressCascader from '../components/PublishAddressCascader.vue'
 import { importGoofishStore, getCrawlJobStatus, getGoofishStoreItems, goofishSearch, uploadImage } from '../api/misc.js'
 import { rewriteOpportunity, getOpportunityAiStatus, getOpportunityImageStatus, getOpportunityImageModels, generateOpportunityImages, listOpportunityImageHistory, recoverOpportunityImages } from '../api/opportunity.js'
+import { ensureAiTokenBalance } from '../utils/aiTokenGuard.js'
 import { getLiteAccounts, checkAccountAuth } from '../api/accounts.js'
 import { publishItem, autoCategory } from '../api/items.js'
 import { getAiProviderStatus, suggestCategoryByAi } from '../api/aiProvider.js'
@@ -875,20 +876,28 @@ async function ensureLoggedXianyuAccount() {
     error.value = '商机发掘需要先登录闲鱼账号。请先到「账号管理」扫码添加账号后再使用。'
     return false
   }
-  // 检测首选账号 Cookie 状态：若缓存数据显示不可用，主动刷新一次鉴权状态
   const preferred = pickPreferredAccount(accounts.value, selectedAccountId.value)
-  if (preferred && !accountAuthUsable(preferred)) {
-    const authStatus = await refreshAccountAuthStatus(preferred.id)
-    if (!authStatus) {
+  if (!preferred) {
+    error.value = '未选择有效的闲鱼账号，请到「账号管理」扫码登录后再使用'
+    return false
+  }
+  // 无论缓存是否显示可用，都主动调用 /check-auth 实时探活一次。
+  // 仅依赖缓存会导致 cookie 已失效但 DB 未更新时，搜索请求被闲鱼接口静默拒绝，
+  // 前端没有任何错误提示只是页面一直转圈。这里强制刷新一次保证用户看到明确提示。
+  const authStatus = await refreshAccountAuthStatus(preferred.id)
+  if (!authStatus) {
+    // 接口异常时降级到缓存判断：若缓存显示可用则放行，由后端搜索接口兜底报错
+    if (!accountAuthUsable(preferred)) {
       error.value = '无法确认闲鱼账号登录状态，请检查网络后重试'
       return false
     }
-    const refreshed = accounts.value.find(item => item.id === preferred.id)
-    if (refreshed && !accountAuthUsable(refreshed)) {
-      const accountLabel = refreshed.nickname || refreshed.displayName || refreshed.externalUid || ('账号' + refreshed.id)
-      error.value = `账号「${accountLabel}」Cookie 已失效（${accountLoginHint(refreshed)}），请到「账号管理」重新登录后再使用`
-      return false
-    }
+    return true
+  }
+  const refreshed = accounts.value.find(item => item.id === preferred.id)
+  if (refreshed && !accountAuthUsable(refreshed)) {
+    const accountLabel = refreshed.nickname || refreshed.displayName || refreshed.externalUid || ('账号' + refreshed.id)
+    error.value = `账号「${accountLabel}」Cookie 已失效（${accountLoginHint(refreshed)}），请到「账号管理」重新登录后再使用`
+    return false
   }
   return true
 }
@@ -1160,7 +1169,7 @@ async function doCollectShop() {
         error.value = statusRes.error || '抓取任务状态查询失败'
         return
       }
-      if (!['pending', 'running', 'retrying', 'completed', 'failed'].includes(statusRes.status)) {
+      if (!['pending', 'running', 'completed', 'failed'].includes(statusRes.status)) {
         throw new Error('店铺抓取任务返回未知状态')
       }
       if (statusRes.status === 'completed') {
@@ -1279,6 +1288,7 @@ async function rewriteSelected(retryCount) {
   rewriteLoading.value = true
   if (!isRetry) error.value = ''
   try {
+    if (!isRetry && !(await ensureAiTokenBalance({ sceneName: '商机改写' }))) return
     const res = await rewriteOpportunity(payload)
     const data = res?.data
     if (requestVersion !== rewriteRequestVersion || sourceItemKey !== getOpportunityItemIdentity(selectedItem.value)) {
@@ -2089,14 +2099,6 @@ function saveDraftNow() {
 onMounted(async()=>{
   await Promise.all([loadAccounts(), refreshAiFeatureStatus(), loadAiCategoryStatus(), loadOppCategories()])
   loadSavedDrafts()
-})
-
-// 组件卸载时清理草稿自动保存定时器，避免 2 秒后仍读写已卸载组件的 reactive 状态
-onUnmounted(() => {
-  if (draftAutoSaveTimer) {
-    clearTimeout(draftAutoSaveTimer)
-    draftAutoSaveTimer = null
-  }
 })
 
 // 监听关键配置变更自动保存草稿（v-model 绑定无法直接调用 triggerAutoSave）

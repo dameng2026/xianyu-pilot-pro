@@ -42,7 +42,7 @@ class SyncAuthFilterTest {
     @Test
     void syncAllowMatchingTokenViaAuthorizationBearer() throws Exception {
         SyncAuthFilter filter = new SyncAuthFilter("sync-secret");
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/open-api/internal/sync/receive");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/sync/receive");
         request.addHeader("Authorization", "Bearer sync-secret");
         MockHttpServletResponse response = new MockHttpServletResponse();
         filter.doFilter(request, response, new MockFilterChain());
@@ -61,7 +61,7 @@ class SyncAuthFilterTest {
     @Test
     void filterProtectsPingEndpoint() throws Exception {
         SyncAuthFilter filter = new SyncAuthFilter("sync-secret");
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/open-api/internal/sync/ping");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/sync/ping");
         request.addHeader("X-Sync-Token", "sync-secret");
         MockHttpServletResponse response = new MockHttpServletResponse();
         filter.doFilter(request, response, new MockFilterChain());
@@ -69,7 +69,7 @@ class SyncAuthFilterTest {
     }
 
     private MockHttpServletResponse execute(SyncAuthFilter filter, String token) throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/open-api/internal/sync/receive");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/sync/receive");
         if (token != null) request.addHeader("X-Sync-Token", token);
         MockHttpServletResponse response = new MockHttpServletResponse();
         filter.doFilter(request, response, new MockFilterChain());

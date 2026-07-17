@@ -24,12 +24,37 @@ public interface AutoReplyLogMapper {
     @Select("SELECT COUNT(*) FROM auto_reply_log WHERE tenant_id = #{tenantId} AND deleted=0 AND DATE(created_time) = CURDATE()")
     int countTodayHits(@Param("tenantId") Long tenantId);
 
+    @Select("<script>" +
+            "SELECT COUNT(*) FROM auto_reply_log " +
+            "WHERE tenant_id = #{tenantId} AND deleted=0 AND DATE(created_time) = CURDATE() " +
+            "<if test='accountId != null'>AND account_id = #{accountId}</if>" +
+            "</script>")
+    int countTodayHitsByAccount(@Param("tenantId") Long tenantId, @Param("accountId") Long accountId);
+
     @Select("SELECT COUNT(*) FROM auto_reply_log WHERE tenant_id = #{tenantId} AND deleted=0 AND rule_id=#{ruleId} AND DATE(created_time)=CURDATE()")
     int countTodayByRule(@Param("tenantId") Long tenantId, @Param("ruleId") Long ruleId);
 
     @Select("SELECT DATE(created_time) AS stat_date, COUNT(*) AS count FROM auto_reply_log WHERE tenant_id = #{tenantId} AND deleted=0 AND created_time >= #{startDate} GROUP BY DATE(created_time) ORDER BY stat_date ASC")
     List<Map<String, Object>> countDaily(@Param("tenantId") Long tenantId, @Param("startDate") LocalDate startDate);
 
+    @Select("<script>" +
+            "SELECT DATE(created_time) AS stat_date, COUNT(*) AS count " +
+            "FROM auto_reply_log " +
+            "WHERE tenant_id = #{tenantId} AND deleted=0 AND created_time >= #{startDate} " +
+            "<if test='accountId != null'>AND account_id = #{accountId}</if>" +
+            "GROUP BY DATE(created_time) ORDER BY stat_date ASC" +
+            "</script>")
+    List<Map<String, Object>> countDailyByAccount(@Param("tenantId") Long tenantId, @Param("accountId") Long accountId, @Param("startDate") LocalDate startDate);
+
     @Select("SELECT action, COUNT(*) AS count FROM auto_reply_log WHERE tenant_id=#{tenantId} AND deleted=0 AND created_time >= #{startDate} GROUP BY action")
     List<Map<String, Object>> countByAction(@Param("tenantId") Long tenantId, @Param("startDate") LocalDate startDate);
+
+    @Select("<script>" +
+            "SELECT action, COUNT(*) AS count " +
+            "FROM auto_reply_log " +
+            "WHERE tenant_id=#{tenantId} AND deleted=0 AND created_time >= #{startDate} " +
+            "<if test='accountId != null'>AND account_id = #{accountId}</if>" +
+            "GROUP BY action" +
+            "</script>")
+    List<Map<String, Object>> countByActionAndAccount(@Param("tenantId") Long tenantId, @Param("accountId") Long accountId, @Param("startDate") LocalDate startDate);
 }

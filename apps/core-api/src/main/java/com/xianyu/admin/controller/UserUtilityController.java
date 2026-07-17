@@ -427,7 +427,12 @@ public class UserUtilityController {
             Map<?, ?> json = objectMapper.readValue(body, Map.class);
             Object code = json.get("code");
             return code != null ? code.toString().equals("0") : true;
-        } catch (Exception e) { return true; }
+        } catch (Exception e) {
+            // 解析失败说明飞书返回的不是预期 JSON 结构，可能为错误响应或风控页面，应判失败而非成功
+            logger.warn("parseFeishuResponse failed statusCode={} bodyLen={} errorType={}",
+                statusCode, body == null ? 0 : body.length(), e.getClass().getSimpleName());
+            return false;
+        }
     }
 
     /** 钉钉：HTTP 2xx + errcode==0 视为成功 */
@@ -438,7 +443,11 @@ public class UserUtilityController {
             Map<?, ?> json = objectMapper.readValue(body, Map.class);
             Object code = json.get("errcode");
             return code != null ? code.toString().equals("0") : true;
-        } catch (Exception e) { return true; }
+        } catch (Exception e) {
+            logger.warn("parseDingtalkResponse failed statusCode={} bodyLen={} errorType={}",
+                statusCode, body == null ? 0 : body.length(), e.getClass().getSimpleName());
+            return false;
+        }
     }
 
     /** 企业微信：HTTP 2xx + errcode==0 视为成功 */
@@ -449,7 +458,11 @@ public class UserUtilityController {
             Map<?, ?> json = objectMapper.readValue(body, Map.class);
             Object code = json.get("errcode");
             return code != null ? code.toString().equals("0") : true;
-        } catch (Exception e) { return true; }
+        } catch (Exception e) {
+            logger.warn("parseWechatWorkResponse failed statusCode={} bodyLen={} errorType={}",
+                statusCode, body == null ? 0 : body.length(), e.getClass().getSimpleName());
+            return false;
+        }
     }
 
     /** PushPlus：HTTP 2xx + code==200 视为成功 */
@@ -460,7 +473,11 @@ public class UserUtilityController {
             Map<?, ?> json = objectMapper.readValue(body, Map.class);
             Object code = json.get("code");
             return code != null ? code.toString().equals("200") : true;
-        } catch (Exception e) { return true; }
+        } catch (Exception e) {
+            logger.warn("parsePushPlusResponse failed statusCode={} bodyLen={} errorType={}",
+                statusCode, body == null ? 0 : body.length(), e.getClass().getSimpleName());
+            return false;
+        }
     }
 
     private String extractErrMsg(String body) {

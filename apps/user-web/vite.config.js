@@ -25,8 +25,9 @@ export default defineConfig({
       output: {
         minify: {
           compress: {
-            dropConsole: true,
-            dropDebugger: true
+            // 保留 console.error / console.warn 用于线上排障；仅移除 log/info/debug/trace 等纯诊断输出
+            dropDebugger: true,
+            pure_funcs: ['console.log', 'console.info', 'console.debug', 'console.trace']
           },
           mangle: true
         }

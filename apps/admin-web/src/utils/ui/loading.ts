@@ -10,30 +10,15 @@
  * - 自定义 SVG 加载动画
  * - 单例模式防止重复创建
  * - 锁定页面交互
- *
- * ## 使用场景
- *
- * - 页面初始化加载
- * - 大量数据请求
- * - 路由切换过渡
- * - 异步操作等待
- *
- * ## 特性
- *
- * - 自动检测当前主题并应用对应背景色
- * - 使用自定义 SVG 动画（四点旋转）
- * - 单例模式确保同时只有一个 Loading
- * - 提供便捷的显示/隐藏方法
+ * - DOM 级强制清理，防止遮罩残留
  *
  * @module utils/ui/loading
- * @author Art Design Pro Team
  */
+import { ElLoading } from 'element-plus'
 import { fourDotsSpinnerSvg } from '@/assets/svg/loading'
 
-/**
- * 获取当前主题对应的loading背景色
- * @returns 背景色字符串
- */
+const LOADING_CUSTOM_CLASS = 'art-loading-fix'
+
 const getLoadingBackground = (): string => {
   const isDark = document.documentElement.classList.contains('dark')
   return isDark ? 'rgba(7, 7, 7, 0.85)' : '#fff'
@@ -41,12 +26,10 @@ const getLoadingBackground = (): string => {
 
 const DEFAULT_LOADING_CONFIG = {
   lock: true,
-  get background() {
-    return getLoadingBackground()
-  },
+  background: '#fff',
   svg: fourDotsSpinnerSvg,
   svgViewBox: '0 0 40 40',
-  customClass: 'art-loading-fix'
+  customClass: LOADING_CUSTOM_CLASS
 } as const
 
 interface LoadingInstance {
@@ -55,30 +38,54 @@ interface LoadingInstance {
 
 let loadingInstance: LoadingInstance | null = null
 
+function forceCleanupLoadingDom(): void {
+  try {
+    const customMasks = document.querySelectorAll<HTMLElement>(`.${LOADING_CUSTOM_CLASS}`)
+    customMasks.forEach((mask) => mask.remove())
+
+    document.body.querySelectorAll<HTMLElement>('.el-loading-mask').forEach((mask) => {
+      const style = getComputedStyle(mask)
+      if (style.position === 'fixed' && mask.parentElement === document.body) {
+        mask.remove()
+      }
+    })
+
+    document.body.classList.remove('el-loading-parent--hidden')
+    document.body.classList.remove('el-popup-parent--hidden')
+    document.body.style.overflow = ''
+  } catch {}
+}
+
 export const loadingService = {
-  /**
-   * 显示 loading
-   * @returns 关闭 loading 的函数
-   */
   showLoading(): () => void {
     if (!loadingInstance) {
-      // 每次显示时获取最新的配置，确保背景色与当前主题同步
       const config = {
         ...DEFAULT_LOADING_CONFIG,
         background: getLoadingBackground()
       }
-      loadingInstance = ElLoading.service(config)
+      try {
+        loadingInstance = ElLoading.service(config)
+      } catch {
+        forceCleanupLoadingDom()
+        try {
+          loadingInstance = ElLoading.service(config)
+        } catch {
+          loadingInstance = null
+        }
+      }
     }
     return () => this.hideLoading()
   },
 
-  /**
-   * 隐藏 loading
-   */
   hideLoading(): void {
     if (loadingInstance) {
-      loadingInstance.close()
+      try {
+        loadingInstance.close()
+      } catch {
+        // close may throw if already closed; fall through to DOM cleanup
+      }
       loadingInstance = null
     }
+    forceCleanupLoadingDom()
   }
 }

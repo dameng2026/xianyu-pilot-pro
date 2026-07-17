@@ -29,7 +29,7 @@ public class AdminModuleService {
      */
     private static final Set<String> MODULES_WITHOUT_REAL_BACKEND = Set.of(
             "licenses", "notify-channels", "notify-logs", "risk-events", "runtime",
-            "backups", "versions", "rag", "sensitive-words", "alerts", "files"
+            "backups", "versions", "rag", "alerts", "files"
     );
 
     private final JdbcTemplate jdbcTemplate;

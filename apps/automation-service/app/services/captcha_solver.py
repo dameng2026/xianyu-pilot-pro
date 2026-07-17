@@ -524,7 +524,9 @@ async def _verify_cookie_via_token_api(account_id: int, tenant_id: int) -> bool:
         # 调用 ws_token 模块的完整 Token 获取流程
         # （会自动尝试 cookie 中的 _m_h5_tk、DB 中的 _m_h5_tk、刷新 _m_h5_tk 三种路径）
         from .ws_token import get_ws_token_with_refreshed_m_h5_tk
-        access_token, _, error_type, _ = get_ws_token_with_refreshed_m_h5_tk(cookie_str, m_h5_tk)
+        access_token, _, error_type, _ = await asyncio.to_thread(
+            get_ws_token_with_refreshed_m_h5_tk, cookie_str, m_h5_tk
+        )
         if access_token:
             logger.info(
                 "_verify_cookie_via_token_api: Cookie 验证通过 accountId=%d, accessToken长度=%d",

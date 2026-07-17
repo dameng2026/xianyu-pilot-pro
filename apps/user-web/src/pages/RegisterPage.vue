@@ -14,7 +14,7 @@
       </div>
     </div>
 
-    <div v-if="errorMsg" class="form-error" role="alert" aria-live="assertive">{{ errorMsg }}</div>
+    <div v-if="errorMsg" ref="errorMsgRef" class="form-error" role="alert" aria-live="assertive">{{ errorMsg }}</div>
 
     <div v-if="authCapabilityLoading" class="auth-capability-card" role="status">
       <h3>正在确认注册能力</h3>
@@ -35,20 +35,23 @@
       {{ authCapabilities.securityNotice }}
     </div>
     <form class="auth-form" @submit.prevent="submitRegister">
-      <label class="auth-field auth-field-with-action">
+      <label class="auth-field auth-field-with-action" :class="{ 'has-error': fieldErrors.email }">
         <AuthIcon class="auth-field-icon" name="mail" />
         <input
           v-model.trim="form.email"
           type="email"
           autocomplete="email"
           placeholder="邮箱"
+          aria-invalid="!!fieldErrors.email"
+          @blur="blurEmail"
         />
         <button v-if="form.email" type="button" class="auth-clear-btn" @click="form.email = ''">
           <AuthIcon name="close" />
         </button>
       </label>
+      <span v-if="fieldErrors.email" class="auth-field-error">{{ fieldErrors.email }}</span>
 
-      <label class="auth-field auth-field-with-action">
+      <label class="auth-field auth-field-with-action" :class="{ 'has-error': fieldErrors.emailCode }">
         <AuthIcon class="auth-field-icon" name="code" />
         <input
           v-model.trim="form.emailCode"
@@ -56,6 +59,8 @@
           maxlength="6"
           autocomplete="one-time-code"
           placeholder="邮箱验证码"
+          aria-invalid="!!fieldErrors.emailCode"
+          @blur="blurEmailCode"
         />
         <button
           type="button"
@@ -68,8 +73,9 @@
           {{ emailSending ? '发送中...' : emailCountdown > 0 ? `${emailCountdown}s 后重试` : '获取验证码' }}
         </button>
       </label>
+      <span v-if="fieldErrors.emailCode" class="auth-field-error">{{ fieldErrors.emailCode }}</span>
 
-      <label class="auth-field auth-field-with-action">
+      <label class="auth-field auth-field-with-action" :class="{ 'has-error': fieldErrors.password }">
         <AuthIcon class="auth-field-icon" name="lock" />
         <input
           v-model="form.password"
@@ -77,13 +83,16 @@
           maxlength="32"
           autocomplete="new-password"
           placeholder="设置密码（8-32位，字母+数字组合）"
+          aria-invalid="!!fieldErrors.password"
+          @blur="blurPassword"
         />
         <button type="button" class="auth-eye-btn" @click="showPwd = !showPwd">
           <AuthIcon :name="showPwd ? 'eyeOff' : 'eye'" />
         </button>
       </label>
+      <span v-if="fieldErrors.password" class="auth-field-error">{{ fieldErrors.password }}</span>
 
-      <label class="auth-field auth-field-with-action">
+      <label class="auth-field auth-field-with-action" :class="{ 'has-error': fieldErrors.confirmPassword }">
         <AuthIcon class="auth-field-icon" name="lock" />
         <input
           v-model="form.confirmPassword"
@@ -91,11 +100,14 @@
           maxlength="32"
           autocomplete="new-password"
           placeholder="确认密码"
+          aria-invalid="!!fieldErrors.confirmPassword"
+          @blur="blurConfirmPassword"
         />
         <button type="button" class="auth-eye-btn" @click="showConfirmPwd = !showConfirmPwd">
           <AuthIcon :name="showConfirmPwd ? 'eyeOff' : 'eye'" />
         </button>
       </label>
+      <span v-if="fieldErrors.confirmPassword" class="auth-field-error">{{ fieldErrors.confirmPassword }}</span>
 
       <label class="auth-field">
         <AuthIcon class="auth-field-icon" name="user" />
@@ -108,8 +120,8 @@
       </label>
 
       <div class="auth-agreement">
-        <label class="auth-check auth-check-register auth-check-agreement">
-          <input v-model="form.agreed" type="checkbox" :disabled="!legalDocumentsAvailable" />
+        <label class="auth-check auth-check-register auth-check-agreement" :class="{ 'has-error': fieldErrors.agreed }">
+          <input v-model="form.agreed" type="checkbox" :disabled="!legalDocumentsAvailable" @change="blurAgreed" />
           <span>
             我已阅读并同意
             <button type="button" class="auth-text-link" :disabled="!legalConfig.termsUrl" @click="openDoc('用户协议')">《用户协议》</button>
@@ -117,6 +129,7 @@
             <button type="button" class="auth-text-link" :disabled="!legalConfig.privacyUrl" @click="openDoc('隐私政策')">《隐私政策》</button>
           </span>
         </label>
+        <span v-if="fieldErrors.agreed" class="auth-field-error">{{ fieldErrors.agreed }}</span>
         <p v-if="!legalDocumentsAvailable" class="auth-legal-unavailable" role="status">
           用户协议或隐私政策链接未配置，当前无法完成注册，请联系部署方。
         </p>
@@ -192,10 +205,77 @@ const loading = ref(false)
 const emailSending = ref(false)
 const emailCountdown = ref(0)
 const errorMsg = ref('')
+const errorMsgRef = ref(null)
 const emailValid = computed(() => validateEmail(form.email))
 const legalConfig = LEGAL_CONFIG
 const legalDocumentsAvailable = hasRequiredLegalDocuments(legalConfig)
 let emailTimer = null
+
+// 字段级失焦校验：用户离开字段时给出即时反馈，避免仅在 submit 时才提示
+const fieldErrors = reactive({
+  email: '',
+  emailCode: '',
+  password: '',
+  confirmPassword: '',
+  agreed: ''
+})
+
+function showToast(message, type = 'info') {
+  if (typeof window === 'undefined' || !window.dispatchEvent) return
+  window.dispatchEvent(new CustomEvent('xya-toast', {
+    detail: { message, isError: type === 'error' || type === 'warning' }
+  }))
+}
+
+function blurEmail() {
+  if (!form.email) {
+    fieldErrors.email = ''
+    return
+  }
+  fieldErrors.email = validateEmail(form.email) ? '' : '邮箱格式不正确'
+}
+
+function blurEmailCode() {
+  fieldErrors.emailCode = form.emailCode.trim() ? '' : '请输入邮箱验证码'
+}
+
+function blurPassword() {
+  if (!form.password) {
+    fieldErrors.password = ''
+    return
+  }
+  fieldErrors.password = validatePassword(form.password) ? '' : '密码需为 8-32 位，且包含字母和数字'
+  if (form.confirmPassword && form.confirmPassword !== form.password) {
+    fieldErrors.confirmPassword = '两次输入的密码不一致'
+  } else if (form.confirmPassword) {
+    fieldErrors.confirmPassword = ''
+  }
+}
+
+function blurConfirmPassword() {
+  if (!form.confirmPassword) {
+    fieldErrors.confirmPassword = ''
+    return
+  }
+  fieldErrors.confirmPassword = form.confirmPassword === form.password ? '' : '两次输入的密码不一致'
+}
+
+function blurAgreed() {
+  fieldErrors.agreed = form.agreed ? '' : '请先阅读并同意用户协议和隐私政策'
+}
+
+function scrollToError() {
+  // 优先滚动到字段级错误，其次滚动到顶部错误条
+  const fieldErr = document.querySelector('.auth-field-error')
+  if (fieldErr && typeof fieldErr.scrollIntoView === 'function') {
+    fieldErr.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    return
+  }
+  const el = errorMsgRef.value
+  if (el && typeof el.scrollIntoView === 'function') {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+}
 
 function openDoc(title) {
   const result = openLegalDoc(title)
@@ -255,8 +335,22 @@ async function sendEmail() {
 
 async function submitRegister() {
   if (!selfRegistrationCapability.value.available) return
+  // 触发所有字段级校验，让用户在视觉上看到所有缺失项
+  blurEmail()
+  blurEmailCode()
+  blurPassword()
+  blurConfirmPassword()
+  blurAgreed()
   errorMsg.value = validateForm()
-  if (errorMsg.value || loading.value) return
+  if (errorMsg.value || loading.value) {
+    // 顶部错误条 + 全局 toast 双重提示，确保用户感知到错误
+    if (errorMsg.value) {
+      showToast(errorMsg.value, 'error')
+      // 下一帧滚动，确保 errorMsg div 已渲染
+      requestAnimationFrame(scrollToError)
+    }
+    return
+  }
 
   loading.value = true
   try {
@@ -273,6 +367,8 @@ async function submitRegister() {
     emit('login-success', data)
   } catch (error) {
     errorMsg.value = friendlyError(error, '注册失败，请稍后重试')
+    showToast(errorMsg.value, 'error')
+    requestAnimationFrame(scrollToError)
   } finally {
     loading.value = false
   }

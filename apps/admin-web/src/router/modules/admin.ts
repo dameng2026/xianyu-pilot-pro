@@ -122,6 +122,16 @@ export const adminRoutes: AppRouteRecord[] = [
     ]
   },
   {
+    name: 'AdminMall',
+    path: '/admin/mall',
+    component: '/index/index',
+    meta: { title: '货源商城', icon: 'ri:store-2-line', roles: ADMIN_OPERATORS },
+    children: [
+      { path: 'products', name: 'AdminMallProducts', component: '/admin/mall/products/index', meta: { title: '商品管理', icon: 'ri:archive-line', roles: ADMIN_OPERATORS } as any },
+      { path: 'faqs', name: 'AdminMallFaqs', component: '/admin/mall/faqs/index', meta: { title: '常见问题', icon: 'ri:question-line', roles: ADMIN_OPERATORS } as any }
+    ]
+  },
+  {
     name: 'System',
     path: '/system',
     component: '/index/index',
