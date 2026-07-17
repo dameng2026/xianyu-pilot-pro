@@ -150,6 +150,38 @@
           "sha256": "0b43a6ea3e8e13ffb743a1315631c0b006ead734e860f6d84bd7c3ba710e583b",
           "risk": "expand",
           "rollback": "restore"
+        },
+        {
+          "version": "1.18",
+          "description": "mall product tables (product, card key, faq)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.18__add_mall_product_tables.sql",
+          "sha256": "3f132faaa6a3036e64efc58fa566f6231a9e4b145c795466504cdebab581d63f",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.19",
+          "description": "delivery statement session table",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.19__delivery_statement_session.sql",
+          "sha256": "95cfdd5468f0914b038e4bec3df4305d8c435a57eea8490f48f5707df76952ec",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.20",
+          "description": "add delivery_mode and card_group_id to delivery_text_source",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.20__add_delivery_source_card_mode.sql",
+          "sha256": "3118298b2a29cf9eb8e5bf4f568757a6bd1157405cbc103eded4f95c97dcc056",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.21",
+          "description": "add copy column to mall_product for AI rewrite",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.21__add_mall_product_copy.sql",
+          "sha256": "3d02b82ca5fb46367d9490eb92f1c363636368ab36f4384b272b08119e150f8a",
+          "risk": "expand",
+          "rollback": "restore"
         }
       ],
       "quarantined": [
@@ -247,6 +279,14 @@
           "description": "captcha backoff state and account proxy binding",
           "path": "apps/automation-service/migrations/V1.10__captcha_backoff_and_account_proxy.sql",
           "sha256": "e36bc92ae9b28a7e04a8e5d177e199cf890a53a3a0bd4895d55fb412d2bc25fd",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.11",
+          "description": "pending AI billing table for retry-safe charging",
+          "path": "apps/automation-service/migrations/V1.11__add_pending_billing_table.sql",
+          "sha256": "eb7ec1909edb08cab2f92d456d91dd43745dba196bc3f4cc139ffb05e9bb02fc",
           "risk": "expand",
           "rollback": "restore"
         }
