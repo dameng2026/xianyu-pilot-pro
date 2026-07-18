@@ -166,10 +166,15 @@ async def lifespan(app: FastAPI):
 
     try:
         await probe_upload_storage(str(UPLOAD_IMAGES_ROOT))
-        await reconcile_storage_assets(str(UPLOAD_IMAGES_ROOT))
     except Exception as e:
         log_service_failure(logger, e, operation="initialize_upload_storage")
         raise RuntimeError("上传存储不可用，服务拒绝启动") from None
+    # reconcile_storage_assets 是崩溃恢复操作，失败不应阻止启动；
+    # _storage_reconcile_loop 会每 5 分钟重试。
+    try:
+        await reconcile_storage_assets(str(UPLOAD_IMAGES_ROOT))
+    except Exception as e:
+        log_service_failure(logger, e, operation="initialize_upload_storage_reconcile")
     storage_reconcile_task = asyncio.create_task(_storage_reconcile_loop())
     
     # 启动 WebSocket 连接。
