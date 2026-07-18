@@ -421,8 +421,12 @@ async def _resolve_account_cookie(
     tenant_id: int,
     account_id: Optional[int],
     current_user: dict,
-) -> tuple[Optional[str], Optional[str]]:
-    """根据 accountId 解析账号 Cookie 和 _m_h5_tk，返回 (cookie_str, error_msg)。"""
+) -> tuple[Optional[str], Optional[str], Optional[int]]:
+    """根据 accountId 解析账号 Cookie 和 _m_h5_tk。
+
+    返回 (cookie_str, error_msg, resolved_account_id)。
+    resolved_account_id 用于搜索失败时反向回写 cookie_status。
+    """
     from sqlalchemy import select
     from ..models.entities import XianyuAccountAuth
     from ..core.cookie_crypto import decrypt_cookie_if_needed
@@ -456,20 +460,76 @@ async def _resolve_account_cookie(
             logger.warning("[RESOLVE-COOKIE] 返回失败: auth=%s encrypted_cookie=%s account_id=%d tenant_id=%d",
                            auth is not None, bool(auth and auth.encrypted_cookie) if auth else False,
                            account_id or -1, tenant_id)
-            return None, "账号未登录或Cookie已失效，请先到「账号管理」扫码登录闲鱼账号"
+            return None, "账号未登录或Cookie已失效，请先到「账号管理」扫码登录闲鱼账号", None
 
         cookie_str = decrypt_cookie_if_needed(auth.encrypted_cookie)
         token = _get_token_from_cookie(cookie_str)
         if not token:
-            return None, "Cookie 中缺少 _m_h5_tk，请重新登录闲鱼账号"
+            return None, "Cookie 中缺少 _m_h5_tk，请重新登录闲鱼账号", auth.account_id
 
-        return cookie_str, None
+        return cookie_str, None, auth.account_id
     except Exception as e:
         log_service_failure(
             logger, e, operation="resolve_goods_sync_cookie",
             tenant_id=tenant_id, account_id=account_id,
         )
-        return None, "读取账号登录状态失败，请稍后重试"
+        return None, "读取账号登录状态失败，请稍后重试", None
+
+
+async def _mark_account_cookie_expired(
+    db: "AsyncSession",
+    tenant_id: int,
+    account_id: int,
+    source: str = "unknown",
+) -> None:
+    """检测到 cookie 失效后反向回写数据库 cookie_status=2（过期）。
+
+    让账号管理页面能立即显示异常状态，无需用户主动切换页面查看。
+    同时更新 runtime 表，保持两表状态一致。
+    """
+    from sqlalchemy import select, update
+    from ..models.entities import XianyuAccountAuth, XianyuAccountRuntime
+    from datetime import datetime
+
+    try:
+        # 更新 auth 表 cookie_status=2（过期）
+        await db.execute(
+            update(XianyuAccountAuth)
+            .where(
+                XianyuAccountAuth.account_id == account_id,
+                XianyuAccountAuth.tenant_id == tenant_id,
+                XianyuAccountAuth.deleted == 0,
+            )
+            .values(
+                cookie_status=2,
+                last_login_status_code="COOKIE_EXPIRED",
+                last_login_status_message=f"Cookie 已失效（由 {source} 检测）",
+                last_login_check_time=datetime.now(),
+            )
+        )
+        # 同步更新 runtime 表（如果存在记录）
+        await db.execute(
+            update(XianyuAccountRuntime)
+            .where(
+                XianyuAccountRuntime.account_id == account_id,
+                XianyuAccountRuntime.tenant_id == tenant_id,
+            )
+            .values(
+                cookie_status=2,
+                last_login_status_code="COOKIE_EXPIRED",
+                last_login_status_message=f"Cookie 已失效（由 {source} 检测）",
+                last_login_check_time=datetime.now(),
+            )
+        )
+        await db.commit()
+        logger.info("[COOKIE-EXPIRED] account_id=%d tenant_id=%d source=%s 已回写 cookie_status=2",
+                    account_id, tenant_id, source)
+    except Exception as e:
+        await db.rollback()
+        log_service_failure(
+            logger, e, operation="mark_account_cookie_expired",
+            tenant_id=tenant_id, account_id=account_id,
+        )
 
 
 async def _persist_sync_task(sync_id: str, **fields) -> None:

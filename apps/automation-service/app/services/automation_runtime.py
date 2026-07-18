@@ -2233,7 +2233,7 @@ async def _workflow_shop_fetch(
     state["target_count"] = shop_target_count
 
     # 2) 解析账号 Cookie
-    cookie_str, cookie_err = await _resolve_account_cookie(db, tenant_id, acct_id, {})
+    cookie_str, cookie_err, _resolved_acct_id = await _resolve_account_cookie(db, tenant_id, acct_id, {})
     if cookie_err:
         logger.warning("runtimeFailure operation=resolve_shop_account_cookie errorType=AccountAuthUnavailable requestId=%s", get_request_id() or "-")
         return {
@@ -2777,6 +2777,14 @@ async def _dispatch_scheduled_task(
         return await _run_sync_orders_task(db, tenant_id, task)
     if task_type == "sync_delivery_status":
         return await _run_sync_delivery_status_task(db, tenant_id, task)
+    if task_type == "sync_goods":
+        return await _run_sync_goods_task(db, tenant_id, task)
+    if task_type == "auto_redelivery":
+        return await _run_auto_redelivery_task(db, tenant_id, task)
+    if task_type == "one_click_polish":
+        return await _run_one_click_polish_task(db, tenant_id, task)
+    if task_type == "workflow":
+        return await _run_workflow_scheduled_task(db, tenant_id, task)
     if task_type in {"sync_account", "account_sync", "refresh_account"}:
         return await mark_account_synced(
             db,
@@ -3674,8 +3682,81 @@ async def _upsert_remote_sold_order(
 
 async def _run_sync_orders_task(db: AsyncSession, tenant_id: int, task: dict[str, Any]) -> dict[str, Any]:
     config = _task_config(task)
-    account_id = _safe_int(config.get("accountId") or task.get("account_id"))
     external_order_id = _text(config.get("externalOrderId") or "")
+    account_ids = _extract_task_account_ids(task, config)
+    # 兼容旧任务：未配置 accountIds 时回退到单账号字段
+    if not account_ids:
+        single_id = _safe_int(config.get("accountId") or task.get("account_id"))
+        if single_id:
+            account_ids = [single_id]
+    if not account_ids:
+        return {
+            "ok": False,
+            "errorCode": "ORDER_ACCOUNT_REQUIRED",
+            "message": "请先选择要同步的账号",
+            "processed": 0,
+            "inserted": 0,
+            "updated": 0,
+            "failed": 0,
+            "taskType": task.get("task_type"),
+        }
+
+    # 多账号场景：循环同步并汇总结果
+    if len(account_ids) == 1:
+        return await _run_sync_orders_for_single_account(
+            db, tenant_id, task, account_ids[0], external_order_id
+        )
+
+    aggregated = {
+        "ok": True,
+        "processed": 0,
+        "inserted": 0,
+        "updated": 0,
+        "failed": 0,
+        "taskType": task.get("task_type"),
+        "details": [],
+        "autoDeliveryTriggered": False,
+    }
+    for aid in account_ids:
+        try:
+            single = await _run_sync_orders_for_single_account(
+                db, tenant_id, task, aid, external_order_id
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log_runtime_failure("sync_orders_scheduled_multi", exc)
+            aggregated["ok"] = False
+            aggregated["failed"] += 1
+            aggregated["details"].append({"accountId": aid, "ok": False, "message": str(exc)})
+            continue
+        aggregated["processed"] += _safe_int(single.get("processed"))
+        aggregated["inserted"] += _safe_int(single.get("inserted"))
+        aggregated["updated"] += _safe_int(single.get("updated"))
+        aggregated["failed"] += _safe_int(single.get("failed"))
+        if single.get("autoDeliveryTriggered"):
+            aggregated["autoDeliveryTriggered"] = True
+        aggregated["details"].append({"accountId": aid, "ok": bool(single.get("ok")), "summary": {
+            "processed": single.get("processed"),
+            "inserted": single.get("inserted"),
+            "updated": single.get("updated"),
+            "failed": single.get("failed"),
+        }})
+    aggregated["message"] = (
+        f"同步订单任务执行完成：账号 {len(account_ids)} 个，"
+        f"新增 {aggregated['inserted']} 个，更新 {aggregated['updated']} 个，失败 {aggregated['failed']} 个"
+    )
+    return aggregated
+
+
+async def _run_sync_orders_for_single_account(
+    db: AsyncSession,
+    tenant_id: int,
+    task: dict[str, Any],
+    account_id: int,
+    external_order_id: str,
+) -> dict[str, Any]:
+    """单账号订单同步 + 同步后立即触发自动发货（保持原 _run_sync_orders_task 行为）。"""
     result = await sync_sold_orders_for_account(db, tenant_id, account_id, external_order_id or None)
     result["taskType"] = task.get("task_type")
 
@@ -3716,6 +3797,320 @@ async def _run_sync_delivery_status_task(db: AsyncSession, tenant_id: int, task:
     result = await sync_delivery_status_for_account(db, tenant_id, account_id, external_order_id or None)
     result["taskType"] = task.get("task_type")
     return result
+
+
+def _extract_task_account_ids(task: dict[str, Any], config: dict[str, Any]) -> list[int]:
+    """从 task.config_json.accountIds 提取多账号列表。
+
+    新版多账号任务通过 configJson.accountIds 数组存储；旧版单账号字段保留为兼容字段。
+    """
+    raw = config.get("accountIds")
+    if isinstance(raw, list):
+        ids: list[int] = []
+        seen: set[int] = set()
+        for item in raw:
+            value = _safe_int(item)
+            if value > 0 and value not in seen:
+                seen.add(value)
+                ids.append(value)
+        if ids:
+            return ids
+    # 兼容旧字段：accountId / account_id
+    single = _safe_int(config.get("accountId") or task.get("account_id"))
+    if single > 0:
+        return [single]
+    return []
+
+
+async def _load_tenant_account_ids(db: AsyncSession, tenant_id: int) -> list[int]:
+    """加载租户下所有启用状态的账号 ID（用于未指定账号的兜底场景，如默认自动补发任务）。"""
+    rows = (await db.execute(text("""
+        SELECT a.id
+        FROM xianyu_account a
+        LEFT JOIN xianyu_account_runtime r ON r.tenant_id = a.tenant_id AND r.account_id = a.id AND r.deleted = 0
+        WHERE a.tenant_id = :tenant_id
+          AND a.deleted = 0
+          AND a.status = 1
+        ORDER BY a.id ASC
+    """), {"tenant_id": tenant_id})).mappings().all()
+    return [_safe_int(row.get("id")) for row in rows if _safe_int(row.get("id")) > 0]
+
+
+async def _run_sync_goods_task(db: AsyncSession, tenant_id: int, task: dict[str, Any]) -> dict[str, Any]:
+    """同步商品任务（多账号）：循环调用 sync_goods_for_account 拉取每个账号的最新商品列表。
+
+    定时任务模式下不调用详情接口（async_fetch_detail=False），避免高频调用触发风控。
+    """
+    config = _task_config(task)
+    account_ids = _extract_task_account_ids(task, config)
+    if not account_ids:
+        account_ids = await _load_tenant_account_ids(db, tenant_id)
+    if not account_ids:
+        return {
+            "ok": False,
+            "errorCode": "SYNC_GOODS_ACCOUNT_REQUIRED",
+            "message": "同步商品任务缺少账号",
+            "processed": 0,
+            "taskType": task.get("task_type"),
+        }
+
+    from .xianyu_goods_sync import sync_goods_for_account
+
+    success = 0
+    failed = 0
+    details: list[dict[str, Any]] = []
+    for account_id in account_ids:
+        try:
+            cookie_str, cookie_err, _ = await _resolve_account_cookie(db, tenant_id, account_id, {})
+            if cookie_err or not cookie_str:
+                failed += 1
+                details.append({"accountId": account_id, "ok": False, "message": cookie_err or "Cookie 不可用"})
+                continue
+            sync_id = f"sched_{tenant_id}_{account_id}_{int(time.time())}"
+            result = await sync_goods_for_account(
+                account_id=account_id,
+                tenant_id=tenant_id,
+                cookie_str=cookie_str,
+                sync_id=sync_id,
+                db_session_factory=None,
+                async_fetch_detail=False,
+            )
+            success += 1
+            details.append({
+                "accountId": account_id,
+                "ok": True,
+                "total": _safe_int(result.get("total")),
+                "new": _safe_int(result.get("new")),
+                "updated": _safe_int(result.get("updated")),
+                "offShelf": _safe_int(result.get("off_shelf")),
+            })
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            failed += 1
+            _log_runtime_failure("sync_goods_scheduled", exc)
+            details.append({"accountId": account_id, "ok": False, "message": str(exc)})
+
+    return {
+        "ok": failed == 0,
+        "errorCode": "" if failed == 0 else "SYNC_GOODS_PARTIAL",
+        "message": f"同步商品任务执行完成：账号 {len(account_ids)} 个，成功 {success} 个，失败 {failed} 个",
+        "processed": len(account_ids),
+        "success": success,
+        "failed": failed,
+        "details": details,
+        "taskType": task.get("task_type"),
+    }
+
+
+async def _run_auto_redelivery_task(db: AsyncSession, tenant_id: int, task: dict[str, Any]) -> dict[str, Any]:
+    """自动补发订单任务（间隔模式）：到达设定时间后，先同步订单，再筛选待发货订单批量补发。
+
+    筛选条件（与 process_pending_deliveries 一致）：
+    - order_status IN (1, 2)：已付款或待发货（已退款/退款关闭已映射为 5，自动排除）
+    - 不存在 status=1 的 delivery_record：未发货或上次发货未成功
+    - 命中 delivery_goods_config 或 delivery_rule：已配置货源库并开启自动发货
+
+    若 accountIds 为空（默认 10 分钟任务），按租户整体处理：先同步所有账号订单，再批量补发。
+    """
+    config = _task_config(task)
+    account_ids = _extract_task_account_ids(task, config)
+    if not account_ids:
+        account_ids = await _load_tenant_account_ids(db, tenant_id)
+
+    # 1) 同步订单：确保新订单入库后才能被补发流程识别
+    synced = 0
+    sync_failed = 0
+    for account_id in account_ids:
+        try:
+            await sync_sold_orders_for_account(db, tenant_id, account_id, None)
+            synced += 1
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            sync_failed += 1
+            _log_runtime_failure("auto_redelivery_sync_orders", exc)
+
+    # 2) 批量处理待发货订单：process_pending_deliveries 内部按订单维度筛选并执行
+    try:
+        delivery_result = await process_pending_deliveries(
+            db, tenant_id=tenant_id, account_id=None, limit=100
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log_runtime_failure("auto_redelivery_process", exc)
+        return {
+            "ok": False,
+            "errorCode": "AUTO_REDELIVERY_PROCESS_FAILED",
+            "message": f"自动补发任务处理失败：{exc}",
+            "processed": 0,
+            "success": 0,
+            "skipped": 0,
+            "failed": 0,
+            "syncSummary": {"synced": synced, "syncFailed": sync_failed},
+            "taskType": task.get("task_type"),
+        }
+
+    return {
+        "ok": bool(delivery_result.get("ok", True)),
+        "message": (
+            f"自动补发任务执行完成：同步账号 {synced} 个，"
+            f"处理订单 {delivery_result.get('processed', 0)} 个，"
+            f"成功 {delivery_result.get('success', 0)} 个，"
+            f"跳过 {delivery_result.get('skipped', 0)} 个，"
+            f"失败 {delivery_result.get('failed', 0)} 个"
+        ),
+        "processed": _safe_int(delivery_result.get("processed")),
+        "success": _safe_int(delivery_result.get("success")),
+        "skipped": _safe_int(delivery_result.get("skipped")),
+        "failed": _safe_int(delivery_result.get("failed")),
+        "syncSummary": {"synced": synced, "syncFailed": sync_failed},
+        "taskType": task.get("task_type"),
+    }
+
+
+async def _run_one_click_polish_task(db: AsyncSession, tenant_id: int, task: dict[str, Any]) -> dict[str, Any]:
+    """一键擦亮商品任务（多账号）：循环调用 _submit_polish_task 为每个账号擦亮所有在售商品。"""
+    config = _task_config(task)
+    account_ids = _extract_task_account_ids(task, config)
+    if not account_ids:
+        return {
+            "ok": False,
+            "errorCode": "POLISH_TASK_ACCOUNT_REQUIRED",
+            "message": "一键擦亮任务缺少账号",
+            "processed": 0,
+            "taskType": task.get("task_type"),
+        }
+
+    from app.api.v1.routes.items import _submit_polish_task
+
+    success = 0
+    failed = 0
+    details: list[dict[str, Any]] = []
+    for account_id in account_ids:
+        try:
+            response = await _submit_polish_task(
+                db=db,
+                account_id=account_id,
+                tenant_id=tenant_id,
+            )
+            payload = response.data if isinstance(response.data, dict) else {}
+            if response.code == 200:
+                success += 1
+                details.append({
+                    "accountId": account_id,
+                    "ok": True,
+                    "taskId": payload.get("taskId"),
+                    "total": payload.get("total"),
+                    "message": payload.get("message") or response.msg,
+                })
+            else:
+                failed += 1
+                details.append({
+                    "accountId": account_id,
+                    "ok": False,
+                    "message": response.msg or payload.get("message") or "擦亮任务提交失败",
+                })
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            failed += 1
+            _log_runtime_failure("one_click_polish_scheduled", exc)
+            details.append({"accountId": account_id, "ok": False, "message": str(exc)})
+
+    return {
+        "ok": failed == 0,
+        "errorCode": "" if failed == 0 else "POLISH_TASK_PARTIAL",
+        "message": f"一键擦亮任务执行完成：账号 {len(account_ids)} 个，成功 {success} 个，失败 {failed} 个",
+        "processed": len(account_ids),
+        "success": success,
+        "failed": failed,
+        "details": details,
+        "taskType": task.get("task_type"),
+    }
+
+
+async def _run_workflow_scheduled_task(db: AsyncSession, tenant_id: int, task: dict[str, Any]) -> dict[str, Any]:
+    """工作流定时任务：通过 Java 内部接口触发工作流执行（无用户登录态依赖）。
+
+    工作流任务不绑定具体账号（使用工作流自带账号），仅依赖 config.workflowId 选择已配置的工作流定义。
+    """
+    import httpx
+
+    config = _task_config(task)
+    workflow_id = _safe_int(config.get("workflowId") or config.get("workflow_id"))
+    if not workflow_id:
+        return {
+            "ok": False,
+            "errorCode": "WORKFLOW_ID_REQUIRED",
+            "message": "工作流任务缺少工作流定义",
+            "processed": 0,
+            "taskType": task.get("task_type"),
+        }
+
+    base = (settings.core_api_base_url or "").rstrip("/")
+    if not base:
+        return {
+            "ok": False,
+            "errorCode": "WORKFLOW_TRIGGER_UNCONFIGURED",
+            "message": "core-api 地址未配置",
+            "processed": 0,
+            "taskType": task.get("task_type"),
+        }
+
+    url = f"{base}/open-api/internal/workflow/definitions/{workflow_id}/trigger?tenantId={tenant_id}"
+    headers = {"Content-Type": "application/json"}
+    if settings.effective_internal_api_token:
+        headers["X-Internal-Token"] = settings.effective_internal_api_token
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=30.0,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            resp = await client.post(url, json={}, headers=headers)
+        if resp.status_code != 200:
+            return {
+                "ok": False,
+                "errorCode": "WORKFLOW_TRIGGER_HTTP_ERROR",
+                "message": f"触发工作流失败：HTTP {resp.status_code}",
+                "processed": 0,
+                "workflowId": workflow_id,
+                "taskType": task.get("task_type"),
+            }
+        body = resp.json() if resp.text else {}
+        if body.get("code") != 200:
+            return {
+                "ok": False,
+                "errorCode": "WORKFLOW_TRIGGER_FAILED",
+                "message": body.get("msg") or "触发工作流失败",
+                "processed": 0,
+                "workflowId": workflow_id,
+                "taskType": task.get("task_type"),
+            }
+        data = body.get("data") or {}
+        return {
+            "ok": True,
+            "message": "工作流已触发",
+            "processed": 1,
+            "executionId": data.get("executionId") or data.get("id"),
+            "workflowId": workflow_id,
+            "taskType": task.get("task_type"),
+        }
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log_runtime_failure("workflow_scheduled_trigger", exc)
+        return {
+            "ok": False,
+            "errorCode": "WORKFLOW_TRIGGER_EXCEPTION",
+            "message": f"触发工作流异常：{exc}",
+            "processed": 0,
+            "workflowId": workflow_id,
+            "taskType": task.get("task_type"),
+        }
 
 
 async def sync_sold_orders_for_account(
@@ -6779,7 +7174,7 @@ async def _prepare_account_publishers(
         except (ValueError, TypeError):
             continue
         try:
-            cookie_str, cookie_err = await _resolve_account_cookie(db, tenant_id, acct_id, {})
+            cookie_str, cookie_err, _resolved_acct_id = await _resolve_account_cookie(db, tenant_id, acct_id, {})
             logger.info("[PREPARE-PUB] acct_id=%d auth_ok=%s", acct_id, not bool(cookie_err))
             if cookie_err:
                 result[acct_id] = {"cookie_str": "", "token": "", "publisher": None, "is_fish_shop": False, "error": "账号登录状态不可用"}
@@ -6960,6 +7355,14 @@ async def _publish_single_item(
     title = _text(p.get("title", ""))
     desc = _text(p.get("description", ""))
     price = _text(p.get("price", "0"))
+    # 价格兜底：搜索结果可能未携带 price 字段（如风控降级时 DOM 提取的残缺数据），使用默认价避免发布被拒绝
+    try:
+        _price_num = float(price)
+    except (ValueError, TypeError):
+        _price_num = 0.0
+    if _price_num <= 0:
+        logger.warning("[PUBLISH-INLINE] 商品价格缺失或无效，使用默认价 1 元 account=%d title=%s origPrice=%r", acct_id, title[:20], price)
+        price = "1"
     source_item_id = _text(p.get("itemId", ""))
     source_title_raw = _text(p.get("title", ""))
     source_title_hash = _hashlib.md5(source_title_raw.strip().lower().encode("utf-8")).hexdigest() if source_title_raw else ""
@@ -7289,7 +7692,7 @@ async def _execute_workflow_node(
             account_id = 1  # 默认使用第一个账号
 
         # 3) 解析账号 Cookie（与 /goofish-search 接口完全一致）
-        cookie_str, cookie_err = await _resolve_account_cookie(db, tenant_id, int(account_id), {})
+        cookie_str, cookie_err, _resolved_acct_id = await _resolve_account_cookie(db, tenant_id, int(account_id), {})
         if cookie_err:
             logger.warning("runtimeFailure operation=resolve_search_account_cookie errorType=AccountAuthUnavailable requestId=%s", get_request_id() or "-")
             return {
@@ -9204,7 +9607,7 @@ async def _execute_workflow_node(
 
             # 解析账号 Cookie（复用 _resolve_account_cookie，已处理解密）
             if not dry_run:
-                cookie_str, cookie_err = await _resolve_account_cookie(db, tenant_id, acct_id, {})
+                cookie_str, cookie_err, _resolved_acct_id = await _resolve_account_cookie(db, tenant_id, acct_id, {})
                 if cookie_err:
                     logger.warning("runtimeFailure operation=resolve_publish_account_cookie errorType=AccountAuthUnavailable requestId=%s", get_request_id() or "-")
                     for p in acct_polished:
@@ -9250,6 +9653,14 @@ async def _execute_workflow_node(
                 title = _text(p.get("title", ""))
                 desc = _text(p.get("description", ""))
                 price = _text(p.get("price", "0"))
+                # 价格兜底：搜索结果可能未携带 price 字段（如风控降级时 DOM 提取的残缺数据），使用默认价避免发布被拒绝
+                try:
+                    _price_num = float(price)
+                except (ValueError, TypeError):
+                    _price_num = 0.0
+                if _price_num <= 0:
+                    logger.warning("[PUBLISH] 商品价格缺失或无效，使用默认价 1 元 account=%d title=%s origPrice=%r", acct_id, title[:20], price)
+                    price = "1"
                 # 源商品标识（用于跨次运行去重）
                 source_item_id = _text(p.get("itemId", "") or (img_ref.get("sourceItemId", "") if isinstance(img_ref, dict) else ""))
                 source_title_raw = _text(p.get("title", "")) or (img_ref.get("sourceTitle", "") if isinstance(img_ref, dict) else "")

@@ -41,17 +41,19 @@ public class DeliveryTextSourceService {
         int offset = (safeCurrent - 1) * safeSize;
         String kw = keyword == null ? "" : keyword.trim();
 
-        String filter = kw.isBlank() ? "" : " AND (title LIKE CONCAT('%', ?, '%') OR content LIKE CONCAT('%', ?, '%') OR remark LIKE CONCAT('%', ?, '%'))";
+        String filter = kw.isBlank() ? "" : " AND (s.title LIKE CONCAT('%', ?, '%') OR s.content LIKE CONCAT('%', ?, '%') OR s.remark LIKE CONCAT('%', ?, '%') OR (s.from_mall=1 AND mp.title LIKE CONCAT('%', ?, '%')))";
         List<Object> args = new ArrayList<>();
         args.add(tenantId);
         if (!kw.isBlank()) {
             args.add(kw);
             args.add(kw);
             args.add(kw);
+            args.add(kw);
         }
 
         Long total = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM delivery_text_source WHERE tenant_id=? AND deleted=0" + filter,
+                "SELECT COUNT(*) FROM delivery_text_source s LEFT JOIN mall_product mp ON mp.id=s.mall_product_id AND mp.deleted=0 " +
+                        "WHERE s.tenant_id=? AND s.deleted=0" + filter,
                 Long.class,
                 args.toArray()
         );
@@ -61,16 +63,19 @@ public class DeliveryTextSourceService {
         listArgs.add(safeSize);
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
                 "SELECT s.id, s.source_type AS sourceType, s.delivery_mode AS deliveryMode, s.card_group_id AS cardGroupId, " +
-                        "s.title, s.content, s.remark, s.created_time AS createdTime, s.updated_time AS updatedTime, " +
-                        "g.group_name AS cardGroupName, g.remain_count AS cardRemainCount " +
+                        "s.title, s.content, s.remark, s.from_mall AS fromMall, s.mall_product_id AS mallProductId, s.created_time AS createdTime, s.updated_time AS updatedTime, " +
+                        "g.group_name AS cardGroupName, g.remain_count AS cardRemainCount, " +
+                        "mp.title AS mallProductTitle, mp.content AS mallProductContent, mp.status AS mallProductStatus " +
                         "FROM delivery_text_source s " +
                         "LEFT JOIN card_group g ON g.id=s.card_group_id AND g.tenant_id=s.tenant_id AND g.deleted=0 " +
+                        "LEFT JOIN mall_product mp ON mp.id=s.mall_product_id AND mp.deleted=0 " +
                         "WHERE s.tenant_id=? AND s.deleted=0" + filter +
                         " ORDER BY s.updated_time DESC, s.id DESC LIMIT ?, ?",
                 listArgs.toArray()
         );
         enrichUsageStats(tenantId, rows);
         for (Map<String, Object> row : rows) {
+            applyMallProductSnapshot(row);
             row.put("stockLabel", buildStockLabel(row));
         }
         return new PageResult<>(rows, safeCurrent, safeSize, total == null ? 0 : total);
@@ -79,13 +84,16 @@ public class DeliveryTextSourceService {
     public Map<String, Object> detail(Long tenantId, Long sourceId) {
         Map<String, Object> source = jdbcTemplate.queryForMap(
                 "SELECT s.id, s.source_type AS sourceType, s.delivery_mode AS deliveryMode, s.card_group_id AS cardGroupId, " +
-                        "s.title, s.content, s.remark, s.created_time AS createdTime, s.updated_time AS updatedTime, " +
-                        "g.group_name AS cardGroupName, g.remain_count AS cardRemainCount " +
+                        "s.title, s.content, s.remark, s.from_mall AS fromMall, s.mall_product_id AS mallProductId, s.created_time AS createdTime, s.updated_time AS updatedTime, " +
+                        "g.group_name AS cardGroupName, g.remain_count AS cardRemainCount, " +
+                        "mp.title AS mallProductTitle, mp.content AS mallProductContent, mp.status AS mallProductStatus " +
                         "FROM delivery_text_source s " +
                         "LEFT JOIN card_group g ON g.id=s.card_group_id AND g.tenant_id=s.tenant_id AND g.deleted=0 " +
+                        "LEFT JOIN mall_product mp ON mp.id=s.mall_product_id AND mp.deleted=0 " +
                         "WHERE s.tenant_id=? AND s.id=? AND s.deleted=0",
                 tenantId, sourceId
         );
+        applyMallProductSnapshot(source);
         source.put("configuredGoods", listConfiguredGoods(tenantId, sourceId));
         source.put("usageCount", ((List<?>) source.get("configuredGoods")).size());
         source.put("stockLabel", buildStockLabel(source));
@@ -96,19 +104,26 @@ public class DeliveryTextSourceService {
         String deliveryMode = normalizeDeliveryMode(body.get("deliveryMode"));
         Long cardGroupId = "card".equals(deliveryMode) ? asLong(body.get("cardGroupId")) : null;
         jdbcTemplate.update(
-                "INSERT INTO delivery_text_source(tenant_id, source_type, delivery_mode, card_group_id, title, content, remark, created_time, updated_time, deleted) " +
-                        "VALUES(?, 'text', ?, ?, ?, ?, ?, NOW(), NOW(), 0)",
+                "INSERT INTO delivery_text_source(tenant_id, source_type, delivery_mode, card_group_id, title, content, remark, from_mall, mall_product_id, created_time, updated_time, deleted) " +
+                        "VALUES(?, 'text', ?, ?, ?, ?, ?, 0, NULL, NOW(), NOW(), 0)",
                 tenantId, deliveryMode, cardGroupId, text(body.get("title")), text(body.get("content")), text(body.get("remark"))
         );
         return jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
     }
 
     public void update(Long tenantId, Long sourceId, Map<String, Object> body) {
+        Map<String, Object> existing = jdbcTemplate.queryForList(
+                "SELECT from_mall AS fromMall FROM delivery_text_source WHERE tenant_id=? AND id=? AND deleted=0",
+                tenantId, sourceId
+        ).stream().findFirst().orElse(null);
+        if (existing != null && isMallSource(existing.get("fromMall"))) {
+            throw new com.xianyu.admin.common.BizException(403, "商城购买货源内容不可修改，仅可查看");
+        }
         String deliveryMode = normalizeDeliveryMode(body.get("deliveryMode"));
         Long cardGroupId = "card".equals(deliveryMode) ? asLong(body.get("cardGroupId")) : null;
         jdbcTemplate.update(
                 "UPDATE delivery_text_source SET delivery_mode=?, card_group_id=?, title=?, content=?, remark=?, updated_time=NOW() " +
-                        "WHERE tenant_id=? AND id=? AND deleted=0",
+                        "WHERE tenant_id=? AND id=? AND deleted=0 AND from_mall=0",
                 deliveryMode, cardGroupId, text(body.get("title")), text(body.get("content")), text(body.get("remark")), tenantId, sourceId
         );
     }
@@ -400,6 +415,9 @@ public class DeliveryTextSourceService {
     }
 
     private String buildStockLabel(Map<String, Object> row) {
+        if (isMallSource(row.get("fromMall"))) {
+            return "商城货源";
+        }
         String mode = normalizeDeliveryMode(row.get("deliveryMode"));
         if ("card".equals(mode)) {
             Object remain = row.get("cardRemainCount");
@@ -408,6 +426,43 @@ public class DeliveryTextSourceService {
             return groupName.isBlank() ? ("剩余 " + remainCount) : (groupName + " · 剩余 " + remainCount);
         }
         return "文本";
+    }
+
+    /**
+     * 商城购买货源的标题与内容实时从 mall_product 表读取覆盖。
+     * - 标题优先用 mall_product.title（保持与后台最新一致），商品被删除时退回到 delivery_text_source.title 快照
+     * - 内容用 mall_product.content 覆盖；商品下架/删除时显示"商品已下架或已删除"
+     * 同时附加 fromMallLabel 字段，便于前端展示来源徽章
+     */
+    private void applyMallProductSnapshot(Map<String, Object> row) {
+        boolean isMall = isMallSource(row.get("fromMall"));
+        row.put("fromMall", isMall);
+        row.put("fromMallLabel", isMall ? "商城购买" : "自有");
+        if (!isMall) {
+            return;
+        }
+        Object mallProductStatus = row.get("mallProductStatus");
+        boolean productOnline = mallProductStatus instanceof Number number && number.intValue() == 1;
+        if (productOnline) {
+            String mpTitle = text(row.get("mallProductTitle"));
+            String mpContent = text(row.get("mallProductContent"));
+            if (!mpTitle.isBlank()) {
+                row.put("title", mpTitle);
+            }
+            // 商城货源内容实时同步（不存副本，保证后台更新后用户看到最新）
+            row.put("content", mpContent.isBlank() ? "" : mpContent);
+        } else {
+            // 商品已下架或被删除：保留标题快照，内容提示商品不可用
+            row.put("content", "【商品已下架或被删除】该货源内容暂不可用，请联系管理员");
+        }
+    }
+
+    private boolean isMallSource(Object value) {
+        if (value == null) return false;
+        if (value instanceof Boolean b) return b;
+        if (value instanceof Number n) return n.intValue() == 1;
+        String s = String.valueOf(value).trim();
+        return "1".equals(s) || "true".equalsIgnoreCase(s);
     }
 
     private Long asLong(Object value) {

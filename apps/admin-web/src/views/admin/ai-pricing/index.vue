@@ -183,8 +183,8 @@
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="120px" label-position="right">
         <ElFormItem label="模型类型" prop="modelType">
           <ElRadioGroup v-model="form.modelType" @change="onModelTypeChange">
-            <ElRadioButton label="chat">对话 chat</ElRadioButton>
-            <ElRadioButton label="image">生图 image</ElRadioButton>
+            <ElRadioButton value="chat">对话 chat</ElRadioButton>
+            <ElRadioButton value="image">生图 image</ElRadioButton>
           </ElRadioGroup>
         </ElFormItem>
         <ElFormItem label="模块 Key">

@@ -45,7 +45,11 @@ export const addressDictTree = () => request.get('/address-dict/tree')
 export const goofishSearch = (q, page = 1, pageSize = 20, accountId = undefined, mode = 'auto') =>
   request.get('/goofish/search', {
     params: { q, page, pageSize, mode, ...(accountId ? { accountId } : {}) },
-    timeout: 120000,
+    // 超时 180 秒：慢速搜索可能触发 Baxia 风控，由 crawler-service 委托 Python patchright 求解滑块，
+    // 整个过程（Node Playwright 检测 + Python patchright 启动 + 滑块求解 + MTOP 拦截）
+    // 实测需要 120-150 秒。180 秒余量避免把真实 cookie 失效/风控状态吞成"请求超时"。
+    // 各层超时已对齐：前端 axios=180s，Java 网关→Python=180s，Python→crawler=180s。
+    timeout: 180000,
   })
 
 // ---- 爬虫服务（异步抓取）----

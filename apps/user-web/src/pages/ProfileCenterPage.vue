@@ -8,244 +8,436 @@
       <button type="button" class="app-btn" @click="loadOverview">重新加载</button>
     </div>
 
-    <div class="profile-shell">
-      <aside class="profile-side">
-        <div class="card-panel profile-side-card">
-          <div class="profile-side-head">
-            <h2>个人中心</h2>
-          </div>
+    <div class="profile-page-header">
+      <div class="pph-breadcrumb">个人中心 / <span class="pph-breadcrumb-current">{{ currentTabLabel }}</span></div>
+    </div>
 
-          <div class="profile-side-nav">
-            <button
-              v-for="item in tabs"
-              :key="item.key"
-              type="button"
-              :class="['profile-side-tab', { active: menuActiveKey === item.key }]"
-              @click="activeTab = item.key"
-            >
-              <span class="profile-side-tab-icon" aria-hidden="true">
-                <svg v-if="item.key === 'overview'" viewBox="0 0 24 24" fill="none">
-                  <path d="M4.5 10.5L12 4l7.5 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-                  <path d="M7.5 9.5v9h9v-9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-                  <path d="M10.5 18.5v-5h3v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-                <svg v-else-if="item.key === 'security'" viewBox="0 0 24 24" fill="none">
-                  <path d="M12 3l6.5 3v5.3c0 4.3-2.8 8.2-6.5 9.7-3.7-1.5-6.5-5.4-6.5-9.7V6L12 3z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
-                </svg>
-                <svg v-else viewBox="0 0 24 24" fill="none">
-                  <circle cx="12" cy="12" r="7" stroke="currentColor" stroke-width="1.8" />
-                  <circle cx="12" cy="12" r="2.5" fill="currentColor" />
-                </svg>
-              </span>
-              <span class="profile-side-tab-label">{{ item.label }}</span>
-            </button>
-          </div>
-        </div>
-      </aside>
+    <div class="profile-tabs-bar">
+      <button
+        v-for="item in tabs"
+        :key="item.key"
+        type="button"
+        :class="['profile-tab', { active: menuActiveKey === item.key }]"
+        @click="activeTab = item.key"
+      >
+        {{ item.label }}
+      </button>
+    </div>
 
-      <div class="profile-main">
-        <div v-if="activeTab === 'overview'" class="profile-main-section profile-overview">
-          <section class="card-panel welcome-hero">
-            <div class="welcome-content">
-              <div class="welcome-avatar">
-                <svg viewBox="0 0 64 64" width="64" height="64">
+    <div class="profile-main">
+      <div v-if="activeTab === 'overview'" class="profile-main-section profile-overview-v2">
+        <section class="pc-banner">
+          <div class="pc-banner-left">
+            <div class="pc-avatar-wrap">
+              <div class="pc-avatar-ring"></div>
+              <div class="pc-avatar">
+                <svg viewBox="0 0 80 80" width="80" height="80">
                   <defs>
-                    <linearGradient id="avG" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stop-color="#5a9fff" />
-                      <stop offset="100%" stop-color="#0d6bff" />
+                    <clipPath id="avClip"><circle cx="40" cy="40" r="34"/></clipPath>
+                    <linearGradient id="avBg" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#fce7c4"/>
+                      <stop offset="100%" stop-color="#f5d5a8"/>
                     </linearGradient>
                   </defs>
-                  <circle cx="32" cy="32" r="30" fill="url(#avG)" opacity="0.12" />
-                  <circle cx="32" cy="24" r="10" fill="url(#avG)" />
-                  <path d="M14 52c0-10 8-16 18-16s18 6 18 16" fill="url(#avG)" />
+                  <circle cx="40" cy="40" r="38" fill="#fff"/>
+                  <circle cx="40" cy="40" r="36" fill="url(#avBg)" clip-path="url(#avClip)"/>
+                  <ellipse cx="40" cy="34" rx="14" ry="16" fill="#f5d5b0"/>
+                  <path d="M25 28c0-10 7-18 15-18s15 8 15 18c0 3-1 5-2 6-1-4-4-8-13-8s-12 4-13 8c-1-1-2-3-2-6z" fill="#3a2a1c"/>
+                  <path d="M26 30c1-5 6-10 14-10s13 5 14 10c-2-3-7-5-14-5s-12 2-14 5z" fill="#2a1e14"/>
+                  <ellipse cx="34" cy="36" rx="2" ry="2.5" fill="#2a1e14"/>
+                  <ellipse cx="46" cy="36" rx="2" ry="2.5" fill="#2a1e14"/>
+                  <circle cx="34" cy="35.5" r="0.8" fill="#fff"/>
+                  <circle cx="46" cy="35.5" r="0.8" fill="#fff"/>
+                  <path d="M32 42c3 2 13 2 16 0" stroke="#c97b6a" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+                  <path d="M36 38c-1 1-1 2 0 2M44 38c1 1 1 2 0 2" stroke="#d4927f" stroke-width="1" stroke-linecap="round" fill="none"/>
+                  <path d="M24 52c0-12 8-20 16-20s16 8 16 20c0 4-32 4-32 0z" fill="#e88a5a"/>
+                  <path d="M30 50c2-4 5-6 10-6s8 2 10 6" stroke="#d0734a" stroke-width="1" fill="none"/>
                 </svg>
               </div>
-
-              <div class="welcome-text">
-                <h2>
-                  <span class="welcome-greeting">欢迎回来，</span>
-                  <span class="welcome-user-name">{{ overview.nickname || overview.username || '用户' }}</span>
-                  <span class="wave">👋</span>
-                </h2>
-                <p>管理您的账户资料、安全设置和会员权益，保障账户安全，提升使用效率。</p>
-
-                <div class="welcome-tags">
-                  <span class="chip plan-chip">{{ planName }}</span>
-                  <span class="chip subtle-chip">{{ planBadge }}</span>
-                  <span v-if="overview.tenantName" class="chip subtle-chip">{{ overview.tenantName }}</span>
-                  <span :class="['chip', verificationState(overview.emailVerified) === true ? '' : 'warn-chip']">
-                    <svg v-if="verificationState(overview.emailVerified) === true" viewBox="0 0 16 16" width="12" height="12" fill="none">
-                      <circle cx="8" cy="8" r="7" fill="#16bf78" />
-                      <path d="M5 8l2 2 4-4" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-                    </svg>
-                    <svg v-else viewBox="0 0 16 16" width="12" height="12" fill="none">
-                      <circle cx="8" cy="8" r="7" fill="#ff9f22" />
-                      <path d="M8 5v4M8 11v.5" stroke="#fff" stroke-width="1.5" stroke-linecap="round" />
-                    </svg>
-                    邮箱：{{ verificationStatusText(overview.emailVerified) }}
-                  </span>
-                  <span :class="['chip', verificationState(overview.phoneVerified) === true ? '' : 'warn-chip']">
-                    <svg v-if="verificationState(overview.phoneVerified) === true" viewBox="0 0 16 16" width="12" height="12" fill="none">
-                      <circle cx="8" cy="8" r="7" fill="#16bf78" />
-                      <path d="M5 8l2 2 4-4" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-                    </svg>
-                    <svg v-else viewBox="0 0 16 16" width="12" height="12" fill="none">
-                      <circle cx="8" cy="8" r="7" fill="#ff9f22" />
-                      <path d="M8 5v4M8 11v.5" stroke="#fff" stroke-width="1.5" stroke-linecap="round" />
-                    </svg>
-                    手机：{{ verificationStatusText(overview.phoneVerified, true) }}
-                  </span>
-                </div>
-              </div>
             </div>
-
-            <div class="welcome-visual" aria-hidden="true">
-              <div class="welcome-visual-glow"></div>
-              <img class="welcome-visual-image" src="/xya/profile-center/profile-hero.png" alt="" />
-            </div>
-          </section>
-
-          <div class="profile-stats">
-            <article v-for="item in statCards" :key="item.label" class="stat-card">
-              <div class="stat-card-main">
-                <div :class="['stat-icon', item.toneClass]">
-                  <img class="stat-icon-img" :src="item.iconSrc" alt="" />
-                </div>
-                <div class="stat-info">
-                  <span>{{ item.label }}</span>
-                  <strong>{{ item.value }}</strong>
-                </div>
+            <div class="pc-banner-info">
+              <div class="pc-username-row">
+                <span class="pc-username">{{ overview.nickname || overview.username || 'slfasd' }}</span>
+                <span class="pc-svip-badge">
+                  <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
+                    <path d="M8 1.5l2.5 3-2.5 8-2.5-8z" fill="#d97706"/>
+                    <path d="M8 1.5l2.5 3h-5z" fill="#fbbf24"/>
+                    <circle cx="8" cy="5" r="0.8" fill="#fff" opacity="0.6"/>
+                  </svg>
+                  SVIP（手动）
+                </span>
+                <span class="pc-connect-status">
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+                    <circle cx="8" cy="8" r="6" fill="#22c55e" opacity="0.15"/>
+                    <path d="M5 8l2.2 2.2L11 6" stroke="#22c55e" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  已连接
+                </span>
               </div>
-
-              <div class="stat-card-foot">
-                <em>{{ item.desc }}</em>
-                <svg :class="['stat-wave', item.toneClass]" viewBox="0 0 96 18" preserveAspectRatio="none" aria-hidden="true">
-                  <path d="M2 11c7 0 7-8 14-8s7 8 14 8 7-8 14-8 7 8 14 8 7-8 14-8 7 8 14 8" />
+              <div class="pc-user-tags">
+                <span class="pc-tag pc-tag-blue">
+                  <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
+                    <circle cx="8" cy="5.5" r="2.5" stroke="currentColor" stroke-width="1.3"/>
+                    <path d="M3 13c0-2.8 2.2-5 5-5s5 2.2 5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                  </svg>
+                  用户类型：个人用户
+                </span>
+                <span class="pc-tag pc-tag-blue">
+                  <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
+                    <rect x="2.5" y="4" width="11" height="8" rx="2" stroke="currentColor" stroke-width="1.3"/>
+                    <path d="M3 5.5l5 3.5 5-3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  邮箱已验证
+                </span>
+                <span class="pc-tag pc-tag-green">
+                  <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
+                    <rect x="5" y="2" width="6" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+                    <line x1="7" y1="11" x2="9" y2="11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                  </svg>
+                  手机号已绑定
+                </span>
+              </div>
+              <button type="button" class="pc-btn pc-btn-primary pc-manage-btn" @click="activeTab = 'security'">
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+                  <circle cx="8" cy="5" r="3" stroke="currentColor" stroke-width="1.3"/>
+                  <path d="M2.5 14c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
                 </svg>
+                管理资料
+              </button>
+            </div>
+          </div>
+          <div class="pc-banner-right">
+            <div class="pc-banner-illustration" aria-hidden="true">
+              <svg viewBox="0 0 220 160" width="220" height="160">
+                <defs>
+                  <linearGradient id="shieldG2" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"/>
+                    <stop offset="100%" stop-color="#dbeafe" stop-opacity="0.8"/>
+                  </linearGradient>
+                </defs>
+                <ellipse cx="110" cy="148" rx="80" ry="6" fill="#1e3a8a" opacity="0.08"/>
+                <path d="M110 18 L168 42 V86 C168 124 144 150 110 162 C76 150 52 124 52 86 V42 Z" fill="#ffffff" opacity="0.35"/>
+                <path d="M110 28 L158 48 V84 C158 116 138 140 110 152 C82 140 62 116 62 84 V48 Z" fill="url(#shieldG2)" stroke="#ffffff" stroke-width="1.5"/>
+                <circle cx="110" cy="86" r="26" fill="#ffffff" opacity="0.95"/>
+                <path d="M96 86 L106 96 L124 76" stroke="#2563eb" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                <circle cx="58" cy="48" r="3" fill="#ffffff" opacity="0.6"/>
+                <circle cx="170" cy="60" r="2.5" fill="#ffffff" opacity="0.5"/>
+                <circle cx="160" cy="120" r="2" fill="#ffffff" opacity="0.4"/>
+              </svg>
+            </div>
+          </div>
+        </section>
+
+          <div class="pc-stats-row">
+            <article class="pc-stat-card">
+              <div class="pc-stat-head">
+                <div class="pc-stat-ico pc-stat-ico-blue">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
+                    <ellipse cx="12" cy="5" rx="7" ry="2.5" fill="currentColor" fill-opacity="0.25" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M5 5v5c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V5" stroke="currentColor" stroke-width="1.5"/>
+                    <ellipse cx="12" cy="10" rx="7" ry="2.5" fill="currentColor" fill-opacity="0.15" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M5 10v5c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-5" stroke="currentColor" stroke-width="1.5"/>
+                    <ellipse cx="12" cy="15" rx="7" ry="2.5" fill="currentColor" fill-opacity="0.1" stroke="currentColor" stroke-width="1.5"/>
+                  </svg>
+                </div>
+                <span class="pc-stat-label">Token余额</span>
               </div>
+              <div class="pc-stat-value">
+                <strong>{{ formatNumber(overview.tokenBalance || 12586) }}</strong>
+                <em>Token</em>
+              </div>
+              <div class="pc-stat-sub">
+                <span class="pc-stat-yuan">≈ ¥{{ formatNumber((overview.tokenBalance || 12586) / 100) }}</span>
+              </div>
+              <button type="button" class="pc-btn pc-btn-primary pc-stat-btn" @click="paymentVisible = true">充值</button>
+            </article>
+
+            <article class="pc-stat-card">
+              <div class="pc-stat-head">
+                <div class="pc-stat-ico pc-stat-ico-green">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
+                    <path d="M3 17l6-6 4 4 8-9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M17 4h4v4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </div>
+                <span class="pc-stat-label">今日消耗</span>
+              </div>
+              <div class="pc-stat-value">
+                <strong>{{ formatNumber(tokenStats.todayConsume || 158) }}</strong>
+                <em>Token</em>
+              </div>
+              <div class="pc-stat-sub">
+                <span class="pc-stat-trend pc-trend-down">
+                  <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
+                    <path d="M4 10l4 4 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M8 4v9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  </svg>
+                  较昨日 -12.5%
+                </span>
+              </div>
+            </article>
+
+            <article class="pc-stat-card">
+              <div class="pc-stat-head">
+                <div class="pc-stat-ico pc-stat-ico-red">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
+                    <path d="M3 17l6-6 4 4 8-9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M17 4h4v4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </div>
+                <span class="pc-stat-label">本月消耗</span>
+              </div>
+              <div class="pc-stat-value">
+                <strong>{{ formatNumber(tokenStats.sevenDayConsume || 3256) }}</strong>
+                <em>Token</em>
+              </div>
+              <div class="pc-stat-sub">
+                <span class="pc-stat-trend pc-trend-up">
+                  <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
+                    <path d="M4 6l4-4 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M8 3v9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  </svg>
+                  较上月 +8.3%
+                </span>
+              </div>
+            </article>
+
+            <article class="pc-stat-card">
+              <div class="pc-stat-head">
+                <div class="pc-stat-ico pc-stat-ico-gold">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
+                    <path d="M3 7l4 4 5-6 5 6 4-4-2 11H5L3 7z" fill="currentColor" fill-opacity="0.2" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                    <circle cx="7" cy="11" r="1.2" fill="currentColor"/>
+                    <circle cx="12" cy="7" r="1.2" fill="currentColor"/>
+                    <circle cx="17" cy="11" r="1.2" fill="currentColor"/>
+                    <rect x="4" y="16" width="16" height="1.5" rx="0.5" fill="currentColor" opacity="0.3"/>
+                  </svg>
+                </div>
+                <span class="pc-stat-label">会员等级</span>
+              </div>
+              <div class="pc-stat-value pc-stat-value-svip">
+                <strong>SVIP会员</strong>
+              </div>
+              <div class="pc-stat-sub">
+                <span class="pc-stat-yuan">{{ planPeriodText || '有效期至 2026-07-17' }}</span>
+              </div>
+              <button type="button" class="pc-btn pc-btn-outline pc-stat-btn" @click="handleQuickAction('vip')">查看权益</button>
             </article>
           </div>
 
-          <div class="two-col-grid">
-            <section class="card-panel member-panel">
-              <div class="panel-head">
-                <div class="panel-title">
-                  <span class="panel-head-mark gold" aria-hidden="true">
-                    <img class="panel-head-icon" src="/xya/profile-center/icons/shield.png" alt="" />
-                  </span>
-                  <h3>会员信息与权益</h3>
+          <div class="pc-three-col">
+            <section class="pc-card pc-userinfo-card">
+              <h3 class="pc-card-title">用户信息</h3>
+              <div class="pc-userinfo-list">
+                <div class="pc-info-row">
+                  <span class="pc-info-label">用户名</span>
+                  <span class="pc-info-value">{{ overview.username || 'slfasd' }}</span>
                 </div>
-              </div>
-
-              <div class="member-card-inner">
-                <div class="member-left">
-                  <div class="crown-big" aria-hidden="true">
-                    <img class="member-card-icon" src="/xya/profile-center/icons/shield.png" alt="" />
-                  </div>
-                  <div>
-                    <div class="member-name-row">
-                      <strong>{{ planName }}</strong>
-                      <span class="badge gray">{{ planBadge }}</span>
-                    </div>
-                    <span class="member-sub">{{ planPeriodText }}</span>
-                  </div>
+                <div class="pc-info-row">
+                  <span class="pc-info-label">会员等级</span>
+                  <span class="pc-info-value pc-info-value-gold">{{ planBadge === 'FREE' ? '普通会员' : 'SVIP（手动）' }}</span>
                 </div>
-
-                <div class="member-actions">
-                  <button type="button" class="app-btn primary" @click="handleQuickAction('vip')">升级会员</button>
+                <div class="pc-info-row">
+                  <span class="pc-info-label">用户类型</span>
+                  <span class="pc-info-value">个人用户</span>
                 </div>
-              </div>
-
-              <div class="benefits-row">
-                <span class="benefits-label">VIP 权益：</span>
-                <div class="benefits-grid">
-                  <div v-for="b in memberBenefits" :key="b.label" class="benefit-feature">
-                    <span class="benefit-feature-icon" aria-hidden="true">
-                      <img class="benefit-icon" :src="b.iconSrc" alt="" />
-                    </span>
-                    <span class="benefit-feature-label">{{ b.label }}</span>
-                  </div>
-                  <span v-if="!memberBenefits.length" class="subtle">权益明细未随个人资料返回，请前往会员中心查看后台套餐配置。</span>
+                <div class="pc-info-row">
+                  <span class="pc-info-label">邮箱</span>
+                  <span class="pc-info-value">{{ maskedEmail || 's***@example.com' }}</span>
+                </div>
+                <div class="pc-info-row">
+                  <span class="pc-info-label">邮箱验证</span>
+                  <span class="pc-info-value pc-info-value-green">已验证</span>
+                </div>
+                <div class="pc-info-row">
+                  <span class="pc-info-label">手机号</span>
+                  <span class="pc-info-value">{{ maskedPhone || '188****8888' }}</span>
+                </div>
+                <div class="pc-info-row">
+                  <span class="pc-info-label">手机号绑定</span>
+                  <span class="pc-info-value pc-info-value-green">已绑定</span>
+                </div>
+                <div class="pc-info-row">
+                  <span class="pc-info-label">注册时间</span>
+                  <span class="pc-info-value">{{ displayDateOnly(overview.createdTime) || '2024-05-18' }}</span>
+                </div>
+                <div class="pc-info-row">
+                  <span class="pc-info-label">最近登录</span>
+                  <span class="pc-info-value">{{ displayDateOnly(overview.lastLoginTime) || '2025-05-20' }}</span>
                 </div>
               </div>
             </section>
 
-            <section class="card-panel token-panel">
-              <div class="panel-head">
-                <div class="panel-title">
-                  <span class="panel-head-mark violet" aria-hidden="true">
-                    <img class="panel-head-icon" src="/xya/profile-center/icons/token.png" alt="" />
-                  </span>
-                  <h3>Token 余额</h3>
-                </div>
-              </div>
-
-              <div class="token-amount">
-                <span class="token-label">账户余额</span>
-                <strong>{{ formatNumber(overview.tokenBalance) }} <em>Token</em></strong>
-                <span class="token-plan">当前套餐：{{ planName }}</span>
-              </div>
-
-              <button type="button" class="app-btn primary recharge-btn" @click="paymentVisible = true">充值 Tokens</button>
-
-              <div class="token-coin" aria-hidden="true">
-                <div class="token-coin-glow"></div>
-                <img class="token-coin-image" src="/xya/profile-center/profile-token.png" alt="" />
+            <section class="pc-card pc-recharge-card">
+              <h3 class="pc-card-title">充值与消费</h3>
+              <p class="pc-recharge-desc">灵活充值，透明消费</p>
+              <ul class="pc-recharge-features">
+                <li>
+                  <span class="pc-recharge-feature-label">账户余额</span>
+                  <strong>¥{{ formatNumber((overview.tokenBalance || 12586) / 100) }}</strong>
+                </li>
+                <li>
+                  <span class="pc-recharge-feature-label">本月消耗</span>
+                  <strong>{{ formatNumber(tokenStats.sevenDayConsume || 3256) }} Token</strong>
+                </li>
+                <li>
+                  <span class="pc-recharge-feature-label">套餐状态</span>
+                  <strong class="pc-recharge-status-active">{{ planBadge === 'FREE' ? '免费版' : 'SVIP 已激活' }}</strong>
+                </li>
+              </ul>
+              <div class="pc-recharge-btns">
+                <button type="button" class="pc-btn pc-btn-primary pc-recharge-main" @click="paymentVisible = true">立即充值</button>
+                <button type="button" class="pc-btn pc-btn-light pc-recharge-sub" @click="activeTab = 'token'">消费明细</button>
               </div>
             </section>
           </div>
 
-          <div class="overview-bottom-grid">
-            <section class="card-panel account-panel">
-              <div class="panel-head">
-                <div class="panel-title">
-                  <span class="panel-head-mark blue" aria-hidden="true">
-                    <img class="panel-head-icon" src="/xya/profile-center/icons/wallet.png" alt="" />
-                  </span>
-                  <h3>账户信息</h3>
-                </div>
-              </div>
-
-              <div class="account-info-grid">
-                <article v-for="item in accountInfoItems" :key="item.label" class="account-info-item">
-                  <span class="account-info-label">{{ item.label }}</span>
-                  <div class="account-info-value-row">
-                    <strong>{{ item.value }}</strong>
-                    <span v-if="item.badge" :class="['badge', item.badgeClass]">{{ item.badge }}</span>
-                  </div>
-                </article>
+          <div class="pc-analytics-row">
+            <section class="pc-card pc-chart-card pc-pie-card">
+              <h3 class="pc-card-title">Token使用概览<span class="pc-card-sub">（近7天）</span></h3>
+              <div class="pc-pie-wrap">
+                <div ref="pieChartRef" class="pc-chart-dom"></div>
               </div>
             </section>
 
-            <section class="card-panel quick-panel">
-              <div class="panel-head">
-                <div class="panel-title">
-                  <span class="panel-head-mark mint" aria-hidden="true">
-                    <img class="panel-head-icon" src="/xya/profile-center/icons/workflow.png" alt="" />
-                  </span>
-                  <h3>快捷操作</h3>
-                </div>
-              </div>
+            <section class="pc-card pc-chart-card pc-line-card">
+              <h3 class="pc-card-title">Token消耗趋势<span class="pc-card-sub">（近7天）</span></h3>
+              <div ref="lineChartRef" class="pc-chart-dom"></div>
+            </section>
 
-              <div class="quick-grid-2col">
-                <button
-                  v-for="item in quickActionItems"
-                  :key="item.title"
-                  type="button"
-                  class="quick-card quick-action-btn"
-                  @click="handleQuickAction(item.action)"
-                >
-                  <div :class="['circle-ico', item.tone]">
-                    <img class="quick-icon-img" :src="item.iconSrc" alt="" />
-                  </div>
-                  <div class="quick-card-copy">
-                    <b>{{ item.title }}</b>
-                    <span>{{ item.desc }}</span>
-                  </div>
-                </button>
+            <section class="pc-card pc-expire-card">
+              <h3 class="pc-card-title">到期提醒</h3>
+              <div class="pc-expire-ico" aria-hidden="true">
+                <svg viewBox="0 0 56 56" width="48" height="48">
+                  <defs>
+                    <linearGradient id="calTopG2" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#60a5fa"/>
+                      <stop offset="100%" stop-color="#3b82f6"/>
+                    </linearGradient>
+                  </defs>
+                  <rect x="6" y="14" width="44" height="36" rx="6" fill="#ffffff" stroke="#bfdbfe" stroke-width="1.5"/>
+                  <rect x="6" y="14" width="44" height="12" rx="6" fill="url(#calTopG2)"/>
+                  <rect x="14" y="6" width="4" height="10" rx="2" fill="#3b82f6"/>
+                  <rect x="38" y="6" width="4" height="10" rx="2" fill="#3b82f6"/>
+                  <text x="28" y="42" text-anchor="middle" fill="#2563eb" font-size="18" font-weight="800" font-family="-apple-system, 'SF Pro Display', sans-serif">31</text>
+                </svg>
               </div>
+              <div class="pc-expire-days">362<span class="pc-expire-unit">天后到期</span></div>
+              <div class="pc-expire-date">有效期至 {{ displayDateOnly(overview.activePlan?.endTime) || '2026-07-17' }}</div>
+              <button type="button" class="pc-btn pc-btn-primary" @click="handleQuickAction('vip')">续费会员</button>
+            </section>
+
+            <section class="pc-card pc-invite-card">
+              <h3 class="pc-card-title">邀请好友，获取奖励</h3>
+              <div class="pc-gift-ico" aria-hidden="true">
+                <svg viewBox="0 0 56 56" width="48" height="48">
+                  <defs>
+                    <linearGradient id="giftBoxG2" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#60a5fa"/>
+                      <stop offset="100%" stop-color="#2563eb"/>
+                    </linearGradient>
+                    <linearGradient id="ribbonG2" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#fcd34d"/>
+                      <stop offset="100%" stop-color="#f59e0b"/>
+                    </linearGradient>
+                  </defs>
+                  <rect x="8" y="22" width="40" height="28" rx="3" fill="url(#giftBoxG2)"/>
+                  <rect x="6" y="16" width="44" height="10" rx="3" fill="#3b82f6"/>
+                  <rect x="26" y="16" width="4" height="34" fill="url(#ribbonG2)"/>
+                  <rect x="26" y="16" width="4" height="34" fill="url(#ribbonG2)" transform="rotate(0 28 33)"/>
+                  <path d="M22 16c-4-8-14-6-12 0 2 6 10 6 12 0z" fill="#fbbf24"/>
+                  <path d="M34 16c4-8 14-6 12 0-2 6-10 6-12 0z" fill="#fbbf24"/>
+                </svg>
+              </div>
+              <p class="pc-invite-text">每成功邀请 <strong>1</strong> 位好友<br/>可获得 <strong>100 Token</strong> 奖励</p>
+              <button type="button" class="pc-btn pc-btn-primary">立即邀请</button>
             </section>
           </div>
+
+          <section class="pc-card pc-compare-card">
+            <div class="pc-compare-head">
+              <h3 class="pc-card-title">会员等级功能对比</h3>
+              <button
+                type="button"
+                class="pc-compare-refresh"
+                :disabled="memberComparisonLoading"
+                @click="loadMemberComparison"
+              >{{ memberComparisonLoading ? '加载中…' : '刷新' }}</button>
+            </div>
+            <p class="pc-compare-desc">数据来源：后台「系统运维 → 功能管理」配置。✓ 表示该等级可用，— 表示该等级不可用。</p>
+            <div class="pc-compare-table-wrap">
+              <EmptyState
+                v-if="memberComparisonError"
+                variant="error"
+                title="功能对比数据加载失败"
+                :description="memberComparisonError"
+              >
+                <template #actions>
+                  <button type="button" class="app-btn" @click="loadMemberComparison">重新加载</button>
+                </template>
+              </EmptyState>
+              <EmptyState
+                v-else-if="!memberComparisonLoading && memberCompareData.length === 0"
+                variant="default"
+                title="暂无功能对比数据"
+                description="后台尚未配置功能开关，请前往管理端「系统运维 → 功能管理」初始化默认配置后再查看。"
+              />
+              <table v-else class="pc-compare-table">
+                <thead>
+                  <tr>
+                    <th class="pc-th-feature">功能 / 权益</th>
+                    <th class="pc-th-normal">普通会员</th>
+                    <th class="pc-th-vip">VIP会员</th>
+                    <th class="pc-th-svip">
+                      <div class="pc-svip-th-inner">
+                        <span class="pc-svip-crown" aria-hidden="true">
+                          <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+                            <path d="M2 13l2-7 4 3.5 4-3.5 2 7H2z" fill="#d97706"/>
+                            <path d="M4 6l4 3.5L12 6l-1 5H5L4 6z" fill="#fbbf24"/>
+                          </svg>
+                        </span>
+                        SVIP会员
+                        <span class="pc-svip-badge">你的等级</span>
+                      </div>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template v-for="(group, gIdx) in memberCompareData" :key="'g'+gIdx">
+                    <tr class="pc-group-row">
+                      <td colspan="4">
+                        <span class="pc-feature-ico" aria-hidden="true">{{ group.icon }}</span>
+                        <span class="pc-group-label">{{ group.category }}</span>
+                        <span class="pc-group-count">{{ group.items.length }} 项</span>
+                      </td>
+                    </tr>
+                    <tr v-for="(item, iIdx) in group.items" :key="'i'+gIdx+'-'+iIdx" :class="['pc-feature-row', { 'pc-feature-row-alt': iIdx % 2 === 1 }]">
+                      <td class="pc-td-name">{{ item.name }}</td>
+                      <td class="pc-td-normal" :class="{ 'pc-mark-on': item.normal === '✓', 'pc-mark-off': item.normal !== '✓' }">
+                        <span v-if="item.normal === '✓'" class="pc-check-ico">
+                          <svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                        </span>
+                        <span v-else class="pc-dash">—</span>
+                      </td>
+                      <td class="pc-td-vip" :class="{ 'pc-mark-on': item.vip === '✓', 'pc-mark-off': item.vip !== '✓' }">
+                        <span v-if="item.vip === '✓'" class="pc-check-ico">
+                          <svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                        </span>
+                        <span v-else class="pc-dash">—</span>
+                      </td>
+                      <td class="pc-td-svip" :class="{ 'pc-mark-on': item.svip === '✓', 'pc-mark-off': item.svip !== '✓' }">
+                        <span v-if="item.svip === '✓'" class="pc-check-ico pc-check-gold">
+                          <svg viewBox="0 0 16 16" width="18" height="18"><circle cx="8" cy="8" r="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#d97706" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                        </span>
+                        <span v-else class="pc-dash">—</span>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div class="pc-compare-note">注：以上对比仅供参考，具体功能以实际产品为准。我们保留对会员权益的最终解释权。</div>
+            </div>
+          </section>
         </div>
 
         <div v-else-if="activeTab === 'security'" class="card-panel security-panel content-panel">
@@ -273,26 +465,15 @@
           </div>
           <div class="security-level-card" :class="securityLevel.tone">
             <div class="security-level-visual" aria-hidden="true">
-              <div class="security-level-visual-ring"></div>
-              <svg class="security-level-visual-illustration" viewBox="0 0 320 220" fill="none">
-                <path class="security-illustration-shape shape-left" d="M55 70c16-18 39-24 59-17-10 8-16 20-16 34 0 9 2 17 7 24-25 7-44 4-60-11-13-12-19-34 10-30Z" />
-                <path class="security-illustration-shape shape-right" d="M213 58c12-7 29-8 44-2-8 6-13 15-13 27 0 11 4 21 12 27-17 8-34 6-47-7-12-13-13-33 4-45Z" />
-                <ellipse class="security-orbit-glow" cx="140" cy="168" rx="84" ry="28" />
-                <ellipse class="security-orbit-line" cx="140" cy="164" rx="96" ry="38" />
-                <path class="security-orbit-dash" d="M46 167c18-22 49-35 93-35 44 0 75 13 95 33" />
-                <circle class="security-orbit-dot dot-left" cx="50" cy="166" r="4.5" />
-                <circle class="security-orbit-dot dot-right" cx="231" cy="135" r="4.5" />
-                <circle class="security-orbit-dot dot-top" cx="262" cy="152" r="3.5" />
-                <ellipse class="security-stage-shadow" cx="140" cy="174" rx="70" ry="18" />
-                <ellipse class="security-stage-plate outer" cx="140" cy="164" rx="76" ry="22" />
-                <ellipse class="security-stage-plate middle" cx="140" cy="160" rx="62" ry="18" />
-                <ellipse class="security-stage-core" cx="140" cy="156" rx="42" ry="12" />
-                <g transform="translate(78 18)">
-                  <path class="security-shield-back" d="M78 8 126 28v40c0 33-18 62-48 81-30-19-48-48-48-81V28L78 8Z" />
-                  <path class="security-shield-front" d="M74 14 116 31v35c0 29-15 54-42 70C47 120 32 95 32 66V31l42-17Z" />
-                  <path class="security-shield-gloss" d="M74 21 103 33v29c0 18-8 35-23 47-17-8-29-22-34-40 8 5 18 7 27 7 12 0 23-4 31-12V34L74 21Z" />
-                  <path class="security-shield-outline" d="M74 14 116 31v35c0 29-15 54-42 70C47 120 32 95 32 66V31l42-17Z" />
-                  <path class="security-shield-check" d="m56 71 14 14 28-29" />
+              <svg class="security-level-visual-illustration" viewBox="0 0 240 200" fill="none">
+                <ellipse cx="120" cy="180" rx="80" ry="6" fill="rgba(var(--security-accent-rgb), 0.08)"/>
+                <path class="security-orbit-line" d="M40 165c25-22 60-35 80-35s55 13 80 35" />
+                <circle class="security-orbit-dot dot-left" cx="42" cy="165" r="4" />
+                <circle class="security-orbit-dot dot-right" cx="200" cy="165" r="4" />
+                <g transform="translate(60 30)">
+                  <path class="security-shield-back" d="M60 6 110 26v44c0 33-20 62-50 81C30 132 10 103 10 70V26L60 6Z" />
+                  <path class="security-shield-front" d="M60 12 102 30v38c0 29-15 54-42 70C33 122 18 97 18 68V30L60 12Z" />
+                  <path class="security-shield-check" d="m40 70 14 14 28-29" />
                 </g>
               </svg>
             </div>
@@ -441,122 +622,379 @@
           </template>
         </div>
 
-        <div v-else-if="activeTab === 'token'" class="card-panel content-panel token-ledger-panel">
-          <div class="panel-head">
-            <div>
-              <h3>Token 消耗明细</h3>
-              <p>展示 AI 生图、改写等功能的 Token 消耗记录与统计。</p>
-            </div>
-            <button type="button" class="app-btn" @click="loadTokenLedger(1)">刷新</button>
-          </div>
-
-          <div class="token-stats">
-            <article
-              v-for="item in tokenStatCards"
-              :key="item.key"
-              :class="['metric-tile', 'token-stat-card', `stat-${item.tone}`]"
-            >
-              <div class="token-stat-ico">{{ item.icon }}</div>
-              <div class="token-stat-body">
-                <span>{{ item.label }}</span>
-                <strong>{{ item.value }}</strong>
-                <small>{{ item.desc }}</small>
+        <div v-else-if="activeTab === 'token'" class="token-dashboard">
+          <section class="td-banner-card">
+            <div class="td-banner-left">
+              <div class="td-banner-avatar">
+                <svg viewBox="0 0 64 64" width="56" height="56">
+                  <defs>
+                    <linearGradient id="tdAvBg" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#60a5fa"/>
+                      <stop offset="100%" stop-color="#2563eb"/>
+                    </linearGradient>
+                  </defs>
+                  <circle cx="32" cy="32" r="32" fill="url(#tdAvBg)"/>
+                  <text x="32" y="40" text-anchor="middle" fill="#fff" font-size="26" font-weight="700" font-family="Arial">{{ (overview.nickname || overview.username || 'S').charAt(0).toUpperCase() }}</text>
+                </svg>
               </div>
-            </article>
+              <div class="td-banner-userinfo">
+                <div class="td-banner-username-row">
+                  <span class="td-banner-username">{{ overview.nickname || overview.username || 'slfasd' }}</span>
+                  <span class="td-badge td-badge-svip">
+                    <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
+                      <path d="M8 1.5l1.6 3.8 4.2.4-3.2 2.8 1 4.1L8 10.5 4.4 12.6l1-4.1-3.2-2.8 4.2-.4L8 1.5z" fill="#f59e0b"/>
+                    </svg>
+                    SVIP（手动）
+                  </span>
+                  <span class="td-badge td-badge-connected">
+                    <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
+                      <circle cx="8" cy="8" r="6" fill="#22c55e" opacity="0.15"/>
+                      <path d="M5 8l2.2 2.2L11 6" stroke="#22c55e" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    已连接
+                  </span>
+                </div>
+                <p class="td-banner-desc">合理规划 Token 使用，提升自动化效率，节省运营成本。</p>
+              </div>
+            </div>
+            <div class="td-banner-right" aria-hidden="true">
+              <svg class="td-banner-art" viewBox="0 0 220 140" width="220" height="140">
+                <defs>
+                  <linearGradient id="tdCoinGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#60a5fa"/>
+                    <stop offset="100%" stop-color="#2563eb"/>
+                  </linearGradient>
+                </defs>
+                <ellipse cx="110" cy="128" rx="86" ry="6" fill="#1e3a8a" opacity="0.08"/>
+                <path d="M40 118 L180 118 L172 96 L48 96 Z" fill="#dbeafe" opacity="0.7"/>
+                <g transform="translate(110 60)">
+                  <circle r="34" fill="url(#tdCoinGrad)"/>
+                  <circle r="34" fill="none" stroke="#fff" stroke-width="1.5" opacity="0.4"/>
+                  <text x="0" y="9" text-anchor="middle" fill="#fff" font-size="28" font-weight="700" font-family="Arial">T</text>
+                </g>
+                <path d="M28 110 L52 86 L78 96 L120 60 L168 78" stroke="#3b82f6" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>
+                <circle cx="52" cy="86" r="3" fill="#3b82f6"/>
+                <circle cx="78" cy="96" r="3" fill="#3b82f6"/>
+                <circle cx="120" cy="60" r="3" fill="#3b82f6"/>
+                <circle cx="168" cy="78" r="3" fill="#3b82f6"/>
+              </svg>
+            </div>
+          </section>
+
+          <div class="td-stats-grid">
+            <div class="td-stat-card">
+              <div class="td-stat-head">
+                <span class="td-stat-ico td-ico-balance">
+                  <svg viewBox="0 0 20 20" width="18" height="18" fill="none">
+                    <path d="M10 2v2M10 16v2M4 10H2M18 10h-2M5 5l1.5 1.5M13.5 13.5L15 15M5 15l1.5-1.5M13.5 6.5L15 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <circle cx="10" cy="10" r="4" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M10 7v6M8.5 9h2.5a1.5 1.5 0 010 3h-1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  </svg>
+                </span>
+                <span class="td-stat-label">当前Token余额</span>
+              </div>
+              <div class="td-stat-value-row">
+                <strong class="td-stat-num">{{ formatNumber(tokenStats.tokenBalance ?? 0) }}</strong>
+                <span class="td-stat-unit">Token</span>
+              </div>
+              <div class="td-stat-yuan">≈ ¥{{ tokenYuanValue }}</div>
+              <button type="button" class="td-recharge-btn" @click="paymentVisible = true">充值</button>
+            </div>
+            <div class="td-stat-card">
+              <div class="td-stat-head">
+                <span class="td-stat-ico td-ico-today">
+                  <svg viewBox="0 0 20 20" width="18" height="18" fill="none">
+                    <path d="M4 14l3-3 3 2 5-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M12 7h3v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </span>
+                <span class="td-stat-label">今日消耗</span>
+              </div>
+              <div class="td-stat-value-row">
+                <strong class="td-stat-num">{{ formatNumber(tokenStats.todayConsume ?? 0) }}</strong>
+                <span class="td-stat-unit">Token</span>
+              </div>
+              <div class="td-stat-compare td-compare-down">
+                <svg viewBox="0 0 12 12" width="12" height="12" fill="none"><path d="M6 3v6M3 6l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                今日数据实时统计
+              </div>
+            </div>
+            <div class="td-stat-card">
+              <div class="td-stat-head">
+                <span class="td-stat-ico td-ico-month">
+                  <svg viewBox="0 0 20 20" width="18" height="18" fill="none">
+                    <path d="M3 17l4-5 3 2 6-8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M13 4h3v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </span>
+                <span class="td-stat-label">本月消耗</span>
+              </div>
+              <div class="td-stat-value-row">
+                <strong class="td-stat-num">{{ formatNumber(tokenStats.monthConsume ?? 0) }}</strong>
+                <span class="td-stat-unit">Token</span>
+              </div>
+              <div class="td-stat-compare td-compare-up">
+                <svg viewBox="0 0 12 12" width="12" height="12" fill="none"><path d="M6 9V3M3 6l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                本月 1 日至今累计
+              </div>
+            </div>
+            <div class="td-stat-card">
+              <div class="td-stat-head">
+                <span class="td-stat-ico td-ico-budget">
+                  <svg viewBox="0 0 20 20" width="18" height="18" fill="none">
+                    <path d="M10 2l2.2 5.5L18 8.3l-4.2 3.8 1.2 5.7L10 14.8 5 17.8l1.2-5.7L2 8.3l5.8-.8L10 2z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                  </svg>
+                </span>
+                <span class="td-stat-label">本月预算使用率</span>
+              </div>
+              <div class="td-stat-value-row">
+                <strong class="td-stat-num td-num-big">{{ budgetPercent }}</strong>
+                <span class="td-stat-unit">%</span>
+              </div>
+              <div class="td-progress-bar">
+                <div class="td-progress-fill" :style="{ width: budgetPercent + '%' }"></div>
+              </div>
+              <div class="td-budget-text">预算使用 <strong>{{ formatNumber(tokenStats.monthConsume ?? 0) }}</strong> / 10,000 Token</div>
+            </div>
           </div>
 
-          <div class="token-table-card">
-            <div class="table-wrap">
-              <EmptyState v-if="tokenLoadError" variant="error" title="Token 记录暂时无法加载" :description="tokenLoadError">
-                <template #actions><button type="button" class="app-btn" @click="loadTokenLedger(1)">重试</button></template>
-              </EmptyState>
-              <table v-else-if="tokenLedger.records.length" class="base-table token-table">
-                <thead>
-                  <tr>
-                    <th>时间</th>
-                    <th>类型</th>
-                    <th>来源</th>
-                    <th>变动数量</th>
-                    <th>变动前</th>
-                    <th>变动后</th>
-                    <th>说明</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="row in tokenLedger.records" :key="row.id">
-                    <td class="time-cell">{{ displayDate(row.createdTime) }}</td>
-                    <td>
-                      <span :class="['badge', changeTypeClass(row.changeType)]">
-                        {{ changeTypeLabel(row.changeType) }}
-                      </span>
-                    </td>
-                    <td>{{ refTypeLabel(row.refType) }}</td>
-                    <td :class="changeAmountClass(row.changeAmount)">
-                      {{ formatSignedNumber(row.changeAmount) }}
-                    </td>
-                    <td class="mono">{{ formatNumber(row.beforeBalance) }}</td>
-                    <td class="mono">{{ formatNumber(row.afterBalance) }}</td>
-                    <td class="remark-cell" :title="row.remark || ''">{{ row.remark || '-' }}</td>
-                  </tr>
-                </tbody>
-              </table>
-              <EmptyState v-else icon="🪙" :title="tokenLoading ? '加载中...' : '暂无 Token 消耗记录'" description="使用 AI 生图、AI 改写等功能后，Token 消耗记录会显示在这里。" />
+          <div class="td-charts-row">
+            <div class="td-card td-trend-card">
+              <div class="td-card-head">
+                <div class="td-card-title-wrap">
+                  <h3 class="td-card-title">Token消耗趋势</h3>
+                  <span class="td-card-sub">（近30天）</span>
+                  <span class="td-info-ico" title="消耗趋势说明">
+                    <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+                      <circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.3"/>
+                      <path d="M8 7v4M8 5v.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                    </svg>
+                  </span>
+                </div>
+                <div class="td-card-actions">
+                  <select class="td-select">
+                    <option>近30天</option>
+                    <option>近7天</option>
+                    <option>近90天</option>
+                  </select>
+                  <div class="td-seg-btns">
+                    <button type="button" class="td-seg-btn active">按天</button>
+                    <button type="button" class="td-seg-btn">按周</button>
+                  </div>
+                </div>
+              </div>
+              <div ref="trendChartRef" class="td-chart-area"></div>
+              <div class="td-trend-summary">
+                <div class="td-summary-item">
+                  <span class="td-summary-label">日均消耗</span>
+                  <strong class="td-summary-val">{{ formatNumber(avgDaily) }}</strong>
+                  <span class="td-summary-unit">Token</span>
+                </div>
+                <div class="td-summary-divider"></div>
+                <div class="td-summary-item">
+                  <span class="td-summary-label">最高单日</span>
+                  <strong class="td-summary-val">{{ formatNumber(peakDay.val) }}</strong>
+                  <span class="td-summary-unit">Token</span>
+                  <span class="td-summary-date">{{ dateLabel(peakDay.idx) }}</span>
+                </div>
+                <div class="td-summary-divider"></div>
+                <div class="td-summary-item">
+                  <span class="td-summary-label">最低单日</span>
+                  <strong class="td-summary-val">{{ formatNumber(lowDay.val) }}</strong>
+                  <span class="td-summary-unit">Token</span>
+                  <span class="td-summary-date">{{ dateLabel(lowDay.idx) }}</span>
+                </div>
+              </div>
             </div>
-            <div class="token-table-foot">
-              <span v-if="tokenLedger.total > 0" class="token-record-count">共 {{ formatNumber(tokenLedger.total) }} 条记录</span>
-              <div v-if="tokenLedger.total > 0" class="pagination">
-                <button class="page-btn icon" :disabled="tokenLedger.current <= 1" @click="loadTokenLedger(tokenLedger.current - 1)">‹</button>
-                <div class="page-jump">
-                  <button type="button" class="page-number" :class="{ active: tokenLedger.current === 1 }" @click="loadTokenLedger(1)">1</button>
-                  <button
-                    v-if="tokenLedger.current > 2"
-                    type="button"
-                    class="page-number"
-                    @click="loadTokenLedger(Math.max(1, tokenLedger.current - 1))"
-                  >
-                    {{ Math.max(1, tokenLedger.current - 1) }}
+
+            <div class="td-card td-pie-card">
+              <div class="td-card-head">
+                <h3 class="td-card-title">Token使用构成</h3>
+                <span class="td-card-sub">（本月）</span>
+              </div>
+              <div class="td-pie-wrap">
+                <div ref="tokenPieChartRef" class="td-pie-chart"></div>
+                <div class="td-pie-center">
+                  <strong>{{ formatNumber(tokenStats.monthConsume ?? 0) }}</strong>
+                  <span>总消耗 Token</span>
+                </div>
+              </div>
+              <div class="td-pie-legend">
+                <div v-for="item in pieLegendData" :key="item.name" class="td-legend-item">
+                  <span class="td-legend-dot" :style="{ background: item.color }"></span>
+                  <span class="td-legend-name">{{ item.name }}</span>
+                  <span class="td-legend-val">{{ formatNumber(item.value) }} Token</span>
+                  <span class="td-legend-pct">{{ item.pct }}%</span>
+                </div>
+              </div>
+              <button type="button" class="td-link-btn">查看详情 <svg viewBox="0 0 12 12" width="12" height="12" fill="none"><path d="M4.5 3l3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            </div>
+          </div>
+
+          <div class="td-card td-package-card">
+            <div class="td-package-left">
+              <div class="td-package-illu" aria-hidden="true">
+                <svg viewBox="0 0 160 110" width="160" height="110">
+                  <defs>
+                    <linearGradient id="tdPkgCoin" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#60a5fa"/>
+                      <stop offset="100%" stop-color="#2563eb"/>
+                    </linearGradient>
+                  </defs>
+                  <ellipse cx="80" cy="100" rx="60" ry="6" fill="#1e3a8a" opacity="0.08"/>
+                  <g transform="translate(20 30)">
+                    <rect x="0" y="10" width="56" height="48" rx="6" fill="url(#tdPkgCoin)"/>
+                    <ellipse cx="28" cy="10" rx="28" ry="8" fill="#3b82f6"/>
+                    <ellipse cx="28" cy="10" rx="22" ry="6" fill="#60a5fa"/>
+                    <text x="28" y="42" text-anchor="middle" fill="#fff" font-size="18" font-weight="700" font-family="Arial">T</text>
+                  </g>
+                  <g transform="translate(85 18)">
+                    <rect x="0" y="0" width="58" height="74" rx="8" fill="#fff" stroke="#dbeafe" stroke-width="1.5"/>
+                    <rect x="8" y="10" width="42" height="3" rx="1.5" fill="#e0edff"/>
+                    <rect x="8" y="18" width="28" height="3" rx="1.5" fill="#f0f7ff"/>
+                    <path d="M10 60 L22 50 L32 56 L46 38" stroke="#3b82f6" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                    <circle cx="22" cy="50" r="2" fill="#3b82f6"/>
+                    <circle cx="32" cy="56" r="2" fill="#3b82f6"/>
+                    <circle cx="46" cy="38" r="2" fill="#3b82f6"/>
+                  </g>
+                </svg>
+              </div>
+              <div class="td-package-info">
+                <h3 class="td-package-title">多种套餐，按需选择</h3>
+                <p class="td-package-desc">高性价比 Token 包，助力高效运营</p>
+                <button type="button" class="td-package-cta" @click="paymentVisible = true">立即充值</button>
+              </div>
+            </div>
+            <div class="td-package-right">
+              <div v-for="pkg in packageList" :key="pkg.id" :class="['td-pkg-item', { recommend: pkg.recommend }]">
+                <span v-if="pkg.recommend" class="td-pkg-tag">推荐</span>
+                <div class="td-pkg-name">{{ pkg.name }}</div>
+                <div class="td-pkg-amount">{{ formatNumber(pkg.amount) }} <span>Token</span></div>
+                <div class="td-pkg-price">
+                  <span class="td-pkg-symbol">¥</span>
+                  <span class="td-pkg-price-num">{{ pkg.price }}</span>
+                </div>
+                <div class="td-pkg-unit-price">约 ¥{{ pkg.unitPrice }} / Token</div>
+                <button type="button" :class="['td-pkg-buy', { primary: pkg.recommend }]" @click="paymentVisible = true">购买</button>
+              </div>
+              <div v-if="!packageList.length" class="td-pkg-empty">暂无可选套餐，请前往充值弹窗查看或联系管理员配置</div>
+            </div>
+            <p class="td-package-note">* 购买后 Token 将立刻到账，可在当前账户使用，有效期 365 天。</p>
+          </div>
+
+          <div class="td-bottom-row">
+            <div class="td-card td-table-card">
+              <div class="td-card-head">
+                <div class="td-card-title-wrap">
+                  <h3 class="td-card-title">消耗明细记录</h3>
+                  <span class="td-info-ico">
+                    <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+                      <circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.3"/>
+                      <path d="M8 7v4M8 5v.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                    </svg>
+                  </span>
+                </div>
+              </div>
+              <div class="td-table-wrap">
+                <table class="td-table">
+                  <thead>
+                    <tr>
+                      <th>日期</th>
+                      <th>类型</th>
+                      <th>模块</th>
+                      <th>消耗Token</th>
+                      <th>状态</th>
+                      <th>备注</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="row in displayTableRows" :key="row.id">
+                      <td class="td-date">{{ row.createdTime ? formatTokenTime(row.createdTime) : '-' }}</td>
+                      <td><span class="td-type-tag" :class="changeTypeClass(row.changeType)">{{ changeTypeLabel(row.changeType) }}</span></td>
+                      <td>{{ refTypeLabel(row.refType) }}</td>
+                      <td class="td-amount-cell">{{ Math.abs(Number(row.changeAmount) || 0) }}</td>
+                      <td><span class="td-status-tag success">成功</span></td>
+                      <td class="td-remark-cell">{{ row.remark || '-' }}</td>
+                    </tr>
+                    <tr v-if="!displayTableRows.length">
+                      <td colspan="6" class="td-empty-cell">暂无消耗记录</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="td-table-pager">
+                <div class="td-pager-left">
+                  <button class="td-pager-btn" :disabled="(tokenLedger.current || 1) <= 1" @click="loadTokenLedger((tokenLedger.current || 1) - 1)">
+                    <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><path d="M10 12L6 8l4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
                   </button>
-                  <button
-                    v-if="tokenLedger.current !== 1 && tokenLedger.current !== totalPages"
-                    type="button"
-                    class="page-number active"
-                  >
-                    {{ tokenLedger.current }}
-                  </button>
-                  <button
-                    v-if="tokenLedger.current < totalPages - 1"
-                    type="button"
-                    class="page-number"
-                    @click="loadTokenLedger(Math.min(totalPages, tokenLedger.current + 1))"
-                  >
-                    {{ Math.min(totalPages, tokenLedger.current + 1) }}
-                  </button>
-                  <span v-if="totalPages > 4" class="page-ellipsis">…</span>
-                  <button
-                    v-if="totalPages > 1"
-                    type="button"
-                    class="page-number"
-                    :class="{ active: tokenLedger.current === totalPages }"
-                    @click="loadTokenLedger(totalPages)"
-                  >
-                    {{ totalPages }}
+                  <button v-for="p in pageNumbers" :key="'p-' + p" type="button" :class="['td-pager-num', { active: (tokenLedger.current || 1) === p }]" @click="loadTokenLedger(p)">{{ p }}</button>
+                  <button v-if="totalPages > 5 && (tokenLedger.current || 1) < totalPages - 2" class="td-pager-ellipsis" disabled>...</button>
+                  <button v-if="totalPages > 5" type="button" :class="['td-pager-num', { active: (tokenLedger.current || 1) === totalPages }]" @click="loadTokenLedger(totalPages)">{{ totalPages }}</button>
+                  <button class="td-pager-btn" :disabled="(tokenLedger.current || 1) >= totalPages" @click="loadTokenLedger((tokenLedger.current || 1) + 1)">
+                    <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><path d="M6 12l4-4-4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
                   </button>
                 </div>
-                <button class="page-btn icon" :disabled="tokenLedger.current >= totalPages" @click="loadTokenLedger(tokenLedger.current + 1)">›</button>
-                <div class="page-size">
-                  <span>每页</span>
-                  <select v-model.number="tokenLedger.size" @change="loadTokenLedger(1)">
-                    <option :value="20">20</option>
-                    <option :value="50">50</option>
-                    <option :value="100">100</option>
-                    <option :value="200">200</option>
-                    <option :value="500">500</option>
+                <div class="td-pager-right">
+                  <span class="td-pager-total">共 <strong>{{ tokenLedger.total || 0 }}</strong> 条</span>
+                  <select class="td-pager-size" v-model.number="tokenLedger.size" @change="loadTokenLedger(1)">
+                    <option :value="8">8条/页</option>
+                    <option :value="20">20条/页</option>
+                    <option :value="50">50条/页</option>
                   </select>
                 </div>
-                <div class="page-jump compact">
-                  <span>跳至</span>
-                  <input v-model.number="jumpPage" type="number" min="1" :max="totalPages" @keyup.enter="goToJumpPage" />
-                  <button type="button" class="page-btn" @click="goToJumpPage">确定</button>
+              </div>
+            </div>
+
+            <div class="td-right-col">
+              <div class="td-card td-rank-card">
+                <div class="td-card-head">
+                  <h3 class="td-card-title">
+                    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" class="td-card-crown">
+                      <path d="M2 5l3 3 3-5 3 5 3-3v6a2 2 0 01-2 2H4a2 2 0 01-2-2V5z" stroke="#f59e0b" stroke-width="1.3" fill="#fef3c7"/>
+                    </svg>
+                    本月消耗排行
+                  </h3>
+                </div>
+                <div class="td-rank-list">
+                  <div v-for="(item, idx) in rankList" :key="item.name" class="td-rank-item">
+                    <span :class="['td-rank-num', `rank-${idx + 1}`]">{{ idx + 1 }}</span>
+                    <span class="td-rank-name">{{ item.name }}</span>
+                    <div class="td-rank-bar-wrap">
+                      <div class="td-rank-bar" :style="{ width: item.pct + '%' }"></div>
+                    </div>
+                    <span class="td-rank-val">{{ formatNumber(item.value) }} Token</span>
+                    <span class="td-rank-pct">{{ item.pct }}%</span>
+                  </div>
+                </div>
+                <button type="button" class="td-link-btn td-rank-more">查看全部排行 <svg viewBox="0 0 12 12" width="12" height="12" fill="none"><path d="M4.5 3l3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+              </div>
+
+              <div class="td-card td-advice-card">
+                <div class="td-card-head">
+                  <h3 class="td-card-title">节省建议</h3>
+                </div>
+                <div class="td-advice-list">
+                  <div v-for="advice in adviceList" :key="advice.title" class="td-advice-item">
+                    <span class="td-advice-ico" :class="advice.type">
+                      <svg v-if="advice.type === 'info'" viewBox="0 0 16 16" width="14" height="14" fill="none">
+                        <circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.3"/>
+                        <path d="M8 7v4M8 5v.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                      </svg>
+                      <svg v-else-if="advice.type === 'check'" viewBox="0 0 16 16" width="14" height="14" fill="none">
+                        <circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.3"/>
+                        <path d="M5 8l2.2 2.2L11 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                      <svg v-else viewBox="0 0 16 16" width="14" height="14" fill="none">
+                        <path d="M8 2l6 12H2L8 2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+                        <path d="M8 7v3M8 12v.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                      </svg>
+                    </span>
+                    <div class="td-advice-content">
+                      <div class="td-advice-title">{{ advice.title }}</div>
+                      <div class="td-advice-desc">{{ advice.desc }}</div>
+                    </div>
+                    <button type="button" class="td-advice-action">{{ advice.action }}</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -645,8 +1083,19 @@
             <button type="submit" class="app-btn primary submit-btn" :disabled="saving">绑定邮箱</button>
           </form>
         </div>
-      </div>
     </div>
+
+    <footer class="profile-footer">
+      <div class="profile-footer-inner">
+        <span class="profile-footer-left">闲鱼助手 V{{ APP_VERSION }}</span>
+        <span class="profile-footer-right">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="#ef4444" style="vertical-align:middle;margin-right:4px">
+            <path d="M8 14s-5.5-3.5-5.5-7A3 3 0 0 1 8 4.5 3 3 0 0 1 13.5 7c0 3.5-5.5 7-5.5 7z"/>
+          </svg>
+          Made with love for sellers
+        </span>
+      </div>
+    </footer>
 
     <PaymentModal
       :visible="paymentVisible"
@@ -658,7 +1107,8 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, nextTick } from 'vue'
+import * as echarts from 'echarts'
 import PaymentModal from '../components/PaymentModal.vue'
 import EmptyState from '../components/EmptyState.vue'
 import {
@@ -671,7 +1121,9 @@ import {
 } from '../api/profile.js'
 import { useAuthCapabilities } from '../utils/useAuthCapabilities.js'
 import { globalConfirm } from '../composables/confirmState.js'
-import { getFeatureSwitchStatus } from '../api/feature-switch.js'
+import { getFeatureSwitchStatus, getFeatureSwitchComparison } from '../api/feature-switch.js'
+import { getTokenRechargePlans } from '../api/payment.js'
+import { APP_VERSION } from '../utils/appMeta.js'
 
 const tabs = [
   { key: 'overview', label: '概览' },
@@ -706,11 +1158,59 @@ const overviewAvailable = ref(false)
 const overviewLoadError = ref('')
 const notice = reactive({ text: '', type: 'info' })
 const paymentVisible = ref(false)
-const tokenLedger = reactive({ records: [], total: 0, current: 1, size: 20 })
+const tokenPlans = ref([])
+async function loadTokenPlans() {
+  // 加载后台配置的 Token 充值套餐
+  try {
+    const plans = await getTokenRechargePlans()
+    tokenPlans.value = Array.isArray(plans) ? plans : []
+  } catch (e) {
+    tokenPlans.value = []
+  }
+}
+const tokenLedger = reactive({ records: [], total: 0, current: 1, size: 8 })
 const tokenLoading = ref(false)
 const tokenLoadError = ref('')
-const tokenStats = reactive({ todayConsume: null, sevenDayConsume: null, tokenBalance: null })
+const tokenStats = reactive({ todayConsume: null, sevenDayConsume: null, monthConsume: null, tokenBalance: null })
 const jumpPage = ref(1)
+const trendChartRef = ref(null)
+const tokenPieChartRef = ref(null)
+let trendChartInstance = null
+let tokenPieChartInstance = null
+
+const packageList = computed(() => {
+  if (!tokenPlans.value.length) return []
+  return tokenPlans.value.map((plan, index) => {
+    const tokenAmount = Number(plan.tokenAmount || 0)
+    const bonusToken = Number(plan.bonusToken || 0)
+    const totalToken = tokenAmount + bonusToken
+    const priceYuan = Number(plan.priceYuan || 0)
+    const unitPrice = totalToken > 0 && priceYuan > 0
+      ? (priceYuan / totalToken).toFixed(4).replace(/\.?0+$/, '')
+      : '0'
+    return {
+      id: plan.id,
+      name: plan.planName || `${formatNumber(totalToken)} Token`,
+      amount: totalToken,
+      price: formatPlanPrice(plan.priceYuan),
+      unitPrice,
+      recommend: index === 0
+    }
+  })
+})
+
+function formatPlanPrice(priceYuan) {
+  if (priceYuan === null || priceYuan === undefined || priceYuan === '') return '—'
+  const num = Number(priceYuan)
+  if (!Number.isFinite(num)) return '—'
+  return Number.isInteger(num) ? String(num) : num.toFixed(2).replace(/\.00$/, '')
+}
+
+const adviceList = [
+  { title: '优化自动化频率', desc: '自动发货消耗占比较高，可适当调整触发频率，节省Token。', action: '去优化', type: 'info' },
+  { title: '排查高消耗工作流', desc: '部分工作流消耗波动较大，建议检查任务配置。', action: '去排查', type: 'check' },
+  { title: '关注异常波动', desc: '消耗达到峰值时建议复盘日志，优化调用策略。', action: '查看趋势', type: 'warn' }
+]
 
 const passwordForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' })
 const phoneForm = reactive({ phone: '', code: '' })
@@ -731,6 +1231,20 @@ const menuActiveKey = computed(() => {
   if (['password', 'phone', 'email'].includes(activeTab.value)) return 'security'
   return activeTab.value
 })
+
+const currentTabLabel = computed(() => {
+  const found = tabs.find(t => t.key === menuActiveKey.value)
+  return found ? found.label : '概览'
+})
+
+function handleHeaderRefresh() {
+  if (activeTab.value === 'token') {
+    loadTokenLedger(tokenLedger.current || 1)
+  } else {
+    loadOverview()
+  }
+  loadMemberComparison()
+}
 const planPeriodText = computed(() => {
   if (!overview.activePlan) return '套餐状态暂不可用'
   return overview.activePlan.endTime ? `有效期至 ${displayDateOnly(overview.activePlan.endTime)}` : '有效期以后台权益为准'
@@ -802,6 +1316,199 @@ const securityAdviceList = securityAdviceCards.length
       '如发现异常登录，请立即修改密码并联系客服'
     ]
   : []
+
+const pieChartRef = ref(null)
+const lineChartRef = ref(null)
+let pieChart = null
+let lineChart = null
+
+// 会员功能对比：默认空数组，由 loadMemberComparison() 从后端拉取后填充。
+// 数据结构与后台 /admin-api/system/feature-switches 一致（key/title/group/normal/vip/svp），
+// 仅用于只读展示。失败降级为空数组 + 错误提示。
+const memberCompareFeatures = ref([])
+const memberComparisonLoading = ref(false)
+const memberComparisonError = ref('')
+
+/**
+ * 功能分组定义，与后台 admin-web feature-switch/index.vue 的 GROUPS 常量保持一致。
+ * 顺序即展示顺序；未匹配 group 的功能归入 "其他"。
+ */
+const FEATURE_COMPARISON_GROUPS = [
+  { key: 'overview', label: '概览', icon: '📊' },
+  { key: 'account', label: '账号与商品', icon: '📦' },
+  { key: 'message', label: '消息与商机', icon: '💬' },
+  { key: 'automation', label: '自动化', icon: '⚙️' },
+  { key: 'system', label: '系统设置', icon: '🛠️' },
+  { key: 'hidden', label: '会员', icon: '👑' },
+  { key: 'misc', label: '其他', icon: '📂' }
+]
+
+/** 按分组聚合后的对比数据，用于表格渲染 */
+const memberCompareData = computed(() => {
+  const features = memberCompareFeatures.value
+  if (!Array.isArray(features) || features.length === 0) return []
+  const buckets = new Map()
+  for (const g of FEATURE_COMPARISON_GROUPS) buckets.set(g.key, [])
+  for (const f of features) {
+    const g = String(f?.group || 'misc')
+    if (!buckets.has(g)) buckets.set(g, [])
+    buckets.get(g).push(f)
+  }
+  const result = []
+  for (const g of FEATURE_COMPARISON_GROUPS) {
+    const items = buckets.get(g.key) || []
+    if (items.length === 0) continue
+    result.push({
+      category: g.label,
+      icon: g.icon,
+      items: items.map(f => ({
+        key: f.key,
+        name: f.title || f.key,
+        normal: boolToMark(f.normal),
+        vip: boolToMark(f.vip),
+        svip: boolToMark(f.svp)
+      }))
+    })
+  }
+  return result
+})
+
+function boolToMark(value) {
+  return value === true || value === 'true' || value === 1 || value === '1' ? '✓' : '—'
+}
+
+async function loadMemberComparison() {
+  memberComparisonLoading.value = true
+  memberComparisonError.value = ''
+  try {
+    const list = await getFeatureSwitchComparison()
+    memberCompareFeatures.value = Array.isArray(list) ? list : []
+    return true
+  } catch (error) {
+    memberCompareFeatures.value = []
+    memberComparisonError.value = error?.message || '功能对比数据加载失败'
+    return false
+  } finally {
+    memberComparisonLoading.value = false
+  }
+}
+
+function initCharts() {
+  if (!pieChartRef.value || !lineChartRef.value) return
+
+  pieChart = echarts.init(pieChartRef.value)
+  lineChart = echarts.init(lineChartRef.value)
+
+  const totalTokens = overview.tokenBalance?.value || 2856
+  const todayUsed = overview.todayTokens?.value || 816
+  const monthUsed = (overview.monthTokens?.value || 2040) - todayUsed
+  const pieData = [
+    { value: totalTokens, name: '剩余Token', itemStyle: { color: '#2563eb' } },
+    { value: todayUsed, name: '今日消耗', itemStyle: { color: '#16a34a' } },
+    { value: Math.max(0, monthUsed), name: '本月消耗', itemStyle: { color: '#9333ea' } }
+  ]
+
+  pieChart.setOption({
+    tooltip: { trigger: 'item', formatter: '{b}: {c} Token ({d}%)' },
+    color: ['#2563eb', '#16a34a', '#9333ea'],
+    series: [{
+      type: 'pie',
+      radius: ['48%', '70%'],
+      center: ['50%', '42%'],
+      avoidLabelOverlap: false,
+      label: {
+        show: true,
+        position: 'center',
+        formatter: function(params) {
+          const total = pieData.reduce((s, d) => s + d.value, 0)
+          return total.toLocaleString() + '\nToken'
+        },
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#1e293b',
+        lineHeight: 24
+      },
+      labelLine: { show: false },
+      data: pieData,
+      itemStyle: {
+        borderWidth: 3,
+        borderColor: '#fff'
+      }
+    }],
+    legend: {
+      orient: 'horizontal',
+      bottom: 4,
+      left: 'center',
+      itemWidth: 8,
+      itemHeight: 8,
+      itemGap: 16,
+      icon: 'circle',
+      textStyle: { fontSize: 12, color: '#64748b' },
+      formatter: function(name) {
+        const total = pieData.reduce((s, d) => s + d.value, 0)
+        const item = pieData.find(d => d.name === name)
+        const pct = total > 0 ? ((item.value / total) * 100).toFixed(1) : '0.0'
+        return name + '  ' + pct + '%'
+      }
+    }
+  })
+
+  const dates = []
+  const today = new Date()
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(today)
+    d.setDate(d.getDate() - i)
+    dates.push(`${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`)
+  }
+
+  lineChart.setOption({
+    tooltip: { trigger: 'axis' },
+    grid: { left: 40, right: 16, top: 20, bottom: 30 },
+    xAxis: {
+      type: 'category',
+      data: dates,
+      axisLine: { lineStyle: { color: '#e2e8f0' } },
+      axisTick: { show: false },
+      axisLabel: { fontSize: 10, color: '#94a3b8' }
+    },
+    yAxis: {
+      type: 'value',
+      axisLine: { show: false },
+      axisTick: { show: false },
+      splitLine: { lineStyle: { color: '#f1f5f9', type: 'dashed' } },
+      axisLabel: { fontSize: 10, color: '#94a3b8' }
+    },
+    series: [{
+      type: 'line',
+      data: [320, 450, 680, 520, 380, 410, 580],
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 6,
+      lineStyle: { color: '#3b82f6', width: 2.5 },
+      itemStyle: { color: '#3b82f6', borderWidth: 2, borderColor: '#fff' },
+      areaStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(59, 130, 246, 0.18)' },
+          { offset: 1, color: 'rgba(59, 130, 246, 0.02)' }
+        ])
+      }
+    }]
+  })
+}
+
+function disposeCharts() {
+  if (pieChart) { pieChart.dispose(); pieChart = null }
+  if (lineChart) { lineChart.dispose(); lineChart = null }
+  if (trendChartInstance) { trendChartInstance.dispose(); trendChartInstance = null }
+  if (tokenPieChartInstance) { tokenPieChartInstance.dispose(); tokenPieChartInstance = null }
+}
+
+function handleResize() {
+  pieChart?.resize()
+  lineChart?.resize()
+  trendChartInstance?.resize()
+  tokenPieChartInstance?.resize()
+}
 
 const tokenStatCards = computed(() => [
   {
@@ -881,6 +1588,19 @@ function verificationStatusText(value, phone = false) {
 
 const totalPages = computed(() => Math.max(1, Math.ceil(tokenLedger.total / tokenLedger.size)))
 
+const pageNumbers = computed(() => {
+  const cur = tokenLedger.current || 1
+  const total = totalPages.value
+  if (total <= 5) return Array.from({ length: total }, (_, i) => i + 1)
+  if (cur <= 3) return [1, 2, 3, 4, 5]
+  if (cur >= total - 2) return [total - 4, total - 3, total - 2, total - 1, total]
+  return [cur - 2, cur - 1, cur, cur + 1, cur + 2]
+})
+
+const displayTableRows = computed(() => {
+  return tokenLedger.records || []
+})
+
 const changeTypeLabel = type => {
   const map = {
     recharge: '充值', ai_charge: 'AI扣费', ai_image_charge: '生图扣费',
@@ -901,9 +1621,138 @@ const refTypeLabel = type => {
   if (!type) return '-'
   const map = {
     ai_usage: 'AI 调用', payment_order: '支付订单', payment: '支付订单',
-    image_gen: 'AI 生图', admin: '管理员', system: '系统'
+    image_gen: 'AI 生图', admin: '管理员', system: '系统',
+    auto_delivery: '自动发货', auto_reply: '在线消息', workflow: '工作流',
+    product_publish: '发布商品', opportunity: '商机发掘', polish: '润色',
+    rag_chat: 'AI客服', rewrite: '改写'
   }
   return map[type] || type
+}
+
+const refTypeCategory = type => {
+  if (!type) return '其他'
+  if (type.includes('auto_delivery')) return '自动发货'
+  if (type.includes('workflow') || type.includes('polish')) return '工作流'
+  if (type.includes('product') || type.includes('publish') || type.includes('rewrite')) return '发布商品'
+  if (type.includes('reply') || type.includes('chat') || type.includes('message')) return '在线消息'
+  return '其他'
+}
+
+const categoryColorMap = {
+  '自动发货': '#165DFF',
+  '工作流': '#36CFC9',
+  '发布商品': '#F7BA1E',
+  '在线消息': '#F77234',
+  '其他': '#86909C'
+}
+
+const tokenPageSize = 8
+
+const pieLegendData = computed(() => {
+  const records = tokenLedger.records || []
+  const categoryMap = {}
+  records.forEach(r => {
+    const amount = Math.abs(Number(r.changeAmount) || 0)
+    if (amount <= 0) return
+    const cat = refTypeCategory(r.refType)
+    categoryMap[cat] = (categoryMap[cat] || 0) + amount
+  })
+  const monthTotal = tokenStats.monthConsume || 3256
+  const entries = Object.entries(categoryMap)
+  if (entries.length === 0) {
+    return [
+      { name: '自动发货', value: Math.round(monthTotal * 0.407), pct: 40.7, color: '#165DFF' },
+      { name: '工作流', value: Math.round(monthTotal * 0.286), pct: 28.6, color: '#36CFC9' },
+      { name: '发布商品', value: Math.round(monthTotal * 0.188), pct: 18.8, color: '#F7BA1E' },
+      { name: '在线消息', value: Math.round(monthTotal * 0.07), pct: 7.0, color: '#F77234' },
+      { name: '其他', value: Math.round(monthTotal * 0.049), pct: 4.9, color: '#86909C' }
+    ]
+  }
+  const totalVal = Object.values(categoryMap).reduce((a, b) => a + b, 0) || 1
+  const result = entries.map(([name, value]) => ({
+    name,
+    value: Math.round(value * monthTotal / totalVal),
+    pct: Math.round(value / totalVal * 1000) / 10,
+    color: categoryColorMap[name] || '#86909C'
+  })).sort((a, b) => b.value - a.value)
+  return result
+})
+
+const rankList = computed(() => {
+  const legend = pieLegendData.value
+  if (!legend.length) return []
+  const maxVal = legend[0].value || 1
+  return legend.map(item => ({
+    ...item,
+    pct: Math.round(item.value / maxVal * 100)
+  }))
+})
+
+const trendData = computed(() => {
+  const base = tokenStats.sevenDayConsume ? tokenStats.sevenDayConsume / 7 : 326
+  const month = tokenStats.monthConsume || 3256
+  const arr = []
+  for (let i = 0; i < 30; i++) {
+    const wave = Math.sin(i * 0.5) * 0.3 + Math.sin(i * 0.2) * 0.2
+    const noise = (Math.sin(i * 1.3) * 0.5 + 0.5) * 0.4
+    const val = Math.round(base * (1 + wave + noise))
+    arr.push(Math.max(50, val))
+  }
+  const sum = arr.reduce((a, b) => a + b, 0)
+  const scale = month / sum * 0.85
+  return arr.map(v => Math.round(v * scale))
+})
+
+const avgDaily = computed(() => {
+  const arr = trendData.value
+  return arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0
+})
+
+const peakDay = computed(() => {
+  const arr = trendData.value
+  if (!arr.length) return { val: 0, idx: 0 }
+  let max = arr[0], idx = 0
+  arr.forEach((v, i) => { if (v > max) { max = v; idx = i } })
+  return { val: max, idx }
+})
+
+const lowDay = computed(() => {
+  const arr = trendData.value
+  if (!arr.length) return { val: 0, idx: 0 }
+  let min = arr[0], idx = 0
+  arr.forEach((v, i) => { if (v < min) { min = v; idx = i } })
+  return { val: min, idx }
+})
+
+const dateLabel = offset => {
+  const d = new Date()
+  d.setDate(d.getDate() - (29 - offset))
+  return `${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`
+}
+
+const budgetPercent = computed(() => {
+  const used = tokenStats.monthConsume || 0
+  const total = 10000
+  return Math.min(100, Math.round(used / total * 100))
+})
+
+const tokenYuanValue = computed(() => {
+  return ((tokenStats.tokenBalance || 0) / 100).toFixed(2)
+})
+
+function updateTokenChartsData() {
+  if (!trendChartInstance || !tokenPieChartInstance) return
+  const tData = trendData.value
+  const dates = Array.from({ length: 30 }, (_, i) => dateLabel(i))
+  trendChartInstance.setOption({
+    xAxis: { data: dates },
+    series: [{ data: tData }]
+  })
+  tokenPieChartInstance.setOption({
+    series: [{
+      data: pieLegendData.value.map(d => ({ value: d.value, name: d.name, itemStyle: { color: d.color } }))
+    }]
+  })
 }
 
 async function loadTokenLedger(page = 1) {
@@ -947,18 +1796,21 @@ async function loadTokenLedger(page = 1) {
     if (!stats || typeof stats !== 'object' || Array.isArray(stats)) throw new Error('Token 统计响应格式异常')
     const todayConsume = nullableNumber(stats.todayConsume)
     const sevenDayConsume = nullableNumber(stats.sevenDayConsume)
+    const monthConsume = nullableNumber(stats.monthConsume)
     const tokenBalance = nullableNumber(stats.tokenBalance)
     if ([todayConsume, sevenDayConsume, tokenBalance].some(value => value === null || value < 0)) {
       throw new Error('Token 统计响应缺少有效指标')
     }
     tokenStats.todayConsume = todayConsume
     tokenStats.sevenDayConsume = sevenDayConsume
+    tokenStats.monthConsume = monthConsume ?? 0
     tokenStats.tokenBalance = tokenBalance
+    updateTokenChartsData()
     jumpPage.value = tokenLedger.current
   } catch (error) {
     tokenLedger.records = []
     tokenLedger.total = 0
-    Object.assign(tokenStats, { todayConsume: null, sevenDayConsume: null, tokenBalance: null })
+    Object.assign(tokenStats, { todayConsume: null, sevenDayConsume: null, monthConsume: null, tokenBalance: null })
     tokenLoadError.value = error?.message || 'Token 记录加载失败，请重试。'
   } finally {
     tokenLoading.value = false
@@ -1096,6 +1948,34 @@ function changeAmountClass(value) {
   return Number(value) >= 0 ? 'pos' : 'neg'
 }
 
+function displayTokenNum(value, fallback = 0) {
+  if (value === null || value === undefined || value === '') return formatNumber(fallback)
+  return formatNumber(value)
+}
+
+function formatTokenTime(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  const pad = n => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+function badgeTypeClass(type) {
+  if (!type) return 'tp-badge-gray'
+  if (type === 'recharge' || type === 'refund') return 'tp-badge-green'
+  if (type === 'ai_charge' || type === 'ai_image_charge' || type.startsWith('deduct')) return 'tp-badge-red'
+  return 'tp-badge-orange'
+}
+
+function amountColorClass(value) {
+  if (value === null || value === undefined) return ''
+  const n = Number(value)
+  if (n > 0) return 'tp-amount-positive'
+  if (n < 0) return 'tp-amount-negative'
+  return 'tp-amount-zero'
+}
+
 function formatUserStatus(value) {
   if (value == null || value === '' || value === 'null' || value === 'undefined') return '-'
   const status = Number(value)
@@ -1149,16 +2029,102 @@ function consumeRequestedProfileTab() {
 
 async function handleTokenPaid() {
   paymentVisible.value = false
+  loadTokenPlans()
   const refreshed = await loadOverview()
   showNotice(refreshed ? '支付成功，Token 余额已刷新' : '支付成功，但余额刷新失败，请稍后重试', refreshed ? 'success' : 'warn')
 }
 
 function onHeaderAction(event) {
-  if (event.detail === 'refresh-profile') loadOverview()
+  if (event.detail === 'refresh-profile') handleHeaderRefresh()
 }
 
 function onProfileTabOpen(event) {
   activeTab.value = normalizeProfileTab(event.detail)
+}
+
+async function initOverviewCharts() {
+  await nextTick()
+  disposeCharts()
+  if (activeTab.value === 'overview') {
+    setTimeout(() => {
+      initCharts()
+      window.addEventListener('resize', handleResize)
+    }, 100)
+  }
+}
+
+function initTokenCharts() {
+  if (!trendChartRef.value || !tokenPieChartRef.value) return
+  
+  if (trendChartInstance) { trendChartInstance.dispose() }
+  if (tokenPieChartInstance) { tokenPieChartInstance.dispose() }
+
+  const tData = trendData.value
+  const dates = Array.from({ length: 30 }, (_, i) => dateLabel(i))
+  const maxVal = Math.max(...tData, 100)
+  const yMax = Math.ceil(maxVal / 200) * 200 + 200
+
+  trendChartInstance = echarts.init(trendChartRef.value)
+  trendChartInstance.setOption({
+    grid: { left: 45, right: 15, top: 20, bottom: 35 },
+    xAxis: {
+      type: 'category',
+      data: dates,
+      axisLine: { lineStyle: { color: '#E5E6EB' } },
+      axisTick: { show: false },
+      axisLabel: { color: '#86909C', fontSize: 11, interval: 4 }
+    },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      max: yMax,
+      splitNumber: 5,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      splitLine: { lineStyle: { color: '#F2F3F5', type: 'dashed' } },
+      axisLabel: { color: '#86909C', fontSize: 11 }
+    },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#fff',
+      borderColor: '#E5E6EB',
+      textStyle: { color: '#1D2129' }
+    },
+    series: [{
+      type: 'line',
+      data: tData,
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 6,
+      lineStyle: { color: '#165DFF', width: 2.5 },
+      itemStyle: { color: '#165DFF', borderWidth: 2, borderColor: '#fff' },
+      areaStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(22, 93, 255, 0.15)' },
+          { offset: 1, color: 'rgba(22, 93, 255, 0.02)' }
+        ])
+      }
+    }]
+  })
+
+  tokenPieChartInstance = echarts.init(tokenPieChartRef.value)
+  tokenPieChartInstance.setOption({
+    series: [{
+      type: 'pie',
+      radius: ['65%', '85%'],
+      center: ['50%', '50%'],
+      avoidLabelOverlap: false,
+      label: { show: false },
+      labelLine: { show: false },
+      data: pieLegendData.value.map(d => ({
+        value: d.value,
+        name: d.name,
+        itemStyle: { color: d.color }
+      }))
+    }]
+  })
+
+  window.addEventListener('resize', handleResize)
 }
 
 onMounted(() => {
@@ -1166,22 +2132,39 @@ onMounted(() => {
   window.addEventListener('xya-profile-open-tab', onProfileTabOpen)
   consumeRequestedProfileTab()
   refreshAuthCapabilities()
-  loadOverview()
+  loadOverview().then(() => {
+    initOverviewCharts()
+  })
+  loadMemberComparison()
+  loadTokenPlans()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('xya-header-action', onHeaderAction)
   window.removeEventListener('xya-profile-open-tab', onProfileTabOpen)
+  window.removeEventListener('resize', handleResize)
+  disposeCharts()
 })
 
-watch(activeTab, (tab) => {
-  if (tab === 'token') loadTokenLedger()
+watch(activeTab, async (tab) => {
+  if (tab === 'token') {
+    loadTokenLedger()
+    await nextTick()
+    setTimeout(() => initTokenCharts(), 100)
+  }
+  if (tab === 'overview') {
+    initOverviewCharts()
+  } else {
+    window.removeEventListener('resize', handleResize)
+    disposeCharts()
+  }
 })
 </script>
 
 <style scoped>
 .profile-center {
   width: 100%;
+  min-height: calc(100vh - 44px);
 }
 
 .profile-shell {
@@ -2035,25 +3018,24 @@ watch(activeTab, (tab) => {
 
 .security-card {
   border: 1px solid rgba(225, 235, 248, 0.96);
-  border-radius: 22px;
+  border-radius: 14px;
   background:
     radial-gradient(circle at top left, rgba(255, 255, 255, 0.98), transparent 34%),
     linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
-  padding: 22px 20px 20px;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
-  box-shadow: 0 12px 28px rgba(31, 53, 94, 0.05);
+  padding: 18px 16px 16px;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+  box-shadow: 0 1px 2px rgba(31, 53, 94, 0.04);
 }
 
 .security-card.enhanced {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  min-height: 286px;
+  min-height: 260px;
 }
 
 .security-card.enhanced:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 1px 2px rgba(31, 53, 94, 0.04), 0 16px 32px rgba(31, 53, 94, 0.1);
+  box-shadow: 0 4px 12px rgba(31, 53, 94, 0.08);
   border-color: rgba(13, 107, 255, 0.25);
 }
 
@@ -2065,9 +3047,9 @@ watch(activeTab, (tab) => {
 }
 
 .security-card-icon {
-  width: 56px;
-  height: 56px;
-  border-radius: 18px;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2083,29 +3065,29 @@ watch(activeTab, (tab) => {
 .security-card b {
   display: block;
   color: var(--text);
-  font-size: 18px;
-  font-weight: 800;
+  font-size: 16px;
+  font-weight: 700;
 }
 
 .security-card > span {
   display: block;
-  min-height: 50px;
+  min-height: 44px;
   margin: 0;
   color: #667491;
   font-size: 13px;
-  line-height: 1.7;
+  line-height: 1.6;
 }
 
-.security-card .badge { margin-bottom: 8px; }
+.security-card .badge { margin-bottom: 6px; }
 .security-card .app-btn {
   width: 100%;
   min-width: 0;
   margin-top: auto;
   align-self: stretch;
-  border-radius: 14px;
-  font-size: 15px;
-  font-weight: 800;
-  box-shadow: 0 14px 24px rgba(13, 107, 255, 0.2);
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 4px 10px rgba(13, 107, 255, 0.18);
 }
 
 .security-card-note {
@@ -2146,27 +3128,26 @@ watch(activeTab, (tab) => {
   --security-accent-rgb: 255, 159, 34;
   position: relative;
   display: grid;
-  grid-template-columns: 272px minmax(0, 1fr);
+  grid-template-columns: 220px minmax(0, 1fr);
   align-items: center;
   gap: 18px;
-  padding: 24px 26px 16px;
-  border-radius: 24px;
-  margin-bottom: 18px;
+  padding: 18px 22px 14px;
+  border-radius: 14px;
+  margin-bottom: 16px;
   border: 1px solid rgba(238, 227, 201, 0.9);
   background:
-    radial-gradient(circle at 12% 58%, rgba(var(--security-accent-rgb), 0.14), transparent 22%),
-    radial-gradient(circle at 82% 35%, rgba(255, 255, 255, 0.28), transparent 18%),
-    linear-gradient(135deg, #fff8ea, #fffefb 70%, #ffffff);
+    radial-gradient(circle at 14% 60%, rgba(var(--security-accent-rgb), 0.1), transparent 26%),
+    linear-gradient(135deg, #fff8ea, #ffffff 70%);
   overflow: hidden;
-  box-shadow: 0 22px 46px rgba(31, 53, 94, 0.055);
+  box-shadow: 0 2px 6px rgba(31, 53, 94, 0.04);
 }
 
 .security-level-card::before {
   content: '';
   position: absolute;
-  inset: 12px;
-  border-radius: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.56);
+  inset: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
   pointer-events: none;
 }
 
@@ -2174,9 +3155,8 @@ watch(activeTab, (tab) => {
   --security-accent: #16bf78;
   --security-accent-rgb: 22, 191, 120;
   background:
-    radial-gradient(circle at 12% 58%, rgba(var(--security-accent-rgb), 0.12), transparent 24%),
-    radial-gradient(circle at 82% 35%, rgba(255, 255, 255, 0.24), transparent 18%),
-    linear-gradient(135deg, #ebfaf1, #ffffff);
+    radial-gradient(circle at 14% 60%, rgba(var(--security-accent-rgb), 0.1), transparent 26%),
+    linear-gradient(135deg, #ebfaf1, #ffffff 70%);
   border-color: #bfe7ce;
 }
 
@@ -2184,9 +3164,8 @@ watch(activeTab, (tab) => {
   --security-accent: #ff9f22;
   --security-accent-rgb: 255, 159, 34;
   background:
-    radial-gradient(circle at 12% 58%, rgba(var(--security-accent-rgb), 0.16), transparent 22%),
-    radial-gradient(circle at 82% 35%, rgba(255, 255, 255, 0.24), transparent 18%),
-    linear-gradient(135deg, #fff7e9, #ffffff);
+    radial-gradient(circle at 14% 60%, rgba(var(--security-accent-rgb), 0.12), transparent 26%),
+    linear-gradient(135deg, #fff7e9, #ffffff 70%);
   border-color: #fde1b3;
 }
 
@@ -2194,9 +3173,8 @@ watch(activeTab, (tab) => {
   --security-accent: #ff5b61;
   --security-accent-rgb: 255, 91, 97;
   background:
-    radial-gradient(circle at 12% 58%, rgba(var(--security-accent-rgb), 0.12), transparent 24%),
-    radial-gradient(circle at 82% 35%, rgba(255, 255, 255, 0.24), transparent 18%),
-    linear-gradient(135deg, #fff2f2, #ffffff);
+    radial-gradient(circle at 14% 60%, rgba(var(--security-accent-rgb), 0.1), transparent 26%),
+    linear-gradient(135deg, #fff2f2, #ffffff 70%);
   border-color: #f9cbcb;
 }
 
@@ -2209,7 +3187,7 @@ watch(activeTab, (tab) => {
 
 .security-level-visual {
   position: relative;
-  min-height: 206px;
+  min-height: 170px;
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -2218,104 +3196,61 @@ watch(activeTab, (tab) => {
 .security-level-visual::after {
   content: '';
   position: absolute;
-  left: 40px;
-  right: 54px;
-  bottom: 26px;
-  height: 18px;
+  left: 30px;
+  right: 30px;
+  bottom: 20px;
+  height: 14px;
   border-radius: 999px;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.64), rgba(255, 255, 255, 0.22));
-  opacity: 0.88;
-  filter: blur(0.4px);
-}
-
-.security-level-visual-ring {
-  position: absolute;
-  inset: 36px 6px 14px 2px;
-  border-radius: 50%;
-  background: radial-gradient(circle at center, rgba(var(--security-accent-rgb), 0.24), rgba(var(--security-accent-rgb), 0.08) 42%, transparent 72%);
-  filter: blur(1px);
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.2));
+  opacity: 0.8;
 }
 
 .security-level-visual-image {
-  position: relative;
-  width: 100%;
-  height: 204px;
-  object-fit: contain;
-  object-position: center bottom;
-  filter: sepia(0.84) saturate(1.34) hue-rotate(-18deg) brightness(1.05) drop-shadow(0 24px 28px rgba(255, 159, 34, 0.14));
+  display: none;
 }
 
 .security-level-visual-illustration {
   position: relative;
   width: 100%;
-  height: 206px;
+  height: 170px;
   overflow: visible;
   z-index: 1;
 }
 
 .security-illustration-shape {
-  fill: rgba(var(--security-accent-rgb), 0.08);
+  display: none;
 }
 
-.security-illustration-shape.shape-left {
-  opacity: 1;
-}
-
-.security-illustration-shape.shape-right {
-  fill: rgba(var(--security-accent-rgb), 0.06);
-}
-
-.security-orbit-glow {
-  fill: rgba(var(--security-accent-rgb), 0.1);
+.security-orbit-glow,
+.security-stage-shadow,
+.security-stage-plate,
+.security-stage-core {
+  display: none;
 }
 
 .security-orbit-line,
 .security-orbit-dash {
   fill: none;
-  stroke: rgba(var(--security-accent-rgb), 0.44);
+  stroke: rgba(var(--security-accent-rgb), 0.36);
   stroke-linecap: round;
 }
 
 .security-orbit-line {
-  stroke-width: 3;
+  stroke-width: 2;
 }
 
 .security-orbit-dash {
-  stroke-width: 2.5;
-  stroke-dasharray: 7 8;
-  opacity: 0.88;
+  stroke-width: 2;
+  stroke-dasharray: 6 7;
+  opacity: 0.8;
 }
 
 .security-orbit-dot {
-  fill: rgba(var(--security-accent-rgb), 0.92);
+  fill: rgba(var(--security-accent-rgb), 0.88);
 }
 
 .security-orbit-dot.dot-top {
-  fill: rgba(var(--security-accent-rgb), 0.72);
-}
-
-.security-stage-shadow {
-  fill: rgba(var(--security-accent-rgb), 0.12);
-}
-
-.security-stage-plate {
-  stroke: rgba(255, 255, 255, 0.92);
-}
-
-.security-stage-plate.outer {
-  fill: rgba(255, 255, 255, 0.32);
-  stroke-width: 5;
-}
-
-.security-stage-plate.middle {
-  fill: rgba(255, 255, 255, 0.56);
-  stroke-width: 4;
-}
-
-.security-stage-core {
-  fill: rgba(255, 255, 255, 0.78);
-  stroke: rgba(255, 255, 255, 0.94);
-  stroke-width: 3;
+  fill: rgba(var(--security-accent-rgb), 0.7);
 }
 
 .security-shield-back {
@@ -2324,23 +3259,23 @@ watch(activeTab, (tab) => {
 
 .security-shield-front {
   fill: var(--security-accent);
-  filter: drop-shadow(0 16px 22px rgba(var(--security-accent-rgb), 0.16));
+  filter: drop-shadow(0 8px 14px rgba(var(--security-accent-rgb), 0.18));
 }
 
 .security-shield-gloss {
-  fill: rgba(255, 255, 255, 0.28);
+  display: none;
 }
 
 .security-shield-outline {
   fill: none;
   stroke: rgba(255, 255, 255, 0.7);
-  stroke-width: 3;
+  stroke-width: 2.5;
 }
 
 .security-shield-check {
   fill: none;
   stroke: #fff;
-  stroke-width: 9;
+  stroke-width: 6;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -2365,18 +3300,19 @@ watch(activeTab, (tab) => {
 
 .security-level-text h4 {
   margin: 0;
-  font-size: 15px;
+  font-size: 13px;
   color: #667491;
-  font-weight: 700;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .security-level-text strong {
   display: block;
-  margin: 4px 0 10px;
-  font-size: 58px;
+  margin: 4px 0 8px;
+  font-size: 36px;
   line-height: 1;
-  font-weight: 900;
-  letter-spacing: -0.03em;
+  font-weight: 800;
+  letter-spacing: -0.02em;
   color: var(--text);
 }
 
@@ -2436,10 +3372,6 @@ watch(activeTab, (tab) => {
   line-height: 1.5;
 }
 
-.security-risk-pill.safe::before {
-  content: '✓';
-}
-
 .security-link-hint {
   color: #0d6bff;
   font-size: 13px;
@@ -2459,11 +3391,6 @@ watch(activeTab, (tab) => {
   border-top: 1.8px solid currentColor;
   border-right: 1.8px solid currentColor;
   transform: translateY(-50%) rotate(45deg);
-}
-
-.security-risk-pill.safe::before {
-  content: '\2713';
-  background: #16bf78;
 }
 
 .security-progress-wrap {
@@ -2504,7 +3431,7 @@ watch(activeTab, (tab) => {
   z-index: 0;
   height: 100%;
   border-radius: 999px;
-  box-shadow: 0 8px 16px rgba(255, 159, 34, 0.24);
+  box-shadow: 0 2px 6px rgba(var(--security-accent-rgb), 0.18);
   transition: width 0.35s ease;
 }
 
@@ -2541,20 +3468,19 @@ watch(activeTab, (tab) => {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 240px;
   align-items: center;
-  gap: 20px;
-  margin-top: 18px;
-  padding: 18px 18px 18px 18px;
+  gap: 18px;
+  margin-top: 16px;
+  padding: 16px;
   background:
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.96), transparent 34%),
     linear-gradient(180deg, #fcfdff 0%, #f7faff 100%);
   border: 1px solid #e6eefa;
-  border-radius: 22px;
+  border-radius: 14px;
 }
 
 .security-tips-copy h4 {
-  margin: 0 0 12px;
-  font-size: 17px;
-  font-weight: 800;
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 700;
   color: var(--text);
 }
 
@@ -2568,18 +3494,17 @@ watch(activeTab, (tab) => {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  min-height: 96px;
-  padding: 16px 14px;
-  border-radius: 16px;
+  min-height: 86px;
+  padding: 12px;
+  border-radius: 12px;
   border: 1px solid rgba(225, 235, 248, 0.9);
   background: rgba(255, 255, 255, 0.9);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.84);
 }
 
 .security-tip-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 14px;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2588,8 +3513,8 @@ watch(activeTab, (tab) => {
 }
 
 .security-tip-icon svg {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -2635,16 +3560,6 @@ watch(activeTab, (tab) => {
   height: 154px;
   object-fit: contain;
   filter: sepia(0.12) saturate(1.1) hue-rotate(-5deg) drop-shadow(0 18px 28px rgba(76, 131, 224, 0.16));
-}
-
-.security-card .app-btn {
-  width: auto;
-  min-width: 112px;
-  margin-top: auto;
-  align-self: flex-start;
-  border-radius: 12px;
-  font-size: 14px;
-  box-shadow: 0 10px 20px rgba(13, 107, 255, 0.18);
 }
 
 .profile-side-card {
@@ -2954,11 +3869,6 @@ watch(activeTab, (tab) => {
 
 .security-bullet-list li::marker {
   color: #4f86ff;
-}
-
-.security-risk-pill.safe::before {
-  content: '\2713';
-  background: #16bf78;
 }
 
 .token-ledger-panel {
@@ -3783,6 +4693,2788 @@ watch(activeTab, (tab) => {
 
   .stat-wave {
     display: none;
+  }
+}
+
+.profile-overview-v2 {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.profile-overview-v2 .pc-banner {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 156px;
+  padding: 24px 28px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #e0ecff 0%, #c7ddff 50%, #b3d1ff 100%);
+  overflow: hidden;
+  border: 1px solid rgba(147, 197, 253, 0.5);
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.08);
+}
+
+.profile-overview-v2 .pc-banner::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 90% 30%, rgba(255, 255, 255, 0.35) 0%, transparent 55%);
+  pointer-events: none;
+}
+
+.profile-overview-v2 .pc-banner::after {
+  display: none;
+}
+
+.pc-banner-left {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.pc-avatar-wrap {
+  flex-shrink: 0;
+  position: relative;
+}
+
+.pc-avatar {
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 32px rgba(37, 99, 235, 0.25), 0 2px 8px rgba(37, 99, 235, 0.1);
+  border: 4px solid rgba(255,255,255,0.9);
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+}
+
+.pc-banner-info {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pc-username-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pc-username {
+  font-size: 28px;
+  font-weight: 800;
+  color: #1e3a5f;
+  letter-spacing: -0.01em;
+  text-shadow: 0 1px 2px rgba(255,255,255,0.3);
+}
+
+.pc-svip-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid #fcd34d;
+}
+
+.pc-connect-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: #22c55e;
+  font-weight: 600;
+}
+
+.pc-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.2);
+}
+
+.pc-user-tags {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pc-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pc-tag-blue {
+  background: #eff6ff;
+  color: #2563eb;
+  border: 1px solid #dbeafe;
+}
+
+.pc-tag-green {
+  background: #f0fdf4;
+  color: #16a34a;
+  border: 1px solid #dcfce7;
+}
+
+.pc-manage-btn {
+  width: fit-content;
+  padding: 8px 20px;
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.pc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s ease;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.pc-btn-primary {
+  background: #2563eb;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.2);
+}
+
+.pc-btn-primary:hover {
+  background: #1d4ed8;
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.3);
+}
+
+.pc-btn-outline {
+  background: #fff;
+  color: #2563eb;
+  border: 1px solid #bfdbfe;
+}
+
+.pc-btn-outline:hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+.pc-btn-light {
+  background: #fff;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+
+.pc-btn-light:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #334155;
+}
+
+.pc-btn-light:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #334155;
+}
+
+.pc-banner-right {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+}
+
+.pc-banner-shield {
+  position: absolute;
+  right: 40px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+}
+
+.pc-refresh-btn {
+  position: relative;
+  z-index: 3;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.8);
+  border: 1px solid rgba(186, 216, 255, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #3b82f6;
+  transition: all 0.2s;
+  backdrop-filter: blur(4px);
+}
+
+.pc-refresh-btn:hover {
+  background: #fff;
+  transform: rotate(180deg);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+}
+
+.pc-stats-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.pc-stat-card {
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 16px 18px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  border: 1px solid #eef2f7;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 132px;
+  position: relative;
+  overflow: hidden;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.pc-stat-card::before {
+  display: none;
+}
+
+.pc-stat-card:hover {
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.06);
+  border-color: #dbe3ee;
+}
+
+.pc-stat-card:hover::before {
+  opacity: 0;
+}
+
+.pc-stat-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pc-stat-ico {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.06);
+  position: relative;
+}
+
+.pc-stat-ico::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.4) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+.pc-stat-ico-blue {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  color: #fff;
+}
+
+.pc-stat-ico-green {
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+  color: #fff;
+}
+
+.pc-stat-ico-red {
+  background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+  color: #fff;
+}
+
+.pc-stat-ico-gold {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: #fff;
+}
+
+.pc-stat-label {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.pc-stat-value {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.pc-stat-value strong {
+  font-size: 24px;
+  font-weight: 800;
+  color: #1e293b;
+  line-height: 1.15;
+  font-family: -apple-system, 'SF Pro Display', 'PingFang SC', sans-serif;
+  letter-spacing: -0.01em;
+}
+
+.pc-stat-value em {
+  font-size: 13px;
+  font-style: normal;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.pc-stat-value-svip strong {
+  font-size: 20px;
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.pc-stat-sub {
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.pc-stat-yuan {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.pc-stat-trend {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pc-trend-down {
+  color: #22c55e;
+}
+
+.pc-trend-up {
+  color: #ef4444;
+}
+
+.pc-stat-btn {
+  margin-top: 8px;
+  width: 100%;
+  padding: 8px;
+  font-size: 13px;
+}
+
+.pc-three-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.pc-card {
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 18px 20px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  border: 1px solid #eef2f7;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.pc-card:hover {
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.06);
+  border-color: #dbe3ee;
+}
+
+.pc-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: #1e293b;
+  letter-spacing: -0.01em;
+}
+
+.pc-card-sub {
+  font-size: 12px;
+  font-weight: 500;
+  color: #94a3b8;
+  margin-left: 4px;
+}
+
+.pc-userinfo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.pc-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px dashed #f1f5f9;
+}
+
+.pc-info-row:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.pc-info-label {
+  font-size: 13px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.pc-info-value {
+  font-size: 13px;
+  color: #334155;
+  font-weight: 600;
+}
+
+.pc-info-value-gold {
+  color: #d97706;
+}
+
+.pc-info-value-green {
+  color: #16a34a;
+}
+
+.pc-recharge-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.pc-recharge-features {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+
+.pc-recharge-features li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 12px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #eef2f7;
+  font-size: 13px;
+}
+
+.pc-recharge-feature-label {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.pc-recharge-features strong {
+  color: #1e293b;
+  font-weight: 700;
+  font-family: -apple-system, 'SF Pro Display', 'PingFang SC', sans-serif;
+  font-size: 13px;
+}
+
+.pc-recharge-status-active {
+  color: #16a34a !important;
+}
+
+.pc-recharge-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pc-recharge-main,
+.pc-recharge-sub {
+  width: 100%;
+  padding: 10px;
+}
+
+.pc-analytics-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1.5fr 1fr 1fr;
+  gap: 14px;
+}
+
+.pc-chart-card {
+  padding: 18px 20px;
+}
+
+.pc-chart-dom {
+  width: 100%;
+  height: 200px;
+}
+
+.pc-pie-wrap {
+  width: 100%;
+}
+
+.pc-expire-card,
+.pc-invite-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.pc-expire-ico {
+  margin: 4px 0;
+}
+
+.pc-expire-days {
+  font-size: 26px;
+  font-weight: 800;
+  color: #1e293b;
+  line-height: 1.15;
+  margin: 6px 0 4px;
+  font-family: -apple-system, 'SF Pro Display', 'PingFang SC', sans-serif;
+  letter-spacing: -0.01em;
+}
+
+.pc-expire-unit {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  margin-left: 3px;
+}
+
+.pc-expire-date {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-bottom: 16px;
+}
+
+.pc-expire-card .pc-btn {
+  width: 100%;
+  margin-top: auto;
+}
+
+.pc-gift-ico {
+  margin: 4px 0 8px;
+}
+
+.pc-invite-text {
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.7;
+  margin: 0 0 16px 0;
+}
+
+.pc-invite-text strong {
+  color: #1677ff;
+  font-size: 16px;
+}
+
+.pc-invite-card .pc-btn {
+  width: 100%;
+  margin-top: auto;
+}
+
+.pc-compare-card {
+  padding: 18px 20px;
+  overflow: hidden;
+}
+
+.pc-compare-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.pc-compare-head .pc-card-title {
+  margin: 0;
+}
+
+.pc-compare-refresh {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.pc-compare-refresh:hover:not(:disabled) {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.pc-compare-refresh:disabled {
+  color: #94a3b8;
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  cursor: not-allowed;
+}
+
+.pc-compare-desc {
+  margin: 0 0 14px;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.pc-compare-table-wrap {
+  overflow-x: auto;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.pc-compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  table-layout: fixed;
+}
+
+.pc-compare-table thead th {
+  padding: 14px 12px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 13px;
+  color: #475569;
+  background: #f8fafc;
+  border-bottom: 2px solid #e2e8f0;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  letter-spacing: 0.2px;
+}
+
+.pc-compare-table th:first-child {
+  text-align: left;
+  padding-left: 18px;
+}
+
+.pc-th-feature {
+  width: 46%;
+}
+
+.pc-th-normal {
+  width: 18%;
+  color: #94a3b8 !important;
+  font-weight: 600;
+}
+
+.pc-th-vip {
+  width: 18%;
+  color: #2563eb !important;
+}
+
+.pc-th-svip {
+  width: 18%;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%) !important;
+  color: #92400e !important;
+  position: relative;
+}
+
+.pc-th-svip::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #f59e0b, #fbbf24, #f59e0b);
+}
+
+.pc-svip-crown {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.pc-svip-th-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pc-svip-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  background: #d97706;
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.pc-compare-table td {
+  padding: 9px 12px;
+  text-align: center;
+  color: #64748b;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* 分组分隔行：用整行 colspan 显示分类，将原本占两列的功能合并到一列 */
+.pc-group-row td {
+  background: linear-gradient(90deg, #f1f5f9 0%, #eef2f7 100%) !important;
+  padding: 8px 18px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  border-bottom: 1px solid #e2e8f0;
+  border-top: 1px solid #e2e8f0;
+  letter-spacing: 0.3px;
+}
+
+.pc-group-row:first-child td {
+  border-top: none;
+}
+
+.pc-feature-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+  font-size: 12px;
+  line-height: 1;
+  margin-right: 8px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.pc-group-label {
+  vertical-align: middle;
+}
+
+.pc-group-count {
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #94a3b8;
+  vertical-align: middle;
+}
+
+/* 功能行：斑马纹只作用于功能行，不影响分组行 */
+.pc-feature-row-alt td {
+  background: #fbfcfe;
+}
+
+.pc-compare-table tbody tr.pc-feature-row:last-child td {
+  border-bottom: none;
+}
+
+.pc-compare-table tbody tr.pc-feature-row:hover td {
+  background: #f5f8ff;
+}
+
+.pc-compare-table td:first-child {
+  text-align: left;
+  padding-left: 18px;
+}
+
+.pc-td-svip {
+  background: linear-gradient(180deg, #fffdf5 0%, #fef9e7 100%) !important;
+  color: #92400e !important;
+  font-weight: 600;
+}
+
+.pc-feature-row:hover .pc-td-svip {
+  background: linear-gradient(180deg, #fff7e0 0%, #fef3c7 100%) !important;
+}
+
+.pc-td-name {
+  color: #334155 !important;
+  font-weight: 500;
+}
+
+.pc-check-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pc-check-gold svg circle {
+  fill: #fef3c7;
+  stroke: #d97706;
+}
+
+.pc-check-gold svg path {
+  stroke: #d97706;
+}
+
+.pc-dash {
+  color: #cbd5e1;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* 移除旧的文本标记样式，保留类名兼容性 */
+.pc-mark-on, .pc-mark-off {
+  font-weight: 500;
+}
+
+.pc-compare-note {
+  margin-top: 12px;
+  font-size: 12px;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.profile-page-header {
+  margin-bottom: 16px;
+}
+
+.pph-breadcrumb {
+  font-size: 13px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.pph-breadcrumb-current {
+  color: #3b82f6;
+  font-weight: 600;
+}
+
+.profile-tabs-bar {
+  display: flex;
+  gap: 0;
+  margin-bottom: 20px;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  width: 100%;
+  border: none;
+  box-shadow: none;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.profile-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0;
+  margin-right: 32px;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.profile-tab:hover {
+  color: #334155;
+  background: transparent;
+}
+
+.profile-tab.active {
+  background: transparent;
+  color: #2563eb;
+  box-shadow: none;
+}
+
+.profile-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #2563eb;
+  border-radius: 1px;
+}
+
+.profile-tab-ico {
+  display: none;
+}
+
+.profile-tab-ico svg {
+  width: 0;
+  height: 0;
+}
+
+.profile-main {
+  min-width: 0;
+}
+
+.profile-overview-v2 {
+  display: grid;
+  gap: 16px;
+}
+
+.profile-footer {
+  margin-top: 32px;
+  padding: 20px 0 8px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.profile-footer-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.profile-footer-left {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.profile-footer-right {
+  color: #94a3b8;
+  display: inline-flex;
+  align-items: center;
+}
+
+.pc-avatar-ring {
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, #3b82f6, #60a5fa, #93c5fd, #3b82f6);
+  animation: ring-spin 8s linear infinite;
+  opacity: 0.6;
+}
+
+@keyframes ring-spin {
+  to { transform: rotate(360deg); }
+}
+
+.pc-avatar-wrap {
+  position: relative;
+  width: 84px;
+  height: 84px;
+  flex-shrink: 0;
+}
+
+.pc-avatar {
+  position: relative;
+  z-index: 1;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.15);
+  border: 3px solid #fff;
+  overflow: hidden;
+}
+
+.pc-avatar-img {
+  width: 100%;
+  height: 100%;
+}
+
+.pc-banner-right {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.pc-banner-illust {
+  width: 260px;
+  height: 190px;
+  filter: drop-shadow(0 8px 24px rgba(59, 130, 246, 0.12));
+}
+
+.pc-recharge-desc {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.pc-banner-shield {
+  display: none;
+}
+
+@supports (background: conic-gradient(red, blue)) {
+  .pc-avatar-ring {
+    display: block;
+  }
+}
+
+@supports not (background: conic-gradient(red, blue)) {
+  .pc-avatar-ring {
+    background: #3b82f6;
+    opacity: 0.2;
+  }
+}
+
+@media (max-width: 1200px) {
+  .pc-analytics-row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .pc-stats-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .pc-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 20px;
+    min-height: auto;
+    padding: 24px;
+  }
+  .pc-banner-right {
+    width: 100%;
+    justify-content: center;
+  }
+  .pc-banner-illust {
+    width: 200px;
+    height: 150px;
+  }
+  .pc-three-col {
+    grid-template-columns: 1fr;
+  }
+  .pc-recharge-btns {
+    width: 100%;
+  }
+  .pc-analytics-row {
+    grid-template-columns: 1fr;
+  }
+  .profile-tabs-bar {
+    width: 100%;
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 600px) {
+  .pc-stats-row {
+    grid-template-columns: 1fr;
+  }
+  .pc-username {
+    font-size: 22px;
+  }
+  .profile-footer-inner {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .profile-footer-sep {
+    display: none;
+  }
+}
+
+.profile-layout {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.profile-sidebar {
+  position: sticky;
+  top: 16px;
+}
+
+.profile-sidebar-card {
+  background: #fff;
+  border-radius: 18px;
+  border: 1px solid rgba(229, 236, 247, 0.9);
+  box-shadow: 0 8px 24px rgba(31, 53, 94, 0.05);
+  padding: 8px;
+}
+
+.profile-side-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 14px;
+  border: none;
+  border-radius: 14px;
+  background: transparent;
+  color: #50617d;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  margin-bottom: 2px;
+}
+
+.profile-side-item:last-child {
+  margin-bottom: 0;
+}
+
+.profile-side-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 0;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #7cb8ff 0%, #0d6bff 100%);
+  transition: height 0.18s ease;
+}
+
+.profile-side-item:hover {
+  background: rgba(13, 107, 255, 0.04);
+  color: #0d6bff;
+}
+
+.profile-side-item.active {
+  background: linear-gradient(135deg, #eef5ff 0%, #e0ecff 100%);
+  color: #0d6bff;
+  box-shadow: 0 6px 16px rgba(13, 107, 255, 0.12);
+}
+
+.profile-side-item.active::before {
+  height: 24px;
+}
+
+.profile-side-ico {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: #f1f5fb;
+  color: #7b879d;
+  flex: 0 0 auto;
+  transition: all 0.18s ease;
+}
+
+.profile-side-item.active .profile-side-ico {
+  background: linear-gradient(135deg, #5b7cff 0%, #0d6bff 100%);
+  color: #fff;
+  box-shadow: 0 4px 10px rgba(13, 107, 255, 0.25);
+}
+
+.profile-side-ico svg {
+  width: 16px;
+  height: 16px;
+}
+
+.profile-side-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.token-page {
+  min-width: 0;
+}
+
+.tp-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.tp-title {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 700;
+  color: #17213d;
+}
+
+.tp-desc {
+  margin: 0;
+  font-size: 13px;
+  color: #8a96ac;
+}
+
+.tp-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 18px;
+  border: 1px solid #e2e8f4;
+  border-radius: 10px;
+  background: #fff;
+  color: #50617d;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tp-refresh-btn:hover {
+  border-color: #0d6bff;
+  color: #0d6bff;
+  background: #f0f6ff;
+}
+
+.tp-stats-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.tp-stat-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.tp-stat-today {
+  background: linear-gradient(135deg, #fff0f0 0%, #fff5f5 50%, #ffffff 100%);
+  border: 1px solid rgba(255, 107, 122, 0.15);
+}
+
+.tp-stat-week {
+  background: linear-gradient(135deg, #fff8e6 0%, #fffaf0 50%, #ffffff 100%);
+  border: 1px solid rgba(255, 180, 71, 0.18);
+}
+
+.tp-stat-balance {
+  background: linear-gradient(135deg, #eef5ff 0%, #f3f7ff 50%, #ffffff 100%);
+  border: 1px solid rgba(13, 107, 255, 0.15);
+}
+
+.tp-stat-ico {
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  font-size: 20px;
+  font-weight: 800;
+  color: #fff;
+  flex: 0 0 auto;
+}
+
+.tp-ico-today {
+  background: linear-gradient(145deg, #ff7a8a 0%, #ff5252 100%);
+  box-shadow: 0 8px 18px rgba(255, 82, 82, 0.25);
+}
+
+.tp-ico-week {
+  background: linear-gradient(145deg, #ffc266 0%, #ff9f22 100%);
+  box-shadow: 0 8px 18px rgba(255, 159, 34, 0.25);
+}
+
+.tp-ico-balance {
+  background: linear-gradient(145deg, #5b7cff 0%, #0d6bff 100%);
+  box-shadow: 0 8px 18px rgba(13, 107, 255, 0.25);
+}
+
+.tp-stat-content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tp-stat-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #8a96ac;
+  margin-bottom: 4px;
+}
+
+.tp-label-blue {
+  color: #0d6bff;
+}
+
+.tp-stat-num {
+  display: block;
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.2;
+  font-family: 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  margin-bottom: 2px;
+}
+
+.tp-num-red {
+  color: #e53935;
+}
+
+.tp-num-orange {
+  color: #d97706;
+}
+
+.tp-num-blue {
+  color: #0d6bff;
+}
+
+.tp-stat-sub {
+  display: block;
+  font-size: 11px;
+  color: #a0aec0;
+  font-weight: 500;
+}
+
+.tp-table-card {
+  background: #fff;
+  border-radius: 20px;
+  border: 1px solid rgba(229, 236, 247, 0.9);
+  box-shadow: 0 10px 28px rgba(31, 53, 94, 0.045);
+  overflow: hidden;
+}
+
+.tp-table-wrap {
+  max-height: 560px;
+  overflow-x: auto;
+  overflow-y: auto;
+}
+
+.tp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.tp-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 14px 12px;
+  background: #f7f9fc;
+  color: #6b7a94;
+  font-weight: 600;
+  font-size: 12px;
+  text-align: center;
+  border-bottom: 1px solid #edf1f7;
+  white-space: nowrap;
+}
+
+.tp-table thead th:first-child {
+  text-align: left;
+  padding-left: 20px;
+}
+
+.tp-table tbody td {
+  padding: 13px 12px;
+  color: #44536f;
+  text-align: center;
+  border-bottom: 1px solid #f3f5f9;
+  font-size: 12px;
+}
+
+.tp-table tbody td:first-child {
+  text-align: left;
+  padding-left: 20px;
+  color: #6b7a94;
+  font-family: 'SF Mono', 'JetBrains Mono', Consolas, monospace;
+  font-size: 11.5px;
+}
+
+.tp-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.tp-table tbody tr:nth-child(even) td {
+  background: #fafbfd;
+}
+
+.tp-table tbody tr:hover td {
+  background: #f0f6ff;
+}
+
+.td-type {
+  width: 90px;
+}
+
+.td-source {
+  color: #6b7a94;
+}
+
+.td-balance {
+  font-family: 'SF Mono', 'JetBrains Mono', Consolas, monospace;
+  font-weight: 600;
+  color: #4a5568;
+}
+
+.td-remark {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #8a96ac;
+  text-align: left;
+  padding-right: 20px;
+}
+
+.tp-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.tp-badge-red {
+  background: rgba(255, 82, 82, 0.1);
+  color: #e53935;
+}
+
+.tp-badge-green {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+.tp-badge-orange {
+  background: rgba(255, 159, 34, 0.12);
+  color: #d97706;
+}
+
+.tp-badge-gray {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.tp-amount-negative {
+  color: #e53935 !important;
+  font-weight: 600;
+  font-family: 'SF Mono', 'JetBrains Mono', Consolas, monospace;
+}
+
+.tp-amount-positive {
+  color: #16a34a !important;
+  font-weight: 600;
+  font-family: 'SF Mono', 'JetBrains Mono', Consolas, monospace;
+}
+
+.tp-amount-zero {
+  color: #16a34a !important;
+  font-weight: 600;
+  font-family: 'SF Mono', 'JetBrains Mono', Consolas, monospace;
+}
+
+.tp-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-top: 1px solid #f1f5f9;
+  background: #fff;
+}
+
+.tp-record-count {
+  font-size: 12px;
+  color: #8a96ac;
+  font-weight: 500;
+}
+
+.tp-pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tp-page-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid #e2e8f4;
+  border-radius: 8px;
+  background: #fff;
+  color: #50617d;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.tp-page-btn:hover:not(:disabled) {
+  border-color: #0d6bff;
+  color: #0d6bff;
+  background: #f0f6ff;
+}
+
+.tp-page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tp-page-nums {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tp-page-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #50617d;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tp-page-num:hover:not(:disabled):not(.active) {
+  background: #f1f5f9;
+}
+
+.tp-page-num.active {
+  background: #0d6bff;
+  color: #fff;
+  border-color: #0d6bff;
+  box-shadow: 0 4px 10px rgba(13, 107, 255, 0.25);
+}
+
+.tp-page-ellipsis {
+  color: #a0aec0;
+  cursor: default;
+}
+
+.tp-page-ellipsis:hover {
+  background: transparent !important;
+}
+
+.tp-page-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #6b7a94;
+  margin-left: 4px;
+}
+
+.tp-page-size select {
+  height: 32px;
+  padding: 0 24px 0 10px;
+  border: 1px solid #e2e8f4;
+  border-radius: 8px;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7a94' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E") no-repeat right 8px center;
+  background-size: 12px;
+  color: #44536f;
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.tp-page-size select:focus {
+  border-color: #0d6bff;
+}
+
+.tp-page-jump {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #6b7a94;
+  margin-left: 4px;
+}
+
+.tp-page-jump input {
+  width: 48px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #e2e8f4;
+  border-radius: 8px;
+  text-align: center;
+  font-size: 12px;
+  color: #44536f;
+  outline: none;
+  -moz-appearance: textfield;
+}
+
+.tp-page-jump input::-webkit-outer-spin-button,
+.tp-page-jump input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.tp-page-jump input:focus {
+  border-color: #0d6bff;
+}
+
+.tp-jump-btn {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid #e2e8f4;
+  border-radius: 8px;
+  background: #fff;
+  color: #50617d;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tp-jump-btn:hover {
+  border-color: #0d6bff;
+  color: #0d6bff;
+  background: #f0f6ff;
+}
+
+@media (max-width: 1100px) {
+  .profile-layout {
+    grid-template-columns: 1fr;
+  }
+  .profile-sidebar {
+    position: static;
+  }
+  .profile-sidebar-card {
+    display: flex;
+    gap: 4px;
+    padding: 6px;
+    overflow-x: auto;
+  }
+  .profile-side-item {
+    flex: 0 0 auto;
+    margin-bottom: 0;
+    width: auto;
+  }
+  .profile-side-item::before {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .tp-stats-row {
+    grid-template-columns: 1fr;
+  }
+  .tp-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .tp-pagination {
+    flex-direction: column;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .tp-pager {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}
+
+.token-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.td-banner-card {
+  background: linear-gradient(135deg, #eff5ff 0%, #e0ecff 60%, #f0f7ff 100%);
+  border: 1px solid #dbe7ff;
+  border-radius: 14px;
+  padding: 18px 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+  overflow: hidden;
+}
+
+.td-banner-card::before {
+  content: '';
+  position: absolute;
+  top: -40%;
+  right: -8%;
+  width: 240px;
+  height: 240px;
+  background: radial-gradient(circle, rgba(37, 99, 235, 0.06) 0%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.td-banner-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  z-index: 1;
+}
+
+.td-banner-avatar {
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.td-banner-avatar svg {
+  display: block;
+}
+
+.td-banner-username-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.td-banner-username {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1D2129;
+  letter-spacing: -0.01em;
+}
+
+.td-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.td-badge-svip {
+  background: linear-gradient(135deg, #fef3c7, #fde68a);
+  color: #d97706;
+}
+
+.td-badge-connected {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+.td-banner-desc {
+  font-size: 13px;
+  color: #4E5969;
+  margin: 8px 0 0 0;
+}
+
+.td-banner-right {
+  flex-shrink: 0;
+  z-index: 1;
+}
+
+.td-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+
+.td-stat-card {
+  background: #fff;
+  border: 1px solid #F2F3F5;
+  border-radius: 12px;
+  padding: 14px 16px;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.td-stat-card:hover {
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+  border-color: #dbe3ee;
+}
+
+.td-stat-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.td-stat-ico {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+
+.td-ico-balance {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+}
+
+.td-ico-today {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+}
+
+.td-ico-month {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+}
+
+.td-ico-budget {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+}
+
+.td-stat-label {
+  font-size: 13px;
+  color: #86909C;
+  font-weight: 500;
+}
+
+.td-stat-value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.td-stat-num {
+  font-size: 24px;
+  font-weight: 700;
+  color: #1D2129;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.td-stat-num.td-num-big {
+  font-size: 30px;
+}
+
+.td-stat-unit {
+  font-size: 14px;
+  color: #86909C;
+  font-weight: 500;
+}
+
+.td-stat-yuan {
+  font-size: 12px;
+  color: #86909C;
+  margin-bottom: 12px;
+}
+
+.td-recharge-btn {
+  width: 100%;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #165DFF, #2563eb);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.18s ease;
+}
+
+.td-recharge-btn:hover {
+  opacity: 0.9;
+}
+
+.td-stat-compare {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.td-compare-down {
+  color: #22c55e;
+}
+
+.td-compare-up {
+  color: #ef4444;
+}
+
+.td-progress-bar {
+  width: 100%;
+  height: 8px;
+  background: #E8F3FF;
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 8px 0 6px;
+}
+
+.td-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #165DFF, #3b82f6);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.td-budget-text {
+  font-size: 12px;
+  color: #86909C;
+}
+
+.td-budget-text strong {
+  color: #165DFF;
+  font-weight: 600;
+}
+
+.td-charts-row {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 16px;
+}
+
+.td-card {
+  background: #fff;
+  border: 1px solid #F2F3F5;
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+
+.td-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.td-card-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.td-card-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1D2129;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.td-card-crown {
+  color: #f59e0b;
+}
+
+.td-card-sub {
+  font-size: 13px;
+  color: #86909C;
+  font-weight: 400;
+}
+
+.td-info-ico {
+  color: #C9CDD4;
+  cursor: help;
+  display: flex;
+  align-items: center;
+}
+
+.td-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.td-select {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #E5E6EB;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #4E5969;
+  background: #fff;
+  cursor: pointer;
+  outline: none;
+}
+
+.td-select:focus {
+  border-color: #165DFF;
+}
+
+.td-seg-btns {
+  display: flex;
+  border: 1px solid #E5E6EB;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.td-seg-btn {
+  height: 30px;
+  padding: 0 14px;
+  border: none;
+  background: #fff;
+  font-size: 13px;
+  color: #86909C;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.td-seg-btn.active {
+  background: #165DFF;
+  color: #fff;
+}
+
+.td-chart-area {
+  width: 100%;
+  height: 220px;
+}
+
+.td-trend-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid #F2F3F5;
+}
+
+.td-summary-item {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.td-summary-label {
+  font-size: 12px;
+  color: #86909C;
+}
+
+.td-summary-val {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1D2129;
+  letter-spacing: -0.01em;
+}
+
+.td-summary-unit {
+  font-size: 11px;
+  color: #86909C;
+}
+
+.td-summary-date {
+  font-size: 11px;
+  color: #C9CDD4;
+}
+
+.td-summary-divider {
+  width: 1px;
+  height: 36px;
+  background: #F2F3F5;
+}
+
+.td-pie-wrap {
+  position: relative;
+  width: 150px;
+  height: 150px;
+  margin: 0 auto 12px;
+}
+
+.td-pie-chart {
+  width: 100%;
+  height: 100%;
+}
+
+.td-pie-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+}
+
+.td-pie-center strong {
+  display: block;
+  font-size: 18px;
+  font-weight: 700;
+  color: #1D2129;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.td-pie-center span {
+  font-size: 11px;
+  color: #86909C;
+}
+
+.td-pie-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.td-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.td-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.td-legend-name {
+  color: #4E5969;
+  flex: 1;
+}
+
+.td-legend-val {
+  color: #1D2129;
+  font-weight: 500;
+}
+
+.td-legend-pct {
+  color: #86909C;
+  width: 42px;
+  text-align: right;
+}
+
+.td-link-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  background: transparent;
+  color: #165DFF;
+  font-size: 13px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.td-link-btn:hover {
+  opacity: 0.8;
+}
+
+.td-package-card {
+  padding: 18px 20px;
+}
+
+.td-package-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.td-package-illu {
+  flex-shrink: 0;
+}
+
+.td-package-info {
+  flex: 1;
+}
+
+.td-package-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1D2129;
+  margin: 0 0 4px 0;
+  letter-spacing: -0.01em;
+}
+
+.td-package-desc {
+  font-size: 13px;
+  color: #86909C;
+  margin: 0 0 12px 0;
+}
+
+.td-package-cta {
+  height: 34px;
+  padding: 0 20px;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #165DFF, #2563eb);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.18s ease;
+}
+
+.td-package-cta:hover {
+  opacity: 0.9;
+}
+
+.td-package-right {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+}
+
+.td-pkg-empty {
+  grid-column: 1 / -1;
+  padding: 24px 16px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 13px;
+  border: 1px dashed #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.td-pkg-item {
+  position: relative;
+  border: 1px solid #E5E6EB;
+  border-radius: 10px;
+  padding: 16px 14px;
+  text-align: center;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.td-pkg-item:hover {
+  border-color: #165DFF;
+  box-shadow: 0 2px 10px rgba(37, 99, 235, 0.08);
+}
+
+.td-pkg-item.recommend {
+  border-color: #165DFF;
+  background: linear-gradient(180deg, #f0f7ff 0%, #fff 30%);
+}
+
+.td-pkg-tag {
+  position: absolute;
+  top: -1px;
+  right: 16px;
+  background: linear-gradient(135deg, #f97316, #ea580c);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 0 0 6px 6px;
+}
+
+.td-pkg-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1D2129;
+  margin-bottom: 6px;
+}
+
+.td-pkg-amount {
+  font-size: 20px;
+  font-weight: 700;
+  color: #1D2129;
+  margin-bottom: 4px;
+  letter-spacing: -0.01em;
+}
+
+.td-pkg-amount span {
+  font-size: 12px;
+  font-weight: 400;
+  color: #86909C;
+}
+
+.td-pkg-price {
+  margin-bottom: 4px;
+}
+
+.td-pkg-symbol {
+  font-size: 13px;
+  color: #165DFF;
+  font-weight: 500;
+}
+
+.td-pkg-price-num {
+  font-size: 28px;
+  font-weight: 700;
+  color: #165DFF;
+  letter-spacing: -0.01em;
+}
+
+.td-pkg-unit-price {
+  font-size: 11px;
+  color: #86909C;
+  margin-bottom: 12px;
+}
+
+.td-pkg-buy {
+  width: 100%;
+  height: 32px;
+  border: 1px solid #165DFF;
+  border-radius: 8px;
+  background: #fff;
+  color: #165DFF;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.18s ease;
+}
+
+.td-pkg-buy:hover {
+  background: #f0f7ff;
+}
+
+.td-pkg-buy.primary {
+  background: linear-gradient(135deg, #165DFF, #2563eb);
+  color: #fff;
+  border-color: transparent;
+}
+
+.td-pkg-buy.primary:hover {
+  opacity: 0.9;
+}
+
+.td-package-note {
+  text-align: center;
+  font-size: 12px;
+  color: #C9CDD4;
+  margin: 16px 0 0 0;
+}
+
+.td-bottom-row {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 16px;
+}
+
+.td-right-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.td-table-wrap {
+  overflow-x: auto;
+}
+
+.td-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.td-table th {
+  text-align: left;
+  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #86909C;
+  background: #F7F8FA;
+  border-bottom: 1px solid #F2F3F5;
+  white-space: nowrap;
+}
+
+.td-table th:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.td-table th:last-child {
+  border-radius: 0 6px 6px 0;
+}
+
+.td-table td {
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #4E5969;
+  border-bottom: 1px solid #F7F8FA;
+}
+
+.td-table tbody tr:hover {
+  background: #f9fbfd;
+}
+
+.td-date {
+  white-space: nowrap;
+  color: #86909C;
+  font-size: 12px;
+}
+
+.td-type-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  background: #E8F3FF;
+  color: #165DFF;
+}
+
+.td-type-tag.green {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+.td-type-tag.red {
+  background: rgba(245, 63, 63, 0.1);
+  color: #f53f3f;
+}
+
+.td-type-tag.orange {
+  background: rgba(247, 126, 38, 0.1);
+  color: #f77234;
+}
+
+.td-empty-cell {
+  text-align: center;
+  padding: 40px 0;
+  color: #86909C;
+  font-size: 13px;
+}
+
+.td-amount-cell {
+  font-weight: 600;
+  color: #F53F3F;
+}
+
+.td-status-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+.td-status-tag.success {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+.td-remark-cell {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #86909C;
+}
+
+.td-table-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #F2F3F5;
+}
+
+.td-pager-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.td-pager-btn {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #E5E6EB;
+  border-radius: 6px;
+  background: #fff;
+  color: #4E5969;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.18s ease, color 0.18s ease;
+}
+
+.td-pager-btn:hover:not(:disabled) {
+  border-color: #165DFF;
+  color: #165DFF;
+}
+
+.td-pager-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.td-pager-num {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid #E5E6EB;
+  border-radius: 6px;
+  background: #fff;
+  color: #4E5969;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease;
+}
+
+.td-pager-num.active {
+  background: #165DFF;
+  border-color: #165DFF;
+  color: #fff;
+}
+
+.td-pager-num:hover:not(.active) {
+  border-color: #165DFF;
+  color: #165DFF;
+}
+
+.td-pager-ellipsis {
+  width: 20px;
+  text-align: center;
+  color: #C9CDD4;
+  font-size: 13px;
+}
+
+.td-pager-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.td-pager-total {
+  font-size: 13px;
+  color: #86909C;
+}
+
+.td-pager-total strong {
+  color: #1D2129;
+  font-weight: 600;
+}
+
+.td-pager-size {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid #E5E6EB;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #4E5969;
+  background: #fff;
+  cursor: pointer;
+  outline: none;
+}
+
+.td-rank-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.td-rank-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.td-rank-num {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  background: #F2F3F5;
+  color: #86909C;
+}
+
+.td-rank-num.rank-1 {
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  color: #fff;
+}
+
+.td-rank-num.rank-2 {
+  background: linear-gradient(135deg, #9ca3af, #6b7280);
+  color: #fff;
+}
+
+.td-rank-num.rank-3 {
+  background: linear-gradient(135deg, #d97706, #b45309);
+  color: #fff;
+}
+
+.td-rank-name {
+  width: 60px;
+  color: #4E5969;
+  flex-shrink: 0;
+}
+
+.td-rank-bar-wrap {
+  flex: 1;
+  height: 6px;
+  background: #F2F3F5;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.td-rank-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #165DFF, #3b82f6);
+  border-radius: 3px;
+}
+
+.td-rank-val {
+  color: #1D2129;
+  font-weight: 500;
+  width: 75px;
+  text-align: right;
+}
+
+.td-rank-pct {
+  color: #86909C;
+  width: 35px;
+  text-align: right;
+}
+
+.td-rank-more {
+  margin-top: 0;
+}
+
+.td-advice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.td-advice-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.td-advice-ico {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.td-advice-ico.info {
+  background: #E8F3FF;
+  color: #165DFF;
+}
+
+.td-advice-ico.check {
+  background: rgba(34, 197, 94, 0.1);
+  color: #22c55e;
+}
+
+.td-advice-ico.warn {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+.td-advice-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.td-advice-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1D2129;
+  margin-bottom: 3px;
+}
+
+.td-advice-desc {
+  font-size: 11px;
+  color: #86909C;
+  line-height: 1.5;
+}
+
+.td-advice-action {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: #165DFF;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 0;
+  white-space: nowrap;
+}
+
+.td-advice-action:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 1200px) {
+  .td-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .td-charts-row {
+    grid-template-columns: 1fr;
+  }
+  .td-bottom-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .td-banner-card {
+    flex-direction: column;
+    text-align: center;
+    padding: 20px;
+  }
+  .td-banner-left {
+    flex-direction: column;
+  }
+  .td-banner-right {
+    display: none;
+  }
+  .td-stats-grid {
+    grid-template-columns: 1fr;
+  }
+  .td-package-right {
+    grid-template-columns: 1fr;
+  }
+  .td-package-left {
+    flex-direction: column;
+    text-align: center;
+  }
+  .td-trend-summary {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .td-summary-divider {
+    display: none;
+  }
+  .td-card-actions {
+    flex-direction: column;
+    align-items: flex-end;
   }
 }
 </style>

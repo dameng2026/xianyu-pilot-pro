@@ -1,5 +1,11 @@
 import { chromium, Browser, Page, BrowserContextOptions, Cookie, Response } from 'playwright';
+import path from 'path';
+import os from 'os';
+import fs from 'fs/promises';
+import fsSync from 'fs';
+import { spawn } from 'child_process';
 import { isSafeBrowserResourceUrl, normalizeGoofishTargetUrl, safeErrorType } from '../policy.js';
+import { ANTI_DETECT_SCRIPT } from './sliderSolver.js';
 
 export interface SearchResultItem {
   itemId?: string;
@@ -35,12 +41,15 @@ const SEARCH_API_MARKER = 'mtop.taobao.idlemtopsearch.pc.search';
  * MTOP 响应竞速结果。
  * - ok=true 表示成功解析到商品（items 为非空数组）
  * - ok=false 表示 MTOP 返回非成功状态（如 Baxia 风控），items 为空数组，error 携带 retMsg
+ * - punishUrl 仅在 MTOP 返回 FAIL_SYS_USER_VALIDATE 且 data 含 punish URL 时存在，
+ *   主流程据此触发滑块求解后重试
  * 调用方仍可通过外部 networkItems 数组读取已捕获的商品（向后兼容）
  */
 interface MtopSettleResult {
   ok: boolean;
   items: SearchResultItem[];
   error?: string;
+  punishUrl?: string;
 }
 
 /**
@@ -209,7 +218,7 @@ function deduplicateItems(items: SearchResultItem[]): SearchResultItem[] {
  * 使用 DOM 选择器从搜索页面提取商品卡片信息（作为网络拦截的兜底）。
  */
 async function extractFromDom(page: Page): Promise<SearchResultItem[]> {
-  return page.evaluate(() => {
+  const rawResults = await page.evaluate(() => {
     const results: SearchResultItem[] = [];
     const seen = new Set<string>();
 
@@ -300,6 +309,18 @@ async function extractFromDom(page: Page): Promise<SearchResultItem[]> {
 
     return results;
   });
+  // 过滤非商品链接：风控降级时页面会显示"绿色消费"等引导链接，不应作为商品返回
+  return rawResults.filter((item) => {
+    const url = item.itemUrl || '';
+    // 有数字 itemId 的一律保留
+    if (item.itemId && /^\d+$/.test(item.itemId)) return true;
+    // 非 goofish.com 域名过滤掉（如 12377.cn、gov.cn 等引导链接）
+    if (url && !url.includes('goofish.com')) return false;
+    // goofish.com/publish 等引导链接过滤掉
+    if (url.includes('goofish.com/publish')) return false;
+    // 其他 goofish.com 链接保留（可能商品详情页）
+    return true;
+  });
 }
 
 /**
@@ -324,6 +345,175 @@ async function extractPagination(page: Page): Promise<{ total: number; hasMore?:
     );
 
     return { total, hasMore };
+  });
+}
+
+/**
+ * 通过 Python patchright 脚本执行搜索（Node Playwright 的最终兜底方案）。
+ *
+ * 触发场景：Node Playwright 即使使用真实 Chrome channel + ignoreDefaultArgs 仍被 Baxia
+ * 识别为自动化（CDP 协议痕迹 cdc_/__playwright__/Runtime.enable 无法清除）。
+ * patchright 是 Playwright 的反检测分支，自动清理所有 CDP 痕迹，已验证不触发风控。
+ *
+ * 实现：spawn goofishSearch.py，通过 CLI 传递 keyword/page/pageSize/cookieFile，
+ * 从 stdout 最后一行解析 JSON 结果。
+ *
+ * @returns 搜索结果；返回 null 表示未尝试或脚本异常
+ */
+async function searchViaPythonScript(options: {
+  keyword: string;
+  pageNum: number;
+  pageSize: number;
+  cookieStr: string;
+  timeoutMs?: number;
+}): Promise<{ items: SearchResultItem[]; total?: number; hasMore?: boolean } | null> {
+  // 仅在 Windows + 有头模式尝试（与 sliderSolve.py 一致）
+  if (process.platform !== 'win32') {
+    return null;
+  }
+  if (!options.cookieStr) {
+    return null;
+  }
+
+  // 定位 Python 脚本（与 sliderSolve.py 同目录，即 crawler-service 根目录）
+  const scriptPath = path.join(process.cwd(), 'goofishSearch.py');
+  if (!fsSync.existsSync(scriptPath)) {
+    console.warn(`[SearchCrawler] Python 搜索脚本不存在: ${scriptPath}`);
+    return null;
+  }
+
+  // 定位 Python 可执行文件
+  const pythonCandidates = [
+    process.env.PYTHON_PATH,
+    'python',
+    'python3',
+    'py',
+  ].filter(Boolean) as string[];
+  let pythonPath: string | null = null;
+  for (const candidate of pythonCandidates) {
+    try {
+      fsSync.accessSync(candidate, fsSync.constants.X_OK);
+      pythonPath = candidate;
+      break;
+    } catch {
+      try {
+        const { execSync } = await import('child_process');
+        execSync(`${candidate} --version`, { stdio: 'pipe', timeout: 5000 });
+        pythonPath = candidate;
+        break;
+      } catch {
+        // continue
+      }
+    }
+  }
+  if (!pythonPath) {
+    console.warn('[SearchCrawler] 未找到 Python 可执行文件');
+    return null;
+  }
+
+  // 写入临时 Cookie 文件（Cookie 可能很长，不走 CLI 参数）
+  const tmpDir = os.tmpdir();
+  const cookieFile = path.join(tmpDir, `goofish-search-cookie-${Date.now()}.txt`);
+  try {
+    await fs.writeFile(cookieFile, options.cookieStr, 'utf-8');
+  } catch (e) {
+    console.warn(`[SearchCrawler] 写入临时 Cookie 文件失败: ${safeErrorType(e)}`);
+    return null;
+  }
+
+  const args = [
+    scriptPath,
+    '--keyword', options.keyword,
+    '--page', String(options.pageNum),
+    '--page-size', String(options.pageSize),
+    '--cookie-file', cookieFile,
+  ];
+
+  console.log(`[SearchCrawler] 调用 Python patchright 脚本搜索: ${pythonPath} ${scriptPath}`);
+  console.log(`[SearchCrawler]   keyword=${options.keyword}, page=${options.pageNum}, pageSize=${options.pageSize}`);
+
+  return new Promise((resolve) => {
+    const child = spawn(pythonPath!, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: false,
+      cwd: process.cwd(),
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data: Buffer) => {
+      const text = data.toString('utf-8');
+      stdout += text;
+      // 实时打印 Python 脚本输出（便于诊断）
+      process.stdout.write(`[goofishSearch.py] ${text}`);
+    });
+    child.stderr.on('data', (data: Buffer) => {
+      const text = data.toString('utf-8');
+      stderr += text;
+      process.stderr.write(`[goofishSearch.py:err] ${text}`);
+    });
+
+    // 总超时：搜索场景不求解滑块，Python patchright 直接导航搜索 URL 实测 5-10s 能完成。
+    // 默认 30s，调用方可传入更短超时（如搜索兜底场景传 15s）。
+    const totalTimeout = options.timeoutMs ?? 30000;
+    const timer = setTimeout(() => {
+      console.warn(`[SearchCrawler] Python 搜索脚本超时 (${totalTimeout}ms)，终止进程`);
+      try { child.kill('SIGTERM'); } catch { /* ignore */ }
+      setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch { /* ignore */ }
+      }, 2000);
+    }, totalTimeout);
+
+    child.on('close', (code: number) => {
+      clearTimeout(timer);
+      // 清理临时 Cookie 文件
+      fs.unlink(cookieFile).catch(() => { /* ignore */ });
+
+      // 从 stdout 最后一行解析 JSON 结果（与 sliderSolve.py 协议一致）
+      const lines = stdout.split(/\r?\n/).filter((l) => l.trim());
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (line.startsWith('{') && line.endsWith('}')) {
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed && typeof parsed === 'object' && 'ok' in parsed) {
+              if (parsed.ok && Array.isArray(parsed.items) && parsed.items.length > 0) {
+                console.log(`[SearchCrawler] Python 脚本搜索成功: ${parsed.items.length} 个商品 (exit=${code})`);
+                resolve({
+                  items: parsed.items.map((it: Record<string, unknown>) => ({
+                    itemId: String(it.itemId || ''),
+                    title: String(it.title || ''),
+                    price: String(it.price || ''),
+                    imageUrl: String(it.imageUrl || ''),
+                    itemUrl: String(it.itemUrl || ''),
+                    userNickName: String(it.userNickName || ''),
+                    area: String(it.area || ''),
+                  })),
+                  total: typeof parsed.total === 'number' ? parsed.total : undefined,
+                  hasMore: typeof parsed.hasMore === 'boolean' ? parsed.hasMore : undefined,
+                });
+                return;
+              }
+              console.log(`[SearchCrawler] Python 脚本搜索未返回结果: ok=${parsed.ok}, error=${parsed.error || ''} (exit=${code})`);
+              resolve(null);
+              return;
+            }
+          } catch {
+            // 非合法 JSON，继续向上找
+          }
+        }
+      }
+      console.log(`[SearchCrawler] Python 脚本搜索未输出 JSON 结果 (exit=${code})`);
+      resolve(null);
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      fs.unlink(cookieFile).catch(() => { /* ignore */ });
+      console.warn(`[SearchCrawler] Python 脚本进程错误: ${safeErrorType(err)}`);
+      resolve(null);
+    });
   });
 }
 
@@ -361,6 +551,7 @@ export async function crawlGoofishSearch(
   let mtopSettled = false;
   // 用于在拦截到 MTOP 响应后立即唤醒主流程，避免无谓的固定等待
   // resolve 携带 ok/items/error 字段，调用方仍可通过 networkItems 读取结果（向后兼容）
+  // 搜索场景不求解滑块，mtopDone 只 resolve 一次，故用 const
   let mtopResolve!: (value: MtopSettleResult) => void;
   const mtopDone = new Promise<MtopSettleResult>((resolve) => {
     mtopResolve = resolve;
@@ -370,13 +561,19 @@ export async function crawlGoofishSearch(
     browser = await chromium.launch({
       headless,
       chromiumSandbox: true,
-      ...(isWindows && !headless ? { channel: 'chrome' } : {}),
+      // 使用真实 Chrome channel（而非 Chromium），降低被 Baxia 识别为自动化的概率
+      // sliderSolver.ts 验证：真实 Chrome + ignoreDefaultArgs 是求解滑块成功的关键配置
+      ...(isWindows ? { channel: 'chrome' } : {}),
+      // 移除 Playwright 默认的 --enable-automation 参数，这是 Baxia 识别自动化的强信号
+      ignoreDefaultArgs: ['--enable-automation'],
     });
 
     const contextOptions: BrowserContextOptions = {
       viewport: { width: 1366, height: 900 },
       userAgent:
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      locale: 'zh-CN',
+      timezoneId: 'Asia/Shanghai',
     };
 
     // 注入 Cookie，让浏览器使用已登录的闲鱼会话
@@ -407,6 +604,9 @@ export async function crawlGoofishSearch(
     }
 
     const context = await browser.newContext(contextOptions);
+    // 注入反检测脚本，覆盖 navigator.webdriver / plugins / WebGL vendor / Canvas 指纹等
+    // Baxia 风控常用检测点，避免 headless 浏览器被识别为自动化而触发 FAIL_SYS_USER_VALIDATE
+    await context.addInitScript(ANTI_DETECT_SCRIPT);
     await context.route('**/*', async (route) => {
       const request = route.request();
       if (!isSafeBrowserResourceUrl(request.url())) {
@@ -471,9 +671,21 @@ export async function crawlGoofishSearch(
         if (retMsg && !retMsg.includes('SUCCESS')) {
           // MTOP 返回非成功（如 Baxia 风控）：立即 settle 为失败，唤醒主流程走 DOM 兜底，
           // 避免主流程等满 6 秒超时。不抛出异常，保持向后兼容（调用方读取 items 仍为空数组）。
-          console.log(`[SearchCrawler] MTOP 搜索返回非成功: retMsg=${retMsg}`);
+          // 若 retMsg 包含 FAIL_SYS_USER_VALIDATE 且 data.url 含 punish URL，
+          // 把 punishUrl 一并 settle 给主流程，触发滑块求解后重试。
+          let punishUrl: string | undefined;
+          if (retMsg.includes('FAIL_SYS_USER_VALIDATE')) {
+            const dataObj = jsonObj.data as Record<string, unknown> | undefined;
+            const urlVal = dataObj?.url;
+            if (typeof urlVal === 'string' && urlVal.includes('punish')) {
+              punishUrl = urlVal;
+            }
+          }
+          console.log(
+            `[SearchCrawler] MTOP 搜索返回非成功: retMsg=${retMsg}${punishUrl ? ' (含 punish URL，将尝试滑块求解)' : ''}`,
+          );
           mtopSettled = true;
-          mtopResolve({ ok: false, items: [], error: retMsg });
+          mtopResolve({ ok: false, items: [], error: retMsg, punishUrl });
           return;
         }
 
@@ -504,12 +716,49 @@ export async function crawlGoofishSearch(
     // 竞速等待：MTOP API 响应到达 vs. 最大 6 秒超时
     // 之前固定等待 4s + autoScroll 3s + 1.5s = 8.5s，现在改为事件驱动
     const maxWaitMs = 6000;
-    await Promise.race([
+    let raceResult: MtopSettleResult = await Promise.race([
       mtopDone,
       new Promise<MtopSettleResult>((resolve) =>
         setTimeout(() => resolve({ ok: false, items: [], error: 'timeout' }), maxWaitMs),
       ),
     ]);
+
+    // 若 MTOP 返回 FAIL_SYS_USER_VALIDATE 且含 punish URL，说明 Node Playwright 已被 Baxia 识别为自动化。
+    // 搜索场景不求解滑块（首页停留>5s 反而会触发更多风控），直接委托 Python patchright 完成搜索：
+    //   - patchright 自动清理 CDP 痕迹（cdc_/__playwright__/Runtime.enable）
+    //   - 直接 goto 搜索 URL，不在首页停留，避免触发滑块
+    //   - 实测 5-10s 内能完成搜索
+    if (raceResult.punishUrl && networkItems.length === 0 && cookieStr) {
+      console.log('[SearchCrawler] 检测到 Baxia 风控 punish URL，直接委托 Python patchright 搜索（不求解滑块）');
+      // 先关闭当前浏览器，避免两个 Chrome 实例争抢资源
+      try {
+        if (browser) {
+          await browser.close();
+          browser = null;
+          console.log('[SearchCrawler] 已关闭 Node Playwright 浏览器，准备启动 Python patchright');
+        }
+      } catch (err) {
+        console.log(`[SearchCrawler] 关闭 Node 浏览器异常（忽略）: errorType=${safeErrorType(err)}`);
+      }
+      const pythonResult = await searchViaPythonScript({
+        keyword,
+        pageNum,
+        pageSize,
+        cookieStr,
+        // 搜索场景超时预算：Python patchright 直接 goto 搜索 URL，实测 5-10s 能完成。
+        // 给 15s 足够覆盖慢网/慢机器场景，避免拖累整体响应时间。
+        timeoutMs: 15000,
+      });
+      if (pythonResult && pythonResult.items.length > 0) {
+        // 将 Python 脚本返回的商品填入 networkItems，走快速路径返回
+        networkItems.push(...pythonResult.items);
+        if (pythonResult.total !== undefined) networkTotal = pythonResult.total;
+        if (pythonResult.hasMore !== undefined) networkHasMore = pythonResult.hasMore;
+        console.log(`[SearchCrawler] Python patchright 搜索成功，使用其结果: ${pythonResult.items.length} 个商品`);
+      } else {
+        console.log('[SearchCrawler] Python patchright 搜索未返回结果，继续走 DOM 兜底');
+      }
+    }
 
     // 若已拿到 MTOP 结果，无需检测阻断/滚动/DOM，直接返回
     if (networkItems.length > 0) {

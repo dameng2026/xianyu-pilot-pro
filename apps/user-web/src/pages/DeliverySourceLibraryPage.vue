@@ -85,12 +85,14 @@
           <div class="content-preview">{{ row.content }}</div>
         </template>
         <template #mode="{ row }">
+          <Badge v-if="row.fromMall" type="purple">商城购买</Badge>
           <Badge :type="row.deliveryMode === 'card' ? 'orange' : 'gray'">
             {{ row.deliveryMode === 'card' ? '卡密发货' : '文本发货' }}
           </Badge>
         </template>
         <template #stock="{ row }">
-          <span v-if="row.deliveryMode === 'card'" :class="['stock-cell', { low: (row.cardRemainCount ?? 0) <= 0 }]">
+          <span v-if="row.fromMall" class="subtle">商城货源</span>
+          <span v-else-if="row.deliveryMode === 'card'" :class="['stock-cell', { low: (row.cardRemainCount ?? 0) <= 0 }]">
             剩余 {{ row.cardRemainCount ?? 0 }}
           </span>
           <span v-else class="subtle">文本</span>
@@ -99,20 +101,24 @@
           <Badge>{{ row.usageCount ?? '—' }} 个商品</Badge>
         </template>
         <template #op="{ row }">
-          <button class="link" @click.stop="editSource(row)">编辑</button>
-          <button class="link" @click.stop="analyzeSource(row)">AI一键配置</button>
-          <button class="link danger-text" @click.stop="removeSource(row)">删除</button>
+          <button class="link" @click.stop="editSource(row)">{{ row.fromMall ? '查看' : '编辑' }}</button>
+          <button v-if="!row.fromMall" class="link" @click.stop="analyzeSource(row)">AI一键配置</button>
+          <button v-if="!row.fromMall" class="link danger-text" @click.stop="removeSource(row)">删除</button>
         </template>
       </BaseTable>
     </div>
 
-    <CardPanel v-if="editing" :title="editing.id ? '编辑货源' : '新增货源'" style="margin-top:16px" class="source-editor-panel">
+    <CardPanel v-if="editing" :title="editing.id ? (form.fromMall ? '查看货源' : '编辑货源') : '新增货源'" style="margin-top:16px" class="source-editor-panel">
+      <div v-if="form.fromMall" class="info-tip mall-source-tip">
+        <span class="info-tip-icon">i</span>
+        <span>商城购买货源：内容由后台货源商城统一维护，您可查看正文内容但不可修改。后台更新后此处的货源内容会自动同步。</span>
+      </div>
       <div class="editor-layout">
         <div class="editor-left">
           <div class="form-field">
             <label class="field-label"><span class="required">*</span>标题</label>
             <div class="field-input-wrap">
-              <input v-model="form.title" class="field-input" placeholder="给用户和 AI 模型看的标题" maxlength="50" />
+              <input v-model="form.title" class="field-input" :readonly="form.fromMall" :placeholder="form.fromMall ? '商城货源标题' : '给用户和 AI 模型看的标题'" maxlength="50" />
               <span class="char-count">{{ (form.title || '').length }}/50</span>
             </div>
           </div>
@@ -121,7 +127,7 @@
             <label class="field-label">
               <span class="required">*</span>正文
               <button
-                v-if="form.deliveryMode === 'card'"
+                v-if="form.deliveryMode === 'card' && !form.fromMall"
                 type="button"
                 class="placeholder-btn"
                 @click="insertCardPlaceholder"
@@ -133,7 +139,8 @@
                 v-model="form.content"
                 rows="6"
                 class="field-textarea"
-                :placeholder="form.deliveryMode === 'card' ? '实际发货文本，需包含 {卡密占位}，发货时会自动替换为认领到的卡密' : '实际发货文本内容'"
+                :readonly="form.fromMall"
+                :placeholder="form.fromMall ? '商城货源正文内容（由后台货源商城维护，实时同步）' : (form.deliveryMode === 'card' ? '实际发货文本，需包含 {卡密占位}，发货时会自动替换为认领到的卡密' : '实际发货文本内容')"
                 maxlength="5000"
               ></textarea>
               <span class="char-count">{{ (form.content || '').length }}/5000</span>
@@ -143,7 +150,7 @@
           <div class="form-field">
             <label class="field-label">备注（选填）</label>
             <div class="field-input-wrap">
-              <textarea v-model="form.remark" rows="3" class="field-textarea" placeholder="可添加备注信息，方便后续管理（如来源、用途等）" maxlength="200"></textarea>
+              <textarea v-model="form.remark" rows="3" class="field-textarea" :readonly="form.fromMall" placeholder="可添加备注信息，方便后续管理（如来源、用途等）" maxlength="200"></textarea>
               <span class="char-count">{{ (form.remark || '').length }}/200</span>
             </div>
           </div>
@@ -153,16 +160,16 @@
           <div class="setting-card">
             <div class="setting-card-title">发送类型</div>
             <div class="mode-cards">
-              <label class="mode-card" :class="{ active: form.deliveryMode === 'text' }">
-                <input v-model="form.deliveryMode" type="radio" value="text" @change="onDeliveryModeChange" />
+              <label class="mode-card" :class="{ active: form.deliveryMode === 'text', disabled: form.fromMall }">
+                <input v-model="form.deliveryMode" type="radio" value="text" :disabled="form.fromMall" @change="onDeliveryModeChange" />
                 <span class="mode-card-radio"></span>
                 <div class="mode-card-body">
                   <span class="mode-card-title">文本发送</span>
                   <span class="mode-card-desc">通过文本消息发送给买家，适合固定文案内容</span>
                 </div>
               </label>
-              <label class="mode-card" :class="{ active: form.deliveryMode === 'card' }">
-                <input v-model="form.deliveryMode" type="radio" value="card" @change="onDeliveryModeChange" />
+              <label class="mode-card" :class="{ active: form.deliveryMode === 'card', disabled: form.fromMall }">
+                <input v-model="form.deliveryMode" type="radio" value="card" :disabled="form.fromMall" @change="onDeliveryModeChange" />
                 <span class="mode-card-radio"></span>
                 <div class="mode-card-body">
                   <span class="mode-card-title">卡密发送</span>
@@ -172,9 +179,10 @@
             </div>
             <div class="info-tip">
               <span class="info-tip-icon">i</span>
-              <span>提示：卡密发送将在发送时自动替换占位符，例如 <code>{卡密}</code>、<code>{激活码}</code> 等占位符内容。</span>
+              <span v-if="form.fromMall">商城货源固定为文本模式，由后台统一管理。</span>
+              <span v-else>提示：卡密发送将在发送时自动替换占位符，例如 <code>{卡密}</code>、<code>{激活码}</code> 等占位符内容。</span>
             </div>
-            <div v-if="form.deliveryMode === 'card'" class="card-group-select">
+            <div v-if="form.deliveryMode === 'card' && !form.fromMall" class="card-group-select">
               <select v-model="form.cardGroupId" class="field-input">
                 <option value="" disabled>请选择卡密分组</option>
                 <option v-for="g in cardGroups" :key="g.id" :value="g.id">
@@ -219,8 +227,8 @@
       </div>
 
       <div class="form-actions">
-        <AppButton type="primary" class="save-btn" @click="saveSource">保存</AppButton>
-        <AppButton class="cancel-btn" @click="cancelEdit">取消</AppButton>
+        <AppButton v-if="!form.fromMall" type="primary" class="save-btn" @click="saveSource">保存</AppButton>
+        <AppButton class="cancel-btn" @click="cancelEdit">{{ form.fromMall ? '关闭' : '取消' }}</AppButton>
       </div>
     </CardPanel>
 
@@ -416,7 +424,8 @@ const form = reactive({
   content: '',
   remark: '',
   deliveryMode: 'text',
-  cardGroupId: ''
+  cardGroupId: '',
+  fromMall: false
 })
 
 const columns = [
@@ -540,7 +549,8 @@ function openCreate() {
     content: '',
     remark: '',
     deliveryMode: 'text',
-    cardGroupId: ''
+    cardGroupId: '',
+    fromMall: false
   })
   ensureCardGroupsLoaded()
 }
@@ -553,7 +563,8 @@ function editSource(row) {
     content: row.content || '',
     remark: row.remark || '',
     deliveryMode: row.deliveryMode === 'card' ? 'card' : 'text',
-    cardGroupId: row.cardGroupId ?? ''
+    cardGroupId: row.cardGroupId ?? '',
+    fromMall: !!row.fromMall
   })
   ensureCardGroupsLoaded()
 }

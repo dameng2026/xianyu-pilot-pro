@@ -61,7 +61,7 @@ const DEFAULT_TARGET_URL = 'https://www.goofish.com/im';
 // WebGL vendor 返回 SwiftShader、Canvas 指纹固定，Baxia 可直接识别为自动化。
 // 本脚本覆盖：webdriver / chrome / plugins / languages / permissions /
 // WebGL vendor&renderer / hardwareConcurrency / deviceMemory / Canvas 微扰动
-const ANTI_DETECT_SCRIPT = `
+export const ANTI_DETECT_SCRIPT = `
 (() => {
   try {
     // 1. 屏蔽 navigator.webdriver（删除原型属性，降低 'webdriver' in navigator 命中率）
@@ -219,7 +219,7 @@ const ANTI_DETECT_SCRIPT = `
   } catch (e) {}
 })();
 `;
-const BAXIA_SELECTORS = [
+export const BAXIA_SELECTORS = [
   '#nc_1',              // 阿里 Baxia 标准滑块容器
   '.nc_wrapper',
   '#baxia-dialog',
@@ -274,6 +274,65 @@ export function parseCookieString(cookieStr: string, domain: string = '.goofish.
   return cookies;
 }
 
+// Baxia/淘宝风控相关 cookie 字段名。
+// 这些字段标记了会话的风控状态（punish/封禁），带着它们访问会被服务器持续判定为高风险。
+// 清除后让服务器重新评估会话，有助于脱离 punish 状态。
+// 保留登录态字段：cookie2/_m_h5_tk/unb/t/_tb_token_/sgcookie/tracknick/csg/havana_lgc2_*/XSRF-TOKEN 等。
+// 与 sliderSolve.py 的 _RISK_COOKIE_NAMES 保持一致。
+const RISK_COOKIE_NAMES = new Set([
+  'x5sectag',        // Baxia 风控标签
+  'x5sec',           // Baxia session 数据（hex 编码 JSON）
+  'x5secdata',       // Baxia punish 数据
+  'x5pref',          // Baxia 偏好
+  'bx-cookie-test',  // Baxia cookie 测试标记
+  'tfstk',           // 淘宝风控 token stack
+  'cbc',             // 风控相关
+  'sca',             // 风控相关
+  'isg',             // 阿里 ISG 风控指纹
+]);
+
+/**
+ * 从 cookie 字符串中移除风控相关字段，返回清理后的 cookie 字符串。
+ *
+ * 保留登录态字段，只清除 Baxia/淘宝风控标记字段。
+ * 这样服务器会重新评估会话，有助于脱离 punish 状态。
+ * 与 sliderSolve.py 的 strip_risk_cookies 保持一致。
+ */
+export function stripRiskCookies(cookieStr: string): string {
+  if (!cookieStr) return '';
+  const kept: string[] = [];
+  const removed: string[] = [];
+  for (const part of cookieStr.split(';')) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx <= 0) continue;
+    const name = trimmed.substring(0, eqIdx).trim();
+    if (RISK_COOKIE_NAMES.has(name)) {
+      removed.push(name);
+    } else {
+      kept.push(trimmed);
+    }
+  }
+  if (removed.length > 0) {
+    console.log(`[SliderSolver] 已清除风控 cookie 字段: ${removed.join(', ')}`);
+  }
+  return kept.join('; ');
+}
+
+/**
+ * 检测是否为 Baxia punish URL（来自商品关键词搜索触发风控）。
+ *
+ * punish URL 是搜索触发 FAIL_SYS_USER_VALIDATE 时由 MTOP 返回的验证页 URL，
+ * 典型特征：URL 中含 "punish" 或 "_____tmd_____"。
+ * 与 sliderSolve.py 的 _is_punish_url 保持一致。
+ */
+export function isPunishUrl(url: string | undefined | null): boolean {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  return lower.includes('punish') || lower.includes('_____tmd_____');
+}
+
 async function exportContextCookies(context: any): Promise<string | undefined> {
   try {
     const cookies: Cookie[] = await context.cookies();
@@ -309,7 +368,7 @@ async function saveDebugScreenshot(page: Page, label: string): Promise<string | 
 /**
  * 检测页面是否出现滑块验证组件
  */
-async function detectCaptcha(page: Page): Promise<{ detected: boolean; selector?: string; iframe?: any }> {
+export async function detectCaptcha(page: Page): Promise<{ detected: boolean; selector?: string; iframe?: any }> {
   // 直接在主文档检测
   for (const selector of BAXIA_SELECTORS) {
     try {
@@ -382,7 +441,7 @@ async function findSliderButtonInFrames(frame: any, selectors: string[]): Promis
  * 获取滑块按钮位置和滑块轨道宽度
  * 递归查找所有嵌套 iframe 中的滑块按钮（baxia 滑块通常在多层 iframe 中）
  */
-async function getSliderInfo(frame: any): Promise<{ button: any; trackWidth: number; buttonBox: { x: number; y: number; width: number; height: number }; ownerFrame: any } | null> {
+export async function getSliderInfo(frame: any): Promise<{ button: any; trackWidth: number; buttonBox: { x: number; y: number; width: number; height: number }; ownerFrame: any } | null> {
   const buttonSelectors = ['#nc_1_n1z', '.btn_slide', '.nc_iconfont', '.slide-btn', '#nc_1_n1t', '.nc-lang-cnt', '[data-role="slider"]'];
   // 递归查找所有 frame（包括嵌套 iframe）中的滑块按钮
   const found = await findSliderButtonInFrames(frame, buttonSelectors);
@@ -430,7 +489,7 @@ async function getSliderInfo(frame: any): Promise<{ button: any; trackWidth: num
  * @param attempt 当前重试次数（从1开始）。每次重试使用不同的滑动速度和停顿策略，
  *                降低被风控识别为机器人的概率。
  */
-async function humanLikeDrag(
+export async function humanLikeDrag(
   page: Page,
   frame: any,
   button: any,
@@ -642,7 +701,7 @@ async function humanLikeDrag(
  * @param distance 需要滑动的距离
  * @param attempt 当前重试次数
  */
-async function humanLikeDragOutOfContainer(
+export async function humanLikeDragOutOfContainer(
   page: Page,
   frame: any,
   button: any,
@@ -756,7 +815,7 @@ async function humanLikeDragOutOfContainer(
 /**
  * 检测滑块验证是否通过
  */
-async function checkSolved(page: Page, frame: any): Promise<boolean> {
+export async function checkSolved(page: Page, frame: any): Promise<boolean> {
   // 成功标识
   const successSelectors = ['.nc_ok', '.success', '#nc_1_n1z.success', '.icon-success'];
   for (const sel of successSelectors) {
@@ -1443,8 +1502,11 @@ async function solveSliderViaPythonScript(
       process.stderr.write(`[sliderSolve.py:err] ${text}`);
     });
 
-    // 总超时：Python 脚本内部 4 个阶段约 60-90 秒，加 30 秒余量
-    const totalTimeout = Math.max(timeoutMs, 120000);
+    // 总超时：与调用方传入的 timeoutMs 对齐（搜索场景 90s，连接场景 30s）。
+    // 搜索链路预算：Node Playwright 启动+搜索+4次slider(30-40s) → solveGoofishSlider(≤90s) → 重试MTOP(5-10s) → searchViaPythonScript(60s)，
+    // 总计需在前端 180s 超时内完成。Python 内部 main_async 会根据 elapsed 跳过第二轮求解，保证 90s 内出结果。
+    // 之前 max(120000) 会把 Python 跑满两轮（120-180s），导致 searchViaPythonScript 兜底还没机会执行就被前端超时 kill。
+    const totalTimeout = Math.max(timeoutMs, 90000);
     const timer = setTimeout(() => {
       console.warn(`[SliderSolver] Python 脚本超时 (${totalTimeout}ms)，终止进程`);
       try { child.kill('SIGTERM'); } catch { /* ignore */ }
@@ -1605,12 +1667,42 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
         });
         // launchPersistentContext 返回 BrowserContext，其 browser() 可用于关闭
         browser = context.browser();
-        if (options.cookieStr) {
-          await context.addCookies(parseCookieString(options.cookieStr));
-        }
         await context.addInitScript(ANTI_DETECT_SCRIPT);
+        // 先落到业务域再注入 Cookie，避免 add_cookies 被丢弃
+        // （参考 sliderSolve.py 的 _launch_solve_once 验证有效方案）
+        const warmupPage = context.pages?.[0] || await context.newPage();
+        try {
+          await warmupPage.goto('https://www.goofish.com/', { waitUntil: 'domcontentloaded', timeout: 45000 });
+          console.log('[SliderSolver] 预热导航 goofish.com 完成');
+        } catch (e: any) {
+          console.warn(`[SliderSolver] 预热导航警告（不影响后续）: ${safeErrorType(e)}`);
+        }
+        if (options.cookieStr) {
+          // 清除风控相关 cookie（x5sectag/x5sec/tfstk 等），让服务器重新评估会话
+          // 避免带着 punish 标记访问导致持续被风控
+          const cleanCookieStr = stripRiskCookies(options.cookieStr);
+          const goofishCookies = parseCookieString(cleanCookieStr, '.goofish.com');
+          const wwwCookies = parseCookieString(cleanCookieStr, 'www.goofish.com');
+          const allCookies = [...goofishCookies, ...wwwCookies];
+          if (allCookies.length > 0) {
+            try {
+              await context.addCookies(allCookies);
+              console.log(`[SliderSolver] 注入 ${allCookies.length} 条 cookies（含 .goofish / www）`);
+            } catch (e: any) {
+              console.warn(`[SliderSolver] 注入 cookies 警告: ${safeErrorType(e)}`);
+              // 回退只写 .goofish.com
+              try {
+                await context.addCookies(goofishCookies);
+              } catch { /* ignore */ }
+            }
+          }
+          // 注入后刷新页面让 cookie 生效
+          try {
+            await warmupPage.reload({ waitUntil: 'domcontentloaded', timeout: 45000 });
+          } catch { /* ignore */ }
+        }
         usingCDP = true;
-        console.log('[SliderSolver] 已启动持久化 Chrome 并注入反检测脚本');
+        console.log('[SliderSolver] 已启动持久化 Chrome 并注入反检测脚本 + 预热 Cookie');
       } catch (e: any) {
         console.warn(`[SliderSolver] 持久化 Chrome 启动失败，回退: ${safeErrorType(e)}`);
         if (browser) { await browser.close().catch(() => {}); browser = null; }

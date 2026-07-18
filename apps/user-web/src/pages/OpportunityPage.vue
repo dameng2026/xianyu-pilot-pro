@@ -1066,17 +1066,34 @@ async function doSearch() {
     searched.value = true
     step.value = 1
 
+    // 链路正常但无结果时，显示后端返回的 warning（如有），否则才显示"未搜索到商品"
+    // 避免后端发生异常时（cookie失效被吞、风控被吞）误报"未搜索到商品"
     if (items.value.length) {
       activateSelectedItem(items.value[0])
-    }
-
-    if (!items.value.length) {
+    } else if (typeof data.warning === 'string' && data.warning.trim()) {
+      // 慢速搜索成功但快速搜索有警告（如触发风控已降级），显示降级提示
+      error.value = data.warning.trim()
+    } else if (typeof data.fastFallbackReason === 'string' && data.fastFallbackReason.trim()) {
+      error.value = data.fastFallbackReason.trim()
+    } else {
       error.value = '未搜索到商品，请更换关键词或稍后重试'
     }
   } catch (e) {
     console.error('[OppPage] 搜索异常:', e)
     error.value = friendlyError(e, '商品搜索失败，请稍后重试')
     items.value = []
+    // 后端检测到 cookie 失效（HTTP 409），主动刷新当前账号的鉴权状态
+    // 让账号管理页面立即显示异常，无需用户手动切换页面查看
+    if (e && (e.code === 409 || /Cookie.*失效|登录状态.*失效|_m_h5_tk/.test(String(e.message || '')))) {
+      try {
+        const preferred = pickPreferredAccount(accounts.value, selectedAccountId.value)
+        if (preferred && preferred.id) {
+          await refreshAccountAuthStatus(preferred.id)
+        }
+      } catch (refreshErr) {
+        console.warn('[OppPage] 刷新账号状态失败:', refreshErr)
+      }
+    }
   } finally {
     searchLoading.value = false
   }

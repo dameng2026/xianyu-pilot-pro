@@ -301,7 +301,7 @@ public class DeliveryExecutionService {
             // 7. 构建消息内容
             String resolvedContent = resolveContent(mode, header, content, footer, cardContent,
                     buyerName, orderIdStr, goodsTitle, String.valueOf(firstItem.getGoodsId()),
-                    shopName, null);
+                    shopName, null, tenantId);
 
             // 8. 发送消息（支持分段发送）
             boolean segmented = segmentSend != null && (Boolean.TRUE.equals(segmentSend) || "true".equals(String.valueOf(segmentSend)));
@@ -375,7 +375,7 @@ public class DeliveryExecutionService {
     private String resolveContent(String mode, String header, String content, String footer,
                                    String cardContent, String buyerName, String orderId,
                                    String goodsTitle, String goodsId, String shopName,
-                                   Map<String, Object> timingConfig) {
+                                   Map<String, Object> timingConfig, Long tenantId) {
         StringBuilder sb = new StringBuilder();
         if (header != null && !header.isBlank()) {
             sb.append(header).append("\n");
@@ -402,7 +402,95 @@ public class DeliveryExecutionService {
         // 卡密相关变量（可能在头部或底部中使用）
         result = result
                 .replace("{卡密}", cardContent != null ? cardContent : "");
+
+        // 货源占位符：{货源:ID} → 实时读取对应货源的最新内容（含商城货源 JOIN mall_product）
+        result = resolveSourcePlaceholders(result, tenantId);
         return result;
+    }
+
+    /**
+     * 替换 {货源:ID} 占位符为对应货源的最新内容。
+     * - 普通货源：读取 delivery_text_source.content
+     * - 商城货源（from_mall=1）：JOIN mall_product 取最新 content，商品下架/删除时使用兜底文案
+     * 异常格式（如 {货源:}、{货源:非数字}、{货源}）会被识别为占位符并替换为兜底文案，
+     * 避免原始占位符文本被发送给买家。找不到货源时也替换为兜底文案，不发送空字符串。
+     */
+    private String resolveSourcePlaceholders(String text, Long tenantId) {
+        if (text == null || text.isEmpty() || tenantId == null) return text;
+        // 匹配 {货源:任意非}内容} 或 {货源} 格式
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\\{货源(?::([^}]*))?\\}");
+        java.util.regex.Matcher matcher = pattern.matcher(text);
+        if (!matcher.find()) return text;
+
+        java.util.Map<String, String> cache = new HashMap<>();
+        StringBuffer sb = new StringBuffer();
+        matcher.reset();
+        while (matcher.find()) {
+            String idRaw = matcher.group(1); // 可能为 null（{货源} 格式）或空字符串（{货源:}）或非数字
+            String replacement;
+            if (idRaw == null || idRaw.isEmpty()) {
+                replacement = "【货源占位符格式错误】请检查发货正文中的 {货源:ID} 占位符";
+            } else {
+                try {
+                    long sourceId = Long.parseLong(idRaw.trim());
+                    replacement = cache.computeIfAbsent(idRaw.trim(), id -> loadSourceContent(tenantId, sourceId));
+                } catch (NumberFormatException ex) {
+                    replacement = "【货源占位符格式错误】请检查发货正文中的 {货源:ID} 占位符";
+                }
+            }
+            matcher.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(sb);
+        return sb.toString();
+    }
+
+    /**
+     * 加载单个货源的最新内容（含商城货源 JOIN mall_product 实时同步）。
+     * 找不到货源或异常时返回兜底文案，避免向买家发送空内容。
+     */
+    private String loadSourceContent(Long tenantId, Long sourceId) {
+        try {
+            Map<String, Object> row = jdbcTemplate.queryForMap(
+                    "SELECT s.id, s.title, s.content, s.from_mall, s.mall_product_id, " +
+                            "mp.title AS mp_title, mp.content AS mp_content, mp.status AS mp_status " +
+                            "FROM delivery_text_source s " +
+                            "LEFT JOIN mall_product mp ON mp.id = s.mall_product_id " +
+                            "WHERE s.id = ? AND s.tenant_id = ? AND s.deleted = 0",
+                    sourceId, tenantId);
+            boolean fromMall = isMallSource(row.get("from_mall"));
+            if (fromMall) {
+                Object mpStatus = row.get("mp_status");
+                // 商品在线（status=1 上架）时实时使用 mall_product 的最新内容
+                if (mpStatus != null && Integer.parseInt(String.valueOf(mpStatus)) == 1) {
+                    Object mpContent = row.get("mp_content");
+                    if (mpContent != null && !String.valueOf(mpContent).isBlank()) {
+                        return String.valueOf(mpContent);
+                    }
+                }
+                // 商品下架/删除时使用兜底文案，避免发送空内容
+                return "【商品已下架或被删除】该货源内容暂不可用，请联系管理员";
+            }
+            Object content = row.get("content");
+            String text = content != null ? String.valueOf(content) : "";
+            if (text.isBlank()) {
+                // 货源内容为空：返回兜底文案，避免发送空内容给买家
+                return "【货源内容为空】请联系管理员补充货源内容";
+            }
+            return text;
+        } catch (EmptyResultDataAccessException notFound) {
+            log.warn("货源占位符解析：未找到货源 sourceId={} tenantId={}", sourceId, tenantId);
+            return "【货源不可用】该货源已被删除或不存在";
+        } catch (Exception e) {
+            log.error("货源占位符解析异常 sourceId={} tenantId={} error={}", sourceId, tenantId, e.getMessage());
+            return "【货源不可用】货源加载失败，请稍后重试";
+        }
+    }
+
+    private boolean isMallSource(Object value) {
+        if (value == null) return false;
+        if (value instanceof Boolean) return (Boolean) value;
+        String s = String.valueOf(value).trim().toLowerCase();
+        return "1".equals(s) || "true".equals(s);
     }
 
     /**

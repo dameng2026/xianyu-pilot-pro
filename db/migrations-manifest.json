@@ -182,6 +182,22 @@
           "sha256": "3d02b82ca5fb46367d9490eb92f1c363636368ab36f4384b272b08119e150f8a",
           "risk": "expand",
           "rollback": "restore"
+        },
+        {
+          "version": "1.22",
+          "description": "add from_mall and mall_product_id to delivery_text_source for marketplace purchased sources",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.22__add_delivery_source_mall_origin.sql",
+          "sha256": "6cf6cfee04f3bae1cb6dfaeb200feac935a711aa01b97a99130b08c6a05d908d",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.23",
+          "description": "preset default 10-minute auto_redelivery scheduled task for every tenant",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.23__preset_default_auto_redelivery_task.sql",
+          "sha256": "da07567f464e2aef6ab177b6bc07768a3022bf22fee436abaa8cade1058d6453",
+          "risk": "backfill",
+          "rollback": "restore"
         }
       ],
       "quarantined": [

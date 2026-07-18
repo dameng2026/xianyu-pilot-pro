@@ -148,16 +148,55 @@
     }
   }
 
+  // 检查元素是否由 Vue 组件实例管理（ElDialog/ElDrawer 等通过 Teleport 挂到 body 的 overlay）
+  // 这些元素由 Vue 持有引用并管理生命周期，即使内部暂时没有可见内容
+  // （例如 dialogVisible=false 时 rendered=false，overlay 内部是注释节点），
+  // 也绝不能被外部代码强制 remove，否则后续 v-model=true 时弹窗无法渲染到 DOM。
+  function isVueManaged(el: HTMLElement | null): boolean {
+    if (!el) return false
+    let node: HTMLElement | null = el
+    let depth = 0
+    while (node && depth < 20) {
+      // Vue 3 内部属性：组件挂载后会在 DOM 节点上设置 __vueParentComponent
+      if ((node as any).__vueParentComponent) return true
+      // Vue 应用根节点
+      if ((node as any).__vue_app__) return true
+      if (node === document.body) break
+      node = node.parentElement
+      depth++
+    }
+    return false
+  }
+
+  // Element Plus 通过 Teleport 挂到 body 的 overlay 会带有命名空间前缀的 modal class
+  // （el-modal-dialog / el-modal-drawer 等）。这些是 Element Plus 公开样式约定，
+  // 出现这些 class 说明 overlay 由 EP 组件管理，不应清理。
+  function isElementPlusManagedOverlay(el: HTMLElement): boolean {
+    const cls = el.className || ''
+    if (typeof cls !== 'string') return false
+    return /\bel-modal-(dialog|drawer|messagebox|popover|image|select|cascader|date|time|tooltip)\b/.test(cls)
+  }
+
   function cleanupOrphanMasksDeferred() {
     try {
       const loadingMasks = document.querySelectorAll<HTMLElement>('.el-loading-mask, .art-loading-fix')
       if (loadingMasks.length > 0) {
-        loadingMasks.forEach((m) => m.remove())
+        loadingMasks.forEach((m) => {
+          if (isVueManaged(m)) return
+          m.remove()
+        })
         document.body.classList.remove('el-loading-parent--hidden', 'el-popup-parent--hidden')
       }
 
       const overlays = document.querySelectorAll<HTMLElement>('.el-overlay')
       overlays.forEach((el) => {
+        // 关键修复：跳过 Vue / Element Plus 管理的 overlay
+        const vueManaged = isVueManaged(el)
+        const epManaged = isElementPlusManagedOverlay(el)
+        if (vueManaged || epManaged) {
+          return
+        }
+
         const hasVisibleContent = el.querySelector(
           '.el-dialog, .el-message-box, .el-drawer, .el-message, .el-notification'
         )
@@ -169,7 +208,10 @@
       const modals = document.querySelectorAll<HTMLElement>('.v-modal')
       const hasLegitModal = document.querySelector('.el-overlay .el-dialog, .el-overlay .el-message-box, .el-overlay .el-drawer')
       if (!hasLegitModal && modals.length > 0) {
-        modals.forEach((m) => m.remove())
+        modals.forEach((m) => {
+          if (isVueManaged(m)) return
+          m.remove()
+        })
       }
     } catch {}
   }

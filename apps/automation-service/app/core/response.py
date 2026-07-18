@@ -15,8 +15,8 @@ class ResultObject(CamelModel, Generic[T]):
         return ResultObject(code=200, msg=message, data=data)
 
     @staticmethod
-    def failed(message: str = "操作失败", code: int = 500) -> "ResultObject":
-        return ResultObject(code=code, msg=message, data=None)
+    def failed(message: str = "操作失败", code: int = 500, data: Any = None) -> "ResultObject":
+        return ResultObject(code=code, msg=message, data=data)
 
     @staticmethod
     def validate_failed(message: str = "参数验证失败") -> "ResultObject":

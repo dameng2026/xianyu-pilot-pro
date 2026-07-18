@@ -89,6 +89,12 @@ public class MallProductShopController {
             throw new BizException(400, "商品 ID 非法");
         }
         if (productId <= 0) throw new BizException(400, "商品 ID 非法");
+        // 重复购买检测：已支付订单存在时拒绝再次下单，避免用户重复付款但得不到新货源
+        Long currentUserId = UserContext.userId();
+        if (currentUserId != null && currentUserId > 0
+                && mallProductService.hasUserPurchased(currentUserId, productId)) {
+            throw new BizException(409, "您已购买过该商品，请前往货源库查看");
+        }
         // 二次校验商品可用并检查库存
         Map<String, Object> product = mallProductService.getShopProduct(productId);
         String productType = String.valueOf(product.getOrDefault("productType", "text"));

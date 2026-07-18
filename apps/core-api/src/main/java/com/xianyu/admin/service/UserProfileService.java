@@ -271,6 +271,18 @@ public class UserProfileService {
         }
         stats.put("sevenDayConsume", sevenDayConsume);
 
+        long monthConsume = 0L;
+        try {
+            Number m = jdbcTemplate.queryForObject(
+                    "SELECT COALESCE(SUM(change_amount), 0) FROM token_balance_ledger " +
+                            "WHERE user_id=? AND change_amount < 0 AND created_time >= DATE_FORMAT(CURDATE(), '%Y-%m-01')",
+                    Number.class, userId);
+            if (m != null) monthConsume = -m.longValue();
+        } catch (DataAccessException e) {
+            throw unavailable("本月 Token 消耗", e);
+        }
+        stats.put("monthConsume", monthConsume);
+
         return stats;
     }
 

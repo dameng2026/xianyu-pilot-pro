@@ -37,17 +37,22 @@ async def main():
     # 用真实关键词搜索
     keyword = "iPhone"
     print(f"搜索关键词: {keyword}")
-    async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
+    async with httpx.AsyncClient(timeout=180.0, trust_env=False) as client:
         resp = await client.post(
             "http://localhost:3001/api/goofish/search",
             headers=headers,
             json={"q": keyword, "page": 1, "pageSize": 5, "cookie": cookie_str},
         )
         print(f"HTTP 状态: {resp.status_code}")
+        print(f"原始响应: {resp.text[:2000]}")
         data = resp.json()
         print(f"ok: {data.get('ok')}")
         items = data.get("items", [])
         print(f"搜索结果数: {len(items)}")
+        if data.get("error"):
+            print(f"error: {data.get('error')}")
+        if data.get("errorType"):
+            print(f"errorType: {data.get('errorType')}")
         for i, item in enumerate(items[:5]):
             print(f"  [{i}] itemId={item.get('itemId')} title={item.get('title', '')[:40]} imageUrl={item.get('imageUrl', '')[:60]}")
 

@@ -259,13 +259,29 @@
             </div>
 
             <div class="form-row">
-              <label v-if="configForm.mode === 'text'">正文内容</label>
-              <label v-else>消息底部</label>
+              <div class="content-label-row">
+                <label v-if="configForm.mode === 'text'">正文内容</label>
+                <label v-else>消息底部</label>
+                <button
+                  v-if="configForm.mode === 'text'"
+                  type="button"
+                  class="insert-source-btn"
+                  :disabled="!sourcesAvailable"
+                  @click="openSourceDrawer('content')"
+                >+ 插入货源</button>
+                <button
+                  v-if="configForm.mode === 'text'"
+                  type="button"
+                  class="insert-source-btn ghost"
+                  @click="insertSegmentPlaceholder"
+                >+ 插入 {分段}</button>
+              </div>
               <textarea
                 v-if="configForm.mode === 'text'"
+                ref="contentTextareaRef"
                 v-model="configForm.content"
                 rows="5"
-                :placeholder="configForm.sourceId ? '已引用货源库正文，可继续补充或覆盖' : '请输入买家将收到的发货内容'"
+                :placeholder="configForm.sourceId ? '已引用货源库正文，可继续补充或覆盖。可点击上方「插入货源」将 {货源:ID} 占位符插入到正文，发货时会自动替换为对应货源的最新内容' : '请输入买家将收到的发货内容。可点击上方「插入货源」插入货源占位符'"
               ></textarea>
               <textarea
                 v-else
@@ -309,11 +325,51 @@
         </div>
       </div>
     </div>
+
+    <div v-if="sourceDrawer.visible" class="source-drawer-overlay" @click.self="closeSourceDrawer">
+      <div class="source-drawer">
+        <div class="source-drawer-header">
+          <div class="source-drawer-title">选择货源插入</div>
+          <button type="button" class="source-drawer-close" aria-label="关闭" @click="closeSourceDrawer">×</button>
+        </div>
+        <div class="source-drawer-tip">
+          点击任意货源将把 <code>&#123;货源:ID&#125;</code> 占位符插入到正文光标位置；发货时会自动替换为对应货源的最新内容（商城货源随商品更新同步）。
+        </div>
+        <div class="source-drawer-body">
+          <div v-if="!sourcesAvailable" class="source-drawer-empty">货源库加载失败，无法插入。</div>
+          <div v-else-if="textSources.length === 0" class="source-drawer-empty">暂无货源，请先到货源库添加或购买。</div>
+          <template v-else>
+            <button
+              v-for="source in textSources"
+              :key="source.id"
+              type="button"
+              class="source-drawer-item"
+              @click="insertSourceToContent(source)"
+            >
+              <div class="source-drawer-item-main">
+                <div class="source-drawer-item-title">
+                  <span class="source-drawer-item-name">{{ source.title || '未命名货源' }}</span>
+                  <Badge v-if="source.fromMall" type="purple">商城</Badge>
+                  <Badge v-else-if="source.deliveryMode === 'card'" type="blue">卡密</Badge>
+                  <Badge v-else>文本</Badge>
+                </div>
+                <div class="source-drawer-item-meta">
+                  <span>ID: {{ source.id }}</span>
+                  <span v-if="source.fromMall">货源内容实时同步</span>
+                  <span v-else>库存：{{ source.stockLabel || '—' }}</span>
+                </div>
+              </div>
+              <span class="source-drawer-item-insert">插入</span>
+            </button>
+          </template>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import StatCard from '../components/StatCard.vue'
 import CardPanel from '../components/CardPanel.vue'
 import Badge from '../components/Badge.vue'
@@ -404,6 +460,12 @@ const batchForm = reactive({
   mode: '',
   cardGroupId: '',
   sourceId: ''
+})
+
+const contentTextareaRef = ref(null)
+const sourceDrawer = reactive({
+  visible: false,
+  target: null
 })
 
 const columns = [
@@ -813,6 +875,49 @@ function goSourceLibrary() {
   emit('navigate', 'delivery-source-library')
 }
 
+function openSourceDrawer(target) {
+  if (!sourcesAvailable.value || textSources.value.length === 0) {
+    error.value = '当前货源库不可用，无法插入货源占位符。'
+    return
+  }
+  sourceDrawer.target = target || 'content'
+  sourceDrawer.visible = true
+}
+
+function closeSourceDrawer() {
+  sourceDrawer.visible = false
+  sourceDrawer.target = null
+}
+
+function insertSegmentPlaceholder() {
+  insertAtCursor('{分段}')
+}
+
+function insertSourceToContent(source) {
+  if (!source?.id) return
+  insertAtCursor(`{货源:${source.id}}`)
+  closeSourceDrawer()
+}
+
+function insertAtCursor(text) {
+  const textarea = contentTextareaRef.value
+  if (!textarea || typeof text !== 'string' || !text) return
+  const start = textarea.selectionStart ?? configForm.content.length
+  const end = textarea.selectionEnd ?? configForm.content.length
+  const before = (configForm.content || '').slice(0, start)
+  const after = (configForm.content || '').slice(end)
+  configForm.content = `${before}${text}${after}`
+  nextTick(() => {
+    const newPosition = start + text.length
+    textarea.focus?.()
+    try {
+      textarea.setSelectionRange?.(newPosition, newPosition)
+    } catch (_) {
+      // setSelectionRange not available in some envs; ignore.
+    }
+  })
+}
+
 function onHeaderAction(event) {
   if (event.detail === 'delivery-batch') openBatchDialog()
   if (event.detail === 'delivery-refresh') loadAll()
@@ -1112,6 +1217,213 @@ onBeforeUnmount(() => {
   font-family: inherit;
   resize: vertical;
   box-sizing: border-box;
+}
+
+.content-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.insert-source-btn {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid #c7d2fe;
+  background: #eef2ff;
+  color: #4338ca;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+
+.insert-source-btn:hover:not(:disabled) {
+  background: #4f46e5;
+  border-color: #4f46e5;
+  color: #fff;
+}
+
+.insert-source-btn:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.insert-source-btn.ghost {
+  background: #fff;
+  border-color: #dbe1ed;
+  color: #526079;
+}
+
+.insert-source-btn.ghost:hover:not(:disabled) {
+  background: #f5f6fa;
+  border-color: #98a2b3;
+  color: #1a2233;
+}
+
+.source-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, .35);
+  z-index: 1100;
+  display: flex;
+  justify-content: flex-end;
+  animation: source-drawer-fade .18s ease-out;
+}
+
+@keyframes source-drawer-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.source-drawer {
+  width: 420px;
+  max-width: 90vw;
+  height: 100%;
+  background: #fff;
+  box-shadow: -16px 0 48px rgba(15, 23, 42, .18);
+  display: flex;
+  flex-direction: column;
+  animation: source-drawer-slide .22s cubic-bezier(.16, .84, .44, 1);
+}
+
+@keyframes source-drawer-slide {
+  from { transform: translateX(16px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.source-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid #eef1f6;
+}
+
+.source-drawer-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1a2233;
+}
+
+.source-drawer-close {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: #f5f6fa;
+  color: #667085;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s, color .15s;
+}
+
+.source-drawer-close:hover {
+  background: #eef1f6;
+  color: #1a2233;
+}
+
+.source-drawer-tip {
+  padding: 10px 20px;
+  font-size: 12px;
+  color: #526079;
+  background: linear-gradient(90deg, #f0f4ff, #f6f9ff);
+  border-bottom: 1px solid #eef1f6;
+  line-height: 1.6;
+}
+
+.source-drawer-tip code {
+  background: #e0e7ff;
+  color: #3730a3;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
+.source-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.source-drawer-empty {
+  padding: 40px 16px;
+  text-align: center;
+  color: #98a2b3;
+  font-size: 13px;
+}
+
+.source-drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #e6ebf3;
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+
+.source-drawer-item:hover {
+  border-color: #4f46e5;
+  background: #f5f7ff;
+  box-shadow: 0 4px 14px rgba(79, 70, 229, .12);
+}
+
+.source-drawer-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.source-drawer-item-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.source-drawer-item-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a2233;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+
+.source-drawer-item-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  color: #667085;
+}
+
+.source-drawer-item-insert {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  border-radius: 6px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.source-drawer-item:hover .source-drawer-item-insert {
+  background: #4f46e5;
+  color: #fff;
 }
 
 .checkbox-label {

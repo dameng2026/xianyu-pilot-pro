@@ -74,4 +74,16 @@ public class FeatureSwitchController {
         if (userId == null) throw new BizException(401, "登录状态已失效");
         return Result.ok(featureSwitchService.getStatusForCurrentUser(userId));
     }
+
+    /**
+     * 用户端：返回功能对比数据，用于个人中心「会员等级功能对比」表格展示。
+     * 返回结构与 admin 端 listSwitches() 相同（key/title/group/normal/vip/svp），
+     * 仅用于只读展示，不暴露保存/初始化等管理操作。
+     */
+    @GetMapping("/api/feature-switches/comparison")
+    public Result<List<Map<String, Object>>> getComparisonForCurrentUser() {
+        Long userId = TenantContext.getCurrentUserId();
+        if (userId == null) throw new BizException(401, "登录状态已失效");
+        return Result.ok(featureSwitchService.listSwitches());
+    }
 }

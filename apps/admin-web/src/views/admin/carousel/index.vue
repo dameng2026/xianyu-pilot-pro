@@ -144,8 +144,8 @@
                 <div class="cover-card-grid">
                   <ElFormItem label="来源方式" :prop="`coverItems.${index}.sourceType`" label-width="88px">
                     <ElRadioGroup v-model="cover.sourceType">
-                      <ElRadioButton label="upload">文件上传</ElRadioButton>
-                      <ElRadioButton label="url">地址输入</ElRadioButton>
+                      <ElRadioButton value="upload">文件上传</ElRadioButton>
+                      <ElRadioButton value="url">地址输入</ElRadioButton>
                     </ElRadioGroup>
                   </ElFormItem>
 

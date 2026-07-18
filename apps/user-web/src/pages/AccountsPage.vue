@@ -784,7 +784,7 @@ import { accountAuthUsable, accountCookieBadgeType, accountCookieLabel, accountL
 import { extractKeyFields, maskKeyFields, validateCookie, checkIdentity, maskValue } from '../utils/cookie.js'
 import { useCaptchaSolver } from '../composables/useCaptchaSolver.js'
 
-const { solveStates, isAccountSolving, getAccountSolveStatus, solveManually } = useCaptchaSolver()
+const { solveStates, isAccountSolving, getAccountSolveStatus, solveManually, initCaptchaSolverListener, destroyCaptchaSolverListener } = useCaptchaSolver()
 
 const modal = ref('')
 const manual = reactive({ accountNote:'', cookie:'' })
@@ -2284,6 +2284,9 @@ function handleSseEvent(e) {
 onMounted(() => {
   window.addEventListener('xya-header-action', handleHeaderAction)
   window.addEventListener('xya-sse-event', handleSseEvent)
+  // 注册 SSE captcha_solve 监听器：接收后端推送的滑块求解状态变化（retrying/success/fail），
+  // 否则按钮点击后状态只能靠 solveManually 内部 await 更新，无法响应后端异步进度
+  initCaptchaSolverListener()
   loadAccounts().then(() => {
     refreshUncachedWsStatus()
     // 进入页面时主动校验当前页账号的 cookie 实时状态，
@@ -2294,6 +2297,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('xya-header-action', handleHeaderAction)
   window.removeEventListener('xya-sse-event', handleSseEvent)
+  destroyCaptchaSolverListener()
   stopQrPolling()
   stopPolishPolling()
   void cleanupQrLogin()

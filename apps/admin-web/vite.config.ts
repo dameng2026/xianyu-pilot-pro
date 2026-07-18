@@ -164,13 +164,13 @@ export default defineConfig({
     port: 3006,
     proxy: {
       '/admin-api': {
-        target: 'http://localhost:18080',
+        target: 'http://127.0.0.1:18080',
         changeOrigin: true,
       },
       '/uploads': {
         // Keep local media reads on the same authorization boundary as
         // production; core-api validates the path-scoped media cookie.
-        target: 'http://localhost:18080',
+        target: 'http://127.0.0.1:18080',
         changeOrigin: true,
       },
     },

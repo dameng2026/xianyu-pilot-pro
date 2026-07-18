@@ -96,6 +96,15 @@ public class AutomationClient {
     }
 
     /**
+     * 带超时秒数的内部调用，返回完整 ResultObject（含 code/msg/data）。
+     * 用于 WebSocket 启动等长耗时场景：默认 30 秒会在 Playwright 滑块求解中途触发超时，
+     * 调用方可传入 180 覆盖最坏情况。超时秒数会被夹在 [1, 180]。
+     */
+    public Map<String, Object> postInternal(String path, Map<String, Object> body, long timeoutSeconds) {
+        return postJson(normalizeBase(automationBaseUrl), path, body, true, timeoutSeconds);
+    }
+
+    /**
      * 用于工作流执行等长耗时操作：允许调用方指定超时秒数，避免默认 30 秒触发 HttpTimeoutException。
      * 超时秒数会被夹在 [1, 180] 范围内，与 GET 方法的上限保持一致。
      */

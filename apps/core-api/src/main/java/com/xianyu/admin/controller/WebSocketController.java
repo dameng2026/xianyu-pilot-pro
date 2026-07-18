@@ -66,7 +66,11 @@ public class WebSocketController {
             Long tenantId = TenantContext.getCurrentTenantId();
             Object accountId = payload.getOrDefault("xianyuAccountId", payload.get("accountId"));
             log.info("Java -> Python websocket/start tenantId={}, accountId={}", tenantId, accountId);
-            Object result = automationClient.postInternal("/api/websocket/start", payload);
+            // 启动 WS 流程包含预检 Token（秒级）+ 等待 WS 连接结果（最多 12 秒）+
+            // 若 auth_failed 会自动触发 Playwright 滑块求解（最长 180 秒）。
+            // 默认 30 秒超时会在滑块求解中途触发 HttpTimeoutException，导致前端按钮卡在"处理中..."。
+            // 必须给到 180 秒以覆盖滑块求解的最坏情况。
+            Object result = automationClient.postInternal("/api/websocket/start", payload, 180);
             throwIfAutomationBusinessFailed(result, "连接失败，请自行提供 Cookie 或扫码重新登录");
             audit(payload, "WEBSOCKET_START", "启动闲鱼消息监听", request);
             return Result.ok(unwrapAutomationResult(result));

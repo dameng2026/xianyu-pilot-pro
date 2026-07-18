@@ -1625,14 +1625,54 @@ async def close_captcha_dialog(page) -> bool:
     return False
 
 
+def _is_punish_url(url: str) -> bool:
+    """检测是否为 Baxia punish URL（来自商品关键词搜索触发风控）。
+
+    punish URL 是搜索触发 FAIL_SYS_USER_VALIDATE 时由 MTOP 返回的验证页 URL，
+    典型特征：URL 中含 "punish" 或 "_____tmd_____"。
+    这类 URL 来自搜索上下文，直接 goto 即可触发滑块，
+    不应走 /im 消息页拟人导航（会偏离搜索验证场景）。
+    """
+    if not url:
+        return False
+    url_lower = url.lower()
+    return "punish" in url_lower or "_____tmd_____" in url_lower
+
+
+async def _navigate_to_target(page, target_url: str) -> tuple:
+    """根据目标 URL 类型选择导航策略。
+
+    - punish URL（搜索上下文）：直接 goto，不走拟人 /im 导航。
+      搜索场景的滑块求解应直接访问 punish URL，避免 /im 导航偏离验证上下文。
+      （注：goofishSearch.py 的搜索流程已不再求解滑块，但本函数仍保留 punish URL 直跳能力，
+      供未来可能的其他场景使用。）
+    - 其他 URL（消息页上下文）：使用 human_warmup_and_enter_im 拟人导航
+
+    返回 (page, actual_url)：actual_url 供后续 navigate_fresh 重用。
+    """
+    if _is_punish_url(target_url):
+        log(f"检测到 Baxia punish URL（搜索上下文），直接访问: {target_url[:100]}...")
+        try:
+            await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
+        except Exception as e:
+            log(f"跳转 punish URL 失败: {e}")
+        # 等待滑块渲染（Baxia punish 页 JS 需要时间初始化滑块组件）
+        await asyncio.sleep(1.5)
+        return page, target_url
+    else:
+        return await human_warmup_and_enter_im(page, target_url or DEFAULT_TARGET_URL)
+
+
 async def navigate_fresh(page, target_url: str, *, hard: bool = False) -> tuple:
-    """重置导航（真人鼠标点击进入消息页）。
+    """重置导航。
 
     hard=False（默认）：不清 localStorage/sessionStorage，避免把登录痕迹一并清掉加重风控。
     hard=True：清 storage 后再进入目标页（仅在加载失败连跪时使用）。
 
-    返回 (page, actual_im_url)：actual_im_url 是带 spm 参数的消息页 URL。
-    human_warmup_and_enter_im 内部会先打开首页再点击消息入口，不在这里重复打开首页。
+    返回 (page, actual_url)：actual_url 供后续刷新复用。
+    根据 target_url 类型自动选择导航策略：
+    - punish URL（搜索上下文）：直接 goto
+    - 其他 URL（消息页上下文）：human_warmup_and_enter_im 拟人导航
     """
     if hard:
         try:
@@ -1646,9 +1686,9 @@ async def navigate_fresh(page, target_url: str, *, hard: bool = False) -> tuple:
         except Exception as e:
             log(f"清理存储失败(可忽略): {e}")
 
-    # 真人鼠标点击进入消息页（human_warmup_and_enter_im 内部会先打开首页）
+    # 根据目标 URL 类型选择导航策略
     try:
-        page, actual_url = await human_warmup_and_enter_im(page, target_url or DEFAULT_TARGET_URL)
+        page, actual_url = await _navigate_to_target(page, target_url or DEFAULT_TARGET_URL)
         return page, actual_url
     except Exception:
         target_wait = 2.0 + random.random() * 1.8
@@ -2019,16 +2059,17 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
     except Exception:
         pass
 
-    # 拟人路径进入消息页（避免直接 /im）
-    # human_warmup_and_enter_im 返回 (page, actual_im_url)
-    # actual_im_url 是带 spm 参数的消息页 URL（从首页点击进入），后续刷新都用这个 URL
-    page, actual_im_url = await human_warmup_and_enter_im(page, target_url or DEFAULT_TARGET_URL)
+    # 根据目标 URL 类型选择导航策略：
+    # - punish URL（搜索上下文）：直接 goto punish URL，触发搜索场景的滑块
+    # - 其他 URL（消息页上下文）：拟人路径进入 /im，避免直接 /im 触发反爬
+    # _navigate_to_target 返回 (page, actual_url)，actual_url 供后续 navigate_fresh 刷新复用
+    page, actual_im_url = await _navigate_to_target(page, target_url or DEFAULT_TARGET_URL)
     try:
         page.on("response", _on_response)
     except Exception:
         pass
     log(f"当前操作页 URL: {page.url}")
-    log(f"✓ 记录消息页 URL（带 spm 参数，后续刷新复用）: {actual_im_url}")
+    log(f"✓ 记录目标页 URL（后续刷新复用）: {actual_im_url}")
 
     if await page_shows_load_failure(page):
         log("⚠ 进入消息页即出现「加载失败」——浏览器环境很可能已被风控标记")
@@ -2663,7 +2704,12 @@ async def _launch_solve_once(
                 await page0.mouse.wheel(0, 200 + random.randint(0, 400))
                 await asyncio.sleep(0.4 + random.random() * 0.6)
             # 30% 概率访问一个商品页，增加真实浏览痕迹
-            if random.random() < 0.3:
+            # 搜索上下文（punish URL）跳过此步骤：
+            #   1. 搜索场景访问固定商品页反而可疑（每次搜索都访问同一商品）
+            #   2. 商品页可能慢或下架，30 秒 goto + 30 秒 go_back 浪费 60 秒
+            #   3. 搜索上下文已通过 punish URL 直接 goto，不需要额外浏览痕迹
+            # 消息页上下文保留此步骤（增加真实浏览历史，降低"秒进消息页"特征）
+            if not _is_punish_url(target_url) and random.random() < 0.3:
                 try:
                     sample_url = "https://www.goofish.com/item?itemId=746285119876"
                     log(f"访问商品页增加浏览痕迹: {sample_url}")
@@ -2676,6 +2722,8 @@ async def _launch_solve_once(
                     await page0.go_back(wait_until="domcontentloaded", timeout=30000)
                 except Exception as e:
                     log(f"商品页访问警告（不影响后续）: {e}")
+            elif _is_punish_url(target_url):
+                log("搜索上下文（punish URL），跳过商品页访问以节省时间")
         except Exception:
             pass
         await asyncio.sleep(0.8 + random.random() * 1.0)
@@ -2789,10 +2837,16 @@ async def main_async(args) -> dict:
 
                 # 第二轮：仅当检测到滑块且未通过时，换 seed profile 再来一次
                 # 第二轮不启用半自动兜底（第一轮已等过人工）
+                # 搜索链路超时预算：前端 axios=180s，Java 网关→Python=180s，Python→crawler=180s，
+                # crawler 内部 sliderSolver.ts 给 Python 脚本 90s，超时即 kill。
+                # 第一轮 persistent profile 实测 60-90s，若已用时 > 75s，
+                # 第二轮必然被 kill（且无法完整执行），跳过以保留第一轮结果与时间预算给后续兜底路径。
+                elapsed_after_r1 = time.time() - start_time
                 if (
                     not result.get("solved")
                     and result.get("captchaDetected")
                     and not result.get("isLoginPage")
+                    and elapsed_after_r1 < 75.0
                 ):
                     log("=== 第二轮：换 seed profile 重开浏览器再试 ===")
                     await asyncio.sleep(2.0 + random.random() * 2.5)
@@ -2819,6 +2873,13 @@ async def main_async(args) -> dict:
                             ).strip(" |")
                         if r2.get("screenshotPath"):
                             result["screenshotPath"] = r2.get("screenshotPath")
+                elif (
+                    not result.get("solved")
+                    and result.get("captchaDetected")
+                    and not result.get("isLoginPage")
+                ):
+                    # 第二轮因 deadline 跳过：保留第一轮结果给上层
+                    log(f"=== 第二轮跳过（elapsed={elapsed_after_r1:.1f}s >= 75s），保留第一轮结果 ===")
                 result["attempts"] = total_attempts or result.get("attempts") or 0
 
     except TimeoutError as e:

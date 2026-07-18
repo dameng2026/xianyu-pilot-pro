@@ -15,7 +15,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.*;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -44,7 +46,10 @@ public class ScheduledTaskController {
             "refresh_account",
             "auto_reply",
             "reply",
-            "auto-reply"
+            "auto-reply",
+            // 新增任务类型：自动补发订单（间隔触发）、一键擦亮商品（每日多账号）
+            "auto_redelivery",
+            "one_click_polish"
     );
 
     private final JdbcTemplate jdbcTemplate;
@@ -143,8 +148,40 @@ public class ScheduledTaskController {
         String taskName = boundedText(body.get("taskName"), taskType, MAX_TASK_NAME_LENGTH, "任务名称");
         String cronExpression = boundedText(body.get("cronExpression"), null, MAX_CRON_LENGTH, "Cron 表达式");
         String configJson = normalizeConfigJson(body.get("configJson"));
+        // 多账号任务：从 configJson 中读取 accountIds 数组，对每个账号校验归属
+        // 工作流任务不使用 accountIds（使用工作流自带的账号配置），跳过校验
+        if (!"workflow".equals(taskType)) {
+            for (Long id : extractAccountIdsFromConfig(configJson, accountId)) {
+                requireOwnedAccount(id, tenantId);
+            }
+        }
         int enabled = normalizeEnabled(body.get("enabled"));
         return new TaskInput(accountId, taskName, cronExpression, configJson, enabled);
+    }
+
+    /**
+     * 从 configJson 中提取 accountIds 数组（去重）。
+     * 若 accountIds 不存在或为空，回退使用单个 accountId。
+     */
+    private List<Long> extractAccountIdsFromConfig(String configJson, Long fallbackAccountId) {
+        LinkedHashSet<Long> ids = new LinkedHashSet<>();
+        try {
+            JsonNode node = JSON.readTree(configJson);
+            if (node != null && node.has("accountIds") && node.get("accountIds").isArray()) {
+                for (JsonNode item : node.get("accountIds")) {
+                    if (item != null && item.canConvertToLong()) {
+                        long value = item.asLong();
+                        if (value > 0) ids.add(value);
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // configJson 已通过 normalizeConfigJson 校验为合法 JSON，这里不应失败
+        }
+        if (ids.isEmpty() && fallbackAccountId != null) {
+            ids.add(fallbackAccountId);
+        }
+        return new ArrayList<>(ids);
     }
 
     private void requireOwnedAccount(Long accountId, Long tenantId) {

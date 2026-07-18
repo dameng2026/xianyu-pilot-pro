@@ -251,22 +251,54 @@ public class AutomationProxyController {
         try {
             // 商品关键词搜索主链路：前端 -> Java 网关 -> Python MTOP 搜索。
             // Node crawler-service 只负责店铺异步采集，避免关键词搜索绕过闲鱼登录 Cookie 与 MTOP 签名。
+            // 超时 45 秒：搜索场景不求解滑块（直接 goto 搜索 URL），时间预算：
+            //   - 快速搜索（直调 MTOP）：1-3s
+            //   - 慢速搜索（Node Playwright + Python patchright 兜底）：最多 21s（6s MTOP 等待 + 15s Python）
+            //   - 自动模式（快速失败后降级慢速）：最坏 ~30s
+            // 45s 给足余量，同时避免卡死时让用户等太久。
+            // 各层超时：前端 axios=180s，Java 网关→Python=45s，Python→crawler=30s。
             Map<String, Object> raw = automationClient.getInternal(
                     "/api/business-opportunity/goofish-search",
                     params,
-                    120
+                    45
             );
             Object code = raw.get("code");
             if (code != null && ("200".equals(String.valueOf(code)) || "0".equals(String.valueOf(code)))) {
                 return Result.ok(raw.get("data"));
             }
-            // Python 端已对业务错误（Cookie失效、Token过期等）返回明确 msg
+            // Python 端已对业务错误（Cookie失效、Token过期、安全验证等）返回明确 msg + errorType
+            // 直接透传 Python 的友好消息与状态码，避免覆盖导致用户看到无关的"未搜索到商品"
             String message = String.valueOf(raw.getOrDefault("msg", raw.getOrDefault("message", "商品搜索失败")));
-            // 对 Python 未覆盖的情况做二次诊断
-            if (message.contains("Cookie") && (message.contains("失效") || message.contains("过期") || message.contains("_m_h5_tk"))) {
-                throw new BizException(409, "闲鱼账号登录状态已失效，请重新登录后再搜索");
+            Object codeObj = raw.get("code");
+            int bizCode = 503;
+            if (codeObj != null) {
+                try {
+                    bizCode = Integer.parseInt(String.valueOf(codeObj));
+                } catch (NumberFormatException ignored) {
+                    // 保持默认 503
+                }
             }
-            throw new BizException(502, "商品搜索失败，闲鱼服务未返回可用结果");
+            // 从 Python 的 data 字段提取 errorType，透传给前端用于区分错误类型
+            Object rawData = raw.get("data");
+            String errorType = "unknown";
+            if (rawData instanceof Map) {
+                Object et = ((Map<?, ?>) rawData).get("errorType");
+                if (et != null) {
+                    errorType = String.valueOf(et);
+                }
+            }
+            // 根据 errorType 映射到 HTTP 状态码（409 cookie失效 / 503 服务异常 / 502 其他错误）
+            if ("cookie_expired".equals(errorType)) {
+                throw new BizException(409, message);
+            }
+            if ("blocked".equals(errorType) || "captcha_failed".equals(errorType)) {
+                throw new BizException(503, message);
+            }
+            // 兼容旧版 Python（未返回 errorType）：通过 msg 关键词识别 cookie 失效
+            if (message.contains("Cookie") && (message.contains("失效") || message.contains("过期") || message.contains("_m_h5_tk"))) {
+                throw new BizException(409, message);
+            }
+            throw new BizException(bizCode == 503 ? 503 : 502, message);
         } catch (BizException ex) {
             throw ex;
         } catch (Exception ex) {

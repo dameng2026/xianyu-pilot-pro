@@ -1,6 +1,6 @@
 import request from '../utils/request.js'
 
-export const startWebSocket = (accountId, options = {}) => request.post('/websocket/start', { accountId, ...options })
+export const startWebSocket = (accountId, options = {}) => request.post('/websocket/start', { accountId, ...options }, { timeout: 180000 })
 export const stopWebSocket = accountId => request.post('/websocket/stop', { accountId })
 export const websocketStatus = accountId => request.post('/websocket/status', { accountId })
 export const sendMessage = data => request.post('/websocket/sendMessage', data)

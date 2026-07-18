@@ -23,6 +23,29 @@ from ....services.upload_governance import (
 from ....core.response import ResultObject
 from ....core.config import settings
 from ....core.cookie_crypto import decrypt_cookie_if_needed, encrypt_cookie_for_storage
+
+
+class SearchError(Exception):
+    """闲鱼商品搜索自定义异常。
+
+    携带结构化错误类型，用于：
+    1. 上层路由识别 cookie 失效后反向回写数据库 cookie_status
+    2. Java 网关透传给前端对应 HTTP 状态码与错误消息
+    3. 前端区分"链路异常"与"链路正常无结果"显示不同提示
+
+    error_type 取值：
+      - cookie_expired: 账号 Cookie 失效（需要重新登录）
+      - blocked: 闲鱼触发安全验证/风控
+      - captcha_failed: 滑块求解失败
+      - no_results: 链路正常但无搜索结果
+      - unknown: 其他未知错误
+    """
+
+    def __init__(self, message: str, *, error_type: str = "unknown", raw_message: str = ""):
+        super().__init__(message)
+        self.message = message
+        self.error_type = error_type
+        self.raw_message = raw_message or message
 from ....models.entities import (
     XianyuOperationLog, XianyuAccount,
     XianyuAccountAuth, XianyuAccountRuntime,
@@ -1444,6 +1467,15 @@ def _call_crawler_search(keyword: str, page: int, page_size: int, tenant_id: int
     自动处理 Baxia 反爬令牌（bx-ua/bx-umidtoken/bx_et），
     避免 MTOP API 直调被 RGV587 风控拦截。
     传递用户 Cookie 让浏览器使用已登录的闲鱼会话。
+
+    返回结果中可能包含：
+      - warning: 非阻断性警告（如快速搜索降级提示），用于前端展示
+      - errorType: 错误类型标识，用于 Java 网关与前端识别处理
+        cookie_expired: 账号 Cookie 失效（需要重新登录）
+        blocked: 闲鱼触发安全验证/风控
+        captcha_failed: 滑块求解失败
+        no_results: 链路正常但无搜索结果
+        unknown: 其他未知错误
     """
     import requests as _requests
 
@@ -1460,11 +1492,38 @@ def _call_crawler_search(keyword: str, page: int, page_size: int, tenant_id: int
     }
     if cookie_str:
         payload["cookie"] = cookie_str
-    resp = _requests.post(crawler_url, headers=headers, json=payload, timeout=90)
+    # 慢速搜索时间预算（搜索场景不求解滑块，直接 goto 搜索 URL）：
+    #   - Node Playwright 等 MTOP 响应：最多 6s（Promise.race 事件驱动）
+    #   - 若触发 Baxia 风控，委托 Python patchright：最多 15s（直接 goto 搜索 URL，不求解滑块）
+    #   - 合计最坏情况约 21s，给 30s 余量覆盖慢网/慢机器。
+    # 之前 180s 是因为搜索场景错误复用了滑块求解链路（首页预热 + 滑块求解 + 重试），
+    # 现已移除滑块求解，搜索应在 10-20s 内完成。
+    resp = _requests.post(crawler_url, headers=headers, json=payload, timeout=30)
     resp.raise_for_status()
     data = resp.json()
     if not data.get("ok"):
-        raise RuntimeError("crawler-service 搜索失败")
+        # 透传 crawler-service 的具体错误原因与错误类型，避免被吞成"crawler-service 搜索失败"
+        crawler_error = str(data.get("error") or data.get("message") or "").strip()
+        crawler_error_type = str(data.get("errorType") or "").strip().lower()
+        # 根据 crawler-service 的错误信息推断错误类型
+        if not crawler_error_type:
+            if "cookie" in crawler_error.lower() or "_m_h5_tk" in crawler_error.lower():
+                crawler_error_type = "cookie_expired"
+            elif "阻断" in crawler_error or "验证" in crawler_error or "captcha" in crawler_error.lower():
+                crawler_error_type = "blocked"
+            else:
+                crawler_error_type = "unknown"
+        # 友好错误消息映射
+        if crawler_error_type == "cookie_expired":
+            friendly = "闲鱼账号登录状态已失效，请到「账号管理」重新登录后再搜索"
+        elif crawler_error_type == "blocked":
+            friendly = "闲鱼触发安全验证，请稍后再试"
+        elif crawler_error_type == "captcha_failed":
+            friendly = "滑块验证未通过，请稍后再试"
+        else:
+            friendly = crawler_error or "crawler-service 搜索失败"
+        # 通过自定义异常携带 errorType，让上层识别并处理（如反向回写 cookie_status）
+        raise SearchError(friendly, error_type=crawler_error_type, raw_message=crawler_error)
 
     items = data.get("items", [])
     # 标准化为前端期望的格式（crawler-service 已从 MTOP API 响应中提取完整字段）
@@ -1486,13 +1545,17 @@ def _call_crawler_search(keyword: str, page: int, page_size: int, tenant_id: int
             "description": title,
         })
 
-    return {
+    result = {
         "items": normalized,
         "total": data.get("total", len(normalized)),
         "page": data.get("page", page),
         "pageSize": data.get("pageSize", page_size),
         "hasMore": data.get("hasMore", False),
     }
+    # 携带 crawler-service 的非阻断性 warning（如使用了 Python patchright 兜底搜索）
+    if data.get("warning"):
+        result["warning"] = data["warning"]
+    return result
 
 
 def _call_mtop_search_direct(keyword: str, page: int, page_size: int, cookie_str: str) -> dict:
@@ -1532,13 +1595,13 @@ def _call_mtop_search_direct(keyword: str, page: int, page_size: int, cookie_str
 
     # 检测风控/Token失效错误，抛出异常让上层降级到慢速搜索
     if _XIANYU_RGV587 in ret_msg:
-        raise RuntimeError("快速搜索触发风控，将降级到兼容搜索")
+        raise SearchError("快速搜索触发风控，将降级到兼容搜索", error_type="blocked", raw_message=ret_msg)
     if _XIANYU_TOKEN_EXPIRED in ret_msg or _XIANYU_TOKEN_EXPIRED_ALIAS in ret_msg:
-        raise RuntimeError("Cookie/_m_h5_tk 已失效")
+        raise SearchError("Cookie/_m_h5_tk 已失效", error_type="cookie_expired", raw_message=ret_msg)
     if "FAIL_SYS_USER_VALIDATE" in ret_msg:
-        raise RuntimeError("快速搜索触发安全验证，将降级到兼容搜索")
+        raise SearchError("快速搜索触发安全验证，将降级到兼容搜索", error_type="blocked", raw_message=ret_msg)
     if "SUCCESS" not in ret_msg:
-        raise RuntimeError("MTOP 搜索未返回可用结果")
+        raise SearchError("MTOP 搜索未返回可用结果", error_type="unknown", raw_message=ret_msg)
 
     # 解析商品列表（参考 闲鱼搜索接口.md 响应结构）
     result_data = response.get("data", {})
@@ -1604,12 +1667,19 @@ def _execute_search_with_mode(
     - mode=fast：仅快速搜索（直调MTOP API），失败抛异常
     - mode=slow：仅慢速搜索（Playwright浏览器），失败抛异常
     - mode=auto（默认）：先快速搜索，失败则降级到慢速搜索
+
+    关键约束：cookie_expired 错误不降级（两种模式都会失败），直接抛出
+    让上层路由识别并反向回写数据库 cookie_status。
     """
     mode = (mode or "auto").lower().strip()
     if mode not in ("fast", "slow", "auto"):
         mode = "auto"
 
     fast_fallback = False
+    # 记录快速搜索失败原因，用于慢速搜索成功后作为 warning 返回
+    fast_failure_reason: Optional[str] = None
+    # 记录快速搜索检测到的 cookie 失效信号（auto 模式下用于阻断降级）
+    fast_cookie_expired = False
 
     # 快速搜索（直调MTOP API，~1秒）
     if mode in ("fast", "auto"):
@@ -1622,8 +1692,27 @@ def _execute_search_with_mode(
             # 快速搜索无结果但未报错，记录后尝试慢速
             fast_fallback = True
             logger.info("[搜索] 快速搜索无结果 keywordLen=%d，尝试慢速搜索", len(keyword))
+        except SearchError as e:
+            fast_fallback = True
+            fast_failure_reason = e.message
+            # cookie 失效不降级：cookie 已失效时，浏览器方式也会失败
+            # 直接抛出让上层路由处理（反向回写 cookie_status）
+            if e.error_type == "cookie_expired":
+                fast_cookie_expired = True
+                if mode == "auto":
+                    logger.info("[搜索] 快速搜索检测到 cookie 失效，跳过慢速搜索（cookie 已失效）")
+                    raise
+            logger.info(
+                "[搜索] 快速搜索失败 keywordLen=%d errorType=%s，将降级到慢速搜索",
+                len(keyword),
+                type(e).__name__,
+            )
+            if mode == "fast":
+                # fast 模式不降级，直接抛出
+                raise
         except Exception as e:
             fast_fallback = True
+            fast_failure_reason = str(e)
             logger.info(
                 "[搜索] 快速搜索失败 keywordLen=%d errorType=%s，将降级到慢速搜索",
                 len(keyword),
@@ -1637,10 +1726,14 @@ def _execute_search_with_mode(
     try:
         result = _call_crawler_search(keyword, page, page_size, tenant_id, cookie_str)
         result["searchMode"] = "slow"
-        if fast_fallback:
+        if fast_fallback and fast_failure_reason:
             result["fastFallbackReason"] = "快速搜索暂不可用，已自动切换兼容搜索"
+            result["warning"] = fast_failure_reason
         logger.info("[搜索] 慢速搜索成功 keywordLen=%d count=%d", len(keyword), len(result.get("items", [])))
         return result
+    except SearchError:
+        # 慢速搜索的结构化错误（cookie_expired/blocked/captcha_failed），直接抛出
+        raise
     except Exception as e:
         logger.error(
             "[搜索] 慢速搜索失败 keywordLen=%d errorType=%s",
@@ -1650,11 +1743,11 @@ def _execute_search_with_mode(
         )
         error_msg = str(e)
         if "ConnectionRefused" in error_msg or "Connection refused" in error_msg:
-            raise RuntimeError("crawler-service 未启动，请启动爬虫服务后重试")
+            raise SearchError("crawler-service 未启动，请启动爬虫服务后重试", error_type="unknown")
         if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
-            raise RuntimeError("搜索超时，请稍后重试")
+            raise SearchError("搜索超时，请稍后重试", error_type="unknown")
         if "阻断" in error_msg or "验证码" in error_msg or "安全验证" in error_msg:
-            raise RuntimeError("闲鱼触发安全验证，请稍后再试")
+            raise SearchError("闲鱼触发安全验证，请稍后再试", error_type="blocked")
         raise
 
 
@@ -1675,6 +1768,11 @@ async def business_goofish_search(
       - mode=slow：慢速搜索，Playwright浏览器加载页面（~2-3秒，稳定）
       - mode=auto（默认）：先快速搜索，失败自动降级到慢速搜索
     前端 -> Java 网关 -> Python automation-service 的主搜索链路。
+
+    错误返回结构（ResultObject.failed）：
+      - msg: 用户可读的友好错误消息
+      - code: HTTP 状态码（409 cookie失效 / 503 服务不可用 / 502 其他错误）
+      - data: {"errorType": "cookie_expired" | "blocked" | "captcha_failed" | "unknown"}
     """
     keyword = q.strip()
     if not keyword:
@@ -1690,7 +1788,9 @@ async def business_goofish_search(
         return ResultObject.failed("缺少租户上下文，请重新登录")
 
     # 获取账号 Cookie
-    cookie_str, cookie_err = await _resolve_account_cookie(db, tenant_id, accountId, current_user)
+    cookie_str, cookie_err, resolved_account_id = await _resolve_account_cookie(
+        db, tenant_id, accountId, current_user
+    )
     if cookie_err:
         return ResultObject.failed(cookie_err)
 
@@ -1699,7 +1799,37 @@ async def business_goofish_search(
             _execute_search_with_mode,
             keyword, safe_page, safe_page_size, tenant_id, cookie_str, mode,
         )
+    except SearchError as e:
+        # 结构化搜索错误：识别 cookie 失效后反向回写数据库 cookie_status，
+        # 让账号管理页面能立即显示异常状态，不再需要用户主动切换页面查看
+        if e.error_type == "cookie_expired" and resolved_account_id is not None:
+            await _mark_account_cookie_expired(db, tenant_id, resolved_account_id, source="goofish_search")
+        # 返回对应的 HTTP 状态码与错误消息，让 Java 网关与前端能识别处理
+        if e.error_type == "cookie_expired":
+            return ResultObject.failed(
+                "闲鱼账号登录状态已失效，请到「账号管理」重新登录后再搜索",
+                code=409,
+                data={"errorType": "cookie_expired"},
+            )
+        if e.error_type == "blocked":
+            return ResultObject.failed(
+                e.message or "闲鱼触发安全验证，请稍后再试",
+                code=503,
+                data={"errorType": "blocked"},
+            )
+        if e.error_type == "captcha_failed":
+            return ResultObject.failed(
+                e.message or "滑块验证未通过，请稍后再试",
+                code=503,
+                data={"errorType": "captcha_failed"},
+            )
+        return ResultObject.failed(
+            e.message or "商品搜索暂时不可用，请稍后重试",
+            code=503,
+            data={"errorType": "unknown"},
+        )
     except Exception as e:
+        logger.error("[搜索] 未预期异常 keywordLen=%d errorType=%s", len(keyword), type(e).__name__, exc_info=True)
         return safe_route_failure(
             logger, e, operation="search goofish goods", user_message="商品搜索暂时不可用，请稍后重试", code=503
         )

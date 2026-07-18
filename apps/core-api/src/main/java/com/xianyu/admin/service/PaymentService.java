@@ -633,7 +633,8 @@ public class PaymentService {
     }
 
     /**
-     * 商城商品支付成功后处理：更新购买人数，卡密商品自动分配一张可用卡密。
+     * 商城商品支付成功后处理：更新购买人数，卡密商品自动分配一张可用卡密，
+     * 同时将商品绑定到用户货源库（from_mall=1 + mall_product_id），货源内容实时从 mall_product 读取。
      */
     private void fulfillMallProduct(Map<String, Object> order, String source) {
         Long productIdRaw = storedNullablePositiveLong(order.get("target_id"), "商城商品 ID");
@@ -642,7 +643,7 @@ public class PaymentService {
         }
         long productId = productIdRaw;
         Map<String, Object> product = queryOne(
-                "SELECT id, product_type, status FROM mall_product WHERE id=? AND deleted=0", productId);
+                "SELECT id, product_type, status, title FROM mall_product WHERE id=? AND deleted=0", productId);
         if (product == null) {
             throw new BizException(409, "商品不存在或已删除，请人工核验支付订单");
         }
@@ -660,6 +661,27 @@ public class PaymentService {
                     orderNo, productId);
             if (assigned != 1) {
                 log.error("卡密商品无可用卡密可分配（用户已付款），需人工补发卡密或退款, productId={}, orderNo={}", productId, orderNo);
+            }
+        }
+        // 将商品绑定到用户货源库（仅保存商品 ID 与标题快照，货源内容实时从 mall_product 读取以保证后台更新同步）
+        Long userId = storedNullablePositiveLong(order.get("user_id"), "支付订单用户 ID");
+        Long tenantId = storedNullablePositiveLong(order.get("tenant_id"), "支付订单租户 ID");
+        if (userId != null && tenantId != null) {
+            try {
+                Integer existing = jdbcTemplate.queryForObject(
+                        "SELECT COUNT(*) FROM delivery_text_source WHERE tenant_id=? AND from_mall=1 AND mall_product_id=? AND deleted=0",
+                        Integer.class, tenantId, productId);
+                if (existing == null || existing == 0) {
+                    String titleSnapshot = text(product.get("title"));
+                    jdbcTemplate.update(
+                            "INSERT INTO delivery_text_source(tenant_id, source_type, delivery_mode, card_group_id, title, content, remark, from_mall, mall_product_id, created_time, updated_time, deleted) " +
+                                    "VALUES(?, 'text', 'text', NULL, ?, '', '商城购买货源', 1, ?, NOW(), NOW(), 0)",
+                            tenantId, titleSnapshot, productId);
+                    log.info("商城购买货源已绑定到用户货源库 tenantId={} userId={} productId={}", tenantId, userId, productId);
+                }
+            } catch (DataAccessException e) {
+                log.error("商城购买货源绑定到用户货源库失败（不影响卡密分发与购买计数） tenantId={} productId={} errorType={} error={}",
+                        tenantId, productId, e.getClass().getSimpleName(), e.getMessage());
             }
         }
     }

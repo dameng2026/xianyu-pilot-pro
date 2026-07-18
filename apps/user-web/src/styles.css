@@ -607,6 +607,11 @@ input {
   color: #718096
 }
 
+.badge.purple {
+  background: #f3e8ff;
+  color: #7c3aed
+}
+
 .switch {
   width: 42px;
   height: 22px;

@@ -448,7 +448,7 @@
                 >
                   <option value="" disabled>{{ imageModelsError || '请选择已启用且完成配置的生图模型' }}</option>
                   <option v-for="m in availableImageModels" :key="m.moduleKey" :value="m.moduleKey">
-                    {{ m.name || m.displayName || m.moduleKey }}
+                    {{ m.model || m.name || m.moduleKey }}
                   </option>
                 </select>
                 <div v-if="imageModelsError" class="hint-text error-text">{{ imageModelsError }}</div>
@@ -897,7 +897,8 @@ function imageModelsOf(response) {
   }
 
   const seenKeys = new Set()
-  return data.models.map((model, index) => {
+  const result = []
+  data.models.forEach((model, index) => {
     if (!model || typeof model !== 'object' || Array.isArray(model)) {
       throw new Error(`第 ${index + 1} 个图片模型响应格式异常`)
     }
@@ -905,12 +906,14 @@ function imageModelsOf(response) {
     if (!moduleKey || seenKeys.has(moduleKey)) {
       throw new Error(`第 ${index + 1} 个图片模型缺少唯一标识`)
     }
+    // 防御性过滤：仅保留已启用且完成配置的模型，未配置的模型不显示
     if (model.configured !== true || model.enabled !== true) {
-      throw new Error(`图片模型「${moduleKey}」未启用或未完成配置`)
+      return
     }
     seenKeys.add(moduleKey)
-    return { ...model, moduleKey }
+    result.push({ ...model, moduleKey })
   })
+  return result
 }
 
 function isImageModelAvailable(moduleKey) {

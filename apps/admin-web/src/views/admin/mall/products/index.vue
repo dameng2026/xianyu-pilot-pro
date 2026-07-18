@@ -120,12 +120,12 @@
     </ElCard>
 
     <!-- 新增/编辑弹窗 -->
-    <ElDialog v-model="dialogVisible" :title="isEdit ? '编辑商品' : '新增商品'" width="720px" destroy-on-close>
+    <ElDialog v-if="dialogRendered" v-model="dialogVisible" :title="isEdit ? '编辑商品' : '新增商品'" width="720px" destroy-on-close append-to-body>
       <ElForm :model="form" :rules="rules" ref="formRef" label-width="120px" label-position="right">
         <ElFormItem label="商品类型" prop="type">
           <ElRadioGroup v-model="form.type" :disabled="isEdit">
-            <ElRadioButton label="text">文本商品</ElRadioButton>
-            <ElRadioButton label="card">卡密商品</ElRadioButton>
+            <ElRadioButton value="text">文本商品</ElRadioButton>
+            <ElRadioButton value="card">卡密商品</ElRadioButton>
           </ElRadioGroup>
           <div class="form-tip">
             {{ form.type === 'card' ? '卡密商品需要逐条导入可发货的卡密内容' : '文本商品需要填写发货内容，购买后直接展示给用户' }}
@@ -179,8 +179,8 @@
             </div>
             <div v-show="!form.coverUrl" class="cover-input-area">
               <ElRadioGroup v-model="coverUploadMode" size="small" style="margin-bottom: 8px">
-                <ElRadioButton label="file">文件上传</ElRadioButton>
-                <ElRadioButton label="url">URL导入</ElRadioButton>
+                <ElRadioButton value="file">文件上传</ElRadioButton>
+                <ElRadioButton value="url">URL导入</ElRadioButton>
               </ElRadioGroup>
               <ElUpload
                 v-if="coverUploadMode === 'file'"
@@ -236,7 +236,7 @@
     </ElDialog>
 
     <!-- 卡密查看弹窗 -->
-    <ElDialog v-model="cardKeysDialogVisible" title="卡密列表" width="760px" destroy-on-close>
+    <ElDialog v-if="cardKeysRendered" v-model="cardKeysDialogVisible" title="卡密列表" width="760px" destroy-on-close append-to-body>
       <div class="card-keys-head">
         <span>商品：<strong>{{ cardKeysProduct?.title }}</strong></span>
         <span class="muted">共 {{ cardKeysTotal }} 条</span>
@@ -272,7 +272,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, onMounted } from 'vue'
+import { computed, reactive, ref, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElTableColumn } from 'element-plus'
 import { Plus, Refresh, Upload } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules, UploadRequestOptions } from 'element-plus'
@@ -311,9 +311,21 @@ const query = reactive({
 const refreshingCategories = ref(false)
 
 const dialogVisible = ref(false)
+const dialogRendered = ref(false)
 const saving = ref(false)
 const isEdit = ref(false)
 const formRef = ref<FormInstance>()
+
+// 强制每次打开弹窗时重新挂载 ElDialog，避免 Teleport + Transition 持久化导致的 overlay 不插入 DOM 问题
+watch(dialogVisible, (val) => {
+  if (val) {
+    dialogRendered.value = true
+  } else {
+    setTimeout(() => {
+      if (!dialogVisible.value) dialogRendered.value = false
+    }, 350)
+  }
+}, { flush: 'post' })
 
 const defaultForm = () => ({
   id: undefined as number | undefined,
@@ -345,7 +357,18 @@ const cardsLineCount = computed(() => {
 })
 
 const cardKeysDialogVisible = ref(false)
+const cardKeysRendered = ref(false)
 const cardKeysLoading = ref(false)
+
+watch(cardKeysDialogVisible, (val) => {
+  if (val) {
+    cardKeysRendered.value = true
+  } else {
+    setTimeout(() => {
+      if (!cardKeysDialogVisible.value) cardKeysRendered.value = false
+    }, 350)
+  }
+}, { flush: 'post' })
 const cardKeys = ref<CardKeyItem[]>([])
 const cardKeysTotal = ref(0)
 const cardKeysProduct = ref<MallProduct | null>(null)
