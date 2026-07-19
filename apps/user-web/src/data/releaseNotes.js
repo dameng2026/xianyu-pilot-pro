@@ -66,13 +66,40 @@ export const VERSION_BUMP_RULES = [
  */
 
 /** 当前最新版本号（应与 package.json 的 version 字段保持一致） */
-export const CURRENT_VERSION = '1.4.2'
+export const CURRENT_VERSION = '1.5.0'
 
 /**
  * 更新日志数据，最新在前。
  * @type {ReleaseNote[]}
  */
 export const releaseNotes = [
+  {
+    version: '1.5.0',
+    date: '2026-07-19',
+    type: RELEASE_TYPES.MINOR,
+    title: '工作流新增商品草稿箱与图片生成记录',
+    summary: '工作流 PUBLISH 节点产出的商品自动归档到草稿箱，无论发布成功或失败都保留记录并支持重试；新增图片生成记录页聚合展示所有生图调用的图片历史。',
+    changes: [
+      {
+        label: '新增',
+        items: [
+          '工作流「自动化」分组新增「商品草稿箱」子页：工作流 PUBLISH 节点产出的每件商品都会自动保存为草稿，无论发布成功或失败都保留记录',
+          '商品草稿箱支持按发布状态（待发布 / 发布中 / 已发布 / 发布失败）与关键词筛选，发布失败的草稿可一键重试发布或批量重试',
+          '工作流「自动化」分组新增「图片生成记录」子页：聚合展示商机发掘与工作流两类来源的全部生图调用历史，包含图片预览、Prompt、模型、调用方式等完整信息',
+          '图片生成记录支持按来源（全部 / 工作流 / 商机发掘）、状态、关键词筛选，发布失败的记录可一键恢复图片',
+          '商品草稿箱与图片生成记录均提供详情弹窗：左侧大图预览，右侧完整字段，方便排查与回溯'
+        ]
+      },
+      {
+        label: '优化',
+        items: [
+          '工作流 PUBLISH 节点发布失败时错误信息会沉淀到草稿记录，便于后续诊断与重试',
+          '生图历史列表复用 /opportunity/image-history 端点并扩展 source 参数，统一展示商机发掘与工作流两类来源'
+        ]
+      }
+    ],
+    remark: '本次同步执行数据库迁移 V1.25（opportunity_image_history 新增 source / workflow_id / workflow_execution_id / workflow_node_key 字段）与 automation-service V1.12（新增 workflow_goods_draft 表），已按规则校验清单与 sha256。'
+  },
   {
     version: '1.4.2',
     date: '2026-07-19',
