@@ -1879,3 +1879,172 @@ async def workflow_publish(
         db.add(record)
         await db.commit()
         return ResultObject.failed(f"发布失败: {error_msg}")
+
+
+# ==================== 商品草稿箱 ====================
+
+from ....services.workflow_draft_service import (  # noqa: E402
+    list_drafts, get_draft, retry_publish_draft,
+    batch_retry_publish_drafts, delete_draft, get_draft_stats,
+)
+
+
+@router.get("/drafts", response_model=ResultObject)
+async def list_workflow_drafts(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: str = Query("all"),
+    workflow_id: int = Query(None),
+    keyword: str = Query(""),
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """分页查询草稿列表"""
+    try:
+        tenant_id = _require_tenant(current_user)
+    except ValueError:
+        return ResultObject.failed(TENANT_CONTEXT_REQUIRED_MESSAGE, 400)
+
+    try:
+        result = await list_drafts(
+            db, tenant_id, page, page_size, status,
+            workflow_id, keyword or None, start_date, end_date,
+        )
+        return ResultObject.success(result)
+    except Exception as exc:
+        return safe_route_failure(
+            logger, exc,
+            operation="list workflow drafts",
+            user_message="草稿列表暂时无法查询，请稍后重试",
+            code=503,
+        )
+
+
+@router.get("/drafts/stats", response_model=ResultObject)
+async def get_draft_stats_endpoint(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """草稿统计"""
+    try:
+        tenant_id = _require_tenant(current_user)
+    except ValueError:
+        return ResultObject.failed(TENANT_CONTEXT_REQUIRED_MESSAGE, 400)
+
+    try:
+        stats = await get_draft_stats(db, tenant_id)
+        return ResultObject.success(stats)
+    except Exception as exc:
+        return safe_route_failure(
+            logger, exc,
+            operation="get workflow draft stats",
+            user_message="草稿统计暂时无法查询，请稍后重试",
+            code=503,
+        )
+
+
+@router.get("/drafts/{draft_id}", response_model=ResultObject)
+async def get_workflow_draft(
+    draft_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """获取草稿详情"""
+    try:
+        tenant_id = _require_tenant(current_user)
+    except ValueError:
+        return ResultObject.failed(TENANT_CONTEXT_REQUIRED_MESSAGE, 400)
+
+    try:
+        result = await get_draft(db, draft_id, tenant_id)
+        if result is None:
+            return ResultObject.failed("草稿不存在", 404)
+        return ResultObject.success(result)
+    except Exception as exc:
+        return safe_route_failure(
+            logger, exc,
+            operation="get workflow draft detail",
+            user_message="草稿详情暂时无法查询，请稍后重试",
+            code=503,
+        )
+
+
+@router.post("/drafts/{draft_id}/retry-publish", response_model=ResultObject)
+async def retry_publish_draft_endpoint(
+    draft_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """重试发布单个草稿"""
+    try:
+        tenant_id = _require_tenant(current_user)
+    except ValueError:
+        return ResultObject.failed(TENANT_CONTEXT_REQUIRED_MESSAGE, 400)
+
+    try:
+        result = await retry_publish_draft(db, draft_id, tenant_id)
+        return ResultObject.success(result)
+    except ValueError as e:
+        return ResultObject.failed(str(e), 400)
+    except Exception as exc:
+        return safe_route_failure(
+            logger, exc,
+            operation="retry publish workflow draft",
+            user_message="重试发布暂时无法执行，请稍后重试",
+            code=503,
+        )
+
+
+@router.post("/drafts/batch-retry-publish", response_model=ResultObject)
+async def batch_retry_publish_drafts_endpoint(
+    body: dict = Body(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """批量重试发布"""
+    try:
+        tenant_id = _require_tenant(current_user)
+    except ValueError:
+        return ResultObject.failed(TENANT_CONTEXT_REQUIRED_MESSAGE, 400)
+
+    ids = body.get("ids") or []
+    if not ids or not isinstance(ids, list):
+        return ResultObject.failed("ids 不能为空且必须为数组", 400)
+    try:
+        result = await batch_retry_publish_drafts(db, ids, tenant_id)
+        return ResultObject.success(result)
+    except Exception as exc:
+        return safe_route_failure(
+            logger, exc,
+            operation="batch retry publish workflow drafts",
+            user_message="批量重试发布暂时无法执行，请稍后重试",
+            code=503,
+        )
+
+
+@router.delete("/drafts/{draft_id}", response_model=ResultObject)
+async def delete_workflow_draft_endpoint(
+    draft_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """删除草稿（软删除）"""
+    try:
+        tenant_id = _require_tenant(current_user)
+    except ValueError:
+        return ResultObject.failed(TENANT_CONTEXT_REQUIRED_MESSAGE, 400)
+
+    try:
+        ok = await delete_draft(db, draft_id, tenant_id)
+        if not ok:
+            return ResultObject.failed("草稿不存在", 404)
+        return ResultObject.success({"deleted": True})
+    except Exception as exc:
+        return safe_route_failure(
+            logger, exc,
+            operation="delete workflow draft",
+            user_message="草稿暂时无法删除，请稍后重试",
+            code=503,
+        )
