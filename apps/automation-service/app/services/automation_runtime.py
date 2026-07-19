@@ -441,6 +441,69 @@ async def _fetch_product_sensitive_words() -> list[str]:
     return normalized
 
 
+async def _record_workflow_image_history(
+    *,
+    tenant_id: int,
+    user_id: int,
+    request_id: str,
+    model: str,
+    prompt: str,
+    size: str,
+    image_url: str,
+    method: str,
+    workflow_id: Optional[int],
+    workflow_execution_id: Optional[int],
+    workflow_node_key: str,
+    status: str,
+    error_message: str,
+) -> None:
+    """工作流生图结果回传到 Java core-api 落库（fire-and-forget）。
+
+    Java 端 ImageGenerationService.recordExternalGenerationHistory 会写入
+    opportunity_image_history 表，source='workflow'，供前台「工作流 → 图片生成记录」页面查询。
+
+    失败时仅记录警告，不抛出异常（不阻塞工作流主流程）。
+    """
+    import httpx as _httpx
+    base = (settings.core_api_base_url or "").rstrip("/")
+    if not base:
+        logger.debug("[WORKFLOW_IMG_HISTORY] core_api_base_url 未配置，跳过回传")
+        return
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if settings.effective_internal_api_token:
+        headers["X-Internal-Token"] = settings.effective_internal_api_token
+    payload = {
+        "tenantId": tenant_id,
+        "userId": user_id,
+        "requestId": request_id,
+        "model": model,
+        "prompt": prompt,
+        "size": size,
+        "imageUrl": image_url,
+        "method": method,
+        "source": "workflow",
+        "workflowId": workflow_id,
+        "workflowExecutionId": workflow_execution_id,
+        "workflowNodeKey": workflow_node_key,
+        "status": status,
+        "errorMessage": error_message,
+    }
+    try:
+        async with _httpx.AsyncClient(timeout=5.0, follow_redirects=False, trust_env=False) as client:
+            resp = await client.post(
+                f"{base}/open-api/internal/workflow/image-history/record",
+                headers=headers,
+                json=payload,
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "[WORKFLOW_IMG_HISTORY] 回传失败 status=%s model=%s",
+                    resp.status_code, model,
+                )
+    except Exception as e:
+        _log_runtime_failure("record_workflow_image_history", e)
+
+
 def _item_hits_sensitive_word(item: dict, words: list[str]) -> str | None:
     """检查商品标题/描述/卖家是否命中敏感词。命中返回敏感词原文，否则返回 None。
 
@@ -8376,6 +8439,10 @@ async def _execute_workflow_node(
                             ai_reason = _text(prev_img.get("aiReason")) or "继续执行:复用已失败的生图结果"
 
                     # 逐个尝试所有启用的生图模型，直到成功
+                    # ★ 跟踪本次尝试的模型/尺寸/方法，供回传生图历史使用
+                    _attempted_model = ""
+                    _attempted_size = "1024x1024"
+                    _attempted_method = ""
                     if img_url and ai_ok:
                         logger.info("[IMAGE_GENERATE-CONTINUE] idx=%d 跳过生图模型调用（复用 state）", idx)
                     else:
@@ -8400,6 +8467,11 @@ async def _execute_workflow_node(
                                 img_size = raw_size.split(" ")[0] if " " in raw_size else raw_size
                                 if not re.match(r"\d{3,4}x\d{3,4}", img_size):
                                     img_size = "1024x1024"
+
+                                # ★ 跟踪本次尝试的模型/尺寸/方法（每次循环覆盖，最终保留最后尝试的值）
+                                _attempted_model = model_name
+                                _attempted_size = img_size
+                                _attempted_method = provider_mode
 
                                 image_billing_request_id = build_stable_request_id(
                                     "workflow_image",
@@ -8576,6 +8648,27 @@ async def _execute_workflow_node(
                                 idx,
                                 len(ai_reason),
                             )
+
+                    # ★ 生图结果回传 Java core-api 落库（fire-and-forget，不阻塞工作流主流程）
+                    #   即使失败也不影响生图+发布流程，仅记录警告
+                    try:
+                        await _record_workflow_image_history(
+                            tenant_id=tenant_id,
+                            user_id=int(_pub_user_id),
+                            request_id=build_request_id("workflow_image_record"),
+                            model=_attempted_model,
+                            prompt=applied_prompt_text or "",
+                            size=_attempted_size,
+                            image_url=img_url,
+                            method=_attempted_method,
+                            workflow_id=_safe_int(_wf_id) if _wf_id else None,
+                            workflow_execution_id=_safe_int(_exec_id) if _exec_id else None,
+                            workflow_node_key="IMAGE_GENERATE",
+                            status="success" if ai_ok else "failed",
+                            error_message="" if ai_ok else ai_reason,
+                        )
+                    except Exception as _cb_exc:
+                        _log_runtime_failure("record_workflow_image_history_call", _cb_exc)
 
                     _img_ms = int((time.perf_counter() - _t_img_start) * 1000)
                     _image_dict = {
