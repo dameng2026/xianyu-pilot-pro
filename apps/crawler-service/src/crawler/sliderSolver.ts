@@ -231,8 +231,24 @@ export const BAXIA_SELECTORS = [
   '.btn_slide',
 ];
 
+/**
+ * 检测当前环境是否具备有头模式运行条件（即存在可用显示器）。
+ *
+ * Linux 服务器通常没有物理显示器，但通过 Xvfb 虚拟显示器可提供 DISPLAY 环境变量，
+ * 让有头 Chrome 在 Docker 中也能运行（复用本地 Windows 已验证有效的滑块求解路径）。
+ *
+ * 返回 true 表示可以跑有头模式：
+ *   - Windows / macOS：始终为 true（有物理显示子系统）
+ *   - Linux + DISPLAY 环境变量非空：true（Xvfb 或真实显示器）
+ *   - Linux + 无 DISPLAY：false（只能 headless）
+ */
+export function isHeadedDisplayAvailable(): boolean {
+  if (process.platform === 'win32' || process.platform === 'darwin') return true;
+  return Boolean(process.env.DISPLAY && process.env.DISPLAY.trim());
+}
+
 function resolveHeadlessMode(headless?: boolean): boolean {
-  if (isProductionLike(process.env.NODE_ENV || process.env.APP_ENV)) return true;
+  // 显式传入优先（调用方明确要求 headless=true/false 时尊重调用方）
   if (typeof headless === 'boolean') {
     return headless;
   }
@@ -242,7 +258,9 @@ function resolveHeadlessMode(headless?: boolean): boolean {
   if (process.env.HEADLESS === 'false') {
     return false;
   }
-  return process.platform !== 'win32' && !process.env.DISPLAY;
+  // 默认策略：有显示器就用有头模式（生产环境也如此），无显示器才回退 headless
+  // 关键：headless 模式下 Baxia 风控识别率极高，必须优先有头模式
+  return !isHeadedDisplayAvailable();
 }
 
 /**

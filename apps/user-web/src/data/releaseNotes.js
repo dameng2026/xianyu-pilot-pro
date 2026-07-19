@@ -66,13 +66,30 @@ export const VERSION_BUMP_RULES = [
  */
 
 /** 当前最新版本号（应与 package.json 的 version 字段保持一致） */
-export const CURRENT_VERSION = '1.6.0'
+export const CURRENT_VERSION = '1.6.1'
 
 /**
  * 更新日志数据，最新在前。
  * @type {ReleaseNote[]}
  */
 export const releaseNotes = [
+  {
+    version: '1.6.1',
+    date: '2026-07-20',
+    type: RELEASE_TYPES.PATCH,
+    title: '滑块求解恢复可用，在线消息头像/封面图持久化修复',
+    summary: '线上 Linux 环境通过 Xvfb 虚拟显示器让滑块求解复用有头 Chrome 路径，恢复可用；修复在线消息新会话 peer_key 为 NULL 导致买家头像与商品封面图无法持久化的问题；生图记录中空白图片不再展示。',
+    changes: [
+      {
+        label: '修复',
+        items: [
+          '滑块求解在线上 Linux Docker 环境下必然失败的问题：安装 Xvfb 虚拟显示器，让生产环境也能运行有头 Chrome（与本地 Windows 一致的反检测路径），Baxia 风控识别率大幅下降',
+          '在线消息新会话创建时 peer_key 为 NULL 导致后续买家头像、商品封面图无法持久化的问题：新会话 INSERT 时写入 peer_key，并兼容历史所有 sid 存储格式（sid:xxx / 纯 uid / uid@goofish）回填头像',
+          '图片生成记录页面空白图片（仅有 alt 文本、图片实际加载失败）仍占用卡片位置的问题：空白图片记录不再展示'
+        ]
+      }
+    ]
+  },
   {
     version: '1.6.0',
     date: '2026-07-19',

@@ -5349,17 +5349,21 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
             "content": content,
         })
     else:
+        # peer_key 与 external_buyer_id 保持一致（buyer_id 已通过
+        # _resolve_effective_buyer_id_from_sid 解析为真实 external_uid 或 'unknown'），
+        # 避免新会话 peer_key 为 NULL 导致后续头像/封面图持久化失败。
         await db.execute(text("""
             INSERT INTO xianyu_conversation(
-                tenant_id, account_id, external_buyer_id, buyer_name, goods_id, goods_title,
+                tenant_id, account_id, peer_key, external_buyer_id, buyer_name, goods_id, goods_title,
                 last_message_content, last_message_time, deleted, created_time, updated_time
             ) VALUES(
-                :tenant_id, :account_id, :buyer_id, :buyer_name, :goods_id, :item_title,
+                :tenant_id, :account_id, :peer_key, :buyer_id, :buyer_name, :goods_id, :item_title,
                 :content, NOW(), 0, NOW(), NOW()
             )
         """), {
             "tenant_id": tenant_id,
             "account_id": account_id,
+            "peer_key": buyer_id,
             "buyer_id": buyer_id,
             "buyer_name": buyer_name,
             # goods_id 是 bigint 列，空字符串会导致 DataError，需转为 NULL

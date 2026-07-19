@@ -9,7 +9,7 @@ import { closePool, getPool, runMigrations } from './db/index.js';
 import { crawlGoofishSearch } from './crawler/goofishSearch.js';
 import { fetchGoofishItemDetail } from './crawler/goofishItemDetail.js';
 import { resolveStoreUserId } from './crawler/goofish.js';
-import { solveGoofishSlider } from './crawler/sliderSolver.js';
+import { solveGoofishSlider, isHeadedDisplayAvailable } from './crawler/sliderSolver.js';
 import { captureQrCodeOnly, completeQrLoginSession } from './crawler/qrLoginSolver.js';
 import {
   isCorsOriginAllowed,
@@ -707,7 +707,9 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
     } catch (error) {
       return res.status(400).json({ ok: false, error: error instanceof Error ? error.message : 'Cookie is invalid' });
     }
-    const resolvedHeadless = productionLike ? true : (typeof headless === 'boolean' ? headless : undefined);
+    const resolvedHeadless = productionLike
+      ? (isHeadedDisplayAvailable() ? false : true)  // 生产环境：有显示器（Xvfb）就用有头模式，否则 headless
+      : (typeof headless === 'boolean' ? headless : undefined);
     let safeTargetUrl;
     try {
       safeTargetUrl = normalizeGoofishTargetUrl(targetUrl);
@@ -893,7 +895,7 @@ app.post('/api/qrlogin/capture', async (req, res) => {
       result = await captureQrCodeOnly({
         cookieStr,
         targetUrl: safeTargetUrl,
-        headless: productionLike ? true : headless,
+        headless: productionLike ? (isHeadedDisplayAvailable() ? false : true) : headless,
       });
       if (!result.qrImageBytes || !result.browser || !result.context || !result.page) {
         const error = result.error

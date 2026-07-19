@@ -377,6 +377,80 @@ async def _fetch_remote_conversation_user_info(account_id: int, sid: str) -> dic
     }
 
 
+def _normalize_sid_variants(sid: str) -> tuple[str, str, str]:
+    """根据入参 sid 派生三种匹配形态。
+
+    入参可能是 'xxx'、'xxx@goofish' 或 'sid:xxx'。
+    返回 (sid_key, sid_plain, sid_goofish)：
+    - sid_key     : 'sid:xxx' （历史兜底格式）
+    - sid_plain   : 'xxx'      （纯数字 uid）
+    - sid_goofish : 'xxx@goofish' （IM 会话 ID 格式）
+    """
+    raw = (sid or "").strip()
+    if raw.startswith("sid:"):
+        raw = raw[4:]
+    raw = raw.replace("@goofish", "").strip()
+    if not raw:
+        return "", "", ""
+    return f"sid:{raw}", raw, f"{raw}@goofish"
+
+
+async def _find_conversation_ids_by_sid(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+    sid: str,
+) -> list[int]:
+    """通过 sid 查找所有相关的会话 ID。
+
+    覆盖历史所有 peer_key / external_buyer_id 存储格式，以及通过
+    xianyu_chat_message.s_id 关联的会话，避免新会话 peer_key 为 NULL
+    时持久化头像/封面图失败。
+
+    匹配方式：
+    1. peer_key = 'sid:{sid_plain}'
+    2. peer_key = '{sid_plain}'
+    3. peer_key = '{sid_goofish}'
+    4. external_buyer_id = 'sid:{sid_plain}'
+    5. external_buyer_id = '{sid_plain}'
+    6. external_buyer_id = '{sid_goofish}'
+    7. xianyu_chat_message.s_id 命中 sid_plain 或 sid_goofish
+    """
+    if not sid:
+        return []
+    sid_key, sid_plain, sid_goofish = _normalize_sid_variants(sid)
+    if not sid_plain:
+        return []
+    result = await db.execute(text("""
+        SELECT DISTINCT c.id
+        FROM xianyu_conversation c
+        LEFT JOIN xianyu_chat_message m
+          ON m.tenant_id = c.tenant_id
+          AND m.account_id = c.account_id
+          AND m.deleted = 0
+        WHERE c.tenant_id = :tenant_id
+          AND c.account_id = :account_id
+          AND c.deleted = 0
+          AND (
+            c.peer_key COLLATE utf8mb4_unicode_ci = :sid_key COLLATE utf8mb4_unicode_ci
+            OR c.peer_key COLLATE utf8mb4_unicode_ci = :sid_plain COLLATE utf8mb4_unicode_ci
+            OR c.peer_key COLLATE utf8mb4_unicode_ci = :sid_goofish COLLATE utf8mb4_unicode_ci
+            OR c.external_buyer_id COLLATE utf8mb4_unicode_ci = :sid_key COLLATE utf8mb4_unicode_ci
+            OR c.external_buyer_id COLLATE utf8mb4_unicode_ci = :sid_plain COLLATE utf8mb4_unicode_ci
+            OR c.external_buyer_id COLLATE utf8mb4_unicode_ci = :sid_goofish COLLATE utf8mb4_unicode_ci
+            OR m.s_id COLLATE utf8mb4_unicode_ci = :sid_plain COLLATE utf8mb4_unicode_ci
+            OR m.s_id COLLATE utf8mb4_unicode_ci = :sid_goofish COLLATE utf8mb4_unicode_ci
+          )
+    """), {
+        "tenant_id": tenant_id,
+        "account_id": account_id,
+        "sid_key": sid_key,
+        "sid_plain": sid_plain,
+        "sid_goofish": sid_goofish,
+    })
+    return [int(row[0]) for row in result.fetchall()]
+
+
 async def _save_conversation_user_info(
     db: AsyncSession,
     tenant_id: int,
@@ -387,24 +461,23 @@ async def _save_conversation_user_info(
 ) -> None:
     if not sid or (not avatar and not nick):
         return
-    await db.execute(text("""
+    conv_ids = await _find_conversation_ids_by_sid(db, tenant_id, account_id, sid)
+    if not conv_ids:
+        return
+    # 使用 IN (:ids) 形式，避免 MySQL 在 UPDATE 中直接引用被更新表的别名
+    placeholders = ",".join(f":id{i}" for i in range(len(conv_ids)))
+    params: dict[str, Any] = {
+        f"id{i}": cid for i, cid in enumerate(conv_ids)
+    }
+    params["buyer_avatar"] = avatar
+    params["buyer_name"] = nick
+    await db.execute(text(f"""
         UPDATE xianyu_conversation
         SET buyer_avatar = COALESCE(NULLIF(:buyer_avatar, ''), buyer_avatar),
             buyer_name = COALESCE(NULLIF(:buyer_name, ''), buyer_name),
             updated_time = NOW()
-        WHERE tenant_id = :tenant_id
-          AND account_id = :account_id
-          AND (
-            peer_key COLLATE utf8mb4_unicode_ci = :sid_key COLLATE utf8mb4_unicode_ci
-            OR external_buyer_id COLLATE utf8mb4_unicode_ci = :sid_key COLLATE utf8mb4_unicode_ci
-          )
-    """), {
-        "tenant_id": tenant_id,
-        "account_id": account_id,
-        "sid_key": f"sid:{sid}",
-        "buyer_avatar": avatar,
-        "buyer_name": nick,
-    })
+        WHERE id IN ({placeholders})
+    """), params)
 
 
 async def _hydrate_online_conversation_avatars(
@@ -1824,7 +1897,7 @@ async def _upsert_conversation(
         fallback_row = fallback.mappings().first()
         if fallback_row:
             conv = fallback_row["id"]
-            old_peer_key = fallback_row.get("peer_key", "")
+            old_peer_key = fallback_row.get("peer_key") or ""
             # 关键修复：如果已有会话的 peer_key 是 sid:xxx 但与当前 s_id 不同，
             # 说明这是另一个不同会话的消息被误匹配，不应该合并。
             # 应创建新的独立会话。
@@ -1837,14 +1910,17 @@ async def _upsert_conversation(
                         account_id, s_id, old_peer_key
                     )
                     conv = None
-                    old_peer_key = None
-            # 如果 peer_key 已变更（如从 sid:xxx 变为真实 uid），更新
-            if old_peer_key and old_peer_key != peer_key:
+                    old_peer_key = ""
+            # 如果 peer_key 已变更（如从 sid:xxx 变为真实 uid），或旧会话 peer_key 为 NULL
+            # （由历史 automation_runtime.py INSERT 未填写 peer_key 导致），都需更新为新值，
+            # 否则后续 _save_conversation_user_info / _fetch_goods_covers_async 等会因
+            # peer_key 不匹配而无法持久化头像/封面图
+            if conv and old_peer_key != peer_key and peer_key:
                 await db.execute(
                     text("""
                         UPDATE xianyu_conversation
                         SET peer_key = :new_pkey,
-                            peer_external_uid = :new_peuid,
+                            peer_external_uid = COALESCE(:new_peuid, peer_external_uid),
                             updated_time = NOW()
                         WHERE id = :id
                     """),
@@ -1852,7 +1928,7 @@ async def _upsert_conversation(
                 )
                 logger.info(
                     "_upsert_conversation 更新 peer_key: %s -> %s, convId=%s",
-                    old_peer_key, peer_key, conv
+                    old_peer_key or "(NULL)", peer_key, conv
                 )
 
     content_preview = content[:200] if content else f"[消息类型: {content_type}]"
@@ -2520,29 +2596,31 @@ async def _fetch_live_online_conversations_page(
     if goods_updates:
         try:
             for cover_pic, goods_title, sid in goods_updates:
-                sid_key = f"sid:{sid}"
                 set_parts = []
-                params: dict[str, Any] = {"sid_key": sid_key}
+                params: dict[str, Any] = {}
                 if cover_pic:
                     set_parts.append("goods_cover_pic = COALESCE(NULLIF(goods_cover_pic, ''), :cover_pic)")
                     params["cover_pic"] = cover_pic
                 if goods_title:
                     set_parts.append("goods_title = COALESCE(NULLIF(goods_title, ''), :goods_title)")
                     params["goods_title"] = goods_title
-                if set_parts:
-                    await db.execute(
-                        text(f"""
-                            UPDATE xianyu_conversation
-                            SET {', '.join(set_parts)}
-                            WHERE tenant_id = :tenant_id
-                              AND account_id = :account_id
-                              AND (
-                                peer_key COLLATE utf8mb4_unicode_ci = :sid_key COLLATE utf8mb4_unicode_ci
-                                OR external_buyer_id COLLATE utf8mb4_unicode_ci = :sid_key COLLATE utf8mb4_unicode_ci
-                              )
-                        """),
-                        {**params, "tenant_id": tenant_id, "account_id": account_id},
-                    )
+                if not set_parts:
+                    continue
+                # 通过 _find_conversation_ids_by_sid 查找会话，兼容 peer_key 为 NULL 或
+                # external_buyer_id 为 'xxx@goofish' 等历史格式
+                conv_ids = await _find_conversation_ids_by_sid(db, tenant_id, account_id, sid)
+                if not conv_ids:
+                    continue
+                placeholders = ",".join(f":id{i}" for i in range(len(conv_ids)))
+                params.update({f"id{i}": cid for i, cid in enumerate(conv_ids)})
+                await db.execute(
+                    text(f"""
+                        UPDATE xianyu_conversation
+                        SET {', '.join(set_parts)}, updated_time = NOW()
+                        WHERE id IN ({placeholders})
+                    """),
+                    params,
+                )
         except Exception as e:
             logger.debug("持久化 IM goods_cover_pic 到 xianyu_conversation 失败: %s", e)
 
@@ -2932,23 +3010,19 @@ async def _fetch_goods_covers_async(
             for goods_id, cover_url in cover_map.items():
                 sids = goods_id_to_sids.get(goods_id, [])
                 for sid in sids:
-                    sid_key = f"sid:{sid}"
-                    await db.execute(text("""
+                    # 通过 _find_conversation_ids_by_sid 查找会话，兼容 peer_key 为 NULL
+                    # 或 external_buyer_id 为 'xxx@goofish' 等历史格式
+                    conv_ids = await _find_conversation_ids_by_sid(db, tenant_id, account_id, sid)
+                    if not conv_ids:
+                        continue
+                    placeholders = ",".join(f":id{i}" for i in range(len(conv_ids)))
+                    params: dict[str, Any] = {f"id{i}": cid for i, cid in enumerate(conv_ids)}
+                    params["cover_pic"] = cover_url
+                    await db.execute(text(f"""
                         UPDATE xianyu_conversation
                         SET goods_cover_pic = :cover_pic, updated_time = NOW()
-                        WHERE tenant_id = :tenant_id
-                          AND account_id = :account_id
-                          AND deleted = 0
-                          AND (
-                            peer_key COLLATE utf8mb4_unicode_ci = :sid_key COLLATE utf8mb4_unicode_ci
-                            OR external_buyer_id COLLATE utf8mb4_unicode_ci = :sid_key COLLATE utf8mb4_unicode_ci
-                          )
-                    """), {
-                        "tenant_id": tenant_id,
-                        "account_id": account_id,
-                        "sid_key": sid_key,
-                        "cover_pic": cover_url,
-                    })
+                        WHERE id IN ({placeholders})
+                    """), params)
             await db.commit()
             logger.info("拉取商品封面图完成: account_id=%d 更新 %d 个封面图", account_id, len(cover_map))
 
