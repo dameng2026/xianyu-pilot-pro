@@ -206,6 +206,14 @@
           "sha256": "5614790b548a409dffbf706f48662ca67759318548f33cd19f87fb8f4312a1e1",
           "risk": "backfill",
           "rollback": "restore"
+        },
+        {
+          "version": "1.25",
+          "description": "add source/workflow_id/workflow_execution_id/workflow_node_key to opportunity_image_history",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.25__add_opportunity_image_history_source.sql",
+          "sha256": "85f750b076a5a5c2160c7af42d33cdc78e646bc5ce3354ab966c5be47b43ce07",
+          "risk": "expand",
+          "rollback": "restore"
         }
       ],
       "quarantined": [
@@ -311,6 +319,14 @@
           "description": "pending AI billing table for retry-safe charging",
           "path": "apps/automation-service/migrations/V1.11__add_pending_billing_table.sql",
           "sha256": "eb7ec1909edb08cab2f92d456d91dd43745dba196bc3f4cc139ffb05e9bb02fc",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.12",
+          "description": "workflow goods draft table for publish-before-save flow",
+          "path": "apps/automation-service/migrations/V1.12__create_workflow_goods_draft.sql",
+          "sha256": "37d37420395a3251eee8e811b45aeb3998da055bedf193f7d5e554b1dcfa3a03",
           "risk": "expand",
           "rollback": "restore"
         }
