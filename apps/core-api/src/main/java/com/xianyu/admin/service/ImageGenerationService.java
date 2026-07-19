@@ -1226,6 +1226,57 @@ public class ImageGenerationService {
     }
 
     /**
+     * 供 Python automation-service 通过内部接口回传工作流生图历史。
+     * 与本地 generate() 流程不同：自动化端直接调用 AI 提供商 API 生图，
+     * 生图成功后异步回传到 Java 端统一落库到 opportunity_image_history 表。
+     *
+     * @param tenantId            租户ID
+     * @param userId              用户ID（计费主体）
+     * @param requestId           请求ID（用于幂等与追踪）
+     * @param model               生图模型名
+     * @param prompt              最终使用的生图提示词
+     * @param size                图片尺寸，如 "1024x1024"
+     * @param imageUrl            生图结果URL（已保存到本地的可访问URL）
+     * @param method              生图方法标识：chat-completions-image / images-generations / provider-mode
+     * @param source              生图来源：opportunity / workflow
+     * @param workflowId          工作流定义ID（source=workflow 时）
+     * @param workflowExecutionId 工作流执行记录ID（source=workflow 时）
+     * @param workflowNodeKey     生图节点key（source=workflow 时）
+     * @param status              记录状态：success / failed
+     * @param errorMessage        失败原因（status=failed 时）
+     */
+    public void recordExternalGenerationHistory(Long tenantId, Long userId, String requestId,
+                                                 String model, String prompt, String size,
+                                                 String imageUrl, String method,
+                                                 String source, Long workflowId,
+                                                 Long workflowExecutionId, String workflowNodeKey,
+                                                 String status, String errorMessage) {
+        List<Map<String, Object>> images = new ArrayList<>();
+        if (imageUrl != null && !imageUrl.isBlank()) {
+            Map<String, Object> img = new LinkedHashMap<>();
+            img.put("url", imageUrl);
+            img.put("index", 0);
+            images.add(img);
+        }
+        try {
+            String imagesJson = objectMapper.writeValueAsString(images);
+            String safeSource = (source == null || source.isBlank()) ? "opportunity" : source;
+            String safeStatus = (status == null || status.isBlank()) ? "success" : status;
+            String safeError = (errorMessage == null) ? "" : errorMessage;
+            jdbcTemplate.update(
+                    "INSERT INTO opportunity_image_history(tenant_id,user_id,request_id,model,prompt,image_size," +
+                    "image_count,result_images,method_used,status,error_message,raw_response,source,workflow_id," +
+                    "workflow_execution_id,workflow_node_key,created_time,updated_time,deleted) " +
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)",
+                    tenantId, userId, requestId, model, prompt, size,
+                    images.size(), imagesJson, method, safeStatus, safeError, "{}",
+                    safeSource, workflowId, workflowExecutionId, workflowNodeKey);
+        } catch (Exception e) {
+            log.warn("[生图历史] 外部回传保存失败, errorType={}", e.getClass().getSimpleName());
+        }
+    }
+
+    /**
      * 保存生图历史记录到数据库（支持来源溯源字段）。
      * @param source 生图来源：opportunity=商机发掘 / workflow=工作流
      */
