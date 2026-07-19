@@ -729,6 +729,44 @@ class WorkflowPublishRecord(Base):
     updated_time = Column(DateTime, default=func.now(), onupdate=func.now())
 
 
+class WorkflowGoodsDraft(Base):
+    """工作流商品草稿箱：发布前先存草稿，无论成功失败都保留
+
+    与 workflow_publish_record（发布动作日志）的区别：
+    - workflow_publish_record：每次发布动作都新增一条记录（动作流水）
+    - workflow_goods_draft：每个商品对应一条草稿记录，可重复发布（状态机）
+    """
+    __tablename__ = "workflow_goods_draft"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id = Column(BigInteger, nullable=False, index=True)
+    user_id = Column(BigInteger, nullable=True)
+    workflow_id = Column(BigInteger, nullable=True, index=True)
+    workflow_execution_id = Column(BigInteger, nullable=True, index=True)
+    workflow_name = Column(String(200), nullable=True, comment="工作流名称（冗余存储）")
+    node_key = Column(String(100), nullable=True, comment="产生该商品的节点key")
+    account_id = Column(BigInteger, nullable=True, comment="闲鱼账号ID")
+    title = Column(String(500), nullable=False)
+    price = Column(String(50), nullable=True)
+    description = Column(Text, nullable=True)
+    cover_pic = Column(Text, nullable=True, comment="封面图URL")
+    image_urls = Column(JSON, nullable=True, comment="图片URL列表")
+    category = Column(String(100), nullable=True)
+    stock = Column(Integer, default=1)
+    location = Column(JSON, nullable=True, comment="发货地")
+    raw_payload = Column(JSON, nullable=True, comment="原始商品数据快照")
+    source_item_id = Column(String(100), nullable=True, comment="源商品ID（去重用）")
+    source_title_hash = Column(String(64), nullable=True, comment="源标题hash（去重用）")
+    publish_status = Column(String(20), default="draft", nullable=False, index=True,
+                            comment="draft/publishing/published/failed")
+    publish_time = Column(DateTime, nullable=True)
+    xianyu_goods_id = Column(String(100), nullable=True)
+    publish_error_message = Column(Text, nullable=True)
+    publish_attempt_count = Column(Integer, default=0)
+    created_time = Column(DateTime, default=func.now(), nullable=False, index=True)
+    updated_time = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+    deleted = Column(SmallInteger, default=0, nullable=False)
+
+
 class XianyuCaptchaSolveRecord(Base):
     """滑块求解记录"""
     __tablename__ = "xianyu_captcha_solve_record"
