@@ -743,11 +743,10 @@ public class PaymentService {
                     .collect(Collectors.joining("&"));
             String submitUrl = normalizeYipayGateway(gateway);
             String payUrl = submitUrl + (submitUrl.contains("?") ? "&" : "?") + query;
-            // 易支付 submit.php 要求 POST 提交。二维码中放后端跳转端点 URL，
-            // 用户扫码后浏览器打开该端点 → 渲染自动提交的 POST 表单 → 跳转到易支付收银台
-            String redirectUrl = resolveNotifyUrl("/api/payment/redirect/" + orderNo);
+            // 二维码内容直接放易支付 GET URL：扫码后浏览器直接打开收银台，无需我方中转。
+            // 易支付 submit.php 同时支持 GET 和 POST，GET 方式会自动跳转到收银台页面。
             res.put("payUrl", payUrl);
-            res.put("qrContent", redirectUrl);
+            res.put("qrContent", payUrl);
             return res;
         }
         throw new BizException(503, "官方微信/支付宝下单与验签适配器尚未接入，请使用沙箱或已完成验签的支付通道");
