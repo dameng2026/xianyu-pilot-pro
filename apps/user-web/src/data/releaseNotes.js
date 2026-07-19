@@ -66,13 +66,28 @@ export const VERSION_BUMP_RULES = [
  */
 
 /** 当前最新版本号（应与 package.json 的 version 字段保持一致） */
-export const CURRENT_VERSION = '1.4.1'
+export const CURRENT_VERSION = '1.4.2'
 
 /**
  * 更新日志数据，最新在前。
  * @type {ReleaseNote[]}
  */
 export const releaseNotes = [
+  {
+    version: '1.4.2',
+    date: '2026-07-19',
+    type: RELEASE_TYPES.PATCH,
+    title: '定时任务列表移除 Cron 列',
+    summary: '定时任务列表移除用户难以理解的 Cron 表达式列，Cron 仍在后端自动生成。',
+    changes: [
+      {
+        label: '优化',
+        items: [
+          '定时任务列表移除「Cron」列，用户无需理解 Cron 表达式（Cron 仍在后端自动生成）'
+        ]
+      }
+    ]
+  },
   {
     version: '1.4.1',
     date: '2026-07-19',

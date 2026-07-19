@@ -240,7 +240,6 @@ const weekdayOptions = [
 const columns = [
   { key: 'taskName', title: '任务名称' },
   { key: 'taskType', title: '任务类型' },
-  { key: 'cronExpression', title: 'Cron' },
   { key: 'enabled', title: '启用状态' },
   { key: 'lastRunTimeText', title: '上次运行' },
   { key: 'nextRunTimeText', title: '下次运行' },

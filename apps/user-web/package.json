@@ -1,6 +1,6 @@
 {
   "name": "xianyu-assistant-user-web",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "private": true,
   "packageManager": "npm@11.16.0",
   "engines": {
