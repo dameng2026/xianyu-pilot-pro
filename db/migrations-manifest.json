@@ -198,6 +198,14 @@
           "sha256": "da07567f464e2aef6ab177b6bc07768a3022bf22fee436abaa8cade1058d6453",
           "risk": "backfill",
           "rollback": "restore"
+        },
+        {
+          "version": "1.24",
+          "description": "fix mojibake task_name and backfill accountIds for preset auto_redelivery tasks",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.24__fix_preset_auto_redelivery_task.sql",
+          "sha256": "de8a34fd1d0046212f61d19b9f2c837dc96e07b3cabd3287c7e38bb9f8d7c0bd",
+          "risk": "backfill",
+          "rollback": "restore"
         }
       ],
       "quarantined": [

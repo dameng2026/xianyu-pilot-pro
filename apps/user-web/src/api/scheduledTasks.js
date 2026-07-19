@@ -16,3 +16,6 @@ export function deleteScheduledTask(id) {
 export function runScheduledTask(id) {
   return request({ url: `/scheduled-tasks/${id}/run`, method: 'post' })
 }
+export function setScheduledTaskEnabled(id, enabled) {
+  return request({ url: `/scheduled-tasks/${id}/enabled`, method: 'patch', data: { enabled: enabled ? 1 : 0 } })
+}

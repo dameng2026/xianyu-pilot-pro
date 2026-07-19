@@ -21,6 +21,22 @@
           <template #op="{ row }">
             <div class="inline-actions">
               <button class="link" @click.stop="edit(row.raw)">编辑</button>
+              <button
+                v-if="row.enabled === 1 || row.enabled === true"
+                class="link"
+                :disabled="togglingId === row.raw.id"
+                @click.stop="toggleEnabled(row.raw.id, 0)"
+              >
+                {{ togglingId === row.raw.id ? '处理中...' : '禁用' }}
+              </button>
+              <button
+                v-else
+                class="link"
+                :disabled="togglingId === row.raw.id"
+                @click.stop="toggleEnabled(row.raw.id, 1)"
+              >
+                {{ togglingId === row.raw.id ? '处理中...' : '启用' }}
+              </button>
               <button class="link" @click.stop="run(row.raw.id)">
                 {{ busyId === row.raw.id ? '运行中...' : '运行' }}
               </button>
@@ -139,11 +155,6 @@
             </div>
           </template>
 
-          <div class="form-field">
-            <label>Cron 表达式（自动生成）</label>
-            <input :value="generatedCron" class="input" readonly />
-          </div>
-
           <label class="toggle-row">
             <input v-model="form.enabled" type="checkbox" />
             <span>启用</span>
@@ -170,13 +181,11 @@ import Pagination from '../components/Pagination.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { confirmDelete } from '../utils/confirmAction.js'
 import { camelizeKeys, dateTime, totalOf } from '../utils/apiData.js'
-import { createScheduledTask, deleteScheduledTask, getScheduledTasks, runScheduledTask, updateScheduledTask } from '../api/scheduledTasks.js'
+import { createScheduledTask, deleteScheduledTask, getScheduledTasks, runScheduledTask, setScheduledTaskEnabled, updateScheduledTask } from '../api/scheduledTasks.js'
 import { getLiteAccounts } from '../api/accounts.js'
 import { listWorkflows } from '../api/workflow.js'
 import {
   DEFAULT_SCHEDULED_TASK_TYPES,
-  buildCronExpression,
-  buildTaskConfig,
   hydrateFormFromTask,
   normalizeScheduledTaskPayload,
   normalizeScheduledTaskTypes,
@@ -190,6 +199,7 @@ const current = ref(1)
 const pageSize = ref(20)
 const saving = ref(false)
 const busyId = ref(null)
+const togglingId = ref(null)
 const error = ref('')
 const success = ref('')
 const tasksLoadError = ref('')
@@ -251,11 +261,6 @@ const needsAccounts = computed(() => taskRequiresAccounts(form.taskType))
 const isDailyTimeTask = computed(() => ['sync_goods', 'sync_orders', 'one_click_polish'].includes(form.taskType))
 const isAutoRedeliveryTask = computed(() => form.taskType === 'auto_redelivery')
 const isWorkflowTask = computed(() => form.taskType === 'workflow')
-
-const generatedCron = computed(() => {
-  const config = buildTaskConfig(form.taskType, form)
-  return buildCronExpression(form.taskType, config)
-})
 
 // 间隔分钟输入：用文本输入框避免 type=number 在自动化工具下 selectionEnd 不可用
 // 同时提供实时校验提示，低于 10 时显示警告并强制修正为 10
@@ -529,6 +534,26 @@ async function remove(id) {
     else error.value = `任务 #${id} 已删除，但任务列表刷新失败，请重新加载确认最新状态。`
   } catch (requestError) {
     error.value = requestError.message || '删除定时任务失败'
+  }
+}
+
+async function toggleEnabled(id, newEnabled) {
+  if (togglingId.value) return
+  if (!tasksAvailable.value) {
+    error.value = '定时任务服务不可用，无法切换任务状态'
+    return
+  }
+  clearNotice()
+  togglingId.value = id
+  try {
+    await setScheduledTaskEnabled(id, newEnabled)
+    const reloaded = await load()
+    if (reloaded) success.value = `任务 #${id} 已${newEnabled ? '启用' : '禁用'}`
+    else error.value = `任务 #${id} 已${newEnabled ? '启用' : '禁用'}，但列表刷新失败，请重新加载确认最新状态。`
+  } catch (requestError) {
+    error.value = requestError.message || '切换任务状态失败'
+  } finally {
+    togglingId.value = null
   }
 }
 

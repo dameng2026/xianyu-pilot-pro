@@ -122,6 +122,21 @@ public class ScheduledTaskController {
         return Result.ok(null);
     }
 
+    /** 启用/禁用定时任务（仅切换 enabled，无需提交完整表单） */
+    @PatchMapping("/{id}/enabled")
+    public Result<Map<String, Object>> setEnabled(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        requirePositiveId(id, "任务 ID");
+        Long tenantId = requireTenant();
+        int newEnabled = normalizeEnabled(body == null ? null : body.get("enabled"));
+        int affected = jdbcTemplate.update(
+                "UPDATE scheduled_task SET enabled=?, updated_time=NOW() WHERE tenant_id=? AND id=? AND deleted=0",
+                newEnabled, tenantId, id);
+        if (affected != 1) {
+            throw new BizException(404, "定时任务不存在或无权修改");
+        }
+        return Result.ok(Map.of("id", id, "enabled", newEnabled));
+    }
+
     @PostMapping("/{id}/run")
     public Result<Map<String, Object>> run(@PathVariable Long id) {
         requirePositiveId(id, "任务 ID");

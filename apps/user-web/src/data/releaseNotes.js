@@ -66,13 +66,38 @@ export const VERSION_BUMP_RULES = [
  */
 
 /** 当前最新版本号（应与 package.json 的 version 字段保持一致） */
-export const CURRENT_VERSION = '1.4.0'
+export const CURRENT_VERSION = '1.4.1'
 
 /**
  * 更新日志数据，最新在前。
  * @type {ReleaseNote[]}
  */
 export const releaseNotes = [
+  {
+    version: '1.4.1',
+    date: '2026-07-19',
+    type: RELEASE_TYPES.PATCH,
+    title: '定时任务多项问题修复',
+    summary: '修复保存定时任务报错、预置任务名称乱码、账号未自动选中等问题，移除冗余 Cron 显示，操作栏新增启用/禁用按钮。',
+    changes: [
+      {
+        label: '修复',
+        items: [
+          '修复保存「自动补发订单」「一键擦亮商品」等新任务类型时提示「暂不支持该定时任务类型」的问题（后端镜像未更新）',
+          '修复预置「默认自动补发订单任务（10分钟）」名称显示为乱码的问题（迁移脚本字符集修正）',
+          '修复预置自动补发任务未自动选中租户全部闲鱼账号的问题（accountIds 现已回填为租户下全部账号）'
+        ]
+      },
+      {
+        label: '优化',
+        items: [
+          '定时任务表单移除冗余的「Cron 表达式（自动生成）」字段，Cron 仍在后端自动生成',
+          '定时任务操作栏新增「启用 / 禁用」按钮，无需进入编辑表单即可切换任务状态'
+        ]
+      }
+    ],
+    remark: '本次同步执行数据库迁移 V1.24（修正 V1.23 预置任务的乱码 task_name 并回填 accountIds），已备份 core_mysql 并校验 sha256。'
+  },
   {
     version: '1.4.0',
     date: '2026-07-18',
