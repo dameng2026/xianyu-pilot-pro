@@ -359,9 +359,15 @@ public class ImageGenerationService {
             billingCommitted = true;
 
             // ==================== 保存历史记录（用于恢复） ====================
+            // V1.25: 工作流调用生图时通过 payload 携带 source/workflowId 等溯源字段
+            String historySource = text(body.get("source"), "opportunity");
+            Long historyWorkflowId = body.get("workflowId") instanceof Number n ? n.longValue() : null;
+            Long historyWorkflowExecutionId = body.get("workflowExecutionId") instanceof Number n ? n.longValue() : null;
+            String historyWorkflowNodeKey = body.get("workflowNodeKey") == null ? null : String.valueOf(body.get("workflowNodeKey"));
             boolean historySaved = true;
             try {
-                saveGenerationHistory(tenantId, userId, requestId, model, finalPrompt, size, validImages, methodUsed);
+                saveGenerationHistory(tenantId, userId, requestId, model, finalPrompt, size, validImages, methodUsed,
+                        historySource, historyWorkflowId, historyWorkflowExecutionId, historyWorkflowNodeKey);
             } catch (Exception historyError) {
                 historySaved = false;
                 log.error("图片已生成并完成扣费，但历史记录保存失败, requestId={}, errorType={}", requestId, historyError.getClass().getSimpleName());
@@ -1143,10 +1149,24 @@ public class ImageGenerationService {
 
     /**
      * 保存生图历史记录到数据库，用于异常恢复。
+     * 向后兼容重载：未传 source 时默认 'opportunity'（商机发掘）。
      */
     private void saveGenerationHistory(Long tenantId, Long userId, String requestId,
                                         String model, String prompt, String size,
                                         List<Map<String, Object>> images, String method) {
+        saveGenerationHistory(tenantId, userId, requestId, model, prompt, size, images, method,
+                "opportunity", null, null, null);
+    }
+
+    /**
+     * 保存生图历史记录到数据库（支持来源溯源字段）。
+     * @param source 生图来源：opportunity=商机发掘 / workflow=工作流
+     */
+    private void saveGenerationHistory(Long tenantId, Long userId, String requestId,
+                                        String model, String prompt, String size,
+                                        List<Map<String, Object>> images, String method,
+                                        String source, Long workflowId,
+                                        Long workflowExecutionId, String workflowNodeKey) {
         try {
             // 只保存url信息，不保存b64内容
             List<Map<String, Object>> saveImages = new ArrayList<>();
@@ -1164,10 +1184,13 @@ public class ImageGenerationService {
 
             jdbcTemplate.update(
                     "INSERT INTO opportunity_image_history(tenant_id,user_id,request_id,model,prompt,image_size," +
-                    "image_count,result_images,method_used,status,raw_response,created_time,updated_time,deleted) " +
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)",
+                    "image_count,result_images,method_used,status,raw_response,source,workflow_id," +
+                    "workflow_execution_id,workflow_node_key,created_time,updated_time,deleted) " +
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)",
                     tenantId, userId, requestId, model, prompt, size,
-                    saveImages.size(), imagesJson, method, "success", "{}");
+                    saveImages.size(), imagesJson, method, "success", "{}",
+                    source == null ? "opportunity" : source, workflowId,
+                    workflowExecutionId, workflowNodeKey);
         } catch (Exception e) {
             log.warn("[生图历史] 保存失败, errorType={}", e.getClass().getSimpleName());
         }
