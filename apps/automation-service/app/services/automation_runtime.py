@@ -504,6 +504,209 @@ async def _record_workflow_image_history(
         _log_runtime_failure("record_workflow_image_history", e)
 
 
+async def _save_publish_draft(
+    db: AsyncSession,
+    *,
+    tenant_id: int,
+    user_id: Optional[int],
+    workflow_id: Optional[int],
+    execution_id: Optional[int],
+    workflow_name: str,
+    node_key: str,
+    account_id: Optional[int],
+    title: str,
+    price: str,
+    description: str,
+    cover_pic: str,
+    image_urls: list,
+    category: str,
+    stock: int,
+    location: Optional[dict],
+    raw_payload: Optional[dict],
+    source_item_id: str,
+    source_title_hash: str,
+    initial_status: str = "publishing",
+    error_message: str = "",
+) -> Optional[int]:
+    """保存发布草稿到 workflow_goods_draft 表，返回草稿ID（fire-and-forget）。
+
+    用于"发布前先存草稿"：无论后续发布成功或失败，草稿记录都保留，
+    便于用户在前台「工作流 → 商品草稿箱」页面查看与重试发布。
+    """
+    try:
+        result = await db.execute(
+            text("""
+                INSERT INTO workflow_goods_draft(
+                    tenant_id, user_id, workflow_id, workflow_execution_id, workflow_name,
+                    node_key, account_id, title, price, description, cover_pic, image_urls,
+                    category, stock, location, raw_payload, source_item_id, source_title_hash,
+                    publish_status, publish_error_message, publish_attempt_count,
+                    created_time, updated_time, deleted
+                ) VALUES (
+                    :t, :u, :wid, :eid, :wn, :nk, :aid, :title, :price, :desc, :cover, :imgs,
+                    :cat, :stock, :loc, :raw, :si, :sh, :ps, :err, 1,
+                    NOW(), NOW(), 0
+                )
+            """),
+            {
+                "t": tenant_id, "u": user_id, "wid": workflow_id, "eid": execution_id,
+                "wn": workflow_name or None, "nk": node_key or None,
+                "aid": account_id, "title": (title or "")[:500], "price": price,
+                "desc": description, "cover": cover_pic,
+                "imgs": json.dumps(image_urls or [], ensure_ascii=False),
+                "cat": category, "stock": stock,
+                "loc": json.dumps(location, ensure_ascii=False) if location else None,
+                "raw": json.dumps(raw_payload, ensure_ascii=False) if raw_payload else None,
+                "si": source_item_id, "sh": source_title_hash,
+                "ps": initial_status,
+                "err": error_message[:2000] if error_message else None,
+            },
+        )
+        await db.commit()
+        return result.lastrowid
+    except Exception as exc:
+        await db.rollback()
+        _log_runtime_failure("save_publish_draft", exc)
+        return None
+
+
+async def _update_publish_draft_status(
+    db: AsyncSession,
+    *,
+    draft_id: Optional[int],
+    status: str,
+    xianyu_goods_id: str = "",
+    error_message: str = "",
+) -> None:
+    """更新草稿发布状态（fire-and-forget，失败仅警告）。
+
+    状态机：publishing → published / failed
+    """
+    if not draft_id:
+        return
+    try:
+        await db.execute(
+            text("""
+                UPDATE workflow_goods_draft
+                SET publish_status=:ps,
+                    xianyu_goods_id=CASE WHEN :gid != '' THEN :gid ELSE xianyu_goods_id END,
+                    publish_error_message=:err,
+                    publish_time=CASE WHEN :ps IN ('published','failed') THEN NOW() ELSE publish_time END,
+                    updated_time=NOW()
+                WHERE id=:id
+            """),
+            {
+                "ps": status,
+                "gid": xianyu_goods_id or "",
+                "err": error_message[:2000] if error_message else None,
+                "id": draft_id,
+            },
+        )
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        _log_runtime_failure("update_publish_draft_status", exc)
+
+
+async def _finalize_publish_draft_from_result(
+    db: AsyncSession,
+    *,
+    draft_id: Optional[int],
+    publish_result: dict,
+) -> None:
+    """根据 publish_result 更新草稿最终状态（fire-and-forget）。
+
+    映射规则：
+    - status=published → draft status=published，记录 xianyu_goods_id
+    - status=failed/skipped_no_ai_image/skipped_duplicate/skipped → draft status=failed，记录 error_message
+    """
+    if not draft_id:
+        return
+    status = _text(publish_result.get("status"))
+    if status == "published":
+        await _update_publish_draft_status(
+            db, draft_id=draft_id, status="published",
+            xianyu_goods_id=_text(publish_result.get("goods_id", "")),
+        )
+    elif status in ("failed", "skipped_no_ai_image", "skipped_duplicate", "skipped"):
+        await _update_publish_draft_status(
+            db, draft_id=draft_id, status="failed",
+            error_message=_text(publish_result.get("error", "")),
+        )
+
+
+async def _save_legacy_publish_draft(
+    db: AsyncSession,
+    *,
+    context: dict,
+    tenant_id: int,
+    account_id: Optional[int],
+    is_fish_shop: bool,
+    category: str,
+    address,
+    p: dict,
+    img_url: str,
+    image_urls: list,
+    publish_result: dict,
+    node_key: str = "PUBLISH",
+) -> None:
+    """fire-and-forget: 为 legacy PUBLISH 节点单条发布结果保存草稿（含最终状态）。
+
+    与 _publish_single_item 的两阶段（publishing → published/failed）不同，
+    legacy PUBLISH 节点在结果已知后批量保存草稿，直接写入最终状态。
+    自动从 p 推导 source_item_id / source_title_hash，避免在每个调用点重复计算。
+
+    用于「无论发布成功或失败都存入草稿箱」的约束：在 legacy PUBLISH 节点的
+    每个 publish_results.append({...}) 后调用，确保所有发布结果都有对应草稿记录。
+    """
+    import hashlib as _hashlib
+    try:
+        _status = _text(publish_result.get("status"))
+        # 映射到草稿状态：published 保留，其余（failed/skipped_*/dry_run）统一为 failed
+        _draft_status = "published" if _status == "published" else "failed"
+        _err_msg = ""
+        if _draft_status == "failed":
+            _err_msg = _text(publish_result.get("error", "")) or _status
+
+        _source_item_id = _text(p.get("itemId", ""))
+        _source_title_raw = _text(p.get("title", ""))
+        _source_title_hash = (
+            _hashlib.md5(_source_title_raw.strip().lower().encode("utf-8")).hexdigest()
+            if _source_title_raw else ""
+        )
+
+        _draft_id = await _save_publish_draft(
+            db=db, tenant_id=tenant_id,
+            user_id=_safe_int(context.get("__user_id__"), 0) or None,
+            workflow_id=context.get("__workflow_id__"),
+            execution_id=context.get("__execution_id__"),
+            workflow_name=_text(context.get("__workflow_name__")),
+            node_key=node_key,
+            account_id=account_id,
+            title=_text(p.get("title", "")),
+            price=_text(p.get("price", "1")) or "1",
+            description=_text(p.get("description", "")),
+            cover_pic=img_url or "",
+            image_urls=image_urls or [],
+            category=category,
+            stock=999 if is_fish_shop else 1,
+            location=address if isinstance(address, dict) else None,
+            raw_payload=p,
+            source_item_id=_source_item_id,
+            source_title_hash=_source_title_hash,
+            initial_status=_draft_status,
+            error_message=_err_msg,
+        )
+        # published 状态需要回写 xianyu_goods_id（_save_publish_draft 未填该字段）
+        if _draft_id and _draft_status == "published":
+            await _update_publish_draft_status(
+                db, draft_id=_draft_id, status="published",
+                xianyu_goods_id=_text(publish_result.get("goods_id", "")),
+            )
+    except Exception as _draft_err:
+        _log_runtime_failure("legacy_publish_draft", _draft_err)
+
+
 def _item_hits_sensitive_word(item: dict, words: list[str]) -> str | None:
     """检查商品标题/描述/卖家是否命中敏感词。命中返回敏感词原文，否则返回 None。
 
@@ -5649,8 +5852,8 @@ async def _resolve_account_user_id(db: AsyncSession, tenant_id: int, account_id:
             LIMIT 1
         """), {"tenant_id": tenant_id, "account_id": account_id})).mappings().first()
     except Exception as exc:
-        # ★ 临时调试日志：DB 异常详情（确认后删除）
-        logger.exception("[IMAGE_GENERATE-DEBUG] _resolve_account_user_id DB query failed tenant_id=%r account_id=%r", tenant_id, account_id)
+        # ★ DB 异常：通过 _log_runtime_failure 记录错误类型（不泄露异常详情），再 re-raise
+        _log_runtime_failure("resolve_account_user_id_db_query", exc)
         raise
     # ★ 临时调试日志：DB 查询结果（确认后删除）
     logger.warning(
@@ -6770,9 +6973,10 @@ async def execute_workflow(db: AsyncSession, payload: dict[str, Any]) -> dict[st
 
     # 初始化上下文
     context: dict[str, Any] = {"input": payload.get("input") or {}, "artifacts": []}
-    # 将 workflow_id/execution_id 注入 context，供 PUBLISH 等节点写去重表使用
+    # 将 workflow_id/execution_id/workflow_name 注入 context，供 PUBLISH 等节点写去重表与草稿箱使用
     context["__workflow_id__"] = workflow_id
     context["__execution_id__"] = execution_id
+    context["__workflow_name__"] = workflow_name
     # ★ 注入前端预检传入的 addressPayload，供 IMAGE_GENERATE 节点直接使用
     # 注意：Java WorkflowService.execute 把前端整个 input 作为 payload.input 传递，
     # 因此 addressPayload 实际位于 payload.input.addressPayload；同时兼容历史路径
@@ -7430,6 +7634,72 @@ async def _publish_single_item(
     source_title_raw = _text(p.get("title", ""))
     source_title_hash = _hashlib.md5(source_title_raw.strip().lower().encode("utf-8")).hexdigest() if source_title_raw else ""
 
+    # ★ 发布前先存草稿：无论后续发布成功或失败都保留，便于用户在前台草稿箱查看与重试
+    #   状态机：publishing（插入时） → published/failed（finalize 时）
+    #   鱼小铺账号库存默认 999，普通账号库存固定 1（与实际发布逻辑一致）
+    _draft_stock = 999 if account_pub.get("is_fish_shop") else 1
+    _draft_id = await _save_publish_draft(
+        db=db, tenant_id=tenant_id,
+        user_id=_safe_int(context.get("__user_id__"), 0) or None,
+        workflow_id=context.get("__workflow_id__"),
+        execution_id=context.get("__execution_id__"),
+        workflow_name=_text(context.get("__workflow_name__")),
+        node_key="IMAGE_GENERATE",
+        account_id=acct_id,
+        title=title, price=price, description=desc,
+        cover_pic=img_url, image_urls=[img_url] if img_url else [],
+        category=category, stock=_draft_stock,
+        location=address if isinstance(address, dict) else None,
+        raw_payload=p,
+        source_item_id=source_item_id, source_title_hash=source_title_hash,
+        initial_status="publishing",
+    )
+    try:
+        _result = await _publish_single_item_impl(
+            db, tenant_id, context, state, p, img_url, img_ai_ok,
+            category, address_text, address, account_pub, acct_id, platform, idx,
+            title=title, desc=desc, price=price,
+            source_item_id=source_item_id, source_title_hash=source_title_hash,
+        )
+    finally:
+        # ★ 无论成功/失败/跳过，都根据结果更新草稿状态（fire-and-forget）
+        if _result and _draft_id:
+            try:
+                await _finalize_publish_draft_from_result(
+                    db, draft_id=_draft_id, publish_result=_result,
+                )
+            except Exception as _fin_exc:
+                _log_runtime_failure("finalize_publish_draft", _fin_exc)
+    return _result
+
+
+async def _publish_single_item_impl(
+    db: AsyncSession,
+    tenant_id: int,
+    context: dict,
+    state: dict,
+    p: dict,
+    img_url: str,
+    img_ai_ok: bool,
+    category: str,
+    address_text: str,
+    address: dict,
+    account_pub: dict,
+    acct_id: int,
+    platform: str,
+    idx: int,
+    *,
+    title: str,
+    desc: str,
+    price: str,
+    source_item_id: str,
+    source_title_hash: str,
+) -> dict:
+    """_publish_single_item 的内部实现（不含草稿逻辑）。
+
+    草稿保存与状态更新由外层 _publish_single_item 统一处理。
+    本函数仅负责校验、去重、实际发布与落库去重表。
+    """
     # 约束1：未生成AI封面图的商品严禁发布
     if not img_ai_ok or not img_url:
         logger.warning("[PUBLISH-INLINE] 跳过发布(无AI封面图) account=%d title=%s", acct_id, title[:20])
@@ -8247,8 +8517,8 @@ async def _execute_workflow_node(
                     _pub_user_id,
                 )
             except Exception as exc:
-                # ★ 临时调试日志：打印完整异常信息（确认后恢复为 _log_runtime_failure）
-                logger.exception("[IMAGE_GENERATE-DEBUG] resolve_user raised tenant_id=%r account_ids=%r", tenant_id, account_ids)
+                # ★ resolve_user 异常：通过 _log_runtime_failure 记录错误类型（不泄露异常详情）
+                _log_runtime_failure("resolve_user_for_image_generate", exc)
                 _pub_user_id = None
         else:
             logger.warning("[IMAGE_GENERATE-DEBUG] account_ids 为空，无法解析 user_id")
@@ -9698,6 +9968,10 @@ async def _execute_workflow_node(
                 logger.info("[PUBLISH] 账号%d 无对应润色版本，跳过", acct_id)
                 continue
 
+            # ★ 鱼小铺标识默认 False（dry_run 路径不查询，统一按普通账号处理库存=1）
+            #   非 dry_run 路径在下方 cookie 解析后会覆盖为真实值
+            acct_is_fish_shop = False
+
             # 解析账号 Cookie（复用 _resolve_account_cookie，已处理解密）
             if not dry_run:
                 cookie_str, cookie_err, _resolved_acct_id = await _resolve_account_cookie(db, tenant_id, acct_id, {})
@@ -9710,6 +9984,13 @@ async def _execute_workflow_node(
                             "error": "发布账号登录状态不可用，请重新登录",
                             "account_id": acct_id, "category": category,
                         })
+                        # ★ 草稿保存（fire-and-forget）：发布前账号失效也记入草稿箱
+                        await _save_legacy_publish_draft(
+                            db, context=context, tenant_id=tenant_id, account_id=acct_id,
+                            is_fish_shop=acct_is_fish_shop, category=category, address=address,
+                            p=p, img_url="", image_urls=[],
+                            publish_result=publish_results[-1],
+                        )
                     continue
                 token = extract_token_from_cookie(cookie_str)
                 if not token:
@@ -9721,6 +10002,13 @@ async def _execute_workflow_node(
                             "error": "发布账号登录状态不可用，请重新登录",
                             "account_id": acct_id, "category": category,
                         })
+                        # ★ 草稿保存（fire-and-forget）：Cookie 缺 token 也记入草稿箱
+                        await _save_legacy_publish_draft(
+                            db, context=context, tenant_id=tenant_id, account_id=acct_id,
+                            is_fish_shop=acct_is_fish_shop, category=category, address=address,
+                            p=p, img_url="", image_urls=[],
+                            publish_result=publish_results[-1],
+                        )
                     continue
                 publisher = XianyuItemPublisher(cookie_str, tenant_id)
                 # 查询账号是否鱼小铺：鱼小铺账号可自定义库存，普通账号库存固定为 1
@@ -9775,6 +10063,13 @@ async def _execute_workflow_node(
                         "addressText": address_text, "address": address,
                         "source_item_id": source_item_id,
                     })
+                    # ★ 草稿保存（fire-and-forget）：无 AI 封面图也记入草稿箱
+                    await _save_legacy_publish_draft(
+                        db, context=context, tenant_id=tenant_id, account_id=acct_id,
+                        is_fish_shop=acct_is_fish_shop, category=category, address=address,
+                        p=p, img_url=img_url, image_urls=image_urls,
+                        publish_result=publish_results[-1],
+                    )
                     logger.warning("[PUBLISH] 跳过发布(无AI封面图) account=%d title=%s", acct_id, title[:20])
                     continue
 
@@ -9789,6 +10084,13 @@ async def _execute_workflow_node(
                         "account_id": acct_id, "category": category,
                         "addressText": address_text, "address": address,
                     })
+                    # ★ 草稿保存（fire-and-forget）：dry_run / 字段缺失也记入草稿箱
+                    await _save_legacy_publish_draft(
+                        db, context=context, tenant_id=tenant_id, account_id=acct_id,
+                        is_fish_shop=acct_is_fish_shop, category=category, address=address,
+                        p=p, img_url=img_url, image_urls=image_urls,
+                        publish_result=publish_results[-1],
+                    )
                     continue
 
                 # ★ 价格校验：价格 <= 0 直接跳过发布，避免发送到闲鱼后被 FAIL_BIZ_SKU_PRICE_ILLEGAL 拒绝
@@ -9810,6 +10112,13 @@ async def _execute_workflow_node(
                         "addressText": address_text, "address": address,
                         "source_item_id": source_item_id,
                     })
+                    # ★ 草稿保存（fire-and-forget）：价格无效也记入草稿箱
+                    await _save_legacy_publish_draft(
+                        db, context=context, tenant_id=tenant_id, account_id=acct_id,
+                        is_fish_shop=acct_is_fish_shop, category=category, address=address,
+                        p=p, img_url=img_url, image_urls=image_urls,
+                        publish_result=publish_results[-1],
+                    )
                     logger.warning("[PUBLISH] 跳过发布(价格<=0) account=%d title=%s price=%r",
                                    acct_id, title[:20], price)
                     continue
@@ -9845,6 +10154,13 @@ async def _execute_workflow_node(
                             "addressText": address_text, "address": address,
                             "source_item_id": source_item_id,
                         })
+                        # ★ 草稿保存（fire-and-forget）：重复跳过也记入草稿箱
+                        await _save_legacy_publish_draft(
+                            db, context=context, tenant_id=tenant_id, account_id=acct_id,
+                            is_fish_shop=acct_is_fish_shop, category=category, address=address,
+                            p=p, img_url=img_url, image_urls=image_urls,
+                            publish_result=publish_results[-1],
+                        )
                         logger.info("[PUBLISH] 跳过发布(重复) account=%d title=%s itemId=%s", acct_id, title[:20], source_item_id)
                         continue
                 except Exception as exc:
@@ -9882,6 +10198,13 @@ async def _execute_workflow_node(
                             "addressText": address_text, "address": address,
                             "source_item_id": source_item_id,
                         })
+                        # ★ 草稿保存（fire-and-forget）：发布成功记入草稿箱 status=published
+                        await _save_legacy_publish_draft(
+                            db, context=context, tenant_id=tenant_id, account_id=acct_id,
+                            is_fish_shop=acct_is_fish_shop, category=category, address=address,
+                            p=p, img_url=img_url, image_urls=image_urls,
+                            publish_result=publish_results[-1],
+                        )
                         logger.info("[PUBLISH] 发布成功 account=%d title=%s goods_id=%s",
                                      acct_id, title[:20], goods_id)
                         # ★ 约束3：发布成功立即落库去重表，即使后续节点/连接取消也不丢已发布记录
@@ -9930,6 +10253,13 @@ async def _execute_workflow_node(
                             "account_id": acct_id, "category": category,
                             "source_item_id": source_item_id,
                         })
+                        # ★ 草稿保存（fire-and-forget）：发布被拒也记入草稿箱 status=failed
+                        await _save_legacy_publish_draft(
+                            db, context=context, tenant_id=tenant_id, account_id=acct_id,
+                            is_fish_shop=acct_is_fish_shop, category=category, address=address,
+                            p=p, img_url=img_url, image_urls=image_urls,
+                            publish_result=publish_results[-1],
+                        )
                         logger.warning("runtimeFailure operation=publish_workflow_item errorType=ProviderRejected requestId=%s", get_request_id() or "-")
                 except Exception as e:
                     publish_results.append({
@@ -9941,6 +10271,13 @@ async def _execute_workflow_node(
                         "account_id": acct_id, "category": category,
                         "source_item_id": source_item_id,
                     })
+                    # ★ 草稿保存（fire-and-forget）：运行时异常也记入草稿箱 status=failed
+                    await _save_legacy_publish_draft(
+                        db, context=context, tenant_id=tenant_id, account_id=acct_id,
+                        is_fish_shop=acct_is_fish_shop, category=category, address=address,
+                        p=p, img_url=img_url, image_urls=image_urls,
+                        publish_result=publish_results[-1],
+                    )
                     _log_runtime_failure("publish_workflow_item", e)
 
                 # ★ 逐商品发布进度事件：让前端展示"正在发布第 N 个商品"
