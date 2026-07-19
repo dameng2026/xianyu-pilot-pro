@@ -1974,17 +1974,32 @@ async def get_workflow_draft(
 @router.post("/drafts/{draft_id}/retry-publish", response_model=ResultObject)
 async def retry_publish_draft_endpoint(
     draft_id: int,
+    body: dict = Body(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """重试发布单个草稿"""
+    """重试发布单个草稿
+
+    body 可选字段：
+      - accountId: int，指定本次重试发布使用的账号 ID。
+        传值时使用该账号发布；不传时回退到草稿原 account_id。
+    """
     try:
         tenant_id = _require_tenant(current_user)
     except ValueError:
         return ResultObject.failed(TENANT_CONTEXT_REQUIRED_MESSAGE, 400)
 
+    override_account_id = None
+    if body and isinstance(body, dict):
+        raw = body.get("accountId")
+        if raw is not None and str(raw).strip() != "":
+            try:
+                override_account_id = int(raw)
+            except (TypeError, ValueError):
+                return ResultObject.failed("accountId 必须为整数", 400)
+
     try:
-        result = await retry_publish_draft(db, draft_id, tenant_id)
+        result = await retry_publish_draft(db, draft_id, tenant_id, override_account_id)
         return ResultObject.success(result)
     except ValueError as e:
         return ResultObject.failed(str(e), 400)
@@ -2003,7 +2018,13 @@ async def batch_retry_publish_drafts_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """批量重试发布"""
+    """批量重试发布
+
+    body 字段：
+      - ids: List[int]，必填，要重试的草稿 ID 数组
+      - accountId: int，可选，指定本次重试发布使用的账号 ID。
+        传值时所有草稿都使用该账号发布；不传时回退到各草稿原 account_id。
+    """
     try:
         tenant_id = _require_tenant(current_user)
     except ValueError:
@@ -2012,8 +2033,17 @@ async def batch_retry_publish_drafts_endpoint(
     ids = body.get("ids") or []
     if not ids or not isinstance(ids, list):
         return ResultObject.failed("ids 不能为空且必须为数组", 400)
+
+    override_account_id = None
+    raw = body.get("accountId")
+    if raw is not None and str(raw).strip() != "":
+        try:
+            override_account_id = int(raw)
+        except (TypeError, ValueError):
+            return ResultObject.failed("accountId 必须为整数", 400)
+
     try:
-        result = await batch_retry_publish_drafts(db, ids, tenant_id)
+        result = await batch_retry_publish_drafts(db, ids, tenant_id, override_account_id)
         return ResultObject.success(result)
     except Exception as exc:
         return safe_route_failure(

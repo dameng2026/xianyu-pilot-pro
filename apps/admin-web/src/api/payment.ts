@@ -44,3 +44,16 @@ export function saveTokenRechargePlan(data: any) {
 export function deleteTokenRechargePlan(id: number) {
   return request.del<void>({ url: `/payment/token-plans/${id}`, showSuccessMessage: true })
 }
+
+/**
+ * 管理员强制标记订单为已支付。
+ * 用于本地开发测试（易支付异步回调无法到达本机）或生产环境回调丢失的订单补救。
+ * 会触发 fulfillMallProduct 等权益发放逻辑。
+ */
+export function forceMarkPaidOrder(orderNo: string, remark?: string) {
+  return request.post<any>({
+    url: `/payment/orders/${orderNo}/force-paid`,
+    data: { remark: remark || '' },
+    showSuccessMessage: true
+  })
+}

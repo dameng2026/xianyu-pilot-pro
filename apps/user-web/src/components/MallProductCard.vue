@@ -129,9 +129,10 @@ const tagClass = computed(() => {
 
 .mall-cover {
   width: 100%;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 1 / 1;
   position: relative;
   overflow: hidden;
+  background: linear-gradient(135deg, #f6f9ff 0%, #eef3fa 100%);
 }
 
 .cover-img {
@@ -139,6 +140,11 @@ const tagClass = computed(() => {
   height: 100%;
   object-fit: cover;
   display: block;
+  transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.mall-card:hover .cover-img {
+  transform: scale(1.06);
 }
 
 .cover-decor {

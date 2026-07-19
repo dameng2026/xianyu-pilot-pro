@@ -101,24 +101,24 @@
           <Badge>{{ row.usageCount ?? '—' }} 个商品</Badge>
         </template>
         <template #op="{ row }">
-          <button class="link" @click.stop="editSource(row)">{{ row.fromMall ? '查看' : '编辑' }}</button>
-          <button v-if="!row.fromMall" class="link" @click.stop="analyzeSource(row)">AI一键配置</button>
-          <button v-if="!row.fromMall" class="link danger-text" @click.stop="removeSource(row)">删除</button>
+          <button class="link" @click.stop="editSource(row)">编辑</button>
+          <button class="link" @click.stop="analyzeSource(row)">AI一键配置</button>
+          <button class="link danger-text" @click.stop="removeSource(row)">删除</button>
         </template>
       </BaseTable>
     </div>
 
-    <CardPanel v-if="editing" :title="editing.id ? (form.fromMall ? '查看货源' : '编辑货源') : '新增货源'" style="margin-top:16px" class="source-editor-panel">
+    <CardPanel v-if="editing" :title="editing.id ? '编辑货源' : '新增货源'" style="margin-top:16px" class="source-editor-panel">
       <div v-if="form.fromMall" class="info-tip mall-source-tip">
         <span class="info-tip-icon">i</span>
-        <span>商城购买货源：内容由后台货源商城统一维护，您可查看正文内容但不可修改。后台更新后此处的货源内容会自动同步。</span>
+        <span>商城购买货源：可编辑标题、正文、备注，发货类型固定为文本模式。下方"后台货源内容"板块显示后台最新配置，可点击正文上方的"插入货源"按钮将后台内容插入到光标处。</span>
       </div>
       <div class="editor-layout">
         <div class="editor-left">
           <div class="form-field">
             <label class="field-label"><span class="required">*</span>标题</label>
             <div class="field-input-wrap">
-              <input v-model="form.title" class="field-input" :readonly="form.fromMall" :placeholder="form.fromMall ? '商城货源标题' : '给用户和 AI 模型看的标题'" maxlength="50" />
+              <input v-model="form.title" class="field-input" placeholder="给用户和 AI 模型看的标题" maxlength="50" />
               <span class="char-count">{{ (form.title || '').length }}/50</span>
             </div>
           </div>
@@ -132,6 +132,13 @@
                 class="placeholder-btn"
                 @click="insertCardPlaceholder"
               >+ 插入 {卡密占位}</button>
+              <button
+                v-if="form.fromMall"
+                type="button"
+                class="placeholder-btn insert-source-btn"
+                :disabled="!mallSourceInsertableContent"
+                @click="insertMallSourceContent"
+              >+ 插入货源</button>
             </label>
             <div class="field-input-wrap">
               <textarea
@@ -139,8 +146,7 @@
                 v-model="form.content"
                 rows="6"
                 class="field-textarea"
-                :readonly="form.fromMall"
-                :placeholder="form.fromMall ? '商城货源正文内容（由后台货源商城维护，实时同步）' : (form.deliveryMode === 'card' ? '实际发货文本，需包含 {卡密占位}，发货时会自动替换为认领到的卡密' : '实际发货文本内容')"
+                :placeholder="form.deliveryMode === 'card' ? '实际发货文本，需包含 {卡密占位}，发货时会自动替换为认领到的卡密' : '实际发货文本内容'"
                 maxlength="5000"
               ></textarea>
               <span class="char-count">{{ (form.content || '').length }}/5000</span>
@@ -150,13 +156,30 @@
           <div class="form-field">
             <label class="field-label">备注（选填）</label>
             <div class="field-input-wrap">
-              <textarea v-model="form.remark" rows="3" class="field-textarea" :readonly="form.fromMall" placeholder="可添加备注信息，方便后续管理（如来源、用途等）" maxlength="200"></textarea>
+              <textarea v-model="form.remark" rows="3" class="field-textarea" placeholder="可添加备注信息，方便后续管理（如来源、用途等）" maxlength="200"></textarea>
               <span class="char-count">{{ (form.remark || '').length }}/200</span>
             </div>
           </div>
         </div>
 
         <div class="editor-right">
+          <div v-if="form.fromMall" class="setting-card mall-source-preview-card">
+            <div class="setting-card-title">
+              后台货源内容
+              <span class="readonly-badge">只读</span>
+            </div>
+            <div class="mall-source-preview">
+              <div class="mall-source-field">
+                <div class="mall-source-field-label">后台标题</div>
+                <div class="mall-source-field-value">{{ mallSourceTitle || '—' }}</div>
+              </div>
+              <div class="mall-source-field">
+                <div class="mall-source-field-label">后台正文</div>
+                <div class="mall-source-field-value mall-source-content">{{ mallSourceContent || '—' }}</div>
+              </div>
+              <div class="mall-source-tip">此内容由后台货源商城统一维护，更新后此处实时同步。点击正文上方的"插入货源"按钮可将后台内容插入到光标位置。</div>
+            </div>
+          </div>
           <div class="setting-card">
             <div class="setting-card-title">发送类型</div>
             <div class="mode-cards">
@@ -179,7 +202,7 @@
             </div>
             <div class="info-tip">
               <span class="info-tip-icon">i</span>
-              <span v-if="form.fromMall">商城货源固定为文本模式，由后台统一管理。</span>
+              <span v-if="form.fromMall">商城货源固定为文本模式，不可切换为卡密发送。</span>
               <span v-else>提示：卡密发送将在发送时自动替换占位符，例如 <code>{卡密}</code>、<code>{激活码}</code> 等占位符内容。</span>
             </div>
             <div v-if="form.deliveryMode === 'card' && !form.fromMall" class="card-group-select">
@@ -227,8 +250,8 @@
       </div>
 
       <div class="form-actions">
-        <AppButton v-if="!form.fromMall" type="primary" class="save-btn" @click="saveSource">保存</AppButton>
-        <AppButton class="cancel-btn" @click="cancelEdit">{{ form.fromMall ? '关闭' : '取消' }}</AppButton>
+        <AppButton type="primary" class="save-btn" @click="saveSource">保存</AppButton>
+        <AppButton class="cancel-btn" @click="cancelEdit">取消</AppButton>
       </div>
     </CardPanel>
 
@@ -425,7 +448,10 @@ const form = reactive({
   remark: '',
   deliveryMode: 'text',
   cardGroupId: '',
-  fromMall: false
+  fromMall: false,
+  mallProductTitle: '',
+  mallProductContent: '',
+  mallProductOnline: false
 })
 
 const columns = [
@@ -550,7 +576,10 @@ function openCreate() {
     remark: '',
     deliveryMode: 'text',
     cardGroupId: '',
-    fromMall: false
+    fromMall: false,
+    mallProductTitle: '',
+    mallProductContent: '',
+    mallProductOnline: false
   })
   ensureCardGroupsLoaded()
 }
@@ -564,7 +593,10 @@ function editSource(row) {
     remark: row.remark || '',
     deliveryMode: row.deliveryMode === 'card' ? 'card' : 'text',
     cardGroupId: row.cardGroupId ?? '',
-    fromMall: !!row.fromMall
+    fromMall: !!row.fromMall,
+    mallProductTitle: row.mallProductTitle || '',
+    mallProductContent: row.mallProductContent || '',
+    mallProductOnline: row.mallProductOnline ?? false
   })
   ensureCardGroupsLoaded()
 }
@@ -601,6 +633,26 @@ const selectedCardRemainCount = computed(() => {
 const editingUsageCount = computed(() => {
   if (!editing.value?.id) return 0
   return editing.value.usageCount ?? selected.value?.usageCount ?? 0
+})
+
+// 商城货源的后台内容快照（只读展示，商品下架时给出提示）
+const mallSourceTitle = computed(() => {
+  if (!form.fromMall) return ''
+  return form.mallProductTitle || ''
+})
+
+const mallSourceContent = computed(() => {
+  if (!form.fromMall) return ''
+  if (form.mallProductOnline === false) {
+    return '【商品已下架或被删除】该货源内容暂不可用，请联系管理员'
+  }
+  return form.mallProductContent || ''
+})
+
+// 用于"插入货源"按钮的实际插入内容（商品下架时不插入提示文案）
+const mallSourceInsertableContent = computed(() => {
+  if (!form.fromMall || form.mallProductOnline === false) return ''
+  return form.mallProductContent || ''
 })
 
 // 货源板块统计概览
@@ -656,6 +708,34 @@ function insertCardPlaceholder() {
       // 忽略光标设置失败
     }
   })
+}
+
+// 商城货源专属：一键把后台配置的货源内容插入到正文光标位置
+function insertMallSourceContent() {
+  if (!form.fromMall) return
+  const sourceContent = mallSourceInsertableContent.value
+  if (!sourceContent) return
+  const ta = contentTextareaRef.value
+  if (!ta) {
+    form.content = (form.content || '') + sourceContent
+    return
+  }
+  const start = ta.selectionStart ?? form.content.length
+  const end = ta.selectionEnd ?? form.content.length
+  const before = (form.content || '').slice(0, start)
+  const after = (form.content || '').slice(end)
+  form.content = before + sourceContent + after
+  // 等待 DOM 更新后恢复光标位置到插入内容之后
+  requestAnimationFrame(() => {
+    const pos = (before + sourceContent).length
+    try {
+      ta.focus()
+      ta.setSelectionRange(pos, pos)
+    } catch {
+      // 忽略光标设置失败
+    }
+  })
+  success.value = '已将后台货源内容插入到光标位置'
 }
 
 function clearSelected() {
@@ -1161,6 +1241,91 @@ select.field-input {
   font-weight: 700;
   color: #1a2236;
   margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.readonly-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  background: #f3f4f6;
+  border-radius: 999px;
+  letter-spacing: 0.5px;
+}
+
+.mall-source-preview-card {
+  border-color: #dbeafe;
+  background: linear-gradient(180deg, #f8fbff 0%, #fff 100%);
+}
+
+.mall-source-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.mall-source-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mall-source-field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  letter-spacing: 0.3px;
+}
+
+.mall-source-field-value {
+  font-size: 14px;
+  color: #1f2937;
+  line-height: 1.6;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  word-break: break-all;
+}
+
+.mall-source-field-value.mall-source-content {
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow-y: auto;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 13px;
+  color: #374151;
+}
+
+.mall-source-tip {
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.6;
+  padding: 8px 10px;
+  background: #f1f5ff;
+  border-radius: 6px;
+  border-left: 3px solid #3b82f6;
+}
+
+.insert-source-btn {
+  border-color: #7c3aed;
+  background: rgba(124, 58, 237, .06);
+  color: #7c3aed;
+}
+
+.insert-source-btn:hover:not(:disabled) {
+  background: #7c3aed;
+  color: #fff;
+}
+
+.insert-source-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .mode-cards {

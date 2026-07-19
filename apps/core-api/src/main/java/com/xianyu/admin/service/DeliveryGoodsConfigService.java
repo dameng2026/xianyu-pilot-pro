@@ -46,6 +46,58 @@ public class DeliveryGoodsConfigService {
         return stored == null ? new LinkedHashMap<>() : new LinkedHashMap<>(stored.config());
     }
 
+    /**
+     * 批量读取多个商品的发货配置，用于首屏一次性加载，避免逐个请求造成 3s+ 等待。
+     * 返回 Map：goodsId(String) → config(Map)。未配置的商品不在返回 Map 中（前端按缺失处理为空配置）。
+     * 不抛 404 校验异常：批量读取仅返回现有配置，缺失的商品视为无配置。
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, Map<String, Object>> batchRead(Long tenantId, Collection<Long> goodsIds) {
+        requireTenant(tenantId);
+        List<Long> ids = normalizeGoodsIds(goodsIds);
+        Map<Long, Map<String, Object>> result = new LinkedHashMap<>();
+        if (ids.isEmpty()) return result;
+        if (ids.size() > MAX_EXPLICIT_BATCH) {
+            throw new BizException(422, "单次最多查询 500 个商品配置，请分批操作");
+        }
+        String placeholders = ids.stream().map(ignored -> "?").collect(Collectors.joining(","));
+        List<Object> args = new ArrayList<>();
+        args.add(tenantId);
+        args.addAll(ids);
+        try {
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                    "SELECT goods_id, config_json FROM delivery_goods_config "
+                            + "WHERE tenant_id=? AND deleted=0 AND goods_id IN (" + placeholders + ")",
+                    args.toArray()
+            );
+            for (Map<String, Object> row : rows) {
+                Long goodsId = nullablePositiveLong(row.get("goods_id"), "商品配置数据异常");
+                if (goodsId == null) continue;
+                String json = text(row.get("config_json"));
+                if (json.isBlank()) {
+                    result.put(goodsId, new LinkedHashMap<>());
+                    continue;
+                }
+                try {
+                    Map<String, Object> config = objectMapper.readValue(
+                            json, new TypeReference<LinkedHashMap<String, Object>>() {});
+                    result.put(goodsId, config);
+                } catch (Exception error) {
+                    log.error("解析商品发货配置失败 goodsId={}, errorType={}",
+                            goodsId, error.getClass().getSimpleName());
+                    result.put(goodsId, new LinkedHashMap<>());
+                }
+            }
+            return result;
+        } catch (BizException error) {
+            throw error;
+        } catch (Exception error) {
+            log.error("批量读取商品发货配置失败 tenantId={}, count={}, errorType={}",
+                    tenantId, ids.size(), error.getClass().getSimpleName());
+            throw new BizException(503, "商品发货配置暂时不可用，请稍后重试");
+        }
+    }
+
     @Transactional
     public int apply(Long tenantId, Collection<Long> goodsIds, Map<String, Object> rawPatch) {
         requireTenant(tenantId);

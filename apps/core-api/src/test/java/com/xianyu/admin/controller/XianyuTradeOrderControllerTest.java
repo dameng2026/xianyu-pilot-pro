@@ -16,6 +16,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.math.BigDecimal;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -89,5 +91,27 @@ class XianyuTradeOrderControllerTest {
         verify(orderDeliveryCommandService, never()).syncOrders(eq(1L), any(OrderSyncRequest.class));
         verify(orderService).page(1L, null, null, null, null, 1, 20);
         assertEquals(200, result.getCode());
+    }
+
+    @Test
+    void todayAmountShouldDelegateToServiceAndReturnField() {
+        when(orderService.todayAmount(1L, 8L)).thenReturn(new BigDecimal("128.56"));
+
+        Result<java.util.Map<String, Object>> result = controller.todayAmount(8L);
+
+        verify(orderService).todayAmount(1L, 8L);
+        assertEquals(200, result.getCode());
+        assertEquals(new BigDecimal("128.56"), result.getData().get("todayAmount"));
+    }
+
+    @Test
+    void todayAmountShouldReturnZeroWhenServiceReturnsNull() {
+        when(orderService.todayAmount(1L, null)).thenReturn(null);
+
+        Result<java.util.Map<String, Object>> result = controller.todayAmount(null);
+
+        verify(orderService).todayAmount(1L, null);
+        assertEquals(200, result.getCode());
+        assertEquals(BigDecimal.ZERO, result.getData().get("todayAmount"));
     }
 }

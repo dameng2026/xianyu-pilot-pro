@@ -329,11 +329,15 @@
               <div class="mall-pay-countdown" v-if="payCountdownSeconds > 0">剩余支付时间：{{ payCountdownText }}</div>
               <div v-if="payError" class="mall-form-error">{{ payError }}</div>
               <div class="mall-pay-tip">请使用对应 APP 扫描二维码完成支付，支付成功后将自动刷新</div>
+              <button type="button" class="mall-form-submit mall-form-submit-outline" :disabled="payChecking" @click="checkPaymentPaid">
+                {{ payChecking ? '正在查询...' : '我已完成支付' }}
+              </button>
             </div>
             <div v-else-if="payStep === 'success'" class="mall-pay-success">
               <div class="mall-pay-success-icon">✓</div>
               <h3>支付成功</h3>
               <p>{{ currentPayProduct?.title }} 已完成支付</p>
+              <button type="button" class="mall-form-submit" @click="closePayModal">完成</button>
             </div>
           </div>
         </div>
@@ -734,6 +738,7 @@ import { rewriteOpportunity, getOpportunityAiStatus, getOpportunityImageStatus, 
 import { ensureAiTokenBalance } from '../utils/aiTokenGuard.js'
 import { getLiteAccounts, checkAccountAuth } from '../api/accounts.js'
 import { publishItem } from '../api/items.js'
+import { getDeliverySources, applyDeliverySourceToGoods, getDeliverySourceByMallProduct } from '../api/autoDelivery.js'
 import { accountAuthUsable, pickPreferredAccount, accountLoginHint } from '../utils/accountAuth.js'
 import { isPublishAddressComplete, normalizePublishAddress } from '../utils/publishAddress.js'
 import { friendlyError } from '../utils/friendlyError.js'
@@ -1000,6 +1005,7 @@ const paySubmitting = ref(false)
 const payError = ref('')
 const currentOrder = ref(null)
 const payCountdownSeconds = ref(0)
+const payChecking = ref(false)
 let payPollTimer = null
 let payCountdownTimer = null
 
@@ -1071,6 +1077,41 @@ async function createMallOrder() {
   }
 }
 
+// 用户主动点击"我已完成支付"按钮时调用，主动查询订单状态
+// 用于本地开发环境（易支付异步回调无法到达本机）或管理员后台强制标记已支付后
+async function checkPaymentPaid() {
+  const orderNo = currentOrder.value?.orderNo
+  if (!orderNo || payChecking.value) return
+  payChecking.value = true
+  payError.value = ''
+  try {
+    const data = await getPaymentOrder(orderNo)
+    if (!data) {
+      payError.value = '订单状态查询失败，请稍后重试'
+      return
+    }
+    currentOrder.value = { ...currentOrder.value, ...data }
+    const rawStatus = data.status ?? data.orderStatus
+    const statusNum = Number(rawStatus)
+    const statusStr = String(rawStatus || '').toLowerCase()
+    if (statusNum === 1 || statusStr === 'paid' || statusStr === 'success' || statusStr === 'completed') {
+      payStep.value = 'success'
+      stopPayPolling()
+      stopPayCountdown()
+    } else if (statusNum === 2 || statusStr === 'closed' || statusStr === 'failed' || statusStr === 'expired') {
+      stopPayPolling()
+      stopPayCountdown()
+      payError.value = data.statusText || '订单已关闭或支付失败，请重新创建订单'
+    } else {
+      payError.value = '订单尚未支付成功，请完成扫码支付后再点击此按钮（若已扫码支付，请等待几秒后重试）'
+    }
+  } catch (e) {
+    payError.value = e?.message || '订单状态查询失败，请稍后重试'
+  } finally {
+    payChecking.value = false
+  }
+}
+
 function startPayPolling() {
   stopPayPolling()
   payPollTimer = setInterval(async () => {
@@ -1080,11 +1121,21 @@ function startPayPolling() {
       const data = await getPaymentOrder(orderNo)
       if (!data) return
       currentOrder.value = { ...currentOrder.value, ...data }
-      const status = String(data.status || data.orderStatus || '').toLowerCase()
-      if (status === 'paid' || status === 'success' || status === 'success_paid' || status === 'completed') {
+      // 后端 status 字段为数字：0=待支付 1=已支付 2=已关闭
+      // 兼容字符串形式（paid/success）和数字形式（1）
+      const rawStatus = data.status ?? data.orderStatus
+      const statusNum = Number(rawStatus)
+      const statusStr = String(rawStatus || '').toLowerCase()
+      const isPaid = statusNum === 1 || statusStr === 'paid' || statusStr === 'success' || statusStr === 'success_paid' || statusStr === 'completed'
+      const isClosed = statusNum === 2 || statusStr === 'closed' || statusStr === 'failed' || statusStr === 'expired'
+      if (isPaid) {
         payStep.value = 'success'
         stopPayPolling()
         stopPayCountdown()
+      } else if (isClosed) {
+        stopPayPolling()
+        stopPayCountdown()
+        payError.value = data.statusText || '订单已关闭或支付失败，请重新创建订单'
       }
     } catch (e) {
       console.error('[mall] 轮询订单状态失败', e)
@@ -1122,10 +1173,28 @@ async function closePayModal() {
   const orderNo = currentOrder.value?.orderNo
   stopPayPolling()
   stopPayCountdown()
+  // 关闭前主动查询一次订单状态（支持管理员在后台强制标记已支付后，用户关闭弹窗也能识别）
+  let detectedPaid = payStep.value === 'success'
+  if (orderNo && payStep.value === 'qr') {
+    try {
+      const latest = await getPaymentOrder(orderNo)
+      if (latest) {
+        currentOrder.value = { ...currentOrder.value, ...latest }
+        const rawStatus = latest.status ?? latest.orderStatus
+        const statusNum = Number(rawStatus)
+        const statusStr = String(rawStatus || '').toLowerCase()
+        if (statusNum === 1 || statusStr === 'paid' || statusStr === 'success' || statusStr === 'completed') {
+          detectedPaid = true
+          payStep.value = 'success'
+        }
+      }
+    } catch (e) { /* 忽略查询失败 */ }
+  }
+  // 仅在仍未支付时才关闭订单（已支付订单不能关闭）
   if (orderNo && payStep.value === 'qr') {
     try { await closePaymentOrder(orderNo) } catch (e) { /* 忽略关闭失败 */ }
   }
-  const wasSuccess = payStep.value === 'success'
+  const wasSuccess = detectedPaid || payStep.value === 'success'
   payModalVisible.value = false
   if (wasSuccess) {
     loadProducts()
@@ -1734,7 +1803,27 @@ async function runPublish() {
       throw new Error('发布请求已返回，但未获得商品 ID，无法确认是否成功，请先到闲鱼核对后再重试')
     }
     localStorage.setItem('xianyu_pending_sync', 'true')
-    listFlowMessage.value = `已发布到闲鱼（商品ID：${itemId}）`
+    listFlowMessage.value = `已发布到闲鱼（商品ID：${itemId}），正在绑定货源...`
+    // 自动绑定货源：商城货源上架后，自动把对应货源绑定到新上架商品，启用自动发货
+    // 此功能仅对商城购买货源有效（用户已支付购买商城货源后才能上架）
+    try {
+      const sourceRes = await getDeliverySourceByMallProduct(Number(product.id))
+      const sourceData = sourceRes?.data
+      const sourceId = sourceData?.id
+      if (sourceId) {
+        await applyDeliverySourceToGoods(sourceId, {
+          goodsIds: [Number(itemId)],
+          timing: 'paid'
+        })
+        listFlowMessage.value = `已发布到闲鱼（商品ID：${itemId}），货源已自动绑定（发货时机：买家付款后）`
+      } else {
+        // 当前用户尚未购买该商城货源（理论上不应出现，因为只有购买后才能上架），提示用户手动绑定
+        listFlowMessage.value = `已发布到闲鱼（商品ID：${itemId}）。未找到对应货源，请到「会员库」手动绑定货源`
+      }
+    } catch (bindErr) {
+      // 货源绑定失败不影响上架成功的总体结果，仅提示用户后续手动绑定
+      listFlowMessage.value = `已发布到闲鱼（商品ID：${itemId}），但货源自动绑定失败：${friendlyError(bindErr, '请到「会员库」手动绑定')}`
+    }
     return true
   } catch (e) {
     listFlowError.value = friendlyError(e, '发布到闲鱼失败')
@@ -2777,6 +2866,18 @@ onBeforeUnmount(() => {
 .mall-form-submit:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.mall-form-submit-outline {
+  margin-top: 12px;
+  background: #fff;
+  color: #0865f4;
+  border: 1px solid #0865f4;
+}
+
+.mall-form-submit-outline:hover:not(:disabled) {
+  background: #f5f9ff;
+  box-shadow: none;
 }
 
 /* ===== 常见问题 ===== */

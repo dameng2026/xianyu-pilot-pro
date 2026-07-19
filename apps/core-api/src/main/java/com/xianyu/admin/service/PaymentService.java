@@ -8,6 +8,7 @@ import com.google.zxing.BarcodeFormat;
 import com.google.zxing.client.j2se.MatrixToImageWriter;
 import com.google.zxing.common.BitMatrix;
 import com.google.zxing.qrcode.QRCodeWriter;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -17,6 +18,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.math.BigDecimal;
 import java.awt.image.BufferedImage;
@@ -476,6 +480,26 @@ public class PaymentService {
         return markPaid(orderNo, "dev_mock", null);
     }
 
+    /**
+     * 管理员强制标记订单为已支付（不要求沙箱模式）。
+     * 用于本地开发测试（易支付回调无法到达本机）或生产环境回调丢失的订单补救。
+     * 与 mockPay 区别：mockPay 仅在沙箱模式下可用，用于开发流程；
+     * forceMarkPaid 由管理员显式触发，用于真实支付但回调未到的订单。
+     */
+    @Transactional
+    public Map<String, Object> forceMarkPaidByAdmin(String orderNo, String remark) {
+        if (!StringUtils.hasText(orderNo)) throw new BizException(400, "订单号不能为空");
+        Map<String, Object> order = queryOne(
+                "SELECT order_no, status FROM payment_order WHERE order_no=? AND deleted=0 FOR UPDATE", orderNo);
+        if (order == null) throw new BizException(404, "支付订单不存在");
+        int status = storedStatus(order.get("status"), "支付订单状态");
+        if (status == 1) return orderDetail(orderNo);
+        if (status != 0) throw new BizException(400, "订单状态不可标记为已支付（当前状态=" + status + "）");
+        String source = "admin_force_paid" + (StringUtils.hasText(remark) ? ":" + boundedText(remark, 50) : "");
+        log.warn("管理员强制标记订单为已支付 orderNo={} remark={}", orderNo, remark);
+        return markPaid(orderNo, source, null);
+    }
+
     @Transactional
     public Map<String, Object> mockPayUserOrder(String orderNo) {
         requireSandboxMode();
@@ -701,12 +725,14 @@ public class PaymentService {
             validateEnabledPaymentConfiguration(provider, 1, 0,
                     text(config.get("merchant_id")), text(config.get("api_key")), gateway, notifyUrl);
             String resolvedNotifyUrl = resolveNotifyUrl(notifyUrl);
+            // return_url 是用户支付完成后浏览器跳转地址，必须指向用户可访问的前端页面，不能用后端回调 URL
+            String resolvedReturnUrl = resolveReturnUrl(notifyUrl);
             Map<String, String> params = new LinkedHashMap<>();
             params.put("pid", text(config.get("merchant_id")));
             params.put("type", "wechat".equals(channel) ? "wxpay" : "alipay");
             params.put("out_trade_no", orderNo);
             params.put("notify_url", resolvedNotifyUrl);
-            params.put("return_url", resolvedNotifyUrl);
+            params.put("return_url", resolvedReturnUrl);
             params.put("name", title);
             params.put("money", BigDecimal.valueOf(amountCent).divide(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString());
             String sign = signYipay(params, text(config.get("api_key")));
@@ -715,9 +741,13 @@ public class PaymentService {
             String query = params.entrySet().stream()
                     .map(e -> e.getKey() + "=" + urlEncode(e.getValue()))
                     .collect(Collectors.joining("&"));
-            String payUrl = normalizeYipayGateway(gateway) + (normalizeYipayGateway(gateway).contains("?") ? "&" : "?") + query;
+            String submitUrl = normalizeYipayGateway(gateway);
+            String payUrl = submitUrl + (submitUrl.contains("?") ? "&" : "?") + query;
+            // 易支付 submit.php 要求 POST 提交。二维码中放后端跳转端点 URL，
+            // 用户扫码后浏览器打开该端点 → 渲染自动提交的 POST 表单 → 跳转到易支付收银台
+            String redirectUrl = resolveNotifyUrl("/api/payment/redirect/" + orderNo);
             res.put("payUrl", payUrl);
-            res.put("qrContent", payUrl);
+            res.put("qrContent", redirectUrl);
             return res;
         }
         throw new BizException(503, "官方微信/支付宝下单与验签适配器尚未接入，请使用沙箱或已完成验签的支付通道");
@@ -822,12 +852,273 @@ public class PaymentService {
         if (!isRelativePath(notifyUrl)) {
             return notifyUrl;
         }
+        // 优先使用管理员显式配置的 external-base-url
         String base = externalBaseUrl == null ? "" : externalBaseUrl.trim();
+        // 配置缺失时，尝试从当前 HTTP 请求自动推断外部访问地址（基于反向代理转发的 X-Forwarded-* 头）
         if (base.isEmpty()) {
-            throw new BizException(503, "支付回调地址为相对路径，但系统未配置 payment.external-base-url，请联系管理员设置外部访问地址");
+            base = inferExternalBaseUrlFromRequest();
+        }
+        if (base.isEmpty()) {
+            log.warn("支付回调地址解析失败：notifyUrl={}, externalBaseUrl={}, 推断失败。请配置环境变量 PAYMENT_EXTERNAL_BASE_URL", notifyUrl, externalBaseUrl);
+            throw new BizException(503, "支付回调地址为相对路径，但系统未配置 payment.external-base-url，且无法从当前请求推断外部访问地址。请在环境变量 PAYMENT_EXTERNAL_BASE_URL 中设置外部可访问地址（例如：http://1.12.66.249:18080 或 https://your-domain.com），重启服务后生效");
         }
         if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
         return base + notifyUrl;
+    }
+
+    /**
+     * 从当前 HTTP 请求推断外部访问基础地址。
+     * 依次尝试：
+     *   1. X-Forwarded-Proto + X-Forwarded-Host（标准反向代理转发头）
+     *   2. request.getScheme() + request.getServerName() + request.getServerPort()
+     * 优先返回 HTTPS URL；若反向代理或直连为 HTTP，则返回 HTTP URL 并记录警告（回调地址仍可用，但存在被中间人篡改风险）。
+     * 若推断结果是 localhost/127.0.0.1 等本机回环地址，返回空串（手机扫码无法访问本机）。
+     */
+    private String inferExternalBaseUrlFromRequest() {
+        HttpServletRequest request = currentHttpRequest();
+        if (request == null) {
+            log.warn("支付回调地址推断失败：当前线程无 HTTP 请求上下文（可能是异步调用），请配置 payment.external-base-url");
+            return "";
+        }
+        String scheme = firstForwardedValue(request.getHeader("X-Forwarded-Proto"));
+        if (scheme == null || scheme.isEmpty()) {
+            scheme = request.getScheme();
+        }
+        String host = firstForwardedValue(request.getHeader("X-Forwarded-Host"));
+        if (host == null || host.isEmpty()) {
+            host = request.getServerName();
+        }
+        if (host == null || host.isEmpty()) {
+            log.warn("支付回调地址推断失败：无法从请求中解析 host（X-Forwarded-Host 和 serverName 均为空），请配置 payment.external-base-url");
+            return "";
+        }
+        // X-Forwarded-Host 可能包含端口（如 example.com:8443），解析分离
+        String hostPart = host;
+        String portPart = "";
+        int colon = host.lastIndexOf(':');
+        if (colon > 0 && host.indexOf(']') < colon) {
+            hostPart = host.substring(0, colon);
+            portPart = host.substring(colon + 1);
+        }
+        if (hostPart.isEmpty()) {
+            log.warn("支付回调地址推断失败：host 解析为空（原始值={}），请配置 payment.external-base-url", host);
+            return "";
+        }
+        // 拒绝本机回环地址：手机扫码无法访问本机的 localhost/127.0.0.1
+        if (isLoopbackHost(hostPart)) {
+            log.warn("支付回调地址推断失败：推断出的 host 是本机回环地址（{}），手机扫码无法访问。请配置环境变量 PAYMENT_EXTERNAL_BASE_URL 为服务器外网地址（例如 http://1.12.66.249:18080 或 https://your-domain.com）", hostPart);
+            return "";
+        }
+        // 构建 base URL：支持 HTTPS 和 HTTP（HTTP 时记录警告，仍允许使用）
+        String candidate;
+        if ("https".equalsIgnoreCase(scheme)) {
+            candidate = "https://" + hostPart + (portPart.isEmpty() || "443".equals(portPart) ? "" : ":" + portPart);
+        } else if ("http".equalsIgnoreCase(scheme)) {
+            // 若无显式端口，从 request.getServerPort() 补充（直连场景 scheme=http 时通常需要带上端口）
+            if (portPart.isEmpty()) {
+                int serverPort = request.getServerPort();
+                if (serverPort > 0 && serverPort != 80) {
+                    portPart = String.valueOf(serverPort);
+                }
+            }
+            candidate = "http://" + hostPart + (portPart.isEmpty() || "80".equals(portPart) ? "" : ":" + portPart);
+            log.warn("支付回调地址推断为 HTTP（非 HTTPS），存在被中间人篡改风险，建议配置 HTTPS 反向代理或显式设置 payment.external-base-url：{}", candidate);
+        } else {
+            log.warn("支付回调地址推断失败：未知 scheme={}（X-Forwarded-Proto={}），请配置 payment.external-base-url", scheme, request.getHeader("X-Forwarded-Proto"));
+            return "";
+        }
+        return candidate;
+    }
+
+    /** 判断 host 是否为本机回环地址（localhost / 127.0.0.1 / 0:0:0:0:0:0:0:1 等） */
+    private boolean isLoopbackHost(String host) {
+        if (host == null) return false;
+        String h = host.trim().toLowerCase(Locale.ROOT);
+        return "localhost".equals(h)
+                || "127.0.0.1".equals(h)
+                || "0.0.0.0".equals(h)
+                || "::1".equals(h)
+                || "0:0:0:0:0:0:0:1".equals(h);
+    }
+
+    private HttpServletRequest currentHttpRequest() {
+        try {
+            RequestAttributes attrs = RequestContextHolder.getRequestAttributes();
+            if (attrs instanceof ServletRequestAttributes servletAttrs) {
+                return servletAttrs.getRequest();
+            }
+        } catch (IllegalStateException ignored) {
+            // 非请求线程（如异步/定时任务）调用时无请求上下文
+        }
+        return null;
+    }
+
+    private String firstForwardedValue(String headerValue) {
+        if (headerValue == null || headerValue.isBlank()) {
+            return null;
+        }
+        // X-Forwarded-* 可能是逗号分隔的多跳列表，取第一跳（最接近客户端的那一跳由反向代理写入）
+        String first = headerValue.split(",")[0].trim();
+        return first.isEmpty() ? null : first;
+    }
+
+    /**
+     * 解析 return_url（用户支付完成后浏览器跳转地址）。
+     * 与 notify_url（服务器异步回调）不同，return_url 必须指向用户可访问的前端页面。
+     * 优先使用 externalBaseUrl 作为前端基址（去掉后端 /api 前缀），失败时回退到 notify_url 推断出的基址。
+     */
+    private String resolveReturnUrl(String notifyUrl) {
+        String base = inferExternalBaseUrlFromRequest();
+        if (base.isEmpty() && externalBaseUrl != null) {
+            base = externalBaseUrl.trim();
+        }
+        if (base.isEmpty() && !isRelativePath(notifyUrl)) {
+            // notify_url 是绝对地址时，从中提取基址作为 return_url 基址
+            try {
+                java.net.URI uri = java.net.URI.create(notifyUrl);
+                String host = uri.getHost();
+                if (host != null && !host.isEmpty()) {
+                    int port = uri.getPort();
+                    base = uri.getScheme() + "://" + host + (port > 0 && port != 80 && port != 443 ? ":" + port : "");
+                }
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+        if (base.isEmpty()) {
+            // 兜底：使用 notify_url 本身（虽然不理想，但保证签名能算出来）
+            return notifyUrl;
+        }
+        return base;
+    }
+
+    /**
+     * 根据 orderNo 重建易支付参数并返回自动提交的 POST 表单 HTML。
+     * 用户扫码后浏览器打开 /api/payment/redirect/{orderNo}，渲染此 HTML 自动 POST 到易支付 submit.php。
+     */
+    public String buildYipayRedirectHtml(String orderNo) {
+        Map<String, Object> order = queryOne(
+                "SELECT order_no, title, amount_cent, payment_method, provider_type, payment_config_id, status, expire_time " +
+                        "FROM payment_order WHERE order_no=? AND deleted=0", orderNo);
+        if (order == null) {
+            return errorRedirectHtml("支付订单不存在");
+        }
+        int status = ((Number) order.getOrDefault("status", 0)).intValue();
+        if (status == 1) {
+            return alreadyPaidHtml(orderNo);
+        }
+        if (status >= 2) {
+            return errorRedirectHtml("订单已关闭或已过期，请重新发起支付");
+        }
+        String providerType = text(order.get("provider_type"));
+        if (!"yipay".equals(providerType)) {
+            return errorRedirectHtml("该订单不是易支付订单，无法跳转");
+        }
+        Map<String, Object> config = configForOrder(order);
+        String gateway = text(config.get("gateway_url"));
+        String notifyUrl = text(config.get("notify_url"));
+        String resolvedNotifyUrl = resolveNotifyUrl(notifyUrl);
+        String resolvedReturnUrl = resolveReturnUrl(notifyUrl);
+        String channel = text(order.get("payment_method"));
+        long amountCent = ((Number) order.getOrDefault("amount_cent", 0L)).longValue();
+        String title = text(order.get("title"));
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("pid", text(config.get("merchant_id")));
+        params.put("type", "wechat".equals(channel) ? "wxpay" : "alipay");
+        params.put("out_trade_no", orderNo);
+        params.put("notify_url", resolvedNotifyUrl);
+        params.put("return_url", resolvedReturnUrl);
+        params.put("name", title);
+        params.put("money", BigDecimal.valueOf(amountCent).divide(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString());
+        String sign = signYipay(params, text(config.get("api_key")));
+        params.put("sign", sign);
+        params.put("sign_type", "MD5");
+        String submitUrl = normalizeYipayGateway(gateway);
+        return buildAutoSubmitFormHtml(submitUrl, params);
+    }
+
+    private String buildAutoSubmitFormHtml(String action, Map<String, String> params) {
+        StringBuilder html = new StringBuilder();
+        html.append("<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\">");
+        html.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">");
+        html.append("<title>正在跳转到支付页面</title>");
+        html.append("<style>");
+        html.append("body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;");
+        html.append("display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;");
+        html.append("background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;}");
+        html.append(".box{text-align:center;padding:40px;background:rgba(255,255,255,0.1);");
+        html.append("border-radius:16px;backdrop-filter:blur(10px);max-width:90%;}");
+        html.append(".spinner{width:48px;height:48px;border:4px solid rgba(255,255,255,0.3);");
+        html.append("border-top-color:#fff;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 20px;}");
+        html.append("@keyframes spin{to{transform:rotate(360deg);}}");
+        html.append("h2{margin:0 0 8px;font-size:20px;font-weight:600;}");
+        html.append("p{margin:0;font-size:14px;opacity:0.9;line-height:1.5;}");
+        html.append("</style></head><body>");
+        html.append("<div class=\"box\"><div class=\"spinner\"></div>");
+        html.append("<h2>正在跳转到支付页面</h2>");
+        html.append("<p>请稍候，即将打开微信/支付宝收银台...</p></div>");
+        html.append("<form id=\"paying\" action=\"").append(escapeHtml(action)).append("\" method=\"post\">");
+        for (Map.Entry<String, String> entry : params.entrySet()) {
+            html.append("<input type=\"hidden\" name=\"").append(escapeHtml(entry.getKey()))
+                    .append("\" value=\"").append(escapeHtml(entry.getValue())).append("\"/>");
+        }
+        html.append("</form>");
+        html.append("<script>document.forms['paying'].submit();</script>");
+        html.append("</body></html>");
+        return html.toString();
+    }
+
+    private String alreadyPaidHtml(String orderNo) {
+        StringBuilder html = new StringBuilder();
+        html.append("<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\">");
+        html.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">");
+        html.append("<title>支付已完成</title>");
+        html.append("<style>");
+        html.append("body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;");
+        html.append("display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;");
+        html.append("background:linear-gradient(135deg,#11998e 0%,#38ef7d 100%);color:#fff;}");
+        html.append(".box{text-align:center;padding:40px;background:rgba(255,255,255,0.15);");
+        html.append("border-radius:16px;backdrop-filter:blur(10px);max-width:90%;}");
+        html.append(".icon{font-size:64px;margin-bottom:16px;}");
+        html.append("h2{margin:0 0 8px;font-size:22px;font-weight:600;}");
+        html.append("p{margin:0;font-size:14px;opacity:0.9;}");
+        html.append("</style></head><body>");
+        html.append("<div class=\"box\"><div class=\"icon\">✓</div>");
+        html.append("<h2>支付已完成</h2>");
+        html.append("<p>订单 ").append(escapeHtml(orderNo)).append(" 已支付成功</p>");
+        html.append("<p>请返回原页面查看支付结果</p></div>");
+        html.append("</body></html>");
+        return html.toString();
+    }
+
+    private String errorRedirectHtml(String message) {
+        StringBuilder html = new StringBuilder();
+        html.append("<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\">");
+        html.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">");
+        html.append("<title>支付跳转失败</title>");
+        html.append("<style>");
+        html.append("body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;");
+        html.append("display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;");
+        html.append("background:linear-gradient(135deg,#eb3349 0%,#f45c43 100%);color:#fff;}");
+        html.append(".box{text-align:center;padding:40px;background:rgba(255,255,255,0.15);");
+        html.append("border-radius:16px;backdrop-filter:blur(10px);max-width:90%;}");
+        html.append(".icon{font-size:64px;margin-bottom:16px;}");
+        html.append("h2{margin:0 0 8px;font-size:22px;font-weight:600;}");
+        html.append("p{margin:0;font-size:14px;opacity:0.9;}");
+        html.append("</style></head><body>");
+        html.append("<div class=\"box\"><div class=\"icon\">⚠</div>");
+        html.append("<h2>无法跳转到支付页面</h2>");
+        html.append("<p>").append(escapeHtml(message)).append("</p></div>");
+        html.append("</body></html>");
+        return html.toString();
+    }
+
+    private String escapeHtml(String value) {
+        if (value == null) return "";
+        return value.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&#39;");
     }
 
     private String signYipay(Map<String, ?> params, String key) {

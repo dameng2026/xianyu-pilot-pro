@@ -33,6 +33,16 @@ public class DeliveryTextSourceController {
         return Result.ok(deliveryTextSourceService.detail(tenantId, id));
     }
 
+    /**
+     * 根据商城货源商品 ID 查询当前租户会员库中对应的货源记录。
+     * 用于用户从货源商城上架商品后，前端自动绑定该货源到新上架的闲鱼商品。
+     */
+    @GetMapping("/by-mall-product/{mallProductId}")
+    public Result<Map<String, Object>> findByMallProduct(@PathVariable Long mallProductId) {
+        Long tenantId = TenantContext.getCurrentTenantId();
+        return Result.ok(deliveryTextSourceService.findByMallProduct(tenantId, mallProductId));
+    }
+
     @PostMapping
     public Result<Map<String, Object>> create(@RequestBody Map<String, Object> body) {
         Long tenantId = TenantContext.getCurrentTenantId();

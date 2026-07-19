@@ -57,14 +57,14 @@
             </div>
             <div class="pc-banner-info">
               <div class="pc-username-row">
-                <span class="pc-username">{{ overview.nickname || overview.username || 'slfasd' }}</span>
-                <span class="pc-svip-badge">
+                <span class="pc-username">{{ overview.nickname || overview.username || '—' }}</span>
+                <span v-if="planBadge !== 'FREE' && planBadge !== 'UNKNOWN'" class="pc-svip-badge">
                   <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
                     <path d="M8 1.5l2.5 3-2.5 8-2.5-8z" fill="#d97706"/>
                     <path d="M8 1.5l2.5 3h-5z" fill="#fbbf24"/>
                     <circle cx="8" cy="5" r="0.8" fill="#fff" opacity="0.6"/>
                   </svg>
-                  SVIP（手动）
+                  {{ planBadgeText }}
                 </span>
                 <span class="pc-connect-status">
                   <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
@@ -82,19 +82,19 @@
                   </svg>
                   用户类型：个人用户
                 </span>
-                <span class="pc-tag pc-tag-blue">
+                <span :class="['pc-tag', overview.emailVerified ? 'pc-tag-blue' : 'pc-tag-gray']">
                   <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
                     <rect x="2.5" y="4" width="11" height="8" rx="2" stroke="currentColor" stroke-width="1.3"/>
                     <path d="M3 5.5l5 3.5 5-3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
-                  邮箱已验证
+                  {{ overview.emailVerified ? '邮箱已验证' : (maskedEmail ? '邮箱未验证' : '邮箱未绑定') }}
                 </span>
-                <span class="pc-tag pc-tag-green">
+                <span :class="['pc-tag', overview.phoneVerified ? 'pc-tag-green' : 'pc-tag-gray']">
                   <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
                     <rect x="5" y="2" width="6" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
                     <line x1="7" y1="11" x2="9" y2="11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
                   </svg>
-                  手机号已绑定
+                  {{ overview.phoneVerified ? '手机号已绑定' : (maskedPhone ? '手机号未验证' : '手机号未绑定') }}
                 </span>
               </div>
               <button type="button" class="pc-btn pc-btn-primary pc-manage-btn" @click="activeTab = 'security'">
@@ -143,11 +143,11 @@
                 <span class="pc-stat-label">Token余额</span>
               </div>
               <div class="pc-stat-value">
-                <strong>{{ formatNumber(overview.tokenBalance || 12586) }}</strong>
+                <strong>{{ formatNumber(overview.tokenBalance ?? 0) }}</strong>
                 <em>Token</em>
               </div>
               <div class="pc-stat-sub">
-                <span class="pc-stat-yuan">≈ ¥{{ formatNumber((overview.tokenBalance || 12586) / 100) }}</span>
+                <span class="pc-stat-yuan">≈ ¥{{ formatNumber((overview.tokenBalance ?? 0) / 100) }}</span>
               </div>
               <button type="button" class="pc-btn pc-btn-primary pc-stat-btn" @click="paymentVisible = true">充值</button>
             </article>
@@ -163,17 +163,11 @@
                 <span class="pc-stat-label">今日消耗</span>
               </div>
               <div class="pc-stat-value">
-                <strong>{{ formatNumber(tokenStats.todayConsume || 158) }}</strong>
+                <strong>{{ formatNumber(tokenStats.todayConsume ?? 0) }}</strong>
                 <em>Token</em>
               </div>
               <div class="pc-stat-sub">
-                <span class="pc-stat-trend pc-trend-down">
-                  <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
-                    <path d="M4 10l4 4 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M8 4v9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                  </svg>
-                  较昨日 -12.5%
-                </span>
+                <span class="pc-stat-yuan">今日 0 点至今累计</span>
               </div>
             </article>
 
@@ -188,17 +182,11 @@
                 <span class="pc-stat-label">本月消耗</span>
               </div>
               <div class="pc-stat-value">
-                <strong>{{ formatNumber(tokenStats.sevenDayConsume || 3256) }}</strong>
+                <strong>{{ formatNumber(tokenStats.monthConsume ?? 0) }}</strong>
                 <em>Token</em>
               </div>
               <div class="pc-stat-sub">
-                <span class="pc-stat-trend pc-trend-up">
-                  <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
-                    <path d="M4 6l4-4 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M8 3v9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                  </svg>
-                  较上月 +8.3%
-                </span>
+                <span class="pc-stat-yuan">本月 1 日至今累计</span>
               </div>
             </article>
 
@@ -216,10 +204,10 @@
                 <span class="pc-stat-label">会员等级</span>
               </div>
               <div class="pc-stat-value pc-stat-value-svip">
-                <strong>SVIP会员</strong>
+                <strong>{{ planBadgeText }}</strong>
               </div>
               <div class="pc-stat-sub">
-                <span class="pc-stat-yuan">{{ planPeriodText || '有效期至 2026-07-17' }}</span>
+                <span class="pc-stat-yuan">{{ planPeriodText }}</span>
               </div>
               <button type="button" class="pc-btn pc-btn-outline pc-stat-btn" @click="handleQuickAction('vip')">查看权益</button>
             </article>
@@ -231,11 +219,11 @@
               <div class="pc-userinfo-list">
                 <div class="pc-info-row">
                   <span class="pc-info-label">用户名</span>
-                  <span class="pc-info-value">{{ overview.username || 'slfasd' }}</span>
+                  <span class="pc-info-value">{{ overview.username || '—' }}</span>
                 </div>
                 <div class="pc-info-row">
                   <span class="pc-info-label">会员等级</span>
-                  <span class="pc-info-value pc-info-value-gold">{{ planBadge === 'FREE' ? '普通会员' : 'SVIP（手动）' }}</span>
+                  <span class="pc-info-value pc-info-value-gold">{{ planBadgeText }}</span>
                 </div>
                 <div class="pc-info-row">
                   <span class="pc-info-label">用户类型</span>
@@ -243,27 +231,27 @@
                 </div>
                 <div class="pc-info-row">
                   <span class="pc-info-label">邮箱</span>
-                  <span class="pc-info-value">{{ maskedEmail || 's***@example.com' }}</span>
+                  <span class="pc-info-value">{{ maskedEmail || '未绑定邮箱' }}</span>
                 </div>
                 <div class="pc-info-row">
                   <span class="pc-info-label">邮箱验证</span>
-                  <span class="pc-info-value pc-info-value-green">已验证</span>
+                  <span :class="['pc-info-value', emailVerifiedTone]">{{ emailVerifiedText }}</span>
                 </div>
                 <div class="pc-info-row">
                   <span class="pc-info-label">手机号</span>
-                  <span class="pc-info-value">{{ maskedPhone || '188****8888' }}</span>
+                  <span class="pc-info-value">{{ maskedPhone || '未绑定手机号' }}</span>
                 </div>
                 <div class="pc-info-row">
                   <span class="pc-info-label">手机号绑定</span>
-                  <span class="pc-info-value pc-info-value-green">已绑定</span>
+                  <span :class="['pc-info-value', phoneVerifiedTone]">{{ phoneVerifiedText }}</span>
                 </div>
                 <div class="pc-info-row">
                   <span class="pc-info-label">注册时间</span>
-                  <span class="pc-info-value">{{ displayDateOnly(overview.createdTime) || '2024-05-18' }}</span>
+                  <span class="pc-info-value">{{ displayDateOnly(overview.createdTime) }}</span>
                 </div>
                 <div class="pc-info-row">
                   <span class="pc-info-label">最近登录</span>
-                  <span class="pc-info-value">{{ displayDateOnly(overview.lastLoginTime) || '2025-05-20' }}</span>
+                  <span class="pc-info-value">{{ displayDateOnly(overview.lastLoginTime) }}</span>
                 </div>
               </div>
             </section>
@@ -274,15 +262,15 @@
               <ul class="pc-recharge-features">
                 <li>
                   <span class="pc-recharge-feature-label">账户余额</span>
-                  <strong>¥{{ formatNumber((overview.tokenBalance || 12586) / 100) }}</strong>
+                  <strong>¥{{ formatNumber((overview.tokenBalance ?? 0) / 100) }}</strong>
                 </li>
                 <li>
                   <span class="pc-recharge-feature-label">本月消耗</span>
-                  <strong>{{ formatNumber(tokenStats.sevenDayConsume || 3256) }} Token</strong>
+                  <strong>{{ formatNumber(tokenStats.monthConsume ?? 0) }} Token</strong>
                 </li>
                 <li>
                   <span class="pc-recharge-feature-label">套餐状态</span>
-                  <strong class="pc-recharge-status-active">{{ planBadge === 'FREE' ? '免费版' : 'SVIP 已激活' }}</strong>
+                  <strong class="pc-recharge-status-active">{{ planStatusText }}</strong>
                 </li>
               </ul>
               <div class="pc-recharge-btns">
@@ -319,38 +307,12 @@
                   <rect x="6" y="14" width="44" height="12" rx="6" fill="url(#calTopG2)"/>
                   <rect x="14" y="6" width="4" height="10" rx="2" fill="#3b82f6"/>
                   <rect x="38" y="6" width="4" height="10" rx="2" fill="#3b82f6"/>
-                  <text x="28" y="42" text-anchor="middle" fill="#2563eb" font-size="18" font-weight="800" font-family="-apple-system, 'SF Pro Display', sans-serif">31</text>
+                  <text x="28" y="42" text-anchor="middle" fill="#2563eb" font-size="18" font-weight="800" font-family="-apple-system, 'SF Pro Display', sans-serif">{{ planExpireDayText }}</text>
                 </svg>
               </div>
-              <div class="pc-expire-days">362<span class="pc-expire-unit">天后到期</span></div>
-              <div class="pc-expire-date">有效期至 {{ displayDateOnly(overview.activePlan?.endTime) || '2026-07-17' }}</div>
+              <div class="pc-expire-days">{{ planExpireDisplay }}<span class="pc-expire-unit">{{ planExpireUnitText }}</span></div>
+              <div class="pc-expire-date">{{ planExpireDateText }}</div>
               <button type="button" class="pc-btn pc-btn-primary" @click="handleQuickAction('vip')">续费会员</button>
-            </section>
-
-            <section class="pc-card pc-invite-card">
-              <h3 class="pc-card-title">邀请好友，获取奖励</h3>
-              <div class="pc-gift-ico" aria-hidden="true">
-                <svg viewBox="0 0 56 56" width="48" height="48">
-                  <defs>
-                    <linearGradient id="giftBoxG2" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stop-color="#60a5fa"/>
-                      <stop offset="100%" stop-color="#2563eb"/>
-                    </linearGradient>
-                    <linearGradient id="ribbonG2" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stop-color="#fcd34d"/>
-                      <stop offset="100%" stop-color="#f59e0b"/>
-                    </linearGradient>
-                  </defs>
-                  <rect x="8" y="22" width="40" height="28" rx="3" fill="url(#giftBoxG2)"/>
-                  <rect x="6" y="16" width="44" height="10" rx="3" fill="#3b82f6"/>
-                  <rect x="26" y="16" width="4" height="34" fill="url(#ribbonG2)"/>
-                  <rect x="26" y="16" width="4" height="34" fill="url(#ribbonG2)" transform="rotate(0 28 33)"/>
-                  <path d="M22 16c-4-8-14-6-12 0 2 6 10 6 12 0z" fill="#fbbf24"/>
-                  <path d="M34 16c4-8 14-6 12 0-2 6-10 6-12 0z" fill="#fbbf24"/>
-                </svg>
-              </div>
-              <p class="pc-invite-text">每成功邀请 <strong>1</strong> 位好友<br/>可获得 <strong>100 Token</strong> 奖励</p>
-              <button type="button" class="pc-btn pc-btn-primary">立即邀请</button>
             </section>
           </div>
 
@@ -639,12 +601,12 @@
               </div>
               <div class="td-banner-userinfo">
                 <div class="td-banner-username-row">
-                  <span class="td-banner-username">{{ overview.nickname || overview.username || 'slfasd' }}</span>
-                  <span class="td-badge td-badge-svip">
+                  <span class="td-banner-username">{{ overview.nickname || overview.username || '—' }}</span>
+                  <span v-if="planBadge !== 'FREE' && planBadge !== 'UNKNOWN'" class="td-badge td-badge-svip">
                     <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
                       <path d="M8 1.5l1.6 3.8 4.2.4-3.2 2.8 1 4.1L8 10.5 4.4 12.6l1-4.1-3.2-2.8 4.2-.4L8 1.5z" fill="#f59e0b"/>
                     </svg>
-                    SVIP（手动）
+                    {{ planBadgeText }}
                   </span>
                   <span class="td-badge td-badge-connected">
                     <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
@@ -1117,6 +1079,7 @@ import {
   changeProfilePhone,
   getProfileOverview,
   getTokenLedger,
+  getTokenTrend,
   sendProfileCode
 } from '../api/profile.js'
 import { useAuthCapabilities } from '../utils/useAuthCapabilities.js'
@@ -1172,6 +1135,11 @@ const tokenLedger = reactive({ records: [], total: 0, current: 1, size: 8 })
 const tokenLoading = ref(false)
 const tokenLoadError = ref('')
 const tokenStats = reactive({ todayConsume: null, sevenDayConsume: null, monthConsume: null, tokenBalance: null })
+// Token 消耗趋势（按日聚合）与本月分类构成，由后端 /profile/token-trend 返回真实数据
+const tokenTrendSeries = ref([])
+const tokenTrendCategories = ref([])
+const tokenTrendDays = ref(7)
+const tokenTrendLoading = ref(false)
 const jumpPage = ref(1)
 const trendChartRef = ref(null)
 const tokenPieChartRef = ref(null)
@@ -1240,8 +1208,11 @@ const currentTabLabel = computed(() => {
 function handleHeaderRefresh() {
   if (activeTab.value === 'token') {
     loadTokenLedger(tokenLedger.current || 1)
+    loadTokenTrend(30)
   } else {
     loadOverview()
+    loadTokenLedger(1, 1)
+    loadTokenTrend(7)
   }
   loadMemberComparison()
 }
@@ -1249,6 +1220,76 @@ const planPeriodText = computed(() => {
   if (!overview.activePlan) return '套餐状态暂不可用'
   return overview.activePlan.endTime ? `有效期至 ${displayDateOnly(overview.activePlan.endTime)}` : '有效期以后台权益为准'
 })
+
+// 会员等级展示文案：FREE/UNKNOWN 显示"普通会员"，其他显示 planName
+const planBadgeText = computed(() => {
+  if (planBadge.value === 'FREE' || planBadge.value === 'UNKNOWN') return '普通会员'
+  return planName.value || '普通会员'
+})
+
+// 套餐状态展示文案（用于"充值与消费"卡片）
+const planStatusText = computed(() => {
+  if (planBadge.value === 'FREE' || planBadge.value === 'UNKNOWN') return '免费版'
+  return planName.value || '已激活'
+})
+
+// 邮箱/手机号验证状态展示
+const emailVerifiedText = computed(() => {
+  if (!overviewAvailable.value) return '—'
+  if (!maskedEmail.value) return '未绑定'
+  return overview.emailVerified ? '已验证' : '未验证'
+})
+const emailVerifiedTone = computed(() => {
+  if (!overviewAvailable.value || !maskedEmail.value) return ''
+  return overview.emailVerified ? 'pc-info-value-green' : 'pc-info-value-orange'
+})
+const phoneVerifiedText = computed(() => {
+  if (!overviewAvailable.value) return '—'
+  if (!maskedPhone.value) return '未绑定'
+  return overview.phoneVerified ? '已绑定' : '未验证'
+})
+const phoneVerifiedTone = computed(() => {
+  if (!overviewAvailable.value || !maskedPhone.value) return ''
+  return overview.phoneVerified ? 'pc-info-value-green' : 'pc-info-value-orange'
+})
+
+// 到期提醒板块：基于 overview.activePlan.endTime 计算剩余天数
+const planExpireInfo = computed(() => {
+  const endTime = overview.activePlan?.endTime
+  if (!endTime) {
+    // 手动 vip_level 或无订阅：无固定到期日
+    return { hasEnd: false, days: null, dateText: '有效期以后台权益为准' }
+  }
+  const end = new Date(endTime)
+  if (Number.isNaN(end.getTime())) {
+    return { hasEnd: false, days: null, dateText: '有效期以后台权益为准' }
+  }
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  end.setHours(0, 0, 0, 0)
+  const diffMs = end.getTime() - today.getTime()
+  const days = Math.round(diffMs / (24 * 60 * 60 * 1000))
+  return { hasEnd: true, days, dateText: `有效期至 ${displayDateOnly(endTime)}` }
+})
+const planExpireDayText = computed(() => {
+  const info = planExpireInfo.value
+  if (!info.hasEnd) return '∞'
+  if (info.days < 0) return '0'
+  return String(info.days)
+})
+const planExpireDisplay = computed(() => {
+  const info = planExpireInfo.value
+  if (!info.hasEnd) return '永久'
+  if (info.days < 0) return '已过期'
+  return String(info.days)
+})
+const planExpireUnitText = computed(() => {
+  const info = planExpireInfo.value
+  if (!info.hasEnd) return ''
+  if (info.days < 0) return ''
+  return '天后到期'
+})
+const planExpireDateText = computed(() => planExpireInfo.value.dateText)
 
 const securityLevel = computed(() => {
   if (!overviewAvailable.value) return { score: 0, label: '未知', tone: 'unknown', desc: '个人资料未加载，当前不能评估账号安全等级', percent: 0 }
@@ -1399,13 +1440,14 @@ function initCharts() {
   pieChart = echarts.init(pieChartRef.value)
   lineChart = echarts.init(lineChartRef.value)
 
-  const totalTokens = overview.tokenBalance?.value || 2856
-  const todayUsed = overview.todayTokens?.value || 816
-  const monthUsed = (overview.monthTokens?.value || 2040) - todayUsed
+  // 使用真实 tokenStats：余额、今日消耗、本月消耗（本月消耗剔除今日部分避免重复）
+  const balance = Number(tokenStats.tokenBalance ?? overview.tokenBalance ?? 0) || 0
+  const todayUsed = Number(tokenStats.todayConsume ?? 0) || 0
+  const monthUsed = Math.max(0, (Number(tokenStats.monthConsume ?? 0) || 0) - todayUsed)
   const pieData = [
-    { value: totalTokens, name: '剩余Token', itemStyle: { color: '#2563eb' } },
+    { value: balance, name: '剩余Token', itemStyle: { color: '#2563eb' } },
     { value: todayUsed, name: '今日消耗', itemStyle: { color: '#16a34a' } },
-    { value: Math.max(0, monthUsed), name: '本月消耗', itemStyle: { color: '#9333ea' } }
+    { value: monthUsed, name: '本月消耗', itemStyle: { color: '#9333ea' } }
   ]
 
   pieChart.setOption({
@@ -1453,13 +1495,11 @@ function initCharts() {
     }
   })
 
-  const dates = []
-  const today = new Date()
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(today)
-    d.setDate(d.getDate() - i)
-    dates.push(`${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`)
-  }
+  // 7 日趋势图：使用后端返回的真实每日消耗序列
+  const tData = trendData.value
+  const dates = trendDateLabels.value.length
+    ? trendDateLabels.value
+    : Array.from({ length: tokenTrendDays.value }, (_, i) => dateLabel(i))
 
   lineChart.setOption({
     tooltip: { trigger: 'axis' },
@@ -1480,7 +1520,7 @@ function initCharts() {
     },
     series: [{
       type: 'line',
-      data: [320, 450, 680, 520, 380, 410, 580],
+      data: tData,
       smooth: true,
       symbol: 'circle',
       symbolSize: 6,
@@ -1649,33 +1689,23 @@ const categoryColorMap = {
 const tokenPageSize = 8
 
 const pieLegendData = computed(() => {
-  const records = tokenLedger.records || []
-  const categoryMap = {}
-  records.forEach(r => {
-    const amount = Math.abs(Number(r.changeAmount) || 0)
-    if (amount <= 0) return
-    const cat = refTypeCategory(r.refType)
-    categoryMap[cat] = (categoryMap[cat] || 0) + amount
-  })
-  const monthTotal = tokenStats.monthConsume || 3256
-  const entries = Object.entries(categoryMap)
-  if (entries.length === 0) {
-    return [
-      { name: '自动发货', value: Math.round(monthTotal * 0.407), pct: 40.7, color: '#165DFF' },
-      { name: '工作流', value: Math.round(monthTotal * 0.286), pct: 28.6, color: '#36CFC9' },
-      { name: '发布商品', value: Math.round(monthTotal * 0.188), pct: 18.8, color: '#F7BA1E' },
-      { name: '在线消息', value: Math.round(monthTotal * 0.07), pct: 7.0, color: '#F77234' },
-      { name: '其他', value: Math.round(monthTotal * 0.049), pct: 4.9, color: '#86909C' }
-    ]
+  // 优先使用后端 /profile/token-trend 返回的本月分类汇总（真实数据）
+  const cats = tokenTrendCategories.value || []
+  if (cats.length) {
+    const totalVal = cats.reduce((s, c) => s + (Number(c.consume) || 0), 0) || 1
+    return cats.map(c => {
+      const value = Number(c.consume) || 0
+      const name = refTypeCategory(c.refType)
+      return {
+        name,
+        value,
+        pct: Math.round(value / totalVal * 1000) / 10,
+        color: categoryColorMap[name] || '#86909C'
+      }
+    })
   }
-  const totalVal = Object.values(categoryMap).reduce((a, b) => a + b, 0) || 1
-  const result = entries.map(([name, value]) => ({
-    name,
-    value: Math.round(value * monthTotal / totalVal),
-    pct: Math.round(value / totalVal * 1000) / 10,
-    color: categoryColorMap[name] || '#86909C'
-  })).sort((a, b) => b.value - a.value)
-  return result
+  // 后端数据未就绪时返回空数组，让饼图显示"暂无数据"
+  return []
 })
 
 const rankList = computed(() => {
@@ -1688,19 +1718,22 @@ const rankList = computed(() => {
   }))
 })
 
+// 趋势图数据：直接使用后端返回的每日消耗序列（真实数据），不再本地生成
 const trendData = computed(() => {
-  const base = tokenStats.sevenDayConsume ? tokenStats.sevenDayConsume / 7 : 326
-  const month = tokenStats.monthConsume || 3256
-  const arr = []
-  for (let i = 0; i < 30; i++) {
-    const wave = Math.sin(i * 0.5) * 0.3 + Math.sin(i * 0.2) * 0.2
-    const noise = (Math.sin(i * 1.3) * 0.5 + 0.5) * 0.4
-    const val = Math.round(base * (1 + wave + noise))
-    arr.push(Math.max(50, val))
-  }
-  const sum = arr.reduce((a, b) => a + b, 0)
-  const scale = month / sum * 0.85
-  return arr.map(v => Math.round(v * scale))
+  const series = tokenTrendSeries.value || []
+  return series.map(p => Number(p.consume) || 0)
+})
+
+// 趋势图日期标签：使用后端返回的真实日期
+const trendDateLabels = computed(() => {
+  const series = tokenTrendSeries.value || []
+  return series.map(p => {
+    const dateStr = p.date || ''
+    // yyyy-MM-dd → MM-dd
+    const parts = dateStr.split('-')
+    if (parts.length === 3) return `${parts[1]}-${parts[2]}`
+    return dateStr
+  })
 })
 
 const avgDaily = computed(() => {
@@ -1724,9 +1757,12 @@ const lowDay = computed(() => {
   return { val: min, idx }
 })
 
+// 兼容历史调用：按 tokenTrendDays 推导日期标签
 const dateLabel = offset => {
+  const labels = trendDateLabels.value
+  if (labels.length && offset >= 0 && offset < labels.length) return labels[offset]
   const d = new Date()
-  d.setDate(d.getDate() - (29 - offset))
+  d.setDate(d.getDate() - ((tokenTrendDays.value - 1) - offset))
   return `${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`
 }
 
@@ -1743,7 +1779,9 @@ const tokenYuanValue = computed(() => {
 function updateTokenChartsData() {
   if (!trendChartInstance || !tokenPieChartInstance) return
   const tData = trendData.value
-  const dates = Array.from({ length: 30 }, (_, i) => dateLabel(i))
+  const dates = trendDateLabels.value.length
+    ? trendDateLabels.value
+    : Array.from({ length: tokenTrendDays.value }, (_, i) => dateLabel(i))
   trendChartInstance.setOption({
     xAxis: { data: dates },
     series: [{ data: tData }]
@@ -1753,6 +1791,26 @@ function updateTokenChartsData() {
       data: pieLegendData.value.map(d => ({ value: d.value, name: d.name, itemStyle: { color: d.color } }))
     }]
   })
+}
+
+// 加载后端 /profile/token-trend 返回的真实每日消耗序列与本月分类构成
+async function loadTokenTrend(days = 7) {
+  tokenTrendLoading.value = true
+  try {
+    const res = await getTokenTrend({ days })
+    const data = res?.data
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      throw new Error('Token 趋势响应格式异常')
+    }
+    tokenTrendSeries.value = Array.isArray(data.series) ? data.series : []
+    tokenTrendCategories.value = Array.isArray(data.categories) ? data.categories : []
+    tokenTrendDays.value = Number(data.days) || days
+  } catch (e) {
+    tokenTrendSeries.value = []
+    tokenTrendCategories.value = []
+  } finally {
+    tokenTrendLoading.value = false
+  }
 }
 
 async function loadTokenLedger(page = 1) {
@@ -2031,6 +2089,9 @@ async function handleTokenPaid() {
   paymentVisible.value = false
   loadTokenPlans()
   const refreshed = await loadOverview()
+  // 支付成功后刷新 Token 统计与趋势，确保概览/Token 页数据一致
+  loadTokenLedger(activeTab.value === 'token' ? (tokenLedger.current || 1) : 1, activeTab.value === 'token' ? tokenLedger.size : 1)
+  loadTokenTrend(activeTab.value === 'token' ? 30 : 7)
   showNotice(refreshed ? '支付成功，Token 余额已刷新' : '支付成功，但余额刷新失败，请稍后重试', refreshed ? 'success' : 'warn')
 }
 
@@ -2055,12 +2116,14 @@ async function initOverviewCharts() {
 
 function initTokenCharts() {
   if (!trendChartRef.value || !tokenPieChartRef.value) return
-  
+
   if (trendChartInstance) { trendChartInstance.dispose() }
   if (tokenPieChartInstance) { tokenPieChartInstance.dispose() }
 
   const tData = trendData.value
-  const dates = Array.from({ length: 30 }, (_, i) => dateLabel(i))
+  const dates = trendDateLabels.value.length
+    ? trendDateLabels.value
+    : Array.from({ length: tokenTrendDays.value }, (_, i) => dateLabel(i))
   const maxVal = Math.max(...tData, 100)
   const yMax = Math.ceil(maxVal / 200) * 200 + 200
 
@@ -2135,6 +2198,15 @@ onMounted(() => {
   loadOverview().then(() => {
     initOverviewCharts()
   })
+  // 概览页需要 tokenStats（余额/今日/本月）与 7 日趋势数据来渲染统计卡片与图表
+  // loadTokenLedger(1, 1) 仅用于获取 stats（取 1 条记录最小化开销）
+  loadTokenLedger(1, 1).then(() => {
+    if (activeTab.value === 'overview') initOverviewCharts()
+  })
+  // 加载 7 日趋势序列与本月分类构成（真实数据）
+  loadTokenTrend(7).then(() => {
+    if (activeTab.value === 'overview') initOverviewCharts()
+  })
   loadMemberComparison()
   loadTokenPlans()
 })
@@ -2149,12 +2221,18 @@ onBeforeUnmount(() => {
 watch(activeTab, async (tab) => {
   if (tab === 'token') {
     loadTokenLedger()
+    // Token 页使用 30 天趋势数据
+    await loadTokenTrend(30)
     await nextTick()
     setTimeout(() => initTokenCharts(), 100)
   }
   if (tab === 'overview') {
+    // 概览页使用 7 天趋势数据；若已被 token 页切回，重新加载 7 天
+    if (tokenTrendDays.value !== 7) {
+      await loadTokenTrend(7)
+    }
     initOverviewCharts()
-  } else {
+  } else if (tab !== 'token') {
     window.removeEventListener('resize', handleResize)
     disposeCharts()
   }
@@ -4836,6 +4914,12 @@ watch(activeTab, async (tab) => {
   border: 1px solid #dcfce7;
 }
 
+.pc-tag-gray {
+  background: #f8fafc;
+  color: #94a3b8;
+  border: 1px solid #e2e8f0;
+}
+
 .pc-manage-btn {
   width: fit-content;
   padding: 8px 20px;
@@ -5164,6 +5248,10 @@ watch(activeTab, async (tab) => {
   color: #16a34a;
 }
 
+.pc-info-value-orange {
+  color: #ea580c;
+}
+
 .pc-recharge-card {
   display: flex;
   flex-direction: column;
@@ -5220,7 +5308,7 @@ watch(activeTab, async (tab) => {
 
 .pc-analytics-row {
   display: grid;
-  grid-template-columns: 1.2fr 1.5fr 1fr 1fr;
+  grid-template-columns: 1.2fr 1.5fr 1fr;
   gap: 14px;
 }
 

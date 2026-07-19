@@ -12,7 +12,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.sql.Date;
 import java.security.SecureRandom;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -284,6 +287,87 @@ public class UserProfileService {
         stats.put("monthConsume", monthConsume);
 
         return stats;
+    }
+
+    /**
+     * 查询当前用户的 Token 消耗趋势（按日聚合）与本月分类构成。
+     * 仅统计 change_amount < 0 的扣费记录（取绝对值）。
+     * - series：最近 days 天的每日消耗序列，缺失日期补 0，按日期升序排列。
+     * - categories：本月各 ref_type 的消耗汇总，按消耗降序排列。
+     */
+    public Map<String, Object> tokenTrend(int days) {
+        Long userId = UserContext.userId();
+        int safeDays = Math.max(1, Math.min(days, 90));
+
+        Map<LocalDate, Long> consumeMap = new LinkedHashMap<>();
+        try {
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                    "SELECT DATE(created_time) AS d, " +
+                            "COALESCE(SUM(CASE WHEN change_amount < 0 THEN -change_amount ELSE 0 END), 0) AS c " +
+                            "FROM token_balance_ledger WHERE user_id=? AND change_amount < 0 " +
+                            "AND created_time >= DATE_SUB(CURDATE(), INTERVAL ? DAY) " +
+                            "GROUP BY DATE(created_time)",
+                    userId, safeDays - 1);
+            for (Map<String, Object> row : rows) {
+                Object d = row.get("d");
+                Object c = row.get("c");
+                if (d == null || c == null) continue;
+                LocalDate date;
+                if (d instanceof java.util.Date) {
+                    if (d instanceof Date) {
+                        date = ((Date) d).toLocalDate();
+                    } else {
+                        date = ((java.util.Date) d).toInstant().atZone(ZoneId.systemDefault()).toLocalDate();
+                    }
+                } else {
+                    date = LocalDate.parse(String.valueOf(d));
+                }
+                long amount = c instanceof Number ? ((Number) c).longValue() : 0L;
+                consumeMap.put(date, amount);
+            }
+        } catch (DataAccessException e) {
+            throw unavailable("Token 趋势", e);
+        }
+
+        List<Map<String, Object>> series = new ArrayList<>();
+        LocalDate today = LocalDate.now();
+        for (int i = safeDays - 1; i >= 0; i--) {
+            LocalDate date = today.minusDays(i);
+            long consume = consumeMap.getOrDefault(date, 0L);
+            Map<String, Object> point = new LinkedHashMap<>();
+            point.put("date", date.toString());
+            point.put("consume", consume);
+            series.add(point);
+        }
+
+        List<Map<String, Object>> categories = new ArrayList<>();
+        try {
+            List<Map<String, Object>> catRows = jdbcTemplate.queryForList(
+                    "SELECT ref_type AS refType, " +
+                            "COALESCE(SUM(-change_amount), 0) AS consume " +
+                            "FROM token_balance_ledger WHERE user_id=? AND change_amount < 0 " +
+                            "AND created_time >= DATE_FORMAT(CURDATE(), '%Y-%m-01') " +
+                            "GROUP BY ref_type ORDER BY consume DESC",
+                    userId);
+            for (Map<String, Object> row : catRows) {
+                Object refType = row.get("refType");
+                Object consume = row.get("consume");
+                long amount = consume instanceof Number ? ((Number) consume).longValue() : 0L;
+                if (amount <= 0) continue;
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("refType", refType == null ? "" : String.valueOf(refType));
+                item.put("consume", amount);
+                categories.add(item);
+            }
+        } catch (DataAccessException e) {
+            throw unavailable("Token 分类构成", e);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("days", safeDays);
+        result.put("series", series);
+        result.put("categories", categories);
+        return result;
     }
 
     private Map<String, Object> queryActivePlan(Long userId) {

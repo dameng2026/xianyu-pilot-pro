@@ -103,6 +103,18 @@
         <ElTableColumn prop="paymentMethod" label="方式" width="90" />
         <ElTableColumn label="状态" width="100"><template #default="{ row }"><ElTag :type="row.status === 1 ? 'success' : row.status === 0 ? 'warning' : 'info'">{{ row.statusText }}</ElTag></template></ElTableColumn>
         <ElTableColumn prop="createdTime" label="创建时间" min-width="160" />
+        <ElTableColumn label="操作" width="140" fixed="right">
+          <template #default="{ row }">
+            <ElButton
+              v-if="row.status === 0"
+              link
+              type="warning"
+              :loading="!!orderForcePaying[row.orderNo]"
+              @click="forceMarkPaid(row)"
+            >强制标记已支付</ElButton>
+            <span v-else class="empty-state" style="padding: 0; font-size: 12px;">-</span>
+          </template>
+        </ElTableColumn>
       </ElTable>
     </ElCard>
 
@@ -144,6 +156,7 @@
     fetchPaymentConfigs,
     fetchPaymentOrders,
     fetchTokenRechargePlans,
+    forceMarkPaidOrder,
     savePaymentConfig,
     saveTokenRechargePlan
   } from '@/api/payment'
@@ -328,6 +341,29 @@
       await loadTokenPlans()
     } catch (error: any) {
       if (error !== 'cancel' && error !== 'close') ElMessage.error(error?.message || '充值套餐删除失败')
+    }
+  }
+
+  const orderForcePaying = ref<Record<string, boolean>>({})
+  async function forceMarkPaid(row: any) {
+    if (!row?.orderNo) return
+    try {
+      await ElMessageBox.confirm(
+        `确认将订单 ${row.orderNo} 强制标记为已支付？\n\n此操作通常用于：\n• 本地开发环境易支付回调无法到达本机\n• 生产环境回调丢失的订单补救\n\n标记后将自动触发权益发放（如商城货源入库、Token 充值等）。`,
+        '强制标记已支付',
+        { type: 'warning', confirmButtonText: '确认标记', cancelButtonText: '取消' }
+      )
+    } catch {
+      return
+    }
+    orderForcePaying.value[row.orderNo] = true
+    try {
+      await forceMarkPaidOrder(row.orderNo, '管理员手动标记')
+      await loadOrders()
+    } catch (error: any) {
+      ElMessage.error(error?.message || '强制标记已支付失败')
+    } finally {
+      orderForcePaying.value[row.orderNo] = false
     }
   }
 

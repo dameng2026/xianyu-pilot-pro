@@ -46,6 +46,19 @@ export function getGoodsDeliveryConfig(goodsId) {
   return request({ url: `/auto-delivery/goods/${goodsId}/config`, method: 'get' })
 }
 
+// 批量获取多个商品的发货配置。返回 { "<goodsId>": {...}, ... }，未配置的商品不在 Map 中。
+// 用于自动发货页面首屏一次性加载，替代逐个调用 getGoodsDeliveryConfig 造成 3s+ 等待。
+export function batchGetGoodsDeliveryConfigs(goodsIds) {
+  const ids = (Array.isArray(goodsIds) ? goodsIds : [])
+    .map(id => Number(id))
+    .filter(id => Number.isFinite(id) && id > 0)
+  return request({
+    url: '/auto-delivery/goods/configs/batch',
+    method: 'post',
+    data: { goodsIds: ids }
+  })
+}
+
 export function saveGoodsDeliveryConfig(goodsId, data) {
   return request({ url: `/auto-delivery/goods/${goodsId}/config`, method: 'put', data })
 }
@@ -153,6 +166,11 @@ export function getDeliverySources(params = {}) {
 
 export function getDeliverySourceDetail(id) {
   return request({ url: `/auto-delivery/sources/${id}`, method: 'get' })
+}
+
+// 根据商城货源商品 ID 查询当前用户会员库中对应的货源记录（用于上架后自动绑定）
+export function getDeliverySourceByMallProduct(mallProductId) {
+  return request({ url: `/auto-delivery/sources/by-mall-product/${mallProductId}`, method: 'get' })
 }
 
 export function createDeliverySource(data) {

@@ -63,61 +63,81 @@ public class FeatureSwitchService {
 
     private static List<Map<String, Object>> buildDefaultFeatures() {
         List<Map<String, Object>> list = new ArrayList<>();
-        // 概览
-        list.add(feature("dashboard", "工作台", "overview"));
-        list.add(feature("data", "数据看板", "overview"));
-        // 账号与商品
-        list.add(feature("accounts", "闲鱼账号", "account"));
-        list.add(feature("connections", "连接状态", "account"));
-        list.add(feature("products", "商品管理", "account"));
-        list.add(feature("orders", "订单管理", "account"));
-        list.add(feature("product-publish", "商品发布", "account"));
-        // 消息与商机
-        list.add(feature("messages", "消息中心", "message"));
-        list.add(feature("message-center", "会话收件箱", "message"));
-        list.add(feature("opportunities", "商机发掘", "message"));
-        // 自动化
-        list.add(feature("workflow", "工作流", "automation"));
-        list.add(feature("workflow-tasks", "工作流任务", "automation"));
-        list.add(feature("card-warehouse", "卡密仓库", "automation"));
-        list.add(feature("auto-delivery", "自动发货", "automation"));
-        list.add(feature("delivery-source-library", "货源库", "automation"));
-        list.add(feature("delivery-statement", "发货声明", "automation"));
-        list.add(feature("delivery-mall", "货源商城", "automation"));
-        list.add(feature("delivery-templates", "发货模板", "automation"));
-        list.add(feature("delivery-records", "发货记录", "automation"));
-        list.add(feature("scheduled-tasks", "定时任务", "automation"));
-        list.add(feature("auto-reply", "自动回复", "automation"));
-        // 系统设置
-        list.add(feature("logs", "系统日志", "system"));
-        list.add(feature("slider-solve-records", "滑块记录", "system"));
-        list.add(feature("feedback", "意见反馈", "system"));
-        list.add(feature("settings-notify", "通知设置", "system"));
-        list.add(feature("user-manual", "使用手册", "system"));
-        list.add(feature("profile", "个人中心", "system"));
-        // 会员
-        list.add(feature("vip", "会员中心", "hidden"));
-        list.add(feature("member-upgrade", "升级会员", "hidden"));
+        // 概览（所有等级可用）
+        list.add(feature("dashboard", "工作台", "overview", true, true, true));
+        list.add(feature("data", "数据看板", "overview", true, true, true));
+        // 账号与商品（所有等级可用）
+        list.add(feature("accounts", "闲鱼账号", "account", true, true, true));
+        list.add(feature("connections", "连接状态", "account", true, true, true));
+        list.add(feature("products", "商品管理", "account", true, true, true));
+        list.add(feature("orders", "订单管理", "account", true, true, true));
+        list.add(feature("product-publish", "商品发布", "account", true, true, true));
+        // 消息与商机：商机发掘仅 VIP 及以上可用
+        list.add(feature("messages", "消息中心", "message", true, true, true));
+        list.add(feature("message-center", "会话收件箱", "message", true, true, true));
+        list.add(feature("opportunities", "商机发掘", "message", false, true, true));
+        // 自动化：
+        //   - 自动发货链路（含货源库、发货声明、发货模板、发货记录）所有等级可用
+        //   - 货源商城：VIP 及以上可用
+        //   - 工作流、工作流任务、商品草稿箱、图片生成记录：SVIP 专属
+        //   - 卡密仓库、定时任务：所有等级均关闭（暂未开放）
+        list.add(feature("workflow", "工作流", "automation", false, false, true));
+        list.add(feature("workflow-tasks", "工作流任务", "automation", false, false, true));
+        list.add(feature("workflow-drafts", "商品草稿箱", "automation", false, false, true));
+        list.add(feature("workflow-image-records", "图片生成记录", "automation", false, false, true));
+        list.add(feature("card-warehouse", "卡密仓库", "automation", false, false, false));
+        list.add(feature("auto-delivery", "自动发货", "automation", true, true, true));
+        list.add(feature("delivery-source-library", "货源库", "automation", true, true, true));
+        list.add(feature("delivery-statement", "发货声明", "automation", true, true, true));
+        list.add(feature("delivery-mall", "货源商城", "automation", false, true, true));
+        list.add(feature("delivery-templates", "发货模板", "automation", true, true, true));
+        list.add(feature("delivery-records", "发货记录", "automation", true, true, true));
+        list.add(feature("scheduled-tasks", "定时任务", "automation", false, false, false));
+        list.add(feature("auto-reply", "自动回复", "automation", true, true, true));
+        // 系统设置：滑块求解记录仅 VIP 及以上可用
+        list.add(feature("logs", "操作日志", "system", true, true, true));
+        list.add(feature("slider-solve-records", "滑块求解", "system", false, true, true));
+        list.add(feature("feedback", "反馈建议", "system", true, true, true));
+        list.add(feature("settings-notify", "通知设置", "system", true, true, true));
+        list.add(feature("user-manual", "使用手册", "system", true, true, true));
+        list.add(feature("profile", "系统设置", "system", true, true, true));
+        // 会员（所有等级可见，用于查看权益与升级入口）
+        list.add(feature("vip", "会员中心", "hidden", true, true, true));
+        list.add(feature("member-upgrade", "升级会员", "hidden", true, true, true));
         return Collections.unmodifiableList(list);
     }
 
     private static Map<String, Object> feature(String key, String title, String group) {
+        return feature(key, title, group, true, true, true);
+    }
+
+    private static Map<String, Object> feature(String key, String title, String group,
+                                               boolean normal, boolean vip, boolean svp) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("key", key);
         m.put("title", title);
         m.put("group", group);
-        m.put("normal", true);
-        m.put("vip", true);
-        m.put("svp", true);
+        m.put("normal", normal);
+        m.put("vip", vip);
+        m.put("svp", svp);
         return m;
     }
 
     /**
      * 管理端：列出所有功能开关（合并默认值）。
      * 返回每个功能含 key/title/group/normal/vip/svp 五个字段。
+     *
+     * 兜底策略：即使读取存储配置出现任何未预期异常，也降级为默认配置返回，
+     * 避免用户端「功能对比」页面因后端 5xx 错误而显示加载失败。
      */
     public List<Map<String, Object>> listSwitches() {
-        Map<String, Map<String, Object>> stored = loadStoredFeatures();
+        Map<String, Map<String, Object>> stored;
+        try {
+            stored = loadStoredFeatures();
+        } catch (Exception e) {
+            log.warn("listSwitches 读取存储配置失败，降级为默认值, errorType={}", e.getClass().getSimpleName());
+            stored = Collections.emptyMap();
+        }
         List<Map<String, Object>> result = new ArrayList<>();
         for (Map<String, Object> def : DEFAULT_FEATURES) {
             String key = String.valueOf(def.get("key"));

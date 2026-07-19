@@ -41,8 +41,10 @@ public class UserJwtAuthFilter extends OncePerRequestFilter {
                 || uri.equals("/api/carousel/list") || uri.equals("/api/announcement/list")
                 || uri.equals("/api/ops/liveness") || uri.equals("/api/ops/readiness") || uri.equals("/api/ops/prometheus")
                 || uri.startsWith("/api/proxy-image/")
+                || uri.startsWith("/api/payment/redirect/")
                 || uri.startsWith("/api/sync/")) {
             // /api/sync/* 由 SyncAuthFilter 独立鉴权（数据同步接收端，后端到后端调用，无用户 JWT）
+            // /api/payment/redirect/* 是易支付扫码跳转端点，用户在微信扫码后新浏览器窗口打开，无 JWT
             return true;
         }
         return false;

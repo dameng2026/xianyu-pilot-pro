@@ -383,6 +383,7 @@ import { getGoods } from '../api/goods.js'
 import { getCards } from '../api/cards.js'
 import {
   batchDeleteDeliveryRules,
+  batchGetGoodsDeliveryConfigs,
   batchSetDeliveryRules,
   getDeliverySources,
   getDeliveryStats,
@@ -666,6 +667,37 @@ async function loadGoods() {
     const res = await getGoods(params)
     current.value = 1
     const list = recordsOfOrThrow(res?.data, '商品列表响应格式异常')
+
+    // 优先用批量接口一次拉取所有商品配置，把 200 个请求压成 1 个；失败时降级到逐个请求。
+    let configsById = null
+    try {
+      const batchRes = await batchGetGoodsDeliveryConfigs(list.map(goods => goods.id))
+      const data = batchRes?.data
+      if (data && typeof data === 'object' && !Array.isArray(data)) {
+        configsById = data
+      }
+    } catch (batchError) {
+      // 批量接口不可用时降级到逐个请求（保持原有兼容性）
+      console.warn('[AutoDelivery] 批量读取配置失败，降级到逐个请求', batchError?.message || batchError)
+    }
+
+    if (configsById) {
+      allGoods.value = list.map(goods => {
+        const config = configsById[String(goods.id)]
+        if (!config || typeof config !== 'object' || Array.isArray(config)) {
+          return { ...goods, _config: {} }
+        }
+        const validationError = validateGoodsConfig(config)
+        if (validationError) {
+          return { ...goods, _config: {}, _configUnavailable: true, _configError: validationError }
+        }
+        return { ...goods, _config: config }
+      })
+      goodsAvailable.value = true
+      return
+    }
+
+    // Fallback：逐个请求（仅在批量接口不可用时触发）
     const withConfig = await Promise.all(list.map(async goods => {
       try {
         const configRes = await getGoodsDeliveryConfig(goods.id)
@@ -673,16 +705,8 @@ async function loadGoods() {
         if (!config || typeof config !== 'object' || Array.isArray(config)) {
           throw new Error('商品发货配置响应格式异常')
         }
-        for (const timing of ['payDelivery', 'confirmDelivery', 'reviewDelivery']) {
-          const timingConfig = config[timing]
-          if (timingConfig == null) continue
-          const enabled = timingConfig?.enabled
-          if (!timingConfig || typeof timingConfig !== 'object' || Array.isArray(timingConfig)
-            || ![true, false, 0, 1].includes(enabled)
-            || !['text', 'card', 'custom', 'api'].includes(timingConfig.mode)) {
-            throw new Error(`${timing} 发货配置响应格式异常`)
-          }
-        }
+        const validationError = validateGoodsConfig(config)
+        if (validationError) throw new Error(validationError)
         return { ...goods, _config: config }
       } catch (configError) {
         return { ...goods, _config: {}, _configUnavailable: true, _configError: configError?.message || '配置读取失败' }
@@ -694,6 +718,20 @@ async function loadGoods() {
     allGoods.value = []
     error.value = e.message || '商品加载失败'
   }
+}
+
+function validateGoodsConfig(config) {
+  for (const timing of ['payDelivery', 'confirmDelivery', 'reviewDelivery']) {
+    const timingConfig = config[timing]
+    if (timingConfig == null) continue
+    const enabled = timingConfig?.enabled
+    if (!timingConfig || typeof timingConfig !== 'object' || Array.isArray(timingConfig)
+      || ![true, false, 0, 1].includes(enabled)
+      || !['text', 'card', 'custom', 'api'].includes(timingConfig.mode)) {
+      return `${timing} 发货配置响应格式异常`
+    }
+  }
+  return null
 }
 
 function applyFilter() {

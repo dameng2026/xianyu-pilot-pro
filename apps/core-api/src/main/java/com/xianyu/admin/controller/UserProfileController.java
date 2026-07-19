@@ -37,6 +37,11 @@ public class UserProfileController {
         return Result.ok(userProfileService.tokenLedger(current, size));
     }
 
+    @GetMapping("/token-trend")
+    public Result<Map<String, Object>> tokenTrend(@RequestParam(defaultValue = "7") int days) {
+        return Result.ok(userProfileService.tokenTrend(days));
+    }
+
     @PostMapping("/change-password")
     public Result<Void> changePassword(@RequestBody Map<String, String> body, HttpServletRequest request) {
         userProfileService.changePassword(body.get("oldPassword"), body.get("newPassword"), clientIp(request), request.getHeader("User-Agent"));

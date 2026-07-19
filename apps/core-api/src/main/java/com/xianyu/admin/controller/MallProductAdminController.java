@@ -94,6 +94,23 @@ public class MallProductAdminController {
 
     // ==================== 分类 ====================
 
+    /**
+     * 获取闲鱼商品分类树（供后台货源商城新增商品时手动选择分类使用）。
+     * 返回与前台发布商品页面一致的分类树结构，由 automation-service 提供。
+     */
+    @GetMapping("/category-tree")
+    public Result<Object> getCategoryTree() {
+        requireAdmin();
+        try {
+            return Result.ok(mallProductService.getCategoryTree());
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("获取分类树失败, errorType={}", e.getClass().getSimpleName());
+            throw new BizException(503, "分类树暂时无法读取，请稍后重试");
+        }
+    }
+
     @PostMapping("/categories/refresh")
     public Result<Map<String, Object>> refreshCategories() {
         requireAdmin();

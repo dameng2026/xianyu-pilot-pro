@@ -14,6 +14,8 @@ import jakarta.validation.Valid;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
+import java.util.HashMap;
 import java.util.Map;
 
 @RestController
@@ -56,6 +58,19 @@ public class XianyuTradeOrderController {
     public Result<XianyuTradeOrderVO> detail(@PathVariable Long id) {
         Long tenantId = TenantContext.getCurrentTenantId();
         XianyuTradeOrderVO result = orderService.detail(tenantId, id);
+        return Result.ok(result);
+    }
+
+    /**
+     * 查询今日订单金额（仅统计 order_status IN (1,2,3,4) 且 deleted=0 的订单 total_amount 之和）。
+     * accountId 为空时统计当前租户全部账号。
+     */
+    @GetMapping("/today-amount")
+    public Result<Map<String, Object>> todayAmount(@RequestParam(required = false) Long accountId) {
+        Long tenantId = TenantContext.getCurrentTenantId();
+        BigDecimal amount = orderService.todayAmount(tenantId, accountId);
+        Map<String, Object> result = new HashMap<>();
+        result.put("todayAmount", amount == null ? BigDecimal.ZERO : amount);
         return Result.ok(result);
     }
 

@@ -209,6 +209,71 @@
             </div>
           </div>
         </ElFormItem>
+        <ElFormItem label="商品分类" prop="category">
+          <div class="category-selector">
+            <div class="category-tools">
+              <ElInput
+                v-model="categoryKeyword"
+                size="small"
+                placeholder="搜索分类，如 手机 / 图书 / 家居"
+                clearable
+                style="width: 240px"
+              />
+              <ElButton v-if="selectedCategoryPath" size="small" type="warning" plain @click="resetCategorySelection">清除选择</ElButton>
+            </div>
+            <div v-if="categoryKeyword" class="category-search-results">
+              <div
+                v-for="item in categorySearchResults"
+                :key="item.pathIds.join('-')"
+                class="category-result"
+                @click="selectCategoryByPath(item)"
+              >
+                <strong>{{ item.name }}</strong>
+                <span>{{ item.path }}</span>
+              </div>
+              <div v-if="!categorySearchResults.length" class="category-result muted">未找到匹配分类</div>
+            </div>
+            <div class="cascader-levels">
+              <div class="cascader-col">
+                <div v-if="categoriesLoading" class="cascader-item muted">分类加载中...</div>
+                <div v-else-if="categoryLoadError" class="cascader-item muted">分类加载失败，请关闭弹窗重试</div>
+                <div v-else-if="!filteredCategories.length" class="cascader-item muted">暂无分类</div>
+                <div
+                  v-for="cat in filteredCategories"
+                  :key="cat.id"
+                  :class="['cascader-item', { active: level1Id === cat.id }]"
+                  @click="selectLevel1(cat)"
+                >
+                  {{ nodeLabel(cat) }}
+                </div>
+              </div>
+              <div v-if="level2List.length" class="cascader-col">
+                <div
+                  v-for="cat in level2List"
+                  :key="cat.id"
+                  :class="['cascader-item', { active: level2Id === cat.id }]"
+                  @click="selectLevel2(cat)"
+                >
+                  {{ nodeLabel(cat) }}
+                </div>
+              </div>
+              <div v-if="level3List.length" class="cascader-col">
+                <div
+                  v-for="cat in level3List"
+                  :key="cat.id"
+                  :class="['cascader-item', { active: level3Id === cat.id }]"
+                  @click="selectLevel3(cat)"
+                >
+                  {{ nodeLabel(cat) }}
+                </div>
+              </div>
+            </div>
+            <p class="form-tip">
+              已选分类：{{ selectedCategoryPath || '请选择分类（仅手动选择，不会根据封面图自动判定）' }}
+            </p>
+            <p class="form-tip">前台用户上架此商品时，将直接使用此处配置的分类，无需再次选择</p>
+          </div>
+        </ElFormItem>
         <ElFormItem v-if="form.type === 'card'" label="卡密批量导入" prop="cards">
           <div class="cards-import-area">
             <ElInput
@@ -286,8 +351,10 @@ import {
   refreshCategories,
   uploadMallImage,
   uploadMallImageFromUrl,
+  getMallCategoryTree,
   type MallProduct,
   type MallProductType,
+  type MallCategoryNode,
   type CardKeyItem
 } from '@/api/mall'
 
@@ -336,6 +403,7 @@ const defaultForm = () => ({
   deliveryContent: '',
   price: 0,
   coverUrl: '',
+  category: '',
   stock: 0,
   cards: '',
   enabled: true
@@ -348,6 +416,156 @@ const rules: FormRules = {
   title: [{ required: true, message: '请输入商品标题', trigger: 'blur' }],
   content: [{ required: true, message: '请输入商品正文', trigger: 'blur' }],
   price: [{ required: true, message: '请输入价格', trigger: 'blur' }]
+}
+
+// ---- 商品分类级联（手动选择，与前台发布商品使用同一分类源） ----
+const categoryTree = ref<MallCategoryNode[]>([])
+const categoriesLoading = ref(false)
+const categoryLoadError = ref('')
+const level1Id = ref<string | number | null>(null)
+const level2Id = ref<string | number | null>(null)
+const level3Id = ref<string | number | null>(null)
+const level2List = ref<MallCategoryNode[]>([])
+const level3List = ref<MallCategoryNode[]>([])
+const categoryKeyword = ref('')
+const selectedCategoryName = ref('')
+const selectedCategoryPath = ref('')
+
+function resetCategorySelection() {
+  level1Id.value = null
+  level2Id.value = null
+  level3Id.value = null
+  level2List.value = []
+  level3List.value = []
+  categoryKeyword.value = ''
+  selectedCategoryName.value = ''
+  selectedCategoryPath.value = ''
+}
+
+function nodeLabel(node?: MallCategoryNode): string {
+  return node ? (node.label || node.title || String(node.id || '')) : ''
+}
+
+function selectLevel1(cat: MallCategoryNode) {
+  level1Id.value = cat.id
+  level2Id.value = null
+  level3Id.value = null
+  level2List.value = cat.children || []
+  level3List.value = []
+  selectedCategoryName.value = nodeLabel(cat)
+  selectedCategoryPath.value = nodeLabel(cat)
+}
+
+function selectLevel2(cat: MallCategoryNode) {
+  level2Id.value = cat.id
+  level3Id.value = null
+  level3List.value = cat.children || []
+  const l1 = categoryTree.value.find(c => c.id === level1Id.value)
+  selectedCategoryName.value = nodeLabel(cat)
+  selectedCategoryPath.value = `${nodeLabel(l1)} ＞ ${nodeLabel(cat)}`
+}
+
+function selectLevel3(cat: MallCategoryNode) {
+  level3Id.value = cat.id
+  const l1 = categoryTree.value.find(c => c.id === level1Id.value)
+  const l2 = level2List.value.find(c => c.id === level2Id.value)
+  selectedCategoryName.value = nodeLabel(cat)
+  selectedCategoryPath.value = `${nodeLabel(l1)} ＞ ${nodeLabel(l2)} ＞ ${nodeLabel(cat)}`
+}
+
+const filteredCategories = computed(() => {
+  if (!categoryKeyword.value.trim()) return categoryTree.value
+  const kw = categoryKeyword.value.trim().toLowerCase()
+  return categoryTree.value.filter(cat =>
+    nodeLabel(cat).toLowerCase().includes(kw)
+    || (cat.children || []).some(child => nodeLabel(child).toLowerCase().includes(kw))
+  )
+})
+
+const categorySearchResults = computed(() => {
+  const kw = categoryKeyword.value.trim().toLowerCase()
+  if (!kw) return [] as { name: string; path: string; pathIds: (string | number)[] }[]
+  const res: { name: string; path: string; pathIds: (string | number)[] }[] = []
+  const walk = (nodes: MallCategoryNode[], parents: string[] = [], parentIds: (string | number)[] = []) => {
+    for (const node of nodes || []) {
+      const name = nodeLabel(node)
+      const pathParts = [...parents, name]
+      const pathIds = [...parentIds, node.id]
+      if (String(name).toLowerCase().includes(kw)) {
+        res.push({ name, path: pathParts.join(' ＞ '), pathIds })
+      }
+      if (res.length < 20) walk(node.children || [], pathParts, pathIds)
+      if (res.length >= 20) return
+    }
+  }
+  walk(categoryTree.value)
+  return res.slice(0, 20)
+})
+
+function selectCategoryByPath(item: { name: string; path: string; pathIds: (string | number)[] }) {
+  const ids = item.pathIds || []
+  const l1 = categoryTree.value.find(c => String(c.id) === String(ids[0]))
+  if (!l1) return
+  selectLevel1(l1)
+  if (ids[1]) {
+    const l2 = (l1.children || []).find(c => String(c.id) === String(ids[1]))
+    if (l2) selectLevel2(l2)
+    if (ids[2]) {
+      const l3 = (l2?.children || []).find(c => String(c.id) === String(ids[2]))
+      if (l3) selectLevel3(l3)
+    }
+  }
+  categoryKeyword.value = ''
+}
+
+/**
+ * 编辑商品时根据已保存的 category 字符串（叶子分类名）反查分类树并回填选中状态。
+ * 优先匹配叶子名等于 category 的路径；若无匹配则仅回填 category 字符串。
+ */
+function findAndSelectCategoryByName(categoryName: string) {
+  if (!categoryName || !categoryTree.value.length) {
+    selectedCategoryName.value = categoryName || ''
+    selectedCategoryPath.value = categoryName || ''
+    return
+  }
+  const target = String(categoryName).trim()
+  const walk = (nodes: MallCategoryNode[], parents: MallCategoryNode[] = []): MallCategoryNode[] | null => {
+    for (const node of nodes || []) {
+      if (nodeLabel(node) === target) {
+        return [...parents, node]
+      }
+      const matched = walk(node.children || [], [...parents, node])
+      if (matched) return matched
+    }
+    return null
+  }
+  const path = walk(categoryTree.value)
+  if (!path || !path.length) {
+    selectedCategoryName.value = target
+    selectedCategoryPath.value = target
+    return
+  }
+  const [l1, l2, l3] = path
+  if (l1) selectLevel1(l1)
+  if (l2) selectLevel2(l2)
+  if (l3) selectLevel3(l3)
+}
+
+async function loadCategoryTree() {
+  if (categoryTree.value.length) return
+  categoriesLoading.value = true
+  categoryLoadError.value = ''
+  try {
+    const tree = await getMallCategoryTree()
+    const list = tree?.cation || tree?.categories || []
+    if (!Array.isArray(list)) throw new Error('商品分类响应格式异常')
+    categoryTree.value = list
+  } catch (e: any) {
+    categoryLoadError.value = e?.message || '商品分类加载失败'
+    categoryTree.value = []
+  } finally {
+    categoriesLoading.value = false
+  }
 }
 
 const cardsLineCount = computed(() => {
@@ -457,6 +675,7 @@ function openDialog(row?: MallProduct) {
     form.deliveryContent = row.deliveryContent || ''
     form.price = Number(row.price || 0)
     form.coverUrl = row.coverUrl || ''
+    form.category = row.category || ''
     form.stock = row.stock ?? 0
     form.cards = ''
     form.enabled = row.enabled !== false
@@ -464,6 +683,14 @@ function openDialog(row?: MallProduct) {
     Object.assign(form, defaultForm())
     form.type = activeTab.value
   }
+  // 每次打开弹窗时重置分类选中状态，避免上次选择残留
+  resetCategorySelection()
+  // 异步加载分类树（首次加载会请求后端，后续使用缓存）
+  loadCategoryTree().then(() => {
+    if (isEdit.value && form.category) {
+      findAndSelectCategoryByName(form.category)
+    }
+  })
   dialogVisible.value = true
 }
 
@@ -474,12 +701,14 @@ async function handleSave() {
   try {
     const payload: Partial<MallProduct> = {
       type: form.type,
+      productType: form.type,
       title: form.title,
       content: form.content,
       copy: form.copy?.trim() || undefined,
       deliveryContent: form.type === 'text' ? form.deliveryContent : undefined,
       price: Number(form.price),
       coverUrl: form.coverUrl || undefined,
+      category: selectedCategoryName.value || form.category || '',
       enabled: form.enabled
     }
     let productId = form.id
@@ -705,6 +934,103 @@ async function handleUrlImport() {
 .cards-stock-tip strong {
   color: var(--el-color-primary);
   font-weight: 700;
+}
+.category-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.category-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.category-search-results {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  background: var(--el-fill-color-blank);
+  max-height: 200px;
+  overflow-y: auto;
+}
+.category-result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  transition: background-color 0.15s;
+}
+.category-result:last-child {
+  border-bottom: none;
+}
+.category-result:hover {
+  background: var(--el-fill-color-light);
+}
+.category-result strong {
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+}
+.category-result span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.category-result.muted {
+  color: var(--el-text-color-secondary);
+  font-style: normal;
+  cursor: default;
+}
+.category-result.muted:hover {
+  background: transparent;
+}
+.cascader-levels {
+  display: flex;
+  gap: 8px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  background: var(--el-fill-color-blank);
+  min-height: 180px;
+  max-height: 280px;
+  overflow: hidden;
+}
+.cascader-col {
+  flex: 1;
+  min-width: 140px;
+  max-width: 220px;
+  overflow-y: auto;
+  border-right: 1px solid var(--el-border-color-lighter);
+  padding: 4px 0;
+}
+.cascader-col:last-child {
+  border-right: none;
+}
+.cascader-item {
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--el-text-color-primary);
+  cursor: pointer;
+  transition: background-color 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cascader-item:hover {
+  background: var(--el-fill-color-light);
+}
+.cascader-item.active {
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+.cascader-item.muted {
+  color: var(--el-text-color-secondary);
+  cursor: default;
+  font-style: italic;
+}
+.cascader-item.muted:hover {
+  background: transparent;
 }
 .card-keys-head {
   display: flex;

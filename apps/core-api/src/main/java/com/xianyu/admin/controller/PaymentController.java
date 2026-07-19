@@ -109,6 +109,21 @@ public class PaymentController {
                 () -> paymentService.pageOrders(current, size, keyword, status, orderType)));
     }
 
+    /**
+     * 管理员强制标记订单为已支付。
+     * 用于本地开发测试（易支付回调无法到达本机）或生产环境回调丢失的订单补救。
+     * 不要求沙箱模式，但要求管理员权限。
+     */
+    @PostMapping("/admin-api/payment/orders/{orderNo}/force-paid")
+    public Result<Map<String, Object>> forceMarkPaid(@PathVariable String orderNo,
+                                                     @RequestBody(required = false) Map<String, Object> body) {
+        requireSuperAdmin();
+        String normalizedOrderNo = requireOrderNo(orderNo);
+        String remark = body == null ? null : String.valueOf(body.getOrDefault("remark", "")).trim();
+        return Result.ok(callPayment("强制标记已支付",
+                () -> paymentService.forceMarkPaidByAdmin(normalizedOrderNo, remark)));
+    }
+
     @GetMapping("/admin-api/payment/token-plans/page")
     public Result<PageResult<Map<String, Object>>> tokenPlanPage(@RequestParam(defaultValue = "1") int current,
                                                                  @RequestParam(defaultValue = "20") int size,
@@ -164,6 +179,43 @@ public class PaymentController {
                 channel,
                 toObjectMap(safePayload),
                 String.valueOf(safePayload));
+    }
+
+    /**
+     * 易支付扫码跳转端点（公开访问，无需登录）。
+     * 二维码内容指向此端点，用户扫码后浏览器打开此页面 → 渲染自动提交的 POST 表单 → 跳转到易支付收银台。
+     * 易支付 submit.php 要求 POST 提交，不能直接用 GET URL 放入二维码。
+     */
+    @GetMapping({"/open-api/payment/redirect/{orderNo}", "/api/payment/redirect/{orderNo}"})
+    public ResponseEntity<String> yipayRedirect(@PathVariable String orderNo) {
+        String normalizedOrderNo = orderNo == null ? "" : orderNo.trim();
+        if (normalizedOrderNo.isEmpty() || normalizedOrderNo.length() > 64) {
+            return ResponseEntity.badRequest().body("orderNo invalid");
+        }
+        try {
+            String html = paymentService.buildYipayRedirectHtml(normalizedOrderNo);
+            return ResponseEntity.ok().contentType(MediaType.TEXT_HTML).body(html);
+        } catch (BizException e) {
+            log.warn("易支付跳转失败, orderNo={}, code={}, msg={}", normalizedOrderNo, e.getCode(), e.getMessage());
+            return ResponseEntity.status(e.getCode() >= 400 && e.getCode() <= 499 ? e.getCode() : 503)
+                    .contentType(MediaType.TEXT_HTML)
+                    .body("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>跳转失败</title></head><body>" +
+                            "<h2>无法跳转到支付页面</h2><p>" + escapeHtml(e.getMessage()) + "</p></body></html>");
+        } catch (Exception e) {
+            log.error("易支付跳转异常, orderNo={}, errorType={}", normalizedOrderNo, e.getClass().getSimpleName(), e);
+            return ResponseEntity.status(503).contentType(MediaType.TEXT_HTML)
+                    .body("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>跳转失败</title></head><body>" +
+                            "<h2>支付跳转服务暂时不可用</h2><p>请稍后重试或联系管理员</p></body></html>");
+        }
+    }
+
+    private static String escapeHtml(String value) {
+        if (value == null) return "";
+        return value.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&#39;");
     }
 
     private ResponseEntity<String> handleCallbackRequest(String channel,

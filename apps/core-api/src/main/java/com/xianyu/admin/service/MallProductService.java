@@ -97,7 +97,12 @@ public class MallProductService {
     @Transactional
     public Map<String, Object> createProduct(Map<String, Object> data) {
         if (data == null) throw new BizException(400, "商品参数不能为空");
-        String productType = normalizeProductType(required(data, "productType", "商品类型不能为空"));
+        // 兼容前端发送的 type 字段（与 productType 等价）
+        Object productTypeValue = first(data, "productType", "type");
+        if (productTypeValue == null || String.valueOf(productTypeValue).isBlank()) {
+            throw new BizException(400, "商品类型不能为空");
+        }
+        String productType = normalizeProductType(String.valueOf(productTypeValue).trim());
         String title = boundedRequired(data, "title", "商品标题不能为空", MAX_TITLE_LENGTH);
         String subtitle = boundedOptional(data, "subtitle", MAX_SUBTITLE_LENGTH);
         String content = boundedOptional(data, "content", MAX_CONTENT_LENGTH);
@@ -108,14 +113,15 @@ public class MallProductService {
             throw new BizException(400, "商品价格必须在 0 至 1000000 元之间");
         }
         String coverUrl = boundedOptional(data, "coverUrl", MAX_COVER_URL_LENGTH);
-        int status = optionalEnabled(data.get("status"), 1, "商品状态");
+        // 兼容前端 enabled 字段（与 status 等价：true=1 上架, false=0 下架）
+        int status = optionalEnabled(first(data, "status", "enabled"), 1, "商品状态");
         String category = boundedOptional(data, "category", MAX_CATEGORY_LENGTH);
         int sortOrder = optionalInt(data.get("sortOrder"), "排序值", -1_000_000, 1_000_000, 0);
         int affected = safeUpdate("创建商品失败",
                 "INSERT INTO mall_product(tenant_id, product_type, title, subtitle, content, copy, delivery_content, price_cent, " +
                         "cover_url, status, category, ai_category_confidence, sort_order, bought_count, " +
                         "created_time, updated_time, deleted) " +
-                        "VALUES(0,?,?,?,?,?,?,?,?,'',0,?,0,NOW(),NOW(),0)",
+                        "VALUES(0,?,?,?,?,?,?,?,?,?,?,0,?,0,NOW(),NOW(),0)",
                 productType, title, subtitle, content.isEmpty() ? null : content,
                 copy.isEmpty() ? null : copy,
                 deliveryContent.isEmpty() ? null : deliveryContent,
@@ -129,8 +135,10 @@ public class MallProductService {
     public Map<String, Object> updateProduct(long id, Map<String, Object> data) {
         if (data == null) throw new BizException(400, "商品参数不能为空");
         Map<String, Object> existing = getProduct(id);
-        String productType = StringUtils.hasText(text(data.get("productType")))
-                ? normalizeProductType(text(data.get("productType"))) : text(existing.get("productType"));
+        // 兼容前端发送的 type 字段（与 productType 等价）
+        Object productTypeValue = first(data, "productType", "type");
+        String productType = StringUtils.hasText(productTypeValue == null ? "" : String.valueOf(productTypeValue))
+                ? normalizeProductType(String.valueOf(productTypeValue).trim()) : text(existing.get("productType"));
         String title = data.containsKey("title")
                 ? boundedRequired(data, "title", "商品标题不能为空", MAX_TITLE_LENGTH)
                 : text(existing.get("title"));
@@ -154,8 +162,8 @@ public class MallProductService {
         String coverUrl = data.containsKey("coverUrl")
                 ? boundedOptional(data, "coverUrl", MAX_COVER_URL_LENGTH)
                 : text(existing.get("coverUrl"));
-        int status = data.containsKey("status")
-                ? optionalEnabled(data.get("status"), 1, "商品状态")
+        int status = data.containsKey("status") || data.containsKey("enabled")
+                ? optionalEnabled(first(data, "status", "enabled"), 1, "商品状态")
                 : storedInt(existing.get("status"), "商品状态", 0, 1);
         String category = data.containsKey("category")
                 ? boundedOptional(data, "category", MAX_CATEGORY_LENGTH)
@@ -179,6 +187,16 @@ public class MallProductService {
         int affected = safeUpdate("删除商品失败",
                 "UPDATE mall_product SET deleted=1, updated_time=NOW() WHERE id=? AND deleted=0", id);
         if (affected != 1) throw new BizException(404, "商品不存在");
+        // 级联软删除前台用户的货源库中引用该商品的记录（from_mall=1 AND mall_product_id=id）
+        // 不删除用户自定义内容会残留无效货源，故同步标记为已删除
+        try {
+            jdbcTemplate.update(
+                    "UPDATE delivery_text_source SET deleted=1, updated_time=NOW() " +
+                            "WHERE from_mall=1 AND mall_product_id=? AND deleted=0", id);
+        } catch (DataAccessException e) {
+            log.warn("级联删除前台货源库记录失败, mallProductId={}, errorType={}", id, e.getClass().getSimpleName());
+            // 不抛异常：mall_product 已成功删除，货源库残留记录在前台会显示"商品已下架或被删除"
+        }
     }
 
     // ==================== 管理端：卡密 ====================
@@ -399,6 +417,36 @@ public class MallProductService {
     }
 
     // ==================== AI 分类 ====================
+
+    /**
+     * 获取闲鱼商品分类树（供后台货源商城新增商品时手动选择分类使用）。
+     * 转发到 automation-service 的 /api/xianyu/categories 接口，返回与前台发布商品页面一致的分类树结构。
+     *
+     * <p>分类树是全局公共数据，与具体租户无关。但 automation-service 的内部认证要求
+     * X-Internal-Tenant-Id 必须存在且 > 0。超级管理员（platform admin）的 tenantId 为 null，
+     * 因此这里在 tenantId 为空时从 sys_user 表取一个有效 tenantId 作为内部调用凭证。
+     * 该 tenantId 仅用于满足内部认证要求，不影响返回的全局分类树内容。</p>
+     */
+    public Object getCategoryTree() {
+        Long tenantId = com.xianyu.admin.security.TenantContext.getCurrentTenantId();
+        if (tenantId == null || tenantId <= 0) {
+            // 超级管理员：从 sys_user 表取一个有效 tenantId 作为内部调用凭证
+            try {
+                Long fallback = jdbcTemplate.queryForObject(
+                        "SELECT tenant_id FROM sys_user WHERE tenant_id IS NOT NULL AND tenant_id > 0 LIMIT 1",
+                        Long.class);
+                if (fallback == null || fallback <= 0) {
+                    throw new BizException(503, "暂无可用租户，无法获取分类树");
+                }
+                tenantId = fallback;
+            } catch (BizException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new BizException(503, "分类树暂时无法读取，请稍后重试");
+            }
+        }
+        return automationClient.getInternalForData("/api/xianyu/categories", Map.of(), 30, tenantId);
+    }
 
     /**
      * 触发 AI 自动分类。查询所有 category 为空或需要重新分类的商品，

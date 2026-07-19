@@ -9,7 +9,7 @@
       <div v-if="autoSyncState.active" class="global-notice info">
         <strong>正在同步闲鱼商品...</strong>
         <template v-if="autoSyncState.accountTotal > 1">
-          <span>（账号 {{ autoSyncState.accountIndex }}/{{ autoSyncState.accountTotal }}：{{ autoSyncState.accountLabel }}）</span>
+          <span>（并行同步 {{ autoSyncState.accountTotal }} 个账号）</span>
         </template>
         <span v-if="autoSyncState.progress > 0">进度 {{ autoSyncState.progress }}%</span>
         <span class="muted" style="margin-left:8px">请勿离开当前页面，同步完成后将自动展示最新商品</span>
@@ -67,7 +67,7 @@
             <AppButton type="danger" :disabled="!itemsAvailable || selectedKeys.length === 0 || batchDeleting" @click="batchDeleteProducts">
               {{ batchDeleteBtnText }}
             </AppButton>
-            <AppButton type="primary" :disabled="!accountsAvailable || syncing || autoSyncState.active" @click="syncProducts">{{ syncing || autoSyncState.active ? (autoSyncState.accountTotal > 1 ? `同步中 ${autoSyncState.accountIndex}/${autoSyncState.accountTotal}...` : '同步中...') : '同步闲鱼商品' }}</AppButton>
+            <AppButton type="primary" :disabled="!accountsAvailable || syncing || autoSyncState.active" @click="syncProducts">{{ syncing || autoSyncState.active ? '同步中...' : '同步闲鱼商品' }}</AppButton>
           </div>
         </div>
         <div v-if="batchDeleteState.active" class="global-notice warn">
@@ -966,8 +966,8 @@ async function syncProducts(isAuto = false, overrideAccountId = null){
 }
 
 /**
- * 顺序同步所有账号：账号1完成后再同步账号2，避免并发调用闲鱼API触发风控。
- * 汇总各账号结果，单账号失败不影响后续账号。
+ * 并行同步所有账号：所有账号同时调用 refreshItems + 轮询进度。
+ * 单账号失败不影响其他账号，所有账号完成后汇总结果。
  */
 async function syncAllAccounts() {
   const accountList = accounts.value
@@ -989,7 +989,8 @@ async function syncAllAccounts() {
   autoSyncState.error = ''
   autoSyncState.progress = 0
   autoSyncState.summary = emptySyncSummary()
-  autoSyncState.accountIndex = 0
+  // 并行模式：accountIndex 表示已启动账号数，立即置为总数；进度通过平均值反映
+  autoSyncState.accountIndex = accountList.length
   autoSyncState.accountTotal = accountList.length
   autoSyncState.accountLabel = ''
   autoSyncState.failedAccounts = []
@@ -997,46 +998,56 @@ async function syncAllAccounts() {
   items.value = []
   totalCount.value = 0
 
+  // 共享进度数组，每个账号独立更新自己的进度，总进度为所有账号平均值
+  const progresses = new Array(accountList.length).fill(0)
   const totalSummary = { total: 0, new: 0, updated: 0, offShelf: 0, duration: 0 }
   let successfulAccounts = 0
+  const failedList = []
 
   try {
-    for (let i = 0; i < accountList.length; i++) {
-      if (syncPollCanceled) break
-      const acc = accountList[i]
+    // 并行启动所有账号同步：每个账号独立调用 refreshItems + pollSyncProgress
+    const tasks = accountList.map(async (acc, index) => {
       const label = accountName(acc) || `账号 ${acc.id}`
-      autoSyncState.accountIndex = i + 1
-      autoSyncState.accountLabel = label
-      // 不重置 progress 为 0，保留上一账号进度作为起点，避免进度回退闪烁
+      if (syncPollCanceled) {
+        failedList.push({ label, reason: '已取消' })
+        return
+      }
       try {
         const res = await refreshItems({ xianyuAccountId: Number(acc.id) })
+        if (syncPollCanceled) {
+          failedList.push({ label, reason: '已取消' })
+          return
+        }
         const syncId = res.data?.syncId || res.data?.sync_id
-        if (syncId) {
-          syncTask.value = { id: syncId, status: 'running', progress: 0 }
-          // manageLifecycle=false：仅更新进度，由 syncAllAccounts 管理 active/completed/error
-          const summary = await pollSyncProgress(syncId, false)
-          if (summary) {
-            successfulAccounts++
-            totalSummary.total += summary.total
-            totalSummary.new += summary.new
-            totalSummary.updated += summary.updated
-            totalSummary.offShelf += summary.offShelf
-            totalSummary.duration += summary.duration
-          }
-        } else {
-          autoSyncState.failedAccounts.push({ label, reason: '未返回 syncId' })
+        if (!syncId) {
+          failedList.push({ label, reason: '未返回 syncId' })
+          return
+        }
+        // manageLifecycle=false：仅更新进度，由 syncAllAccounts 统一管理 lifecycle
+        // parallel={index, progresses}：并行模式下用平均值计算总进度
+        const summary = await pollSyncProgress(syncId, false, { index, progresses })
+        if (summary) {
+          successfulAccounts++
+          totalSummary.total += summary.total
+          totalSummary.new += summary.new
+          totalSummary.updated += summary.updated
+          totalSummary.offShelf += summary.offShelf
+          totalSummary.duration += summary.duration
         }
       } catch (e) {
-        autoSyncState.failedAccounts.push({ label, reason: e.message || '同步失败' })
+        failedList.push({ label, reason: e.message || '同步失败' })
       }
-    }
+    })
 
+    await Promise.allSettled(tasks)
+
+    autoSyncState.failedAccounts = failedList
     autoSyncState.active = false
-    autoSyncState.completed = autoSyncState.failedAccounts.length === 0 && successfulAccounts === accountList.length
+    autoSyncState.completed = failedList.length === 0 && successfulAccounts === accountList.length
     autoSyncState.progress = autoSyncState.completed ? 100 : autoSyncState.progress
     autoSyncState.summary = successfulAccounts > 0 ? totalSummary : emptySyncSummary()
-    if (autoSyncState.failedAccounts.length > 0) {
-      autoSyncState.error = `${autoSyncState.failedAccounts.length} 个账号同步失败，${successfulAccounts} 个成功：${autoSyncState.failedAccounts.map(f => `${f.label}（${f.reason}）`).join('、')}`
+    if (failedList.length > 0) {
+      autoSyncState.error = `${failedList.length} 个账号同步失败，${successfulAccounts} 个成功：${failedList.map(f => `${f.label}（${f.reason}）`).join('、')}`
     }
     if (autoSyncState.completed) {
       localStorage.setItem(LS_LAST_SYNC_TIME, String(Date.now()))
@@ -1063,7 +1074,7 @@ async function syncAllAccounts() {
   }
 }
 
-async function pollSyncProgress(syncId, manageLifecycle = true) {
+async function pollSyncProgress(syncId, manageLifecycle = true, parallel = null) {
   let retries = 0
   let consecutiveQueryFailures = 0
   const maxRetries = 120
@@ -1094,7 +1105,12 @@ async function pollSyncProgress(syncId, manageLifecycle = true) {
     const pct = Number(progress.progress)
     if (!Number.isFinite(pct) || pct < 0 || pct > 100) throw new Error('同步进度数值异常')
     syncTask.value = { id: syncId, status, progress: pct }
-    if (!manageLifecycle && autoSyncState.accountTotal > 1) {
+    if (parallel && Array.isArray(parallel.progresses) && parallel.progresses.length > 0) {
+      // 并行模式：每个账号独立更新自己的进度，总进度为所有账号平均值
+      parallel.progresses[parallel.index] = pct
+      const sum = parallel.progresses.reduce((a, b) => a + (Number(b) || 0), 0)
+      autoSyncState.progress = Math.round(sum / parallel.progresses.length)
+    } else if (!manageLifecycle && autoSyncState.accountTotal > 1) {
       autoSyncState.progress = Math.round((((autoSyncState.accountIndex - 1) * 100) + pct) / autoSyncState.accountTotal)
     } else {
       autoSyncState.progress = pct

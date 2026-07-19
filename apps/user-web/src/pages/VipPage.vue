@@ -72,26 +72,82 @@
           <div class="vip-panel-title">
             <div>
               <h3>功能对比</h3>
-              <p>不同会员等级的核心功能差异一目了然</p>
+              <p>数据来源：后台「系统运维 → 功能管理」配置，与个人中心「会员等级功能对比」共用同一份数据源。✓ 表示该等级可用，— 表示该等级不可用。</p>
             </div>
+            <button
+              type="button"
+              class="vip-compare-refresh"
+              :disabled="memberComparisonLoading"
+              @click="loadMemberComparison"
+            >{{ memberComparisonLoading ? '加载中…' : '刷新' }}</button>
           </div>
           <div class="vip-compare-wrap">
-            <table>
+            <EmptyState
+              v-if="memberComparisonError"
+              variant="error"
+              title="功能对比数据加载失败"
+              :description="memberComparisonError"
+            >
+              <template #actions>
+                <button type="button" class="vip-btn vip-btn-outline" @click="loadMemberComparison">重新加载</button>
+              </template>
+            </EmptyState>
+            <EmptyState
+              v-else-if="!memberComparisonLoading && memberCompareData.length === 0"
+              variant="default"
+              title="暂无功能对比数据"
+              description="后台尚未配置功能开关，请前往管理端「系统运维 → 功能管理」初始化默认配置后再查看。"
+            />
+            <table v-else class="vip-compare-table">
               <thead>
                 <tr>
-                  <th>功能特性</th>
-                  <th>普通用户</th>
-                  <th>VIP用户</th>
-                  <th>SVIP用户</th>
+                  <th class="vip-th-feature">功能 / 权益</th>
+                  <th class="vip-th-normal">普通会员</th>
+                  <th class="vip-th-vip">VIP会员</th>
+                  <th class="vip-th-svip">
+                    <div class="vip-svip-th-inner">
+                      <span class="vip-svip-crown" aria-hidden="true">
+                        <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+                          <path d="M2 13l2-7 4 3.5 4-3.5 2 7H2z" fill="#d97706"/>
+                          <path d="M4 6l4 3.5L12 6l-1 5H5L4 6z" fill="#fbbf24"/>
+                        </svg>
+                      </span>
+                      SVIP会员
+                    </div>
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="row in compareRows" :key="row.name">
-                  <td>{{ row.name }}</td>
-                  <td>{{ row.free }}</td>
-                  <td>{{ row.vip }}</td>
-                  <td>{{ row.svip }}</td>
-                </tr>
+                <template v-for="(group, gIdx) in memberCompareData" :key="'g'+gIdx">
+                  <tr class="vip-group-row">
+                    <td colspan="4">
+                      <span class="vip-feature-ico" aria-hidden="true">{{ group.icon }}</span>
+                      <span class="vip-group-label">{{ group.category }}</span>
+                      <span class="vip-group-count">{{ group.items.length }} 项</span>
+                    </td>
+                  </tr>
+                  <tr v-for="(item, iIdx) in group.items" :key="'i'+gIdx+'-'+iIdx" :class="['vip-feature-row', { 'vip-feature-row-alt': iIdx % 2 === 1 }]">
+                    <td class="vip-td-name">{{ item.name }}</td>
+                    <td class="vip-td-normal" :class="{ 'vip-mark-on': item.normal === '✓', 'vip-mark-off': item.normal !== '✓' }">
+                      <span v-if="item.normal === '✓'" class="vip-check-ico">
+                        <svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                      </span>
+                      <span v-else class="vip-dash">—</span>
+                    </td>
+                    <td class="vip-td-vip" :class="{ 'vip-mark-on': item.vip === '✓', 'vip-mark-off': item.vip !== '✓' }">
+                      <span v-if="item.vip === '✓'" class="vip-check-ico">
+                        <svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                      </span>
+                      <span v-else class="vip-dash">—</span>
+                    </td>
+                    <td class="vip-td-svip" :class="{ 'vip-mark-on': item.svip === '✓', 'vip-mark-off': item.svip !== '✓' }">
+                      <span v-if="item.svip === '✓'" class="vip-check-ico vip-check-gold">
+                        <svg viewBox="0 0 16 16" width="18" height="18"><circle cx="8" cy="8" r="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#d97706" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                      </span>
+                      <span v-else class="vip-dash">—</span>
+                    </td>
+                  </tr>
+                </template>
               </tbody>
             </table>
           </div>
@@ -166,7 +222,7 @@ import Icon from '../components/Icon.vue'
 import PaymentModal from '../components/PaymentModal.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { getBillingPlans } from '../api/billing.js'
-import { getFeatureSwitchStatus } from '../api/feature-switch.js'
+import { getFeatureSwitchStatus, getFeatureSwitchComparison } from '../api/feature-switch.js'
 import { globalConfirm } from '../composables/confirmState.js'
 import { resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
 
@@ -187,6 +243,25 @@ const paymentVisible = ref(false)
 const selectedPlan = ref(null)
 const avatarLoadFailed = ref(false)
 let plansRequestId = 0
+
+// 会员功能对比：与个人中心 ProfileCenterPage 共用同一份后台「功能管理」数据源
+const memberCompareFeatures = ref([])
+const memberComparisonLoading = ref(false)
+const memberComparisonError = ref('')
+
+/**
+ * 功能分组定义，与后台 admin-web feature-switch/index.vue 的 GROUPS 常量保持一致。
+ * 顺序即展示顺序；未匹配 group 的功能归入 "其他"。
+ */
+const FEATURE_COMPARISON_GROUPS = [
+  { key: 'overview', label: '概览', icon: '📊' },
+  { key: 'account', label: '账号与商品', icon: '📦' },
+  { key: 'message', label: '消息与商机', icon: '💬' },
+  { key: 'automation', label: '自动化', icon: '⚙️' },
+  { key: 'system', label: '系统设置', icon: '🛠️' },
+  { key: 'hidden', label: '会员', icon: '👑' },
+  { key: 'misc', label: '其他', icon: '📂' }
+]
 
 const displayUserName = computed(() => props.user?.name || props.user?.username || props.user?.displayName || '当前用户')
 const defaultAvatarUrl = '/xya/chat_ui_assets/chat_ui_assets_023.png'
@@ -209,6 +284,37 @@ const normalizeLevel = plan => {
   return 'unknown'
 }
 
+// 套餐默认权益描述：当后台未返回具体 features 时使用。
+// 描述与下方「功能对比」表保持一致，仅作概览展示，详细差异以功能对比表为准。
+const PLAN_DEFAULT_FEATURES = {
+  normal: [
+    '闲鱼账号、商品管理、发布商品',
+    '订单管理、在线消息、自动发货',
+    '自动回复、操作日志、反馈建议',
+    '通知设置、系统设置'
+  ],
+  vip: [
+    '包含普通会员全部功能',
+    '商机发掘页面',
+    '货源商城页面',
+    '滑块求解功能'
+  ],
+  svp: [
+    '包含 VIP 会员全部功能',
+    '工作流页面、工作流任务',
+    '商品草稿箱',
+    '图片生成记录'
+  ],
+  unknown: []
+}
+
+const PLAN_DEFAULT_SUMMARY = {
+  normal: '基础运营功能全套开放，适合个人闲鱼卖家',
+  vip: '在普通会员基础上，解锁商机发掘与货源商城',
+  svp: '在 VIP 基础上，解锁工作流自动化与图片生成能力',
+  unknown: '具体权益与限制以后台套餐配置为准'
+}
+
 const displayPlans = computed(() => {
   return plans.value.map(raw => {
     const level = normalizeLevel(raw)
@@ -217,6 +323,10 @@ const displayPlans = computed(() => {
     const priceCent = Number(raw.priceCent)
     const hasPrice = raw.price !== null && raw.price !== undefined && String(raw.price).trim() !== ''
     const canPurchase = ['vip', 'svp'].includes(level) && hasPrice && Number.isFinite(priceCent) && priceCent > 0
+    const rawFeatures = Array.isArray(raw.features) ? raw.features : []
+    // 后端 features 仅包含功能开关类描述（如"支持自动发货"），数量限制已移除；
+    // 当后端返回为空时，使用与等级匹配的默认权益描述。
+    const features = rawFeatures.length > 0 ? rawFeatures : (PLAN_DEFAULT_FEATURES[level] || [])
     return {
       ...raw,
       level,
@@ -224,12 +334,12 @@ const displayPlans = computed(() => {
       price: hasPrice ? String(raw.price) : '价格未配置',
       canPurchase,
       durationLabel,
-      summary: raw.summary || raw.description || '具体权益与限制以后台套餐配置为准',
-      features: Array.isArray(raw.features) ? raw.features : [],
+      summary: raw.summary || raw.description || PLAN_DEFAULT_SUMMARY[level] || '具体权益与限制以后台套餐配置为准',
+      features,
       cardClass: level === 'svp' ? 'svip' : level,
       ornament: level === 'svp' ? 'warm' : level === 'vip' ? 'blue' : 'muted',
       buttonClass: level === 'svp' ? 'vip-btn-warm' : level === 'vip' ? 'vip-btn-primary' : 'vip-btn-ghost',
-      ribbon: raw.ribbon || (raw.recommended === true ? '推荐' : '')
+      ribbon: raw.ribbon || (raw.recommended === true ? '推荐' : (level === 'vip' ? '推荐' : ''))
     }
   })
 })
@@ -261,6 +371,7 @@ const currentPlanPeriod = computed(() => {
   return `${year}-${month}-${day}`
 })
 
+// 当前权益描述：不再展示账号数/商品数等数量限制，改为展示套餐功能特性摘要
 const currentPlanQuota = computed(() => {
   const rawCurrentCode = props.user?.activePlan?.planCode || props.user?.planCode
   if (!rawCurrentCode) return '额度状态未提供'
@@ -268,38 +379,44 @@ const currentPlanQuota = computed(() => {
   const currentLevel = normalizeLevel({ planCode: currentCode })
   const current = displayPlans.value.find(plan => String(plan.planCode || '').trim().toLowerCase() === currentCode || plan.level === currentLevel)
   if (!current) return '以套餐配置为准'
-  const accountQuota = current.maxAccounts ?? current.maxXianyuAccounts
-  const goodsQuota = current.maxGoodsCount
-  if (accountQuota === null || accountQuota === undefined || goodsQuota === null || goodsQuota === undefined) return '额度未提供'
-  return `${accountQuota}账号 / ${goodsQuota}商品`
+  const featureCount = Array.isArray(current.features) ? current.features.length : 0
+  if (featureCount > 0) return `${featureCount} 项权益`
+  return '以套餐配置为准'
 })
 
-const compareRows = computed(() => {
-  const byLevel = Object.fromEntries(displayPlans.value.map(plan => [plan.level, plan]))
-  const featureValue = (level, key, fallback = '—') => {
-    const plan = byLevel[level]
-    if (!plan) return fallback
-    if (key === 'accounts') {
-      const value = plan.maxAccounts ?? plan.maxXianyuAccounts
-      return value === null || value === undefined ? '未配置' : `${value}个`
-    }
-    if (key === 'goods') return plan.maxGoodsCount === null || plan.maxGoodsCount === undefined ? '未配置' : `${plan.maxGoodsCount}个`
-    if (key === 'ai') {
-      const value = plan.aiQuota ?? plan.maxAiReplyPerDay
-      return value === null || value === undefined ? '未配置' : `${value}次/日`
-    }
-    if (key === 'autoDelivery') return plan.enableAutoDelivery === true ? '✓' : plan.enableAutoDelivery === false ? '—' : '未配置'
-    if (key === 'workflow') return plan.enableWorkflowValue === true ? '✓' : plan.enableWorkflowValue === false ? '—' : '未配置'
-    return fallback
+/** 按分组聚合后的对比数据，用于表格渲染（与 ProfileCenterPage 一致） */
+const memberCompareData = computed(() => {
+  const features = memberCompareFeatures.value
+  if (!Array.isArray(features) || features.length === 0) return []
+  const buckets = new Map()
+  for (const g of FEATURE_COMPARISON_GROUPS) buckets.set(g.key, [])
+  for (const f of features) {
+    const g = String(f?.group || 'misc')
+    if (!buckets.has(g)) buckets.set(g, [])
+    buckets.get(g).push(f)
   }
-  return [
-    { name: '可绑定闲鱼账号', free: featureValue('normal', 'accounts'), vip: featureValue('vip', 'accounts'), svip: featureValue('svp', 'accounts') },
-    { name: '可管理商品数', free: featureValue('normal', 'goods'), vip: featureValue('vip', 'goods'), svip: featureValue('svp', 'goods') },
-    { name: 'AI 回复额度', free: featureValue('normal', 'ai'), vip: featureValue('vip', 'ai'), svip: featureValue('svp', 'ai') },
-    { name: '自动发货', free: featureValue('normal', 'autoDelivery'), vip: featureValue('vip', 'autoDelivery'), svip: featureValue('svp', 'autoDelivery') },
-    { name: '自动化发布工作流', free: featureValue('normal', 'workflow'), vip: featureValue('vip', 'workflow'), svip: featureValue('svp', 'workflow') }
-  ]
+  const result = []
+  for (const g of FEATURE_COMPARISON_GROUPS) {
+    const items = buckets.get(g.key) || []
+    if (items.length === 0) continue
+    result.push({
+      category: g.label,
+      icon: g.icon,
+      items: items.map(f => ({
+        key: f.key,
+        name: f.title || f.key,
+        normal: boolToMark(f.normal),
+        vip: boolToMark(f.vip),
+        svip: boolToMark(f.svp)
+      }))
+    })
+  }
+  return result
 })
+
+function boolToMark(value) {
+  return value === true || value === 'true' || value === 1 || value === '1' ? '✓' : '—'
+}
 
 const coreFeatures = [
   { icon: 'paper-plane', title: '发布商品', theme: 'blue' },
@@ -311,10 +428,10 @@ const coreFeatures = [
 ]
 
 const faqs = [
-  { q: 'VIP 与普通用户有什么区别？', a: '权益由后台套餐管理动态控制，前台不再维护一份静态套餐。' },
-  { q: '如何升级会员？', a: '点击“立即升级”后，系统会展示后台当前启用的支付方式；未配置价格或支付渠道时会明确提示不可用。' },
-  { q: '会员是否按账号独立生效？', a: '会员状态按当前登录用户生效；账号数量等限制以后台返回的套餐权益为准。' },
-  { q: '套餐价格从哪里来？', a: '来自 billing_plan 表，与后台套餐管理保持一致。' }
+  { q: 'VIP 与普通用户有什么区别？', a: '权益由后台「功能管理」统一控制，前台 VIP 会员中心与个人中心展示同一份功能对比数据。' },
+  { q: '如何升级会员？', a: '点击"立即升级"后，系统会展示后台当前启用的支付方式；未配置价格或支付渠道时会明确提示不可用。' },
+  { q: '会员是否按账号独立生效？', a: '会员状态按当前登录用户生效；具体可用功能以后台「功能管理」配置为准。' },
+  { q: '功能对比数据从哪里来？', a: '来自后台「系统运维 → 功能管理」配置，与个人中心「会员等级功能对比」共用同一份数据源。' }
 ]
 
 async function loadPlans() {
@@ -332,6 +449,22 @@ async function loadPlans() {
     loadError.value = e?.message || '套餐加载失败'
   } finally {
     if (requestId === plansRequestId) loading.value = false
+  }
+}
+
+async function loadMemberComparison() {
+  memberComparisonLoading.value = true
+  memberComparisonError.value = ''
+  try {
+    const list = await getFeatureSwitchComparison()
+    memberCompareFeatures.value = Array.isArray(list) ? list : []
+    return true
+  } catch (error) {
+    memberCompareFeatures.value = []
+    memberComparisonError.value = error?.message || '功能对比数据加载失败'
+    return false
+  } finally {
+    memberComparisonLoading.value = false
   }
 }
 
@@ -359,11 +492,14 @@ async function handlePaid() {
 async function showFaqNotice() {
   await globalConfirm.alert(
     '会员说明',
-    '套餐价格、权益和可用支付方式均以当前后台配置为准。若页面提示不可用，请联系“关于”页所列支持渠道。'
+    '套餐价格、权益和可用支付方式均以当前后台配置为准。若页面提示不可用，请联系"关于"页所列支持渠道。'
   )
 }
 
-onMounted(loadPlans)
+onMounted(() => {
+  loadPlans()
+  loadMemberComparison()
+})
 </script>
 
 <style scoped>
@@ -655,20 +791,39 @@ onMounted(loadPlans)
 
 .vip-plan li {
   position: relative;
-  padding-left: 18px;
+  padding-left: 22px;
   color: #526079;
-  line-height: 1.45;
+  line-height: 1.5;
   font-size: 13px;
 }
 
 .vip-plan li::before {
-  content: '•';
+  content: '';
   position: absolute;
   left: 0;
-  top: -1px;
-  color: #2f66ff;
-  font-size: 18px;
-  line-height: 1;
+  top: 4px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M4 8l2.5 2.5L12 5' stroke='%232f66ff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>") center/contain no-repeat;
+  box-shadow: 0 0 0 1px #e8eef8 inset;
+}
+
+/* 不同等级套餐的权益项颜色差异化 */
+.vip-plan.free li::before {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M4 8l2.5 2.5L12 5' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>");
+}
+
+.vip-plan.vip li::before {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M4 8l2.5 2.5L12 5' stroke='%232f66ff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>");
+}
+
+.vip-plan.svip li::before {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M4 8l2.5 2.5L12 5' stroke='%23d97706' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>");
+}
+
+.vip-plan.svip li {
+  color: #5b4226;
 }
 
 .vip-ribbon {
@@ -753,34 +908,179 @@ onMounted(loadPlans)
   line-height: 1.6;
 }
 
-.vip-compare-wrap {
-  overflow: auto;
+.vip-compare-refresh {
+  flex-shrink: 0;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid #d8e3f2;
+  background: #fff;
+  color: #2f66ff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.18s ease;
 }
 
-.vip-compare-wrap table {
+.vip-compare-refresh:hover:not(:disabled) {
+  background: #edf4ff;
+  border-color: #2f66ff;
+}
+
+.vip-compare-refresh:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.vip-compare-wrap {
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px solid #edf2fb;
+  background: #fff;
+}
+
+.vip-compare-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
 }
 
-.vip-compare-wrap th,
-.vip-compare-wrap td {
-  padding: 12px 10px;
+.vip-compare-table th,
+.vip-compare-table td {
+  padding: 12px 14px;
   border-bottom: 1px solid #edf2fb;
   text-align: center;
   white-space: nowrap;
 }
 
-.vip-compare-wrap th:first-child,
-.vip-compare-wrap td:first-child {
+.vip-compare-table th:first-child,
+.vip-compare-table td:first-child {
   text-align: left;
 }
 
-.vip-compare-wrap thead th {
+.vip-compare-table thead th {
   font-size: 12px;
   color: #66748d;
   font-weight: 800;
-  background: #fbfcff;
+  background: linear-gradient(180deg, #fbfcff 0%, #f4f8ff 100%);
+  border-bottom: 1px solid #d8e3f2;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.vip-th-feature {
+  min-width: 160px;
+}
+
+.vip-th-normal,
+.vip-th-vip,
+.vip-th-svip {
+  min-width: 100px;
+}
+
+.vip-th-vip {
+  color: #2f66ff;
+}
+
+.vip-th-svip {
+  color: #d97706;
+}
+
+.vip-svip-th-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: center;
+}
+
+.vip-svip-crown {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 分组行 */
+.vip-group-row td {
+  background: linear-gradient(90deg, #f4f8ff 0%, #fbfcff 100%);
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #2f3e5f;
+  border-bottom: 1px solid #e2e9f5;
+}
+
+.vip-feature-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 8px;
+  font-size: 14px;
+}
+
+.vip-group-label {
+  margin-right: 8px;
+}
+
+.vip-group-count {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff;
+  color: #6f7e97;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid #e8eef8;
+}
+
+/* 功能行 */
+.vip-feature-row {
+  transition: background 0.15s ease;
+}
+
+.vip-feature-row:hover {
+  background: #f9fbff;
+}
+
+.vip-feature-row-alt {
+  background: #fafcff;
+}
+
+.vip-td-name {
+  color: #253450;
+  font-weight: 600;
+}
+
+/* 标记样式 */
+.vip-mark-on {
+  background: rgba(22, 163, 74, 0.04);
+}
+
+.vip-mark-off {
+  background: rgba(148, 163, 184, 0.04);
+  opacity: 0.7;
+}
+
+.vip-check-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vip-check-gold {
+  filter: drop-shadow(0 2px 4px rgba(217, 119, 6, 0.18));
+}
+
+.vip-dash {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: #94a3b8;
+  font-size: 14px;
+  font-weight: 700;
 }
 
 /* ----- 右侧栏 ----- */
@@ -1053,6 +1353,38 @@ onMounted(loadPlans)
   .vip-compare-wrap table {
     width: max-content;
     min-width: 560px;
+  }
+
+  /* 移动端功能对比表头粘性定位调整 */
+  .vip-compare-table thead th {
+    position: static;
+  }
+}
+
+/* 超小屏适配：套餐卡片堆叠 + 功能对比紧凑显示 */
+@media (max-width: 480px) {
+  .vip-compare {
+    padding: 14px;
+  }
+
+  .vip-compare-table th,
+  .vip-compare-table td {
+    padding: 10px 8px;
+    font-size: 12px;
+  }
+
+  .vip-group-row td {
+    padding: 8px 10px;
+    font-size: 11px;
+  }
+
+  .vip-panel-title {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .vip-compare-refresh {
+    align-self: flex-start;
   }
 }
 </style>

@@ -81,6 +81,26 @@ public class DeliveryTextSourceService {
         return new PageResult<>(rows, safeCurrent, safeSize, total == null ? 0 : total);
     }
 
+    /**
+     * 根据商城货源商品 ID 查询当前租户会员库中对应的货源记录。
+     * 用于用户从货源商城上架商品后，前端自动绑定该货源到新上架的闲鱼商品。
+     * 返回 null 表示当前租户尚未购买该商城货源（不应出现，因为只有购买后才能上架）。
+     */
+    public Map<String, Object> findByMallProduct(Long tenantId, Long mallProductId) {
+        if (tenantId == null || mallProductId == null || mallProductId <= 0) return null;
+        try {
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                    "SELECT s.id, s.title, s.delivery_mode AS deliveryMode, s.from_mall AS fromMall, s.mall_product_id AS mallProductId " +
+                            "FROM delivery_text_source s " +
+                            "WHERE s.tenant_id=? AND s.from_mall=1 AND s.mall_product_id=? AND s.deleted=0 " +
+                            "ORDER BY s.id DESC LIMIT 1",
+                    tenantId, mallProductId);
+            return rows.isEmpty() ? null : rows.get(0);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     public Map<String, Object> detail(Long tenantId, Long sourceId) {
         Map<String, Object> source = jdbcTemplate.queryForMap(
                 "SELECT s.id, s.source_type AS sourceType, s.delivery_mode AS deliveryMode, s.card_group_id AS cardGroupId, " +
@@ -116,14 +136,16 @@ public class DeliveryTextSourceService {
                 "SELECT from_mall AS fromMall FROM delivery_text_source WHERE tenant_id=? AND id=? AND deleted=0",
                 tenantId, sourceId
         ).stream().findFirst().orElse(null);
-        if (existing != null && isMallSource(existing.get("fromMall"))) {
-            throw new com.xianyu.admin.common.BizException(403, "商城购买货源内容不可修改，仅可查看");
+        if (existing == null) {
+            throw new com.xianyu.admin.common.BizException(404, "货源不存在或已删除");
         }
-        String deliveryMode = normalizeDeliveryMode(body.get("deliveryMode"));
+        boolean isMall = isMallSource(existing.get("fromMall"));
+        // 商城货源可编辑标题/正文/备注，但发货类型固定为文本模式（不可改为卡密）
+        String deliveryMode = isMall ? "text" : normalizeDeliveryMode(body.get("deliveryMode"));
         Long cardGroupId = "card".equals(deliveryMode) ? asLong(body.get("cardGroupId")) : null;
         jdbcTemplate.update(
                 "UPDATE delivery_text_source SET delivery_mode=?, card_group_id=?, title=?, content=?, remark=?, updated_time=NOW() " +
-                        "WHERE tenant_id=? AND id=? AND deleted=0 AND from_mall=0",
+                        "WHERE tenant_id=? AND id=? AND deleted=0",
                 deliveryMode, cardGroupId, text(body.get("title")), text(body.get("content")), text(body.get("remark")), tenantId, sourceId
         );
     }
@@ -429,9 +451,10 @@ public class DeliveryTextSourceService {
     }
 
     /**
-     * 商城购买货源的标题与内容实时从 mall_product 表读取覆盖。
-     * - 标题优先用 mall_product.title（保持与后台最新一致），商品被删除时退回到 delivery_text_source.title 快照
-     * - 内容用 mall_product.content 覆盖；商品下架/删除时显示"商品已下架或已删除"
+     * 商城购买货源的标题与内容保留用户自定义（可编辑），mall_product 内容作为只读参考。
+     * - 标题/正文优先用 delivery_text_source 的用户自定义值；为空时 fallback 到 mall_product 的后台内容
+     * - mallProductTitle/mallProductContent/mallProductOnline 字段供前端只读板块展示后台配置
+     * - 商品下架/删除时，后台内容板块提示"商品已下架或被删除"，用户自定义内容保留不变
      * 同时附加 fromMallLabel 字段，便于前端展示来源徽章
      */
     private void applyMallProductSnapshot(Map<String, Object> row) {
@@ -443,17 +466,20 @@ public class DeliveryTextSourceService {
         }
         Object mallProductStatus = row.get("mallProductStatus");
         boolean productOnline = mallProductStatus instanceof Number number && number.intValue() == 1;
-        if (productOnline) {
-            String mpTitle = text(row.get("mallProductTitle"));
-            String mpContent = text(row.get("mallProductContent"));
-            if (!mpTitle.isBlank()) {
-                row.put("title", mpTitle);
-            }
-            // 商城货源内容实时同步（不存副本，保证后台更新后用户看到最新）
-            row.put("content", mpContent.isBlank() ? "" : mpContent);
-        } else {
-            // 商品已下架或被删除：保留标题快照，内容提示商品不可用
-            row.put("content", "【商品已下架或被删除】该货源内容暂不可用，请联系管理员");
+        String mpTitle = text(row.get("mallProductTitle"));
+        String mpContent = text(row.get("mallProductContent"));
+        // 后台内容快照（供前端只读板块展示，商品下架时给出提示）
+        row.put("mallProductTitle", mpTitle);
+        row.put("mallProductContent", productOnline ? mpContent : "【商品已下架或被删除】该货源内容暂不可用，请联系管理员");
+        row.put("mallProductOnline", productOnline);
+        // 标题与正文保留用户自定义内容，仅在为空且商品在线时 fallback 到后台内容
+        String userTitle = text(row.get("title"));
+        String userContent = text(row.get("content"));
+        if (userTitle.isBlank() && !mpTitle.isBlank()) {
+            row.put("title", mpTitle);
+        }
+        if (userContent.isBlank() && productOnline && !mpContent.isBlank()) {
+            row.put("content", mpContent);
         }
     }
 

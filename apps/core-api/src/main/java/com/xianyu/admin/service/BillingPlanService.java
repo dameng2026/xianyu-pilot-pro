@@ -243,11 +243,9 @@ public class BillingPlanService {
 
     private List<String> buildFeatures(int maxAccounts, int maxGoods, int aiQuota, int workflowQuota, int storageMb,
                                        boolean autoDelivery, boolean kami, boolean aiReply, boolean workflow) {
+        // 套餐权益描述：仅展示功能开关，不再展示账号数/商品数/AI 额度/存储空间等数量限制
+        // 具体功能对比由后台「功能管理」统一维护，VIP 会员中心与个人中心共用同一份对比数据
         List<String> features = new ArrayList<>();
-        features.add("可绑定 " + maxAccounts + " 个闲鱼账号");
-        features.add("最多管理 " + maxGoods + " 个商品");
-        features.add("每日 AI 回复额度 " + aiQuota + " 次");
-        features.add("存储空间 " + storageMb + "MB");
         if (autoDelivery) features.add("支持自动发货");
         if (kami) features.add("支持卡密仓库");
         if (aiReply) features.add("支持智能自动回复");

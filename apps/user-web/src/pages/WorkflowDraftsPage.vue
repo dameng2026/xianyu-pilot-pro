@@ -289,6 +289,23 @@
               <pre class="prompt-text error">{{ detail.publish_error_message }}</pre>
             </div>
 
+            <!-- 重试发布账号选择器（仅在可重试时显示） -->
+            <div v-if="canRetry(detail.publish_status)" class="retry-account-picker">
+              <label class="picker-label">
+                <Icon name="user" />
+                <span>发布账号</span>
+              </label>
+              <select v-model="retryAccountId" class="picker-select" :disabled="retrying || batchRetrying">
+                <option :value="null">使用草稿原账号（{{ detail.account_id || '未绑定' }}）</option>
+                <option v-for="acc in accounts" :key="acc.id" :value="acc.id">
+                  {{ accountDisplayName(acc) }}（ID: {{ acc.id }}）
+                </option>
+              </select>
+              <p class="picker-hint">
+                选择账号后点击「重试发布」将使用该账号重新发布商品；不选择则回退到草稿原账号。
+              </p>
+            </div>
+
             <div class="modal-actions">
               <AppButton
                 v-if="canRetry(detail.publish_status)"
@@ -321,6 +338,8 @@ import EmptyState from '../components/EmptyState.vue'
 import Icon from '../components/Icon.vue'
 import Pagination from '../components/Pagination.vue'
 import { globalConfirm } from '../composables/confirmState.js'
+import { getLiteAccounts } from '../api/accounts.js'
+import { accountName } from '../utils/format.js'
 import {
   listWorkflowDrafts,
   getWorkflowDraftStats,
@@ -349,6 +368,26 @@ const batchRetrying = ref(false)
 const deleting = ref(false)
 const currentIndex = ref(0)
 const copied = ref(false)
+
+// 账号列表（用于重试发布时选择账号）
+const accounts = ref([])
+const retryAccountId = ref(null) // null 表示使用草稿原账号
+
+function accountDisplayName(acc) {
+  if (!acc) return '未知账号'
+  return accountName(acc)
+}
+
+async function loadAccounts() {
+  try {
+    const res = await getLiteAccounts({ current: 1, size: 100 })
+    const data = res && res.data
+    const list = Array.isArray(data) ? data : (data?.records || data?.accounts || data?.list || data?.rows || [])
+    accounts.value = Array.isArray(list) ? list : []
+  } catch (e) {
+    accounts.value = []
+  }
+}
 
 const statusOptions = [
   { value: 'all', label: '全部', dot: 'dot-all' },
@@ -518,11 +557,14 @@ function onSizeChange(size) {
 
 function openDetail(record) {
   detail.value = record
+  // 打开详情时重置账号选择为草稿原账号
+  retryAccountId.value = null
 }
 
 function closeDetail() {
   detail.value = null
   copied.value = false
+  retryAccountId.value = null
 }
 
 async function refreshDetail(draftId) {
@@ -558,7 +600,7 @@ async function retryPublish() {
   globalError.value = ''
   retrying.value = true
   try {
-    const res = await retryPublishDraft(detail.value.id)
+    const res = await retryPublishDraft(detail.value.id, retryAccountId.value)
     const data = res && res.data
     if (data && data.success === false) {
       globalError.value = data.error || '重试发布失败，请稍后重试'
@@ -566,7 +608,10 @@ async function retryPublish() {
     await Promise.all([load(), loadStats()])
     await refreshDetail(detail.value.id)
     if (!globalError.value) {
-      window.dispatchEvent(new CustomEvent('xya-toast', { detail: { message: '重试发布已触发，请稍后查看发布结果', type: 'success' } }))
+      const accountMsg = retryAccountId.value
+        ? `（使用账号 ${retryAccountId.value}）`
+        : ''
+      window.dispatchEvent(new CustomEvent('xya-toast', { detail: { message: `重试发布已触发${accountMsg}，请稍后查看发布结果`, type: 'success' } }))
     }
   } catch (e) {
     globalError.value = (e && e.message) || '重试发布失败，请稍后重试。'
@@ -584,16 +629,19 @@ async function batchRetryFromDetail() {
     window.dispatchEvent(new CustomEvent('xya-toast', { detail: { message: '当前列表没有可重试的草稿', type: 'info' } }))
     return
   }
+  const accountMsg = retryAccountId.value
+    ? `（使用账号 ${retryAccountId.value}）`
+    : '（使用各草稿原账号）'
   const confirmed = await globalConfirm.confirm(
     '批量重试发布',
-    `将重试当前列表中的 ${failedIds.length} 条草稿，是否继续？`,
+    `将重试当前列表中的 ${failedIds.length} 条草稿${accountMsg}，是否继续？`,
     '立即重试'
   )
   if (!confirmed) return
   globalError.value = ''
   batchRetrying.value = true
   try {
-    const res = await batchRetryPublishDrafts(failedIds)
+    const res = await batchRetryPublishDrafts(failedIds, retryAccountId.value)
     const data = res && res.data
     const succ = Number(data?.success) || 0
     const fail = Number(data?.failed) || 0
@@ -601,7 +649,7 @@ async function batchRetryFromDetail() {
     if (detail.value) await refreshDetail(detail.value.id)
     window.dispatchEvent(new CustomEvent('xya-toast', {
       detail: {
-        message: `批量重试完成：成功 ${succ} 条，失败 ${fail} 条`,
+        message: `批量重试完成：成功 ${succ} 条，失败 ${fail} 条${accountMsg}`,
         type: fail > 0 ? 'warn' : 'success'
       }
     }))
@@ -646,6 +694,7 @@ onMounted(() => {
   window.addEventListener('xya-header-action', onHeaderAction)
   load()
   loadStats()
+  loadAccounts()
 })
 
 onBeforeUnmount(() => {
@@ -1473,6 +1522,58 @@ onBeforeUnmount(() => {
   margin-top: 22px;
   padding-top: 16px;
   border-top: 1px solid #eef3fa;
+}
+
+/* === 重试发布账号选择器 === */
+.retry-account-picker {
+  margin-top: 18px;
+  padding: 14px 16px;
+  background: #f8faff;
+  border: 1px solid #dde7f5;
+  border-radius: 10px;
+}
+.retry-account-picker .picker-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #13213d;
+  margin-bottom: 8px;
+}
+.retry-account-picker .picker-label :deep(svg) {
+  width: 14px;
+  height: 14px;
+}
+.retry-account-picker .picker-select {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: #13213d;
+  background: #fff;
+  border: 1px solid #d1dced;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+  outline: none;
+}
+.retry-account-picker .picker-select:hover {
+  border-color: #0d6bff;
+}
+.retry-account-picker .picker-select:focus {
+  border-color: #0d6bff;
+  box-shadow: 0 0 0 3px rgba(13, 107, 255, 0.12);
+}
+.retry-account-picker .picker-select:disabled {
+  background: #f4f6fa;
+  color: #98a2b3;
+  cursor: not-allowed;
+}
+.retry-account-picker .picker-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #5a6880;
+  line-height: 1.5;
 }
 
 /* 全局错误提示 */

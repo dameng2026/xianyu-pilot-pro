@@ -618,6 +618,12 @@ export function mergeConversationDisplaySnapshot(previousConversation, nextConve
   if (!previousConversation) return nextConversation || null
   if (!nextConversation) return previousConversation
   const merged = { ...previousConversation, ...nextConversation }
+  // 保留本地实时未读数：服务器轮询返回的 unreadCount 往往滞后于 WS 实时事件，
+  // 若让服务端值覆盖本地值，会导致红色未读徽标在“显示/隐藏”之间反复闪烁。
+  // 本地 unreadCount 由 WS 事件累加、由用户操作（标记已读/发送消息）重置，更具实时性。
+  if (typeof previousConversation.unreadCount === 'number') {
+    merged.unreadCount = previousConversation.unreadCount
+  }
   if (!merged.avatarUrl && previousConversation.avatarUrl) {
     merged.avatarUrl = previousConversation.avatarUrl
   }

@@ -321,10 +321,11 @@ import { getAiProviderStatus, suggestCategoryByAi } from '../api/aiProvider.js'
 import { fetchCategories } from '../api/categories.js'
 import { aiRewriteGoods } from '../api/workflow.js'
 import { ensureAiTokenBalance } from '../utils/aiTokenGuard.js'
-import { isPublishAddressComplete, normalizePublishAddress } from '../utils/publishAddress.js'
+import { isPublishAddressComplete, normalizePublishAddress, formatPublishAddress } from '../utils/publishAddress.js'
 import { imageUploadValidationMessage } from '../utils/imageUploadPolicy.js'
 import { createRequestGate } from '../utils/requestLifecycle.js'
 import { loadPublishDraft, savePublishDraft, clearPublishDraft } from '../utils/publishDraft.js'
+import { loadLastPublishAddress, saveLastPublishAddress } from '../utils/publishLastAddress.js'
 import { setNavigationGuard, clearNavigationGuard } from '../utils/navigationGuard.js'
 import { promptDraftChoice } from '../composables/draftGuardState.js'
 import { friendlyError } from '../utils/friendlyError.js'
@@ -1351,6 +1352,13 @@ watch(
 watch(shippingMode, scheduleAutoSave)
 watch(selectedCategoryName, scheduleAutoSave)
 watch(selectedAddress, scheduleAutoSave, { deep: true })
+// 用户每次选择完整地址后，保存为历史位置，便于下次进入页面时一键填充
+watch(selectedAddress, (address) => {
+  if (isRestoring.value) return
+  if (isPublishAddressComplete(address)) {
+    saveLastPublishAddress(normalizePublishAddress(address))
+  }
+}, { deep: true })
 watch(() => [autoDelivery.enabled, autoDelivery.sourceId], scheduleAutoSave)
 
 function flushDraftBeforeUnload() {
@@ -1440,6 +1448,21 @@ onMounted(async () => {
     }
   } catch {
     // 草稿恢复失败不影响正常使用
+  }
+  // 草稿未恢复出完整地址时，若存在历史位置，提示是否一键填充
+  if (!isPublishAddressComplete(selectedAddress.value)) {
+    const lastAddress = loadLastPublishAddress()
+    if (lastAddress && isPublishAddressComplete(lastAddress)) {
+      const addressText = formatPublishAddress(lastAddress)
+      const ok = await confirmAction({
+        title: '是否使用上次的商品位置？',
+        description: `上次使用的位置：${addressText}\n点击「确认」将自动填充，也可手动重新选择。`,
+        confirmText: '使用上次位置',
+      })
+      if (ok) {
+        selectedAddress.value = lastAddress
+      }
+    }
   }
 })
 

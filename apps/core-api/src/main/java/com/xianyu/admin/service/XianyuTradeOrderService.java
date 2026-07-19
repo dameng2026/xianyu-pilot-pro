@@ -16,6 +16,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -99,6 +100,18 @@ public class XianyuTradeOrderService {
         enrichDeliverySnapshot(tenantId, vo);
 
         return vo;
+    }
+
+    /**
+     * 查询今日订单金额（按 pay_time 优先、create_time/created_time 兜底确定当日订单，
+     * 仅统计 order_status IN (1,2,3,4) 且 deleted=0 的订单 total_amount 之和）。
+     * accountId 为 null 时统计当前租户全部账号。
+     */
+    public BigDecimal todayAmount(Long tenantId, Long accountId) {
+        if (tenantId == null) {
+            return BigDecimal.ZERO;
+        }
+        return orderMapper.sumTodayAmountByAccount(tenantId, accountId);
     }
 
     /**

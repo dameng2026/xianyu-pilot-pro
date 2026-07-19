@@ -112,11 +112,20 @@ async def get_draft(session: AsyncSession, draft_id: int, tenant_id: int) -> Opt
     return record
 
 
-async def retry_publish_draft(session: AsyncSession, draft_id: int, tenant_id: int) -> Dict[str, Any]:
+async def retry_publish_draft(
+    session: AsyncSession,
+    draft_id: int,
+    tenant_id: int,
+    override_account_id: Optional[int] = None,
+) -> Dict[str, Any]:
     """重试发布单个草稿
 
     状态机：draft/failed → publishing → published/failed
     拒绝状态：publishing（正在发布中）、published（已发布成功）
+
+    :param override_account_id: 可选，指定重新发布使用的账号 ID。
+        传值时使用该账号发布（草稿原账号 ID 仅作回退参考）；
+        不传值时回退到草稿原 account_id。
     """
     result = await session.execute(
         text("SELECT * FROM workflow_goods_draft WHERE id=:id AND tenant_id=:tid AND deleted=0"),
@@ -132,14 +141,17 @@ async def retry_publish_draft(session: AsyncSession, draft_id: int, tenant_id: i
     if draft.get("publish_status") == "published":
         raise ValueError("该草稿已发布成功，无需重试")
 
-    # 更新状态为发布中
+    # 选定本次发布使用的账号 ID：优先使用 override，回退到草稿原账号
+    effective_account_id = override_account_id or draft.get("account_id")
+
+    # 更新状态为发布中（同时记录本次使用的账号 ID，便于后续审计）
     await session.execute(
         text(
             "UPDATE workflow_goods_draft "
             "SET publish_status='publishing', publish_attempt_count=publish_attempt_count+1, "
-            "publish_time=NOW(), updated_time=NOW() WHERE id=:id"
+            "account_id=:aid, publish_time=NOW(), updated_time=NOW() WHERE id=:id"
         ),
-        {"id": draft_id},
+        {"id": draft_id, "aid": effective_account_id},
     )
     await session.commit()
 
@@ -151,7 +163,7 @@ async def retry_publish_draft(session: AsyncSession, draft_id: int, tenant_id: i
             _resolve_account_cookie,
         )
 
-        account_id = draft.get("account_id")
+        account_id = effective_account_id
         cookie_str: Optional[str] = None
         if account_id:
             cookie_str, cookie_err, _ = await _resolve_account_cookie(
@@ -160,7 +172,7 @@ async def retry_publish_draft(session: AsyncSession, draft_id: int, tenant_id: i
             if cookie_err or not cookie_str:
                 raise RuntimeError("发布账号登录状态不可用，请重新登录")
         else:
-            raise RuntimeError("草稿未关联发布账号")
+            raise RuntimeError("草稿未关联发布账号，请选择账号后重试")
 
         token = extract_token_from_cookie(cookie_str)
         if not token:
@@ -220,15 +232,22 @@ async def retry_publish_draft(session: AsyncSession, draft_id: int, tenant_id: i
 
 
 async def batch_retry_publish_drafts(
-    session: AsyncSession, draft_ids: List[int], tenant_id: int
+    session: AsyncSession,
+    draft_ids: List[int],
+    tenant_id: int,
+    override_account_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """批量重试发布"""
+    """批量重试发布
+
+    :param override_account_id: 可选，指定重新发布使用的账号 ID。
+        传值时所有草稿都使用该账号发布；不传时回退到各草稿原 account_id。
+    """
     results = []
     success_count = 0
     failed_count = 0
     for draft_id in draft_ids:
         try:
-            r = await retry_publish_draft(session, draft_id, tenant_id)
+            r = await retry_publish_draft(session, draft_id, tenant_id, override_account_id)
             results.append({"draftId": draft_id, **r})
             if r.get("success"):
                 success_count += 1

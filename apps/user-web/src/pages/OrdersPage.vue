@@ -30,13 +30,13 @@
         </div>
         <AppButton type="primary" class="btn-query" @click="search">查询</AppButton>
         <AppButton class="btn-reset" @click="resetFilters">重置</AppButton>
-        <AppButton :loading="syncingList" :disabled="!accountsAvailable || !query.accountId" class="btn-sync" @click="syncAccountOrders">
+        <AppButton :loading="syncingList" :disabled="!accountsAvailable || !accounts.length" class="btn-sync" @click="onSyncButtonClick">
           <span class="sync-icon">↻</span>
-          {{ syncingList ? '同步中...' : '同步当前账号真实订单' }}
+          {{ syncingList ? '同步中...' : syncButtonText }}
         </AppButton>
       </div>
       <div class="filter-tip">
-        列表默认优先展示本地已缓存订单；如需拉取闲鱼最新真实订单，请点击右侧"同步当前账号真实订单"。
+        列表默认优先展示本地已缓存订单；如需拉取闲鱼最新真实订单，请点击右侧"{{ syncButtonText }}"。
       </div>
     </div>
 
@@ -81,14 +81,13 @@
           <div class="stat-trend down">较昨日 <b>-3.2%</b> <span class="trend-arrow">↓</span></div>
         </div>
       </div>
-      <div class="stat-card">
+      <div v-if="todayAmountAvailable" class="stat-card">
         <div class="stat-icon-circle purple">
           <span class="stat-icon-svg">¥</span>
         </div>
         <div class="stat-info">
           <div class="stat-label">今日订单金额</div>
-          <div class="stat-value amount">¥{{ formatMoney(stats.todayAmount) }}</div>
-          <div class="stat-trend up">较昨日 <b>+15.6%</b> <span class="trend-arrow">↑</span></div>
+          <div class="stat-value amount">¥{{ formatMoney(todayAmount) }}</div>
         </div>
       </div>
     </div>
@@ -359,7 +358,7 @@ import AppButton from '../components/AppButton.vue'
 import Icon from '../components/Icon.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { getLiteAccounts } from '../api/accounts.js'
-import { getOrderDetail, getOrders, manualDeliverOrder, syncOrder, syncOrders } from '../api/orders.js'
+import { getOrderDetail, getOrders, getTodayOrderAmount, manualDeliverOrder, syncOrder, syncOrders } from '../api/orders.js'
 import { totalOf } from '../utils/apiData.js'
 import { accountName } from '../utils/format.js'
 import { buildManualDeliveryPayload, buildOrderDetailViewModel, buildOrderRowViewModel, buildOrdersQuery } from '../utils/orderPageState.js'
@@ -383,6 +382,8 @@ const initialized = ref(false)
 const batchMenuVisible = ref(false)
 const selectedKeys = ref([])
 const jumpPage = ref(1)
+const todayAmount = ref(null)
+const todayAmountAvailable = ref(false)
 
 const query = reactive({
   accountId: '',
@@ -403,6 +404,7 @@ const manualForm = reactive({
 const rows = computed(() => orders.value.map(buildOrderRowViewModel))
 const detailView = computed(() => (selected.value ? buildOrderDetailViewModel(selected.value) : null))
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / query.size)))
+const syncButtonText = computed(() => query.accountId ? '同步当前账号真实订单' : '同步全部账号的真实订单')
 
 const stats = computed(() => {
   const pending = orders.value.filter(o => Number(o.orderStatus) === 2).length
@@ -416,8 +418,7 @@ const stats = computed(() => {
   return {
     pendingDelivery: Math.max(pendingDelivery, pending),
     completed,
-    abnormal: Math.max(abnormal, closed),
-    todayAmount: '128,560.00'
+    abnormal: Math.max(abnormal, closed)
   }
 })
 
@@ -493,7 +494,9 @@ function formatNumber(n) {
 }
 
 function formatMoney(n) {
-  return n
+  const num = Number(n)
+  if (!Number.isFinite(num)) return '0.00'
+  return num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 const failedImageUrls = reactive(new Set())
@@ -527,9 +530,11 @@ async function loadOrders(options = {}) {
   selectedKeys.value = []
   loading.value = true
   try {
-    const [accountResult, orderResult] = await Promise.allSettled([
+    const accountIdParam = query.accountId ? Number(query.accountId) : undefined
+    const [accountResult, orderResult, amountResult] = await Promise.allSettled([
       ensureAccountsLoaded(options.forceAccounts === true),
-      getOrders(buildOrdersQuery({ ...query, sync }))
+      getOrders(buildOrdersQuery({ ...query, sync })),
+      getTodayOrderAmount(accountIdParam)
     ])
     if (accountResult.status === 'rejected') {
       accounts.value = []
@@ -538,6 +543,19 @@ async function loadOrders(options = {}) {
       query.accountId = ''
     } else {
       accountsLoadError.value = ''
+    }
+    if (amountResult.status === 'fulfilled') {
+      const amount = amountResult.value?.data?.todayAmount
+      if (amount !== null && amount !== undefined && String(amount).trim() !== '') {
+        todayAmount.value = amount
+        todayAmountAvailable.value = true
+      } else {
+        todayAmount.value = null
+        todayAmountAvailable.value = false
+      }
+    } else {
+      todayAmount.value = null
+      todayAmountAvailable.value = false
     }
     if (orderResult.status === 'rejected') throw orderResult.reason
     const data = orderResult.value?.data
@@ -688,6 +706,57 @@ async function syncAccountOrders() {
   } finally {
     syncingList.value = false
   }
+}
+
+async function syncAllAccountsOrders() {
+  const list = accounts.value
+  if (!Array.isArray(list) || list.length === 0) {
+    error.value = '没有可同步的账号'
+    return
+  }
+  clearNotice()
+  syncingList.value = true
+  try {
+    const results = await Promise.allSettled(
+      list.map(account => syncOrders({
+        accountId: Number(account.id),
+        syncDeliveryStatus: true
+      }))
+    )
+    let succeeded = 0
+    let failed = 0
+    results.forEach(r => {
+      if (r.status === 'fulfilled') {
+        const data = r.value?.data
+        if (data && typeof data === 'object' && !Array.isArray(data) && data.ok !== false) {
+          succeeded += 1
+        } else {
+          failed += 1
+        }
+      } else {
+        failed += 1
+      }
+    })
+    if (failed === 0) {
+      success.value = `全部账号同步完成（共 ${succeeded} 个账号）`
+    } else if (succeeded === 0) {
+      error.value = `全部账号同步失败（共 ${failed} 个账号）`
+    } else {
+      success.value = `同步完成：成功 ${succeeded} 个，失败 ${failed} 个`
+    }
+    await loadOrders({ sync: false })
+  } catch (requestError) {
+    error.value = requestError.message || '同步全部账号订单失败'
+  } finally {
+    syncingList.value = false
+  }
+}
+
+function onSyncButtonClick() {
+  if (query.accountId) {
+    return syncAccountOrders()
+  }
+  return syncAllAccountsOrders()
 }
 
 function search() {

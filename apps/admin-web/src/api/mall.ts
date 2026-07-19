@@ -7,7 +7,10 @@ export type MallProductType = 'text' | 'card'
 /** 商城商品 */
 export interface MallProduct {
   id?: number
+  /** 商品类型（前端表单字段，向后兼容） */
   type: MallProductType
+  /** 商品类型（后端返回/接收字段，与 type 等价） */
+  productType?: MallProductType
   title: string
   subtitle?: string
   content?: string
@@ -63,6 +66,20 @@ export interface CardKeyPage {
 export interface MallCategory {
   id: number
   name: string
+}
+
+/** 闲鱼分类树节点（与前台发布商品页面一致，支持 label/title 两种字段名） */
+export interface MallCategoryNode {
+  id: string | number
+  label?: string
+  title?: string
+  children?: MallCategoryNode[]
+}
+
+/** 闲鱼分类树（automation-service /api/xianyu/categories 返回结构） */
+export interface MallCategoryTree {
+  cation?: MallCategoryNode[]
+  categories?: MallCategoryNode[]
 }
 
 /** 商城 FAQ */
@@ -123,6 +140,15 @@ export function getCardKeys(productId: number, params: { page?: number; size?: n
 /** 刷新商品分类缓存 */
 export function refreshCategories() {
   return request.post<{ count?: number }>({ url: '/mall/categories/refresh', showSuccessMessage: true })
+}
+
+/**
+ * 获取闲鱼商品分类树（与前台发布商品页面使用同一分类源）。
+ * 用于后台货源商城新增商品弹窗中手动选择分类。
+ */
+export function getMallCategoryTree() {
+  return request.get<MallCategoryTree>({ url: '/mall/category-tree', skipDedupe: true })
+    .then(value => requireRecordPayload<Record<string, any>>(value, '商品分类树') as MallCategoryTree)
 }
 
 /** 上传商品封面图（文件上传） */

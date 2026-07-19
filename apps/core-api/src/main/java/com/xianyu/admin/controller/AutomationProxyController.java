@@ -1285,10 +1285,12 @@ public class AutomationProxyController {
     }
 
     @PostMapping("/workflow/drafts/{draftId}/retry-publish")
-    public Result<Object> retryPublishDraft(@PathVariable("draftId") Long draftId) {
+    public Result<Object> retryPublishDraft(@PathVariable("draftId") Long draftId,
+                                            @RequestBody(required = false) Map<String, Object> body) {
         try {
+            Map<String, Object> payload = body != null ? body : new LinkedHashMap<>();
             return Result.ok(automationClient.postInternalForData(
-                    "/api/workflow/drafts/" + draftId + "/retry-publish", new LinkedHashMap<>()));
+                    "/api/workflow/drafts/" + draftId + "/retry-publish", payload));
         } catch (BizException e) {
             throw e;
         } catch (Exception ex) {

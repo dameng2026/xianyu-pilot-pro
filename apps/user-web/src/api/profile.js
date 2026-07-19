@@ -6,3 +6,4 @@ export const changeProfilePassword = data => request.post('/profile/change-passw
 export const changeProfilePhone = data => request.post('/profile/change-phone', data)
 export const changeProfileEmail = data => request.post('/profile/change-email', data)
 export const getTokenLedger = params => request.get('/profile/token-ledger', { params })
+export const getTokenTrend = params => request.get('/profile/token-trend', { params })
