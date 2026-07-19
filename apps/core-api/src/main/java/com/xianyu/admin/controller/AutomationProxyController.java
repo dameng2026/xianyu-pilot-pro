@@ -488,9 +488,26 @@ public class AutomationProxyController {
     }
 
     @GetMapping("/opportunity/image-history")
-    public Result<Object> opportunityImageHistory(@RequestParam(defaultValue = "20") int limit) {
+    public Result<Object> opportunityImageHistory(
+            @RequestParam(required = false) String source,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Long workflowId,
+            @RequestParam(required = false) String nodeKey,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer pageSize,
+            @RequestParam(defaultValue = "20") int limit) {
         try {
-            return Result.ok(imageGenerationService.listHistory(TenantContext.getCurrentTenantId(), limit));
+            Long tenantId = TenantContext.getCurrentTenantId();
+            // 向后兼容：未传 source 参数时走旧接口（返回 list 结构，商机发掘页面使用）
+            if (source == null || source.isBlank()) {
+                return Result.ok(imageGenerationService.listHistory(tenantId, limit));
+            }
+            // 新接口：传了 source 参数（all/opportunity/workflow）走分页查询
+            int safePage = page == null ? 1 : Math.max(1, page);
+            int safePageSize = pageSize == null ? 20 : Math.min(Math.max(pageSize, 1), 100);
+            return Result.ok(imageGenerationService.listHistoryPaged(
+                    tenantId, source, status, keyword, workflowId, nodeKey, safePage, safePageSize));
         } catch (Exception e) {
             log.error("查询图片生成历史失败, errorType={}", e.getClass().getSimpleName());
             throw new BizException(503, "图片生成历史暂时无法查询，请稍后重试");
