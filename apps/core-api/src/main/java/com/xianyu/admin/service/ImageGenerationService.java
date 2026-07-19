@@ -440,7 +440,8 @@ public class ImageGenerationService {
     }
 
     /**
-     * 历史图片恢复 - 查询最近的生图记录列表。
+     * 历史图片恢复 - 查询最近的生图记录列表（向后兼容重载）。
+     * 商机发掘页面使用，仅按 limit 返回最近记录。
      */
     public List<Map<String, Object>> listHistory(Long tenantId, int limit) {
         try {
@@ -453,6 +454,72 @@ public class ImageGenerationService {
             return rows;
         } catch (Exception e) {
             log.error("查询图片生成历史失败, errorType={}", e.getClass().getSimpleName());
+            throw new BizException(503, "图片生成历史暂时无法查询，请稍后重试");
+        }
+    }
+
+    /**
+     * 查询生图历史（支持来源/分页/关键词过滤）。
+     * 用于「工作流 → 图片生成记录」页面，返回完整字段以便前端直接展示图片预览。
+     * @param source "all" 或 null=所有来源；"opportunity"=商机发掘；"workflow"=工作流
+     * @return { records, total, page, pageSize }
+     */
+    public Map<String, Object> listHistoryPaged(Long tenantId, String source, String status, String keyword,
+                                                 Long workflowId, String nodeKey,
+                                                 int page, int pageSize) {
+        try {
+            int safePage = Math.max(1, page);
+            int safePageSize = Math.min(Math.max(pageSize, 1), 100);
+            int offset = (safePage - 1) * safePageSize;
+
+            StringBuilder where = new StringBuilder("WHERE tenant_id=? AND deleted=0");
+            List<Object> args = new ArrayList<>();
+            args.add(tenantId);
+            if (source != null && !source.isBlank() && !"all".equalsIgnoreCase(source)) {
+                where.append(" AND source=?");
+                args.add(source);
+            }
+            if (status != null && !status.isBlank()) {
+                where.append(" AND status=?");
+                args.add(status);
+            }
+            if (keyword != null && !keyword.isBlank()) {
+                where.append(" AND (prompt LIKE ? OR model LIKE ?)");
+                args.add("%" + keyword + "%");
+                args.add("%" + keyword + "%");
+            }
+            if (workflowId != null) {
+                where.append(" AND workflow_id=?");
+                args.add(workflowId);
+            }
+            if (nodeKey != null && !nodeKey.isBlank()) {
+                where.append(" AND workflow_node_key=?");
+                args.add(nodeKey);
+            }
+
+            Long total = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM opportunity_image_history " + where, Long.class, args.toArray());
+            if (total == null) total = 0L;
+
+            List<Object> pagedArgs = new ArrayList<>(args);
+            pagedArgs.add(safePageSize);
+            pagedArgs.add(offset);
+
+            List<Map<String, Object>> records = jdbcTemplate.queryForList(
+                    "SELECT id,tenant_id,user_id,request_id,model,prompt,image_size,image_count,result_images," +
+                    "method_used,status,error_message,source,workflow_id,workflow_execution_id,workflow_node_key," +
+                    "created_time,updated_time FROM opportunity_image_history " + where +
+                    " ORDER BY created_time DESC LIMIT ? OFFSET ?",
+                    pagedArgs.toArray());
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("records", records);
+            result.put("total", total);
+            result.put("page", safePage);
+            result.put("pageSize", safePageSize);
+            return result;
+        } catch (Exception e) {
+            log.error("查询图片生成历史（分页）失败, errorType={}", e.getClass().getSimpleName());
             throw new BizException(503, "图片生成历史暂时无法查询，请稍后重试");
         }
     }
