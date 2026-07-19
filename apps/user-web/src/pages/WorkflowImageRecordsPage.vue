@@ -72,7 +72,7 @@
       <!-- 图片网格 - 重点优化的卡片视觉 -->
       <div v-else class="image-grid">
         <article
-          v-for="r in records"
+          v-for="r in visibleRecords"
           :key="r.id"
           class="image-card"
           :class="[r.status === 'failed' ? 'is-failed' : 'is-success']"
@@ -312,6 +312,17 @@ const loading = ref(false)
 const loadError = ref('')
 const globalError = ref('')
 
+// 图片加载失败的记录 id 集合：空白图片 / 404 / 加载错误均不展示
+const brokenImageIds = ref({})
+// 过滤后的可见记录：success 状态但图片全部加载失败的记录不展示；
+// failed 状态的记录（本就无图片）保留展示，便于用户排查错误
+const visibleRecords = computed(() => {
+  return records.value.filter(r => {
+    if (r.status === 'failed') return true
+    return !brokenImageIds.value[r.id]
+  })
+})
+
 const filters = ref({ source: 'all', status: '', keyword: '' })
 
 const stats = ref({ total: null, success: null, failed: null, thisMonth: null })
@@ -409,6 +420,10 @@ function onCardImageError(event, record) {
   if (event && event.target) {
     event.target.style.opacity = '0.2'
   }
+  // 标记该记录的图片加载失败，computed visibleRecords 会自动过滤掉
+  if (record && record.id != null) {
+    brokenImageIds.value = { ...brokenImageIds.value, [record.id]: true }
+  }
 }
 
 function extractListData(res) {
@@ -438,6 +453,8 @@ async function load() {
       page: page.value,
       pageSize: pageSize.value
     }
+    // 重置图片加载失败标记（新一批数据）
+    brokenImageIds.value = {}
     const res = await listImageRecords(params)
     const data = extractListData(res)
     records.value = data.records

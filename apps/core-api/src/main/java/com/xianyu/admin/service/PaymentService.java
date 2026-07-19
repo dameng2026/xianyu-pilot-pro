@@ -1052,16 +1052,28 @@ public class PaymentService {
         html.append("@keyframes spin{to{transform:rotate(360deg);}}");
         html.append("h2{margin:0 0 8px;font-size:20px;font-weight:600;}");
         html.append("p{margin:0;font-size:14px;opacity:0.9;line-height:1.5;}");
+        html.append(".pay-btn{display:inline-block;margin-top:24px;padding:14px 32px;");
+        html.append("background:#fff;color:#667eea;border:none;border-radius:8px;");
+        html.append("font-size:16px;font-weight:600;cursor:pointer;text-decoration:none;}");
+        html.append(".pay-btn:hover{background:#f5f5ff;}");
+        html.append(".fallback-hint{margin-top:16px;font-size:13px;opacity:0.85;}");
         html.append("</style></head><body>");
-        html.append("<div class=\"box\"><div class=\"spinner\"></div>");
+        html.append("<div class=\"box\">");
+        html.append("<div class=\"spinner\" id=\"spinner\"></div>");
         html.append("<h2>正在跳转到支付页面</h2>");
-        html.append("<p>请稍候，即将打开微信/支付宝收银台...</p></div>");
+        html.append("<p>请稍候，即将打开微信/支付宝收银台...</p>");
         html.append("<form id=\"paying\" action=\"").append(escapeHtml(action)).append("\" method=\"post\">");
         for (Map.Entry<String, String> entry : params.entrySet()) {
             html.append("<input type=\"hidden\" name=\"").append(escapeHtml(entry.getKey()))
                     .append("\" value=\"").append(escapeHtml(entry.getValue())).append("\"/>");
         }
+        // 显式 submit 按钮：当 CSP 阻止内联 JS 时，用户可手动点击跳转。
+        // 浏览器原生表单提交不依赖 JS，CSP 不会阻止。
+        html.append("<button type=\"submit\" class=\"pay-btn\" id=\"payBtn\">立即支付</button>");
         html.append("</form>");
+        html.append("<p class=\"fallback-hint\">如未自动跳转，请点击上方按钮</p>");
+        html.append("</div>");
+        // 内联脚本自动提交：若 CSP 允许则自动跳转，若被阻止则用户使用上方按钮手动跳转
         html.append("<script>document.forms['paying'].submit();</script>");
         html.append("</body></html>");
         return html.toString();
