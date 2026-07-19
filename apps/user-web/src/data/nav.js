@@ -6,8 +6,8 @@ export const navGroups = [
   { title: '账号与商品', items: [
     { key: 'accounts', label: '闲鱼账号', icon: 'account' },
     { key: 'products', label: '商品管理', icon: 'product' },
-    { key: 'orders', label: '订单管理', icon: 'record' },
     { key: 'product-publish', label: '发布商品', icon: 'publish', child: true },
+    { key: 'orders', label: '订单管理', icon: 'record' },
     { key: 'opportunities', label: '商机发掘', icon: 'opportunity' }
   ]},
   { title: '消息', items: [
@@ -16,6 +16,8 @@ export const navGroups = [
   { title: '自动化', items: [
     { key: 'workflow', label: '工作流', icon: 'workflow' },
     { key: 'workflow-tasks', label: '工作流任务', icon: 'task' },
+    { key: 'workflow-drafts', label: '商品草稿箱', icon: 'document', child: true },
+    { key: 'workflow-image-records', label: '图片生成记录', icon: 'image', child: true },
     { key: 'auto-delivery', label: '自动发货', icon: 'truck' },
     { key: 'delivery-source-library', label: '货源库', icon: 'document', child: true },
     { key: 'delivery-statement', label: '发货声明', icon: 'document', child: true },
@@ -57,6 +59,8 @@ export const pageTitles = {
   'message-center': ['在线消息', '集中处理买家咨询与消息会话'],
   workflow: ['工作流', '设计并运行自动化业务流程'],
   'workflow-tasks': ['工作流任务', '查看工作流任务执行状态与结果'],
+  'workflow-drafts': ['商品草稿箱', '工作流生成的商品草稿与发布记录'],
+  'workflow-image-records': ['图片生成记录', '所有生图模型调用产生的图片历史'],
   'card-warehouse': ['卡密仓库', '管理卡密库存、分组与使用记录'],
   'auto-delivery': ['自动发货', '按商品配置自动发货规则、时机与发送方式'],
   'delivery-source-library': ['货源库', '统一管理文本货源，支持 AI 推荐适配商品并批量配置'],
