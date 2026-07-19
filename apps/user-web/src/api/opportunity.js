@@ -27,6 +27,16 @@ export const generateOpportunityImages = data => request.post('/opportunity/gene
 export const listOpportunityImageHistory = params => request.get('/opportunity/image-history', { params: params || {} })
 
 /**
+ * 查询生图记录列表（聚合商机/工作流两类来源）
+ * 复用 /opportunity/image-history 端点，通过 source 参数过滤来源
+ * 参数：{ source: 'all'|'workflow'|'opportunity', status, keyword, page, pageSize }
+ * 返回：{ records, total, page, pageSize }
+ */
+export const listImageRecords = params => request.get('/opportunity/image-history', {
+  params: { source: 'all', ...(params || {}) }
+})
+
+/**
  * 查询指定生图历史详情
  */
 export const getOpportunityImageHistoryDetail = requestId => request.get(`/opportunity/image-history/${requestId}`)
