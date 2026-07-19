@@ -131,6 +131,8 @@ const pageMap = {
   'message-center': asyncPage(() => import('./pages/MessagesPage.vue')),
   workflow: asyncPage(() => import('./pages/WorkflowPage.vue')),
   'workflow-tasks': asyncPage(() => import('./pages/WorkflowTasksPage.vue')),
+  'workflow-drafts': asyncPage(() => import('./pages/WorkflowDraftsPage.vue')),
+  'workflow-image-records': asyncPage(() => import('./pages/WorkflowImageRecordsPage.vue')),
   'card-warehouse': asyncPage(() => import('./pages/CardWarehousePage.vue')),
   'auto-delivery': asyncPage(() => import('./pages/AutoDeliveryPage.vue')),
   'delivery-source-library': asyncPage(() => import('./pages/DeliverySourceLibraryPage.vue')),
@@ -723,6 +725,12 @@ const headerActions = computed(() => {
     'workflow-tasks': [
       { text: '刷新列表', type: 'ghost', event: 'workflow-tasks-refresh' },
       { text: '打开流程编排', type: 'primary', to: 'workflow' }
+    ],
+    'workflow-drafts': [
+      { text: '刷新列表', type: 'ghost', event: 'workflow-drafts-refresh' }
+    ],
+    'workflow-image-records': [
+      { text: '刷新列表', type: 'ghost', event: 'workflow-image-records-refresh' }
     ],
     'card-warehouse': [
       { text: '新建卡密组', type: 'primary', event: 'cards-create-group' },
