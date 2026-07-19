@@ -1231,6 +1231,97 @@ public class AutomationProxyController {
         }
     }
 
+    // ==================== 工作流商品草稿箱 ====================
+
+    @GetMapping("/workflow/drafts")
+    public Result<Object> listWorkflowDrafts(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int pageSize,
+            @RequestParam(defaultValue = "all") String status,
+            @RequestParam(required = false) Long workflowId,
+            @RequestParam(required = false, defaultValue = "") String keyword,
+            @RequestParam(required = false) String startDate,
+            @RequestParam(required = false) String endDate) {
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("page", page);
+        params.put("page_size", pageSize);
+        params.put("status", status);
+        if (workflowId != null) params.put("workflow_id", workflowId);
+        params.put("keyword", keyword == null ? "" : keyword);
+        if (startDate != null) params.put("start_date", startDate);
+        if (endDate != null) params.put("end_date", endDate);
+        try {
+            return Result.ok(automationClient.getInternalForData("/api/workflow/drafts", params));
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception ex) {
+            log.error("查询草稿列表失败, errorType={}", ex.getClass().getSimpleName());
+            throw new BizException(503, "草稿列表暂时无法查询，请稍后重试");
+        }
+    }
+
+    @GetMapping("/workflow/drafts/stats")
+    public Result<Object> getWorkflowDraftStats() {
+        try {
+            return Result.ok(automationClient.getInternalForData("/api/workflow/drafts/stats", Map.of()));
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception ex) {
+            log.error("查询草稿统计失败, errorType={}", ex.getClass().getSimpleName());
+            throw new BizException(503, "草稿统计暂时无法查询，请稍后重试");
+        }
+    }
+
+    @GetMapping("/workflow/drafts/{draftId}")
+    public Result<Object> getWorkflowDraft(@PathVariable("draftId") Long draftId) {
+        try {
+            return Result.ok(automationClient.getInternalForData("/api/workflow/drafts/" + draftId, Map.of()));
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception ex) {
+            log.error("查询草稿详情失败, draftId={}, errorType={}", draftId, ex.getClass().getSimpleName());
+            throw new BizException(503, "草稿详情暂时无法查询，请稍后重试");
+        }
+    }
+
+    @PostMapping("/workflow/drafts/{draftId}/retry-publish")
+    public Result<Object> retryPublishDraft(@PathVariable("draftId") Long draftId) {
+        try {
+            return Result.ok(automationClient.postInternalForData(
+                    "/api/workflow/drafts/" + draftId + "/retry-publish", new LinkedHashMap<>()));
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception ex) {
+            log.error("重试发布失败, draftId={}, errorType={}", draftId, ex.getClass().getSimpleName());
+            throw new BizException(503, "重试发布暂时无法执行，请稍后重试");
+        }
+    }
+
+    @PostMapping("/workflow/drafts/batch-retry-publish")
+    public Result<Object> batchRetryPublishDrafts(@RequestBody Map<String, Object> body) {
+        try {
+            return Result.ok(automationClient.postInternalForData(
+                    "/api/workflow/drafts/batch-retry-publish", body));
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception ex) {
+            log.error("批量重试发布失败, errorType={}", ex.getClass().getSimpleName());
+            throw new BizException(503, "批量重试发布暂时无法执行，请稍后重试");
+        }
+    }
+
+    @DeleteMapping("/workflow/drafts/{draftId}")
+    public Result<Object> deleteWorkflowDraft(@PathVariable("draftId") Long draftId) {
+        try {
+            return Result.ok(automationClient.deleteInternalForData("/api/workflow/drafts/" + draftId));
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception ex) {
+            log.error("删除草稿失败, draftId={}, errorType={}", draftId, ex.getClass().getSimpleName());
+            throw new BizException(503, "草稿暂时无法删除，请稍后重试");
+        }
+    }
+
     @PostMapping("/item/autoReplyRecords")
     public Result<Object> itemAutoReplyRecords(@RequestBody(required = false) Map<String, Object> body) {
         if (body == null) body = new java.util.LinkedHashMap<>();
