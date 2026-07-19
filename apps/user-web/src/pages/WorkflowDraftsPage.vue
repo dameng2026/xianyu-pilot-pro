@@ -13,13 +13,20 @@
     <CardPanel title="商品草稿箱" desc="工作流生成的商品草稿与发布记录，支持按状态、关键词筛选；失败草稿可重试发布">
       <!-- 筛选区 -->
       <div class="toolbar filter-bar">
-        <select v-model="filters.status" class="input" style="max-width:140px">
-          <option value="all">全部状态</option>
-          <option value="draft">待发布</option>
-          <option value="publishing">发布中</option>
-          <option value="published">已发布</option>
-          <option value="failed">发布失败</option>
-        </select>
+        <div class="filter-chip-group">
+          <button
+            v-for="opt in statusOptions"
+            :key="opt.value"
+            type="button"
+            class="filter-chip"
+            :class="{ active: filters.status === opt.value }"
+            @click="filters.status = opt.value; onSearch()"
+          >
+            <span class="chip-dot" :class="opt.dot" />
+            {{ opt.label }}
+          </button>
+        </div>
+        <div class="filter-divider" />
         <input
           v-model="filters.keyword"
           class="input"
@@ -54,18 +61,22 @@
         v-else-if="!records.length"
         icon="📦"
         title="暂无商品草稿"
-        description="工作流 PUBLISH 节点产出的商品会自动保存到这里，无论发布成功或失败都会保留记录。"
+        description="工作流 PUBLISH 节点产出的商品会自动保存到这里，无论发布成功或失败都会保留记录。运行一次带 PUBLISH 节点的工作流后即可看到草稿。"
       />
 
-      <!-- 草稿网格 -->
+      <!-- 草稿网格 - 与生图记录页风格对齐 -->
       <div v-else class="draft-grid">
-        <div
+        <article
           v-for="r in records"
           :key="r.id"
           class="draft-card"
-          :class="[statusClass(r.publish_status), { failed: r.publish_status === 'failed' }]"
+          :class="`is-${r.publish_status || 'draft'}`"
           @click="openDetail(r)"
         >
+          <!-- 顶部状态条 -->
+          <div class="card-status-bar" :class="`bar-${r.publish_status || 'draft'}`" />
+
+          <!-- 缩略图区 -->
           <div class="draft-thumb">
             <img
               v-if="r.cover_pic"
@@ -75,32 +86,73 @@
               @error="onImageError($event, r)"
             />
             <div v-else class="draft-thumb-placeholder">
-              <Icon name="image" />
+              <div class="placeholder-icon-wrap">
+                <Icon name="image" />
+              </div>
               <span>暂无封面</span>
             </div>
-            <div class="draft-overlay">
-              <span class="overlay-status">{{ statusText(r.publish_status) }}</span>
-              <span v-if="r.price" class="overlay-price">¥{{ r.price }}</span>
+            <!-- 价格角标 -->
+            <div v-if="r.price" class="price-badge">
+              <span class="price-symbol">¥</span>
+              <span class="price-value">{{ r.price }}</span>
+            </div>
+            <!-- 多图指示 -->
+            <div v-if="imageCount(r) > 1" class="img-count-badge">
+              <Icon name="image" />
+              <span>{{ imageCount(r) }}</span>
+            </div>
+            <!-- hover 提示 -->
+            <div class="thumb-overlay">
+              <div class="overlay-bottom">
+                <span class="view-hint">
+                  <Icon name="search" />
+                  <span>查看详情</span>
+                </span>
+              </div>
             </div>
           </div>
+
+          <!-- 信息区 -->
           <div class="draft-info">
-            <div class="draft-badges">
-              <Badge :type="statusBadgeType(r.publish_status)">{{ statusText(r.publish_status) }}</Badge>
-              <Badge v-if="r.workflow_name" type="blue" :title="r.workflow_name">{{ truncate(r.workflow_name, 12) }}</Badge>
-              <Badge v-if="r.category" type="gray">{{ r.category }}</Badge>
+            <!-- 第一行：状态 pill + 工作流标签 -->
+            <div class="info-row info-row-badges">
+              <span class="status-pill" :class="pillClass(r.publish_status)">
+                <span class="pill-dot" />
+                {{ statusText(r.publish_status) }}
+              </span>
+              <span v-if="r.workflow_name" class="workflow-tag" :title="r.workflow_name">
+                {{ truncate(r.workflow_name, 14) }}
+              </span>
             </div>
+
+            <!-- 第二行：标题 -->
             <p class="draft-title" :title="r.title || ''">{{ r.title || '未命名商品' }}</p>
+
+            <!-- 第三行：描述 -->
             <p class="draft-desc" :title="r.description || ''">{{ r.description || '—' }}</p>
-            <p class="draft-meta">
-              <span>{{ formatTime(r.created_time) }}</span>
-              <span v-if="r.image_urls && r.image_urls.length" class="meta-count">{{ r.image_urls.length }} 张图</span>
-            </p>
+
+            <!-- 第四行：分类 + 创建时间 -->
+            <div class="info-row info-row-meta">
+              <span v-if="r.category" class="meta-category">{{ r.category }}</span>
+              <span class="meta-time">
+                <Icon name="clock" />
+                <span>{{ formatTime(r.created_time) }}</span>
+              </span>
+            </div>
+
+            <!-- 失败错误信息 -->
             <div v-if="r.publish_status === 'failed' && r.publish_error_message" class="draft-error" :title="r.publish_error_message">
               <Icon name="warning" />
-              <span>{{ truncate(r.publish_error_message, 40) }}</span>
+              <span>{{ truncate(r.publish_error_message, 50) }}</span>
+            </div>
+
+            <!-- 已发布标识 -->
+            <div v-if="r.publish_status === 'published' && r.xianyu_goods_id" class="draft-published-info">
+              <Icon name="success" />
+              <span>闲鱼 ID: {{ truncate(r.xianyu_goods_id, 18) }}</span>
             </div>
           </div>
-        </div>
+        </article>
       </div>
 
       <!-- 分页 -->
@@ -122,53 +174,118 @@
         <div class="modal-grid">
           <!-- 左侧图片区 -->
           <div class="modal-image-area">
-            <img
-              v-if="detail.cover_pic"
-              class="modal-main-image"
-              :src="detail.cover_pic"
-              :alt="detail.title || '商品草稿'"
-            />
-            <div v-else class="image-error large">
-              <Icon name="image" />
-              <span>该草稿没有封面图</span>
+            <div class="main-image-wrap">
+              <template v-if="currentImage">
+                <img
+                  class="modal-main-image"
+                  :src="currentImage"
+                  :alt="detail.title || '商品草稿'"
+                />
+                <a
+                  v-if="currentImage"
+                  class="download-btn"
+                  :href="currentImage"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  download
+                  title="新窗口打开原图"
+                >
+                  <Icon name="download" />
+                </a>
+                <div v-if="parsedImages.length > 1" class="image-index">
+                  {{ currentIndex + 1 }} / {{ parsedImages.length }}
+                </div>
+              </template>
+              <div v-else class="image-error large">
+                <div class="error-icon-wrap">
+                  <Icon name="image" />
+                </div>
+                <span>该草稿没有封面图</span>
+              </div>
             </div>
-            <div v-if="parsedImages.length > 1" class="more-images">
-              <img
-                v-for="(img, idx) in parsedImages.slice(1)"
+
+            <!-- 缩略图列表（多图时可切换） -->
+            <div v-if="parsedImages.length > 1" class="thumb-strip">
+              <button
+                v-for="(img, idx) in parsedImages"
                 :key="idx"
-                :src="img"
-                :alt="`image-${idx + 1}`"
-                loading="lazy"
-              />
+                type="button"
+                class="thumb-item"
+                :class="{ active: idx === currentIndex }"
+                @click="currentIndex = idx"
+              >
+                <img :src="img" :alt="`image-${idx + 1}`" loading="lazy" />
+              </button>
             </div>
           </div>
 
           <!-- 右侧信息区 -->
           <div class="modal-info">
-            <h2 class="modal-title">{{ detail.title || '未命名商品' }}</h2>
-            <div class="info-grid">
-              <div><span>状态</span><b :class="statusTextClass(detail.publish_status)">{{ statusText(detail.publish_status) }}</b></div>
-              <div><span>价格</span><b>¥{{ detail.price || '—' }}</b></div>
-              <div><span>分类</span><b>{{ detail.category || '—' }}</b></div>
-              <div><span>库存</span><b>{{ detail.stock ?? '—' }}</b></div>
-              <div><span>工作流</span><b>{{ detail.workflow_name || '—' }}</b></div>
-              <div><span>节点 Key</span><b class="mono">{{ detail.node_key || '—' }}</b></div>
-              <div><span>账号 ID</span><b>{{ detail.account_id || '—' }}</b></div>
-              <div><span>工作流 ID</span><b>{{ detail.workflow_id || '—' }}</b></div>
-              <div><span>执行 ID</span><b>{{ detail.workflow_execution_id || '—' }}</b></div>
-              <div><span>草稿 ID</span><b class="mono">{{ detail.id }}</b></div>
-              <div><span>创建时间</span><b>{{ formatTime(detail.created_time) }}</b></div>
-              <div><span>更新时间</span><b>{{ formatTime(detail.updated_time) }}</b></div>
-              <div v-if="detail.publish_time"><span>发布时间</span><b>{{ formatTime(detail.publish_time) }}</b></div>
-              <div v-if="detail.xianyu_goods_id"><span>闲鱼商品 ID</span><b class="mono">{{ detail.xianyu_goods_id }}</b></div>
-              <div v-if="detail.publish_attempt_count"><span>发布尝试</span><b>{{ detail.publish_attempt_count }} 次</b></div>
+            <div class="modal-header">
+              <h2 class="modal-title">{{ detail.title || '未命名商品' }}</h2>
+              <div class="modal-header-badges">
+                <span class="status-pill" :class="pillClass(detail.publish_status)">
+                  <span class="pill-dot" />
+                  {{ statusText(detail.publish_status) }}
+                </span>
+              </div>
             </div>
 
-            <h3 v-if="detail.description" class="section-subtitle">商品描述</h3>
+            <!-- 关键信息卡片 -->
+            <div class="info-cards">
+              <div class="info-card">
+                <span class="info-card-label">价格</span>
+                <span class="info-card-value price-text">¥{{ detail.price || '—' }}</span>
+              </div>
+              <div class="info-card">
+                <span class="info-card-label">分类</span>
+                <span class="info-card-value">{{ detail.category || '—' }}</span>
+              </div>
+              <div class="info-card">
+                <span class="info-card-label">库存</span>
+                <span class="info-card-value">{{ detail.stock ?? '—' }}</span>
+              </div>
+              <div class="info-card">
+                <span class="info-card-label">图片数</span>
+                <span class="info-card-value">{{ parsedImages.length }}</span>
+              </div>
+            </div>
+
+            <!-- 详细字段表格 -->
+            <details class="detail-collapse" open>
+              <summary>完整字段</summary>
+              <div class="info-grid">
+                <div><span>工作流</span><b>{{ detail.workflow_name || '—' }}</b></div>
+                <div><span>节点 Key</span><b class="mono">{{ detail.node_key || '—' }}</b></div>
+                <div><span>账号 ID</span><b>{{ detail.account_id || '—' }}</b></div>
+                <div><span>工作流 ID</span><b>{{ detail.workflow_id || '—' }}</b></div>
+                <div><span>执行 ID</span><b>{{ detail.workflow_execution_id || '—' }}</b></div>
+                <div><span>草稿 ID</span><b class="mono">{{ detail.id }}</b></div>
+                <div><span>创建时间</span><b>{{ formatTime(detail.created_time) }}</b></div>
+                <div><span>更新时间</span><b>{{ formatTime(detail.updated_time) }}</b></div>
+                <div v-if="detail.publish_time"><span>发布时间</span><b>{{ formatTime(detail.publish_time) }}</b></div>
+                <div v-if="detail.xianyu_goods_id"><span>闲鱼商品 ID</span><b class="mono">{{ detail.xianyu_goods_id }}</b></div>
+                <div v-if="detail.publish_attempt_count"><span>发布尝试</span><b>{{ detail.publish_attempt_count }} 次</b></div>
+                <div v-if="detail.source_item_id"><span>源商品 ID</span><b class="mono">{{ truncate(detail.source_item_id, 24) }}</b></div>
+              </div>
+            </details>
+
+            <!-- 商品描述 -->
+            <h3 v-if="detail.description" class="section-subtitle">
+              <Icon name="message" />
+              <span>商品描述</span>
+              <button v-if="detail.description" type="button" class="copy-btn" @click="copyDescription">
+                <Icon name="copy" />
+                <span>{{ copied ? '已复制' : '复制' }}</span>
+              </button>
+            </h3>
             <pre v-if="detail.description" class="prompt-text">{{ detail.description }}</pre>
 
             <div v-if="detail.publish_error_message" class="error-block">
-              <h3 class="section-subtitle">发布失败原因</h3>
+              <h3 class="section-subtitle">
+                <Icon name="warning" />
+                <span>发布失败原因</span>
+              </h3>
               <pre class="prompt-text error">{{ detail.publish_error_message }}</pre>
             </div>
 
@@ -196,11 +313,10 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import StatCard from '../components/StatCard.vue'
 import CardPanel from '../components/CardPanel.vue'
 import AppButton from '../components/AppButton.vue'
-import Badge from '../components/Badge.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Icon from '../components/Icon.vue'
 import Pagination from '../components/Pagination.vue'
@@ -231,6 +347,16 @@ const detail = ref(null)
 const retrying = ref(false)
 const batchRetrying = ref(false)
 const deleting = ref(false)
+const currentIndex = ref(0)
+const copied = ref(false)
+
+const statusOptions = [
+  { value: 'all', label: '全部', dot: 'dot-all' },
+  { value: 'draft', label: '待发布', dot: 'dot-draft' },
+  { value: 'publishing', label: '发布中', dot: 'dot-publishing' },
+  { value: 'published', label: '已发布', dot: 'dot-published' },
+  { value: 'failed', label: '失败', dot: 'dot-failed' }
+]
 
 const parsedImages = computed(() => {
   if (!detail.value) return []
@@ -247,6 +373,10 @@ const parsedImages = computed(() => {
   return []
 })
 
+const currentImage = computed(() => parsedImages.value[currentIndex.value] || detail.value?.cover_pic || '')
+
+watch(detail, () => { currentIndex.value = 0 })
+
 function metricText(value) {
   return value === null || value === undefined ? '—' : value
 }
@@ -260,23 +390,13 @@ function statusText(s) {
   })[s] || s || '—'
 }
 
-function statusBadgeType(s) {
+function pillClass(s) {
   return ({
-    draft: 'gray',
-    publishing: 'blue',
-    published: 'green',
-    failed: 'red'
-  })[s] || 'gray'
-}
-
-function statusClass(s) {
-  return `status-${s || 'draft'}`
-}
-
-function statusTextClass(s) {
-  if (s === 'published') return 'text-success'
-  if (s === 'failed') return 'text-fail'
-  return ''
+    draft: 'pill-draft',
+    publishing: 'pill-publishing',
+    published: 'pill-published',
+    failed: 'pill-fail'
+  })[s] || 'pill-draft'
 }
 
 function canRetry(s) {
@@ -293,9 +413,25 @@ function formatTime(value) {
   return String(value).replace('T', ' ').replace(/\.\d+$/, '').slice(0, 19)
 }
 
+function imageCount(record) {
+  if (!record) return 0
+  const raw = record.image_urls
+  if (Array.isArray(raw)) return raw.filter(Boolean).length
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed) ? parsed.filter(Boolean).length : 0
+    } catch {
+      return 0
+    }
+  }
+  return 0
+}
+
 function onImageError(event, record) {
-  // 图片加载失败时，清空 cover_pic 触发占位符显示
-  if (record) record.cover_pic = ''
+  if (event && event.target) {
+    event.target.style.opacity = '0.15'
+  }
 }
 
 function extractListData(res) {
@@ -386,6 +522,7 @@ function openDetail(record) {
 
 function closeDetail() {
   detail.value = null
+  copied.value = false
 }
 
 async function refreshDetail(draftId) {
@@ -397,6 +534,22 @@ async function refreshDetail(draftId) {
     }
   } catch (e) {
     // 详情刷新失败时保持当前详情，不阻塞主流程
+  }
+}
+
+async function copyDescription() {
+  if (!detail.value || !detail.value.description) return
+  try {
+    await navigator.clipboard.writeText(detail.value.description)
+    copied.value = true
+    setTimeout(() => { copied.value = false }, 2000)
+  } catch {
+    const ta = document.createElement('textarea')
+    ta.value = detail.value.description
+    document.body.appendChild(ta)
+    ta.select()
+    try { document.execCommand('copy'); copied.value = true; setTimeout(() => { copied.value = false }, 2000) } catch {}
+    document.body.removeChild(ta)
   }
 }
 
@@ -505,140 +658,359 @@ onBeforeUnmount(() => {
   display: block;
 }
 
+/* === 筛选区 === */
 .filter-bar {
-  margin-bottom: 16px;
+  margin-bottom: 18px;
   flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.filter-chip-group {
+  display: inline-flex;
+  background: #f4f6fa;
+  border-radius: 10px;
+  padding: 3px;
+  gap: 2px;
+}
+.filter-chip {
+  border: none;
+  background: transparent;
+  color: #5a6880;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.18s ease;
+}
+.filter-chip:hover { color: #13213d; }
+.filter-chip.active {
+  background: #fff;
+  color: #0d6bff;
+  box-shadow: 0 1px 3px rgba(31, 53, 94, 0.08);
+}
+.chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #98a2b3;
+}
+.chip-dot.dot-all { background: linear-gradient(135deg, #0d6bff, #16bf78); }
+.chip-dot.dot-draft { background: #98a2b3; }
+.chip-dot.dot-publishing { background: #0d6bff; }
+.chip-dot.dot-published { background: #16bf78; }
+.chip-dot.dot-failed { background: #ff5b61; }
+.filter-divider {
+  width: 1px;
+  height: 22px;
+  background: #e7edf7;
+  margin: 0 4px;
 }
 
+/* === 加载态 === */
 .loading-wrap {
-  padding: 60px 0;
+  padding: 80px 0;
   text-align: center;
 }
 .spinner {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border: 3px solid #eef3fa;
   border-top-color: #0d6bff;
   border-radius: 50%;
-  margin: 0 auto;
+  margin: 0 auto 12px;
   animation: wd-spin 0.8s linear infinite;
 }
 @keyframes wd-spin { to { transform: rotate(360deg); } }
+.subtle {
+  color: #7a879e;
+  font-size: 13px;
+  margin: 0;
+}
 
+/* === 草稿网格 === */
 .draft-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 16px;
-  margin-top: 8px;
+  gap: 18px;
+  margin-top: 4px;
 }
 
+/* === 草稿卡片 === */
 .draft-card {
+  position: relative;
   background: #fff;
-  border: 1px solid rgba(231, 237, 247, 0.95);
-  border-radius: 16px;
-  box-shadow: 0 18px 42px rgba(31, 53, 94, 0.08);
+  border: 1px solid #e7edf7;
+  border-radius: 14px;
   overflow: hidden;
   cursor: pointer;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 0.22s ease;
   display: flex;
   flex-direction: column;
+  box-shadow: 0 1px 2px rgba(31, 53, 94, 0.04);
 }
 .draft-card:hover {
-  transform: translateY(-2px);
-  border-color: rgba(13, 107, 255, 0.35);
-  box-shadow: 0 22px 50px rgba(31, 53, 94, 0.12);
+  transform: translateY(-4px);
+  border-color: rgba(13, 107, 255, 0.32);
+  box-shadow: 0 14px 32px rgba(31, 53, 94, 0.12),
+              0 2px 6px rgba(13, 107, 255, 0.08);
 }
-.draft-card.failed {
-  border-color: rgba(239, 68, 68, 0.4);
+.draft-card.is-published {
+  border-color: rgba(22, 191, 120, 0.28);
 }
-.draft-card.failed:hover {
-  border-color: rgba(239, 68, 68, 0.7);
+.draft-card.is-published:hover {
+  border-color: rgba(22, 191, 120, 0.5);
+  box-shadow: 0 14px 32px rgba(22, 191, 120, 0.12);
 }
-.draft-card.status-published {
-  border-color: rgba(22, 191, 120, 0.35);
+.draft-card.is-failed {
+  border-color: rgba(255, 91, 97, 0.28);
 }
-.draft-card.status-published:hover {
-  border-color: rgba(22, 191, 120, 0.6);
+.draft-card.is-failed:hover {
+  border-color: rgba(255, 91, 97, 0.5);
+  box-shadow: 0 14px 32px rgba(255, 91, 97, 0.12);
 }
 
+/* 顶部状态条 */
+.card-status-bar {
+  height: 3px;
+  width: 100%;
+  flex-shrink: 0;
+}
+.card-status-bar.bar-draft {
+  background: linear-gradient(90deg, #98a2b3 0%, #c1c9d6 100%);
+}
+.card-status-bar.bar-publishing {
+  background: linear-gradient(90deg, #0d6bff 0%, #3186ff 100%);
+}
+.card-status-bar.bar-published {
+  background: linear-gradient(90deg, #16bf78 0%, #4ade80 100%);
+}
+.card-status-bar.bar-failed {
+  background: linear-gradient(90deg, #ff5b61 0%, #f87171 100%);
+}
+
+/* 缩略图区 */
 .draft-thumb {
   position: relative;
   width: 100%;
   aspect-ratio: 4 / 3;
-  background: #f3f6fb;
+  background: linear-gradient(135deg, #f6f9ff 0%, #eef3fa 100%);
   overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 .draft-thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
-  transition: transform 0.28s ease;
+  transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .draft-card:hover .draft-thumb img {
-  transform: scale(1.03);
+  transform: scale(1.06);
 }
+
+/* 占位符 */
 .draft-thumb-placeholder {
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 8px;
   color: #98a2b3;
   font-size: 12px;
 }
-.draft-thumb-placeholder :deep(.ui-icon) {
-  width: 32px;
-  height: 32px;
+.placeholder-icon-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(13, 107, 255, 0.08);
+  color: #0d6bff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.placeholder-icon-wrap :deep(.ui-icon) {
+  width: 22px;
+  height: 22px;
 }
 
-.draft-overlay {
+/* 价格角标 */
+.price-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #ef4444;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 2px 8px rgba(31, 53, 94, 0.12);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+}
+.price-symbol {
+  font-size: 11px;
+}
+.price-value {
+  font-size: 14px;
+}
+
+/* 多图指示 */
+.img-count-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(13, 107, 255, 0.92);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  backdrop-filter: blur(8px);
+}
+.img-count-badge :deep(.ui-icon) {
+  width: 12px;
+  height: 12px;
+}
+
+/* hover 遮罩 */
+.thumb-overlay {
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(19, 33, 61, 0) 50%, rgba(19, 33, 61, 0.72) 100%);
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  padding: 10px 12px;
+  align-items: center;
+  padding: 10px;
+  pointer-events: none;
+  background: linear-gradient(180deg,
+    rgba(19, 33, 61, 0) 50%,
+    rgba(19, 33, 61, 0.65) 100%);
   opacity: 0;
   transition: opacity 0.22s ease;
-  color: #fff;
-  pointer-events: none;
 }
-.draft-card:hover .draft-overlay {
+.draft-card:hover .thumb-overlay {
   opacity: 1;
 }
-.overlay-status {
+.overlay-bottom {
+  display: flex;
+  justify-content: center;
+}
+.view-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.95);
+  color: #0d6bff;
   font-size: 12px;
   font-weight: 600;
-  color: #fff;
+  padding: 6px 12px;
+  border-radius: 999px;
+  backdrop-filter: blur(8px);
+  transform: translateY(8px);
+  transition: transform 0.22s ease;
 }
-.overlay-price {
-  font-size: 14px;
-  font-weight: 700;
-  color: #ffd166;
-  margin-top: 2px;
+.draft-card:hover .view-hint {
+  transform: translateY(0);
+}
+.view-hint :deep(.ui-icon) {
+  width: 13px;
+  height: 13px;
 }
 
+/* 信息区 */
 .draft-info {
   padding: 12px 14px 14px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
+  flex: 1;
 }
-.draft-badges {
+.info-row {
   display: flex;
+  align-items: center;
+  gap: 6px;
   flex-wrap: wrap;
-  gap: 4px;
 }
+.info-row-badges {
+  gap: 5px;
+}
+.info-row-meta {
+  justify-content: space-between;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px dashed #eef2f7;
+}
+
+/* 状态 pill */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.pill-draft {
+  background: #f1f4f8;
+  color: #718096;
+}
+.pill-publishing {
+  background: #edf5ff;
+  color: #0d6bff;
+}
+.pill-published {
+  background: #e9fbf3;
+  color: #0e9f6e;
+}
+.pill-fail {
+  background: #fff0f1;
+  color: #ef4444;
+}
+.pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* 工作流标签 */
+.workflow-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #edf5ff;
+  color: #0d6bff;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 标题 */
 .draft-title {
   margin: 0;
   font-size: 14px;
   font-weight: 600;
   color: #13213d;
-  line-height: 1.5;
+  line-height: 1.45;
   display: -webkit-box;
   -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
@@ -646,6 +1018,8 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* 描述 */
 .draft-desc {
   margin: 0;
   font-size: 12px;
@@ -657,25 +1031,37 @@ onBeforeUnmount(() => {
   overflow: hidden;
   word-break: break-word;
   min-height: 36px;
+  flex: 1;
 }
-.draft-meta {
-  margin: 0;
-  display: flex;
-  justify-content: space-between;
+
+/* 元信息行 */
+.meta-category {
+  font-size: 11px;
+  color: #5a6880;
+  background: #f4f6fa;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.meta-time {
+  display: inline-flex;
   align-items: center;
+  gap: 4px;
   font-size: 11px;
   color: #98a2b3;
 }
-.meta-count {
-  color: #0d6bff;
-  font-weight: 600;
+.meta-time :deep(.ui-icon) {
+  width: 12px;
+  height: 12px;
 }
+
+/* 错误信息 */
 .draft-error {
   display: flex;
   align-items: flex-start;
-  gap: 4px;
+  gap: 5px;
   margin-top: 4px;
-  padding: 6px 8px;
+  padding: 7px 9px;
   background: #fff5f5;
   border: 1px solid #ffd1d1;
   border-radius: 6px;
@@ -684,8 +1070,8 @@ onBeforeUnmount(() => {
   line-height: 1.5;
 }
 .draft-error :deep(.ui-icon) {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   flex-shrink: 0;
   margin-top: 1px;
 }
@@ -697,7 +1083,27 @@ onBeforeUnmount(() => {
   word-break: break-word;
 }
 
-/* 详情弹窗 */
+/* 已发布信息 */
+.draft-published-info {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  padding: 7px 9px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #15803d;
+  line-height: 1.5;
+}
+.draft-published-info :deep(.ui-icon) {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+/* === 详情弹窗 === */
 .modal-mask {
   position: fixed;
   inset: 0;
@@ -708,19 +1114,29 @@ onBeforeUnmount(() => {
   justify-content: center;
   padding: 24px;
   overflow: auto;
-  backdrop-filter: blur(2px);
+  backdrop-filter: blur(4px);
+  animation: maskFadeIn 0.2s ease;
+}
+@keyframes maskFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 .modal-body {
   position: relative;
   background: #fff;
-  border-radius: 20px;
-  width: min(1080px, 100%);
+  border-radius: 18px;
+  width: min(1120px, 100%);
   max-height: calc(100vh - 48px);
   overflow: hidden;
   box-shadow: 0 32px 80px rgba(15, 23, 42, 0.35);
   border: 1px solid rgba(231, 237, 247, 0.95);
   display: flex;
   flex-direction: column;
+  animation: modalSlideIn 0.24s cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes modalSlideIn {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 .modal-close {
   position: absolute;
@@ -730,7 +1146,7 @@ onBeforeUnmount(() => {
   height: 36px;
   border-radius: 50%;
   border: none;
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.95);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -741,7 +1157,7 @@ onBeforeUnmount(() => {
 }
 .modal-close:hover {
   background: #fff;
-  transform: scale(1.05);
+  transform: scale(1.08);
 }
 .modal-close :deep(.ui-icon) {
   width: 18px;
@@ -751,21 +1167,30 @@ onBeforeUnmount(() => {
 
 .modal-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 420px;
+  grid-template-columns: minmax(0, 1fr) 440px;
   gap: 0;
   overflow: auto;
   max-height: calc(100vh - 48px);
 }
 
+/* 左侧图片区 */
 .modal-image-area {
-  background: #0e1726;
-  padding: 18px;
+  background: linear-gradient(135deg, #0e1726 0%, #1a2540 100%);
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   align-items: center;
   justify-content: flex-start;
-  min-height: 320px;
+  min-height: 360px;
+}
+.main-image-wrap {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
 }
 .modal-main-image {
   max-width: 100%;
@@ -773,49 +1198,195 @@ onBeforeUnmount(() => {
   object-fit: contain;
   border-radius: 10px;
   display: block;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
-.more-images {
+.download-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #13213d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transition: background 0.18s ease, transform 0.12s ease;
+}
+.download-btn:hover {
+  background: #fff;
+  transform: scale(1.05);
+}
+.download-btn :deep(.ui-icon) {
+  width: 16px;
+  height: 16px;
+}
+.image-index {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  backdrop-filter: blur(8px);
+}
+
+.image-error.large {
+  width: 100%;
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 18px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.7);
+}
+.image-error.large .error-icon-wrap {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.image-error.large .error-icon-wrap :deep(.ui-icon) {
+  width: 28px;
+  height: 28px;
+}
+
+/* 缩略图条 */
+.thumb-strip {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   justify-content: center;
   width: 100%;
+  max-height: 100px;
+  overflow-y: auto;
 }
-.more-images img {
-  width: 84px;
-  height: 84px;
-  object-fit: cover;
+.thumb-item {
+  width: 72px;
+  height: 72px;
   border-radius: 8px;
+  overflow: hidden;
   cursor: pointer;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  transition: transform 0.18s ease;
+  border: 2px solid transparent;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0;
+  transition: all 0.18s ease;
 }
-.more-images img:hover {
+.thumb-item:hover {
+  border-color: rgba(255, 255, 255, 0.4);
   transform: scale(1.05);
 }
+.thumb-item.active {
+  border-color: #0d6bff;
+  box-shadow: 0 0 0 2px rgba(13, 107, 255, 0.4);
+}
+.thumb-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
 
+/* 右侧信息区 */
 .modal-info {
-  padding: 24px 22px;
+  padding: 24px 24px 20px;
   overflow-y: auto;
   background: #fff;
 }
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 18px;
+}
 .modal-title {
-  margin: 0 0 16px;
+  margin: 0;
   font-size: 20px;
   font-weight: 700;
   color: #13213d;
   word-break: break-word;
+  flex: 1;
+}
+.modal-header-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex-shrink: 0;
 }
 
+/* 关键信息卡片 */
+.info-cards {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.info-card {
+  background: #f8fafc;
+  border: 1px solid #eef3fa;
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.info-card-label {
+  font-size: 11px;
+  color: #7a879e;
+  font-weight: 500;
+}
+.info-card-value {
+  font-size: 13px;
+  color: #13213d;
+  font-weight: 600;
+  word-break: break-word;
+}
+.info-card-value.price-text {
+  color: #ef4444;
+  font-size: 16px;
+}
+
+/* 折叠详情 */
+.detail-collapse {
+  margin-bottom: 14px;
+}
+.detail-collapse summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #5a6880;
+  font-weight: 600;
+  padding: 6px 0;
+  user-select: none;
+}
+.detail-collapse summary:hover {
+  color: #0d6bff;
+}
 .info-grid {
   display: grid;
   grid-template-columns: 96px 1fr;
-  gap: 10px 12px;
-  font-size: 13px;
+  gap: 8px 12px;
+  font-size: 12px;
   padding: 12px;
   background: #f8fafc;
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px solid #eef3fa;
+  margin-top: 8px;
 }
 .info-grid span {
   color: #7a879e;
@@ -827,36 +1398,64 @@ onBeforeUnmount(() => {
 }
 .info-grid b.mono {
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 12px;
-}
-.text-success {
-  color: #16bf78 !important;
-}
-.text-fail {
-  color: #ef4444 !important;
+  font-size: 11px;
 }
 
+/* 子标题 */
 .section-subtitle {
-  margin: 18px 0 8px;
-  font-size: 14px;
+  margin: 16px 0 8px;
+  font-size: 13px;
   font-weight: 600;
   color: #13213d;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.section-subtitle :deep(.ui-icon) {
+  width: 14px;
+  height: 14px;
+  color: #5a6880;
+}
+.copy-btn {
+  margin-left: auto;
+  border: 1px solid #e7edf7;
+  background: #f8fafc;
+  color: #5a6880;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.18s ease;
+}
+.copy-btn:hover {
+  background: #edf5ff;
+  border-color: #0d6bff;
+  color: #0d6bff;
+}
+.copy-btn :deep(.ui-icon) {
+  width: 12px;
+  height: 12px;
 }
 
 .prompt-text {
-  background: #f3f5f7;
+  background: #f4f6fa;
   border-radius: 10px;
-  padding: 12px;
+  padding: 14px;
   font-size: 12px;
   line-height: 1.65;
   color: #1f2937;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
-  max-height: 200px;
+  max-height: 220px;
   overflow: auto;
   font-family: ui-monospace, Menlo, Consolas, monospace;
   margin: 0;
+  border: 1px solid #eef3fa;
 }
 .prompt-text.error {
   background: #fff5f5;
@@ -871,27 +1470,74 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
-  margin-top: 20px;
+  margin-top: 22px;
   padding-top: 16px;
   border-top: 1px solid #eef3fa;
 }
 
-@media (max-width: 880px) {
+/* 全局错误提示 */
+.global-notice {
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.global-notice.error {
+  background: #fff5f5;
+  color: #b91c1c;
+  border: 1px solid #ffd1d1;
+}
+
+/* === 响应式 === */
+@media (max-width: 960px) {
   .modal-grid {
     grid-template-columns: 1fr;
   }
   .modal-image-area {
-    min-height: 240px;
+    min-height: 280px;
+    padding: 16px;
+  }
+  .modal-info {
+    padding: 18px;
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 720px) {
+  .draft-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+  }
+  .info-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
   .filter-bar {
     gap: 8px;
   }
   .filter-bar .input {
     max-width: 100% !important;
     width: 100%;
+  }
+  .filter-chip-group {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .filter-chip {
+    flex: 1;
+    justify-content: center;
+    padding: 6px 8px;
+  }
+  .filter-divider {
+    display: none;
+  }
+  .draft-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+  .draft-info {
+    padding: 10px;
   }
 }
 </style>
