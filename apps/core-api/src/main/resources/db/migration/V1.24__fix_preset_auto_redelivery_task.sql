@@ -16,28 +16,23 @@ WHERE `task_type` = 'auto_redelivery'
 -- 2. 为每个预置的 auto_redelivery 任务填充 accountIds 为租户全部闲鱼账号
 --    使用 JSON_OBJECT + JSON_ARRAYAGG 重建 config_json
 --    account_id 设为该租户第一个账号（兼容旧逻辑，前端取 accountIds[0]）
+--    注意：MySQL 不允许在 UPDATE JOIN 派生表中引用外层 UPDATE 目标表别名，
+--          故改为直接在 SET 子句中使用相关子查询
 UPDATE `scheduled_task` t
-JOIN (
-    SELECT
-        t2.`id` AS task_id,
-        t2.`tenant_id`,
-        JSON_OBJECT(
-            'intervalMinutes', 10,
-            'accountIds', COALESCE(
-                (SELECT JSON_ARRAYAGG(xa.`id`)
-                 FROM `xianyu_account` xa
-                 WHERE xa.`tenant_id` = t2.`tenant_id`
-                   AND xa.`deleted` = 0),
-                JSON_ARRAY()
-            )
-        ) AS new_config
-    FROM `scheduled_task` t2
-    WHERE t2.`task_type` = 'auto_redelivery'
-      AND t2.`deleted` = 0
-) AS sub ON t.`id` = sub.task_id
-SET t.`config_json` = sub.new_config,
+SET t.`config_json` = JSON_OBJECT(
+        'intervalMinutes', 10,
+        'accountIds', COALESCE(
+            (SELECT JSON_ARRAYAGG(xa.`id`)
+             FROM `xianyu_account` xa
+             WHERE xa.`tenant_id` = t.`tenant_id`
+               AND xa.`deleted` = 0),
+            JSON_ARRAY()
+        )
+    ),
     t.`account_id` = (
         SELECT MIN(xa.`id`) FROM `xianyu_account` xa
         WHERE xa.`tenant_id` = t.`tenant_id` AND xa.`deleted` = 0
     ),
-    t.`updated_time` = NOW();
+    t.`updated_time` = NOW()
+WHERE t.`task_type` = 'auto_redelivery'
+  AND t.`deleted` = 0;
