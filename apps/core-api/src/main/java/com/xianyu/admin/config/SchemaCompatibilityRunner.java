@@ -1778,6 +1778,13 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
                 "CREATE INDEX idx_oih_request_id ON opportunity_image_history(request_id)");
         createIndexIfMissing("opportunity_image_history", "idx_oih_created_time",
                 "CREATE INDEX idx_oih_created_time ON opportunity_image_history(created_time)");
+        // V1.25: 生图来源相关字段（兼容旧库自动补字段）
+        addColumnIfMissing("opportunity_image_history", "source", "VARCHAR(20) NOT NULL DEFAULT 'opportunity'");
+        addColumnIfMissing("opportunity_image_history", "workflow_id", "BIGINT NULL");
+        addColumnIfMissing("opportunity_image_history", "workflow_execution_id", "BIGINT NULL");
+        addColumnIfMissing("opportunity_image_history", "workflow_node_key", "VARCHAR(100) NULL");
+        createIndexIfMissing("opportunity_image_history", "idx_oih_source_tenant_created",
+                "CREATE INDEX idx_oih_source_tenant_created ON opportunity_image_history(source, tenant_id, created_time DESC)");
         addColumnIfMissing("workflow_definition", "enabled", "TINYINT DEFAULT 0");
         addColumnIfMissing("workflow_definition", "published_time", "DATETIME NULL");
         // 早期 DataInitializer 创建的 workflow_edge 表缺少 updated_time 列，
