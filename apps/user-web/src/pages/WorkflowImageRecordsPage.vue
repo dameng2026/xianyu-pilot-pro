@@ -185,7 +185,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import StatCard from '../components/StatCard.vue'
 import CardPanel from '../components/CardPanel.vue'
 import AppButton from '../components/AppButton.vue'
@@ -375,9 +375,21 @@ async function recover() {
   }
 }
 
+function onHeaderAction(event) {
+  if (event.detail === 'workflow-image-records-refresh') {
+    load()
+    loadStats()
+  }
+}
+
 onMounted(() => {
+  window.addEventListener('xya-header-action', onHeaderAction)
   load()
   loadStats()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('xya-header-action', onHeaderAction)
 })
 </script>
 
