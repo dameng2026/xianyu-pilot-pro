@@ -28,6 +28,11 @@
         </button>
       </div>
 
+      <label class="m-msg-search">
+        <MIcon name="search" :size="20" />
+        <input v-model="searchKeyword" type="search" placeholder="搜索买家、商品或消息内容" aria-label="搜索会话" />
+      </label>
+
       <!-- 会话筛选 Tab -->
       <div class="m-filter-tabs">
         <button
@@ -40,6 +45,12 @@
           {{ tab.label }}
           <span v-if="tab.count > 0" class="m-filter-count">{{ tab.count }}</span>
         </button>
+      </div>
+
+      <!-- 保留天数提示 -->
+      <div v-if="retentionNotice" class="m-retention-notice">
+        <MIcon name="info" :size="14" />
+        <span>{{ retentionNotice }}</span>
       </div>
 
       <!-- 加载状态 -->
@@ -89,6 +100,7 @@
             </div>
           </div>
         </div>
+        <div class="m-msg-list-total">共 {{ filteredConversations.length }} 条会话</div>
       </div>
 
       <div class="m-msg-tip">
@@ -115,7 +127,20 @@
         </button>
       </div>
 
+      <div class="m-chat-product-card">
+        <div class="m-chat-product-thumb"><MIcon name="bag" :size="26" /></div>
+        <div class="m-chat-product-main">
+          <strong>{{ activeChat.goodsTitle || activeChat.product || '关联商品' }}</strong>
+          <span>ID：{{ activeChat.xyGoodsId || activeChat.goodsId || '--' }}</span>
+        </div>
+        <div class="m-chat-product-actions">
+          <button type="button" class="m-chat-product-secondary" @click="$emit('force-desktop')">查看商品</button>
+          <button type="button" class="m-chat-product-primary" @click="$emit('force-desktop')">发送商品</button>
+        </div>
+      </div>
+
       <div ref="chatBoxRef" class="m-chat-body">
+        <div class="m-chat-day-divider"><span>今天</span></div>
         <div v-if="chatLoading" class="m-chat-loading" role="status" aria-live="polite">
           <div class="m-loading-spinner"></div>
           <span>正在加载消息...</span>
@@ -155,18 +180,31 @@
         </div>
       </div>
 
-      <div class="m-chat-input">
-        <div v-if="sendError" class="m-chat-send-error" role="alert">{{ sendError }}</div>
-        <input
-          v-model="draft"
-          type="text"
-          placeholder="输入消息..."
-          :disabled="!!chatError"
-          @keyup.enter="sendCurrentMessage"
-        />
-        <button class="m-chat-send" :disabled="!draft.trim() || sending || !!chatError" @click="sendCurrentMessage">
-          <MIcon name="send" :size="18" />
+      <div class="m-chat-quick-actions">
+        <button type="button" @click="$emit('force-desktop')"><MIcon name="image" :size="18" /><span>发送图片</span></button>
+        <button type="button" @click="$emit('force-desktop')"><MIcon name="link" :size="18" /><span>发送商品链接</span></button>
+        <button
+          type="button"
+          :class="conversationAutoReplyStatusClass"
+          :disabled="aiSwitchLoading || !activeChat"
+          @click="toggleConversationAutoReplyState"
+        >
+          <MIcon name="power" :size="18" />
+          <span>{{ conversationAutoReplyButtonText }}</span>
         </button>
+      </div>
+
+      <div class="m-chat-compose">
+        <div v-if="sendError" class="m-chat-send-error" role="alert">{{ sendError }}</div>
+        <button type="button" class="m-chat-attach" @click="$emit('force-desktop')"><MIcon name="plus" :size="20" /></button>
+        <textarea
+          v-model="draft"
+          rows="2"
+          placeholder="输入消息，Enter 发送&#10;Shift+Enter 换行"
+          :disabled="!!chatError"
+          @keydown.enter.exact.prevent="sendCurrentMessage"
+        ></textarea>
+        <button class="m-chat-send" :disabled="!draft.trim() || sending || !!chatError" @click="sendCurrentMessage">发送</button>
       </div>
     </template>
 
@@ -181,7 +219,12 @@ import MobileUnavailableState from './MobileUnavailableState.vue'
 import { getLiteAccounts } from '../api/accounts.js'
 import { onlineConversations, messageContext, markConversationRead } from '../api/messages.js'
 import { sendMessage } from '../api/websocket.js'
+import { getRetentionInfo } from '../api/system.js'
 import { openTrustedMediaUrl, resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
+import {
+  toggleConversationAutoReply,
+  getConversationAutoReplyStatus,
+} from '../api/autoReplyScope.js'
 import {
   extractMessageDisplayText,
   findConversationMatchIndex,
@@ -190,7 +233,8 @@ import {
   getConversationRecordId,
   isSameConversationByPayload,
   matchesAccountSelection,
-  mergeConversationSnapshots
+  mergeConversationSnapshots,
+  parseMessageTimestamp
 } from '../utils/messagesPageState.js'
 
 defineEmits(['force-desktop', 'navigate'])
@@ -201,6 +245,7 @@ const loading = ref(true)
 const loadError = ref('')
 const selectedAccountId = ref('')
 const filterType = ref('all')
+const searchKeyword = ref('')
 
 const activeChat = ref(null)
 const chatMessages = ref([])
@@ -210,14 +255,103 @@ const chatBoxRef = ref(null)
 const draft = ref('')
 const sending = ref(false)
 const sendError = ref('')
+// 会话级自动回复状态（V1.13 引入，支持人工干预暂停/手动关闭/自动恢复）
+// autoReplyPaused: 0=运行中 1=已暂停
+// autoReplyManualDisabled: 0=可自动恢复 1=手动关闭（禁止自动恢复，仅用户手动开启）
+// runningEnabled: 综合考虑账号级/全局开关 + 会话级暂停后的实际运行状态
+const conversationAutoReplyState = ref({
+  autoReplyPaused: 0,
+  autoReplyManualDisabled: 0,
+  lastManualReplyAt: 0,
+  lastAutoReplyAt: 0,
+  effectiveEnabled: null,
+  runningEnabled: null,
+  pausedReason: '',
+})
+const aiSwitchLoading = ref(false)
 let pollingTimer = null
+
+// 数据保留策略提示文案（chatMessageCleanupEnabled && retentionDays>0 时展示）
+const retentionNotice = ref('')
+async function loadRetentionNotice() {
+  try {
+    const info = await getRetentionInfo()
+    if (info && info.chatMessageCleanupEnabled && info.retentionDays > 0) {
+      retentionNotice.value = `聊天记录保留 ${info.retentionDays} 天，更早的消息打开会话后可自动加载`
+    } else {
+      retentionNotice.value = ''
+    }
+  } catch {
+    retentionNotice.value = ''
+  }
+}
+
+// 本地已读状态管理：记录每个会话用户最后查看时的最新消息时间
+// 当服务端轮询返回的会话最后消息时间 <= 本地记录时间时，强制 unreadCount = 0
+// 这样无需依赖闲鱼服务端，用户读完消息后小红点立即消失，只有再来新消息才再次显示未读
+const READ_STATE_STORAGE_KEY = 'xya-mobile-msg-read-state-v1'
+
+function loadReadStateFromStorage() {
+  try {
+    const raw = localStorage.getItem(READ_STATE_STORAGE_KEY)
+    if (raw) {
+      const data = JSON.parse(raw)
+      if (data && typeof data === 'object') {
+        const map = new Map()
+        Object.entries(data).forEach(([key, value]) => {
+          const num = Number(value)
+          if (Number.isFinite(num) && num > 0) map.set(key, num)
+        })
+        return map
+      }
+    }
+  } catch {}
+  return new Map()
+}
+
+function persistReadState(state) {
+  try {
+    const obj = {}
+    state.forEach((value, key) => { obj[key] = value })
+    localStorage.setItem(READ_STATE_STORAGE_KEY, JSON.stringify(obj))
+  } catch {}
+}
+
+const readState = loadReadStateFromStorage()
+
+function getConversationLastMessageTime(conv) {
+  return parseMessageTimestamp(
+    conv?.lastMessageTime ?? conv?.updatedAt ?? conv?.messageTime ?? conv?.createdAt ?? 0
+  )
+}
+
+function applyLocalReadState(conv) {
+  const convKey = getConversationIdentityKey(conv)
+  if (!convKey) return conv
+  const lastReadTime = readState.get(convKey)
+  if (!lastReadTime) return conv
+  const lastMsgTime = getConversationLastMessageTime(conv)
+  if (!lastMsgTime) return conv
+  // 本地已读时间 >= 会话最后消息时间：会话已被用户查看过且没有新消息
+  if (lastReadTime >= lastMsgTime && Number(conv.unreadCount || 0) > 0) {
+    return { ...conv, unreadCount: 0 }
+  }
+  return conv
+}
+
+function markConversationReadLocally(conv) {
+  const convKey = getConversationIdentityKey(conv)
+  if (!convKey) return
+  const lastMsgTime = getConversationLastMessageTime(conv) || Date.now()
+  readState.set(convKey, lastMsgTime)
+  persistReadState(readState)
+}
 
 const filterTabs = computed(() => [
   { key: 'all', label: '全部', count: conversations.value.length },
-  { key: 'unreplied', label: '未回复', count: conversations.value.filter(c => Number(c.unreadCount || 0) > 0).length },
+  { key: 'unreplied', label: '未读', count: conversations.value.filter(c => Number(c.unreadCount || 0) > 0).length },
   { key: 'inProgress', label: '进行中', count: conversations.value.filter(c => !isCompleted(c)).length },
-  { key: 'completed', label: '已完成', count: conversations.value.filter(c => isCompleted(c)).length },
-  { key: 'robot', label: '机器人', count: conversations.value.filter(c => !!c.botEnabled).length }
+  { key: 'completed', label: '已结束', count: conversations.value.filter(c => isCompleted(c)).length }
 ])
 
 const emptyText = computed(() => {
@@ -229,17 +363,111 @@ const emptyText = computed(() => {
 })
 
 const filteredConversations = computed(() => {
+  const keyword = searchKeyword.value.trim().toLowerCase()
   return conversations.value.filter(c => {
-    if (filterType.value === 'unreplied') return Number(c.unreadCount || 0) > 0
-    if (filterType.value === 'inProgress') return !isCompleted(c)
-    if (filterType.value === 'completed') return isCompleted(c)
-    if (filterType.value === 'robot') return !!c.botEnabled
-    return true
+    if (filterType.value === 'unreplied' && Number(c.unreadCount || 0) <= 0) return false
+    if (filterType.value === 'inProgress' && isCompleted(c)) return false
+    if (filterType.value === 'completed' && !isCompleted(c)) return false
+    if (!keyword) return true
+    return [resolvePeerName(c), c.lastMessage, c.lastContent, c.product, c.goodsTitle]
+      .some(value => String(value || '').toLowerCase().includes(keyword))
   })
 })
 
 function isCompleted(c) {
   return ['completed', 'closed', 'transferred'].includes(c.sessionStatus) || c.closed === true
+}
+
+// 会话级自动回复按钮文案（3态：运行中/人工暂停/手动关闭）
+const conversationAutoReplyButtonText = computed(() => {
+  if (aiSwitchLoading.value) return '处理中...'
+  if (!activeChat.value) return '自动回复'
+  const state = conversationAutoReplyState.value
+  if (state.autoReplyManualDisabled === 1) return '手动关闭·点击开启'
+  if (state.autoReplyPaused === 1) return '人工暂停中·点击开启'
+  if (state.runningEnabled === true) return '运行中·点击关闭'
+  if (state.runningEnabled === false) return '已关闭·点击开启'
+  return '自动回复'
+})
+
+// 会话级自动回复状态对应的样式 class
+const conversationAutoReplyStatusClass = computed(() => {
+  const state = conversationAutoReplyState.value
+  if (state.autoReplyManualDisabled === 1) return 'm-auto-reply-disabled'
+  if (state.autoReplyPaused === 1) return 'm-auto-reply-paused'
+  if (state.runningEnabled === true) return 'm-auto-reply-running'
+  return 'm-auto-reply-unknown'
+})
+
+// 加载会话级自动回复状态（V1.13 引入）
+async function loadConversationAutoReplyStatus() {
+  const conv = activeChat.value
+  if (!conv) {
+    conversationAutoReplyState.value = {
+      autoReplyPaused: 0,
+      autoReplyManualDisabled: 0,
+      lastManualReplyAt: 0,
+      lastAutoReplyAt: 0,
+      effectiveEnabled: null,
+      runningEnabled: null,
+      pausedReason: '',
+    }
+    return
+  }
+  const accountId = Number(conv.xianyuAccountId || conv.accountId || selectedAccountId.value || 0)
+  if (!accountId) return
+  try {
+    const params = { accountId }
+    if (conv.sid) params.sid = conv.sid
+    if (conv.peerUserId) params.peerUserId = conv.peerUserId
+    const res = await getConversationAutoReplyStatus(params)
+    const data = res?.data?.data || res?.data
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      conversationAutoReplyState.value = {
+        autoReplyPaused: Number(data.autoReplyPaused ?? data.auto_reply_paused ?? 0),
+        autoReplyManualDisabled: Number(data.autoReplyManualDisabled ?? data.auto_reply_manual_disabled ?? 0),
+        lastManualReplyAt: Number(data.lastManualReplyAt ?? data.last_manual_reply_at ?? 0),
+        lastAutoReplyAt: Number(data.lastAutoReplyAt ?? data.last_auto_reply_at ?? 0),
+        effectiveEnabled: data.effectiveEnabled ?? data.effective_enabled ?? null,
+        runningEnabled: data.runningEnabled ?? data.running_enabled ?? null,
+        pausedReason: data.pausedReason || data.paused_reason || '',
+      }
+    }
+  } catch (e) {
+    // 会话级状态加载失败不阻塞主流程
+    console.warn('[Mobile MSG] loadConversationAutoReplyStatus failed:', e)
+  }
+}
+
+// 切换会话级自动回复开关
+async function toggleConversationAutoReplyState() {
+  if (aiSwitchLoading.value) return
+  const conv = activeChat.value
+  if (!conv) {
+    sendError.value = '请先选择会话'
+    return
+  }
+  const accountId = Number(conv.xianyuAccountId || conv.accountId || selectedAccountId.value || 0)
+  if (!accountId) {
+    sendError.value = '账号信息缺失，无法切换自动回复'
+    return
+  }
+  aiSwitchLoading.value = true
+  sendError.value = ''
+  try {
+    const state = conversationAutoReplyState.value
+    const currentRunning = state.runningEnabled === true
+    const newValue = !currentRunning
+    const payload = { accountId, enabled: newValue }
+    if (conv.sid) payload.sid = conv.sid
+    if (conv.peerUserId) payload.peerUserId = conv.peerUserId
+    await toggleConversationAutoReply(payload)
+    await loadConversationAutoReplyStatus()
+  } catch (e) {
+    sendError.value = e?.message || '自动回复开关更新失败'
+  } finally {
+    aiSwitchLoading.value = false
+  }
 }
 
 function normalizeSid(value) {
@@ -331,7 +559,9 @@ async function loadConversations() {
           .filter(accountId => accountId > 0)
     const batches = await Promise.all(accountIds.map(accountId => fetchConversationBatch(accountId)))
     const merged = mergeConversationSnapshots(batches.flat()).filter(item => getConversationIdentityKey(item))
-    conversations.value = merged
+    // 应用本地已读状态：用户已经查看过且没有新消息的会话，强制 unreadCount = 0
+    // 防止服务端轮询返回的滞后 unreadCount 覆盖本地已读状态
+    conversations.value = merged.map(item => applyLocalReadState(item))
     if (activeChat.value) {
       const nextActive = findPreservedConversation(conversations.value, activeChat.value)
       if (nextActive) {
@@ -377,20 +607,25 @@ async function openConversation(conv) {
   chatLoading.value = true
   await nextTick()
   await loadChatMessages()
-  if (conv.unreadCount > 0) {
-    try {
-      const recordId = getConversationRecordId(conv)
-      if (!recordId) throw new Error('当前会话缺少服务端记录编号')
-      await markConversationRead(recordId)
-      conv.unreadCount = 0
-      conversations.value = conversations.value.map(item =>
-        isSameConversation(item, conv) ? { ...item, unreadCount: 0 } : item
-      )
-      activeChat.value = { ...activeChat.value, unreadCount: 0 }
-    } catch (readError) {
-      chatError.value = readError?.message || '会话已打开，但已读状态同步失败'
-    }
+  // 立即在本地标记为已读（无需依赖服务端 markConversationRead 成功）
+  // 这样用户读完消息后小红点立即消失，只有再来新消息才再次显示未读
+  markConversationReadLocally(conv)
+  if (Number(conv.unreadCount || 0) > 0) {
+    conv.unreadCount = 0
+    conversations.value = conversations.value.map(item =>
+      isSameConversation(item, conv) ? { ...item, unreadCount: 0 } : item
+    )
+    activeChat.value = { ...activeChat.value, unreadCount: 0 }
   }
+  // 异步通知服务端（失败不影响本地已读状态，本地已记录已读时间）
+  try {
+    const recordId = getConversationRecordId(conv)
+    if (recordId) {
+      await markConversationRead(recordId).catch(() => {})
+    }
+  } catch {}
+  // 加载会话级自动回复状态（V1.13 引入）
+  loadConversationAutoReplyStatus().catch(() => {})
 }
 
 async function reloadConversations() {
@@ -477,6 +712,7 @@ function upsertConversationFromEvent(payload) {
     payload.peerUserId || payload.peerExternalUid || payload.senderUserId || payload.receiverUserId || ''
   )
   const preview = extractMessageDisplayText(payload)
+  const payloadTime = parseMessageTimestamp(payload.messageTime || payload.timestamp || payload.sendTime || Date.now())
   const nextConversation = {
     ...payload,
     xianyuAccountId: accountId,
@@ -484,30 +720,71 @@ function upsertConversationFromEvent(payload) {
     peerUserId,
     lastMessage: preview,
     lastContent: preview,
-    lastMessageTime: Number(payload.messageTime || Date.now()),
-    updatedAt: Number(payload.messageTime || Date.now()),
+    lastMessageTime: payloadTime,
+    updatedAt: payloadTime,
     lastIsAutoReply: Boolean(payload.isAutoReply || payload.is_auto_reply),
     botEnabled: Boolean(payload.isAutoReply || payload.is_auto_reply || payload.botEnabled),
   }
   const incomingUnread = String(payload.direction || '').toUpperCase() === 'IN'
+  const isActiveChat = isSameConversation(activeChat.value, nextConversation)
+  // 检查本地已读状态：如果新消息时间 <= 最后查看时间，则视为已读
+  // （通常只有 WS 推送延迟的旧消息才会命中此条件，避免旧消息触发未读小红点）
+  const convKey = getConversationIdentityKey(nextConversation)
+  const lastReadTime = convKey ? readState.get(convKey) : 0
+  const isReadByLocal = Boolean(lastReadTime && payloadTime && payloadTime <= lastReadTime)
+
   const existingIndex = findConversationMatchIndex(conversations.value, nextConversation)
   if (existingIndex >= 0) {
     const existing = conversations.value[existingIndex]
+    let nextUnreadCount
+    if (isActiveChat || isReadByLocal) {
+      nextUnreadCount = 0
+    } else if (incomingUnread) {
+      nextUnreadCount = Math.max(Number(existing.unreadCount || 0), Number(nextConversation.unreadCount || 0)) + 1
+    } else {
+      nextUnreadCount = Number(existing.unreadCount || 0)
+    }
     const merged = {
       ...existing,
       ...nextConversation,
-      unreadCount: isSameConversation(activeChat.value, nextConversation)
-        ? 0
-        : Math.max(Number(existing.unreadCount || 0), Number(nextConversation.unreadCount || 0)) + (incomingUnread ? 1 : 0),
+      unreadCount: nextUnreadCount,
     }
     conversations.value = [merged, ...conversations.value.filter((_, index) => index !== existingIndex)]
   } else {
-    conversations.value = [{ ...nextConversation, unreadCount: incomingUnread ? 1 : 0 }, ...conversations.value]
+    let nextUnreadCount
+    if (isReadByLocal) {
+      nextUnreadCount = 0
+    } else if (incomingUnread) {
+      nextUnreadCount = 1
+    } else {
+      nextUnreadCount = 0
+    }
+    conversations.value = [{ ...nextConversation, unreadCount: nextUnreadCount }, ...conversations.value]
   }
 }
 
 function onSse(event) {
-  const data = event?.detail?.payload || event?.detail || {}
+  const detail = event?.detail
+  const data = detail?.payload || detail || {}
+  const eventType = detail?.type || data.type || data.event || 'message'
+
+  // 会话级自动回复状态变更事件（V1.13 引入）
+  if (eventType === 'conversation_auto_reply_state') {
+    if (!matchesAccountSelection(selectedAccountId.value, data)) return
+    if (activeChat.value && isSameConversation(activeChat.value, data)) {
+      conversationAutoReplyState.value = {
+        autoReplyPaused: Number(data.autoReplyPaused ?? 0),
+        autoReplyManualDisabled: Number(data.autoReplyManualDisabled ?? 0),
+        lastManualReplyAt: Number(data.lastManualReplyAt ?? 0),
+        lastAutoReplyAt: Number(data.lastAutoReplyAt ?? 0),
+        effectiveEnabled: data.effectiveEnabled ?? null,
+        runningEnabled: data.runningEnabled ?? null,
+        pausedReason: data.pausedReason || '',
+      }
+    }
+    return
+  }
+
   if (!matchesAccountSelection(selectedAccountId.value, data)) return
   const normalized = normalizeMessages([data])[0]
   if (!normalized) return
@@ -515,6 +792,14 @@ function onSse(event) {
   if (activeChat.value && isSameConversation(activeChat.value, data)) {
     chatMessages.value = dedupeMessages([...chatMessages.value, normalized])
     activeChat.value = { ...activeChat.value, unreadCount: 0 }
+    // 用户当前正在查看该会话，新消息视为已读，更新本地已读时间
+    // 避免用户离开后会话又显示未读小红点
+    const convKey = getConversationIdentityKey(activeChat.value)
+    const payloadTime = parseMessageTimestamp(data.messageTime || data.timestamp || data.sendTime || Date.now())
+    if (convKey && payloadTime) {
+      readState.set(convKey, payloadTime)
+      persistReadState(readState)
+    }
     nextTick(() => scrollToBottom())
   }
   upsertConversationFromEvent(data)
@@ -621,9 +906,20 @@ function closeChat() {
   chatError.value = ''
   sendError.value = ''
   draft.value = ''
+  // 重置会话级自动回复状态
+  conversationAutoReplyState.value = {
+    autoReplyPaused: 0,
+    autoReplyManualDisabled: 0,
+    lastManualReplyAt: 0,
+    lastAutoReplyAt: 0,
+    effectiveEnabled: null,
+    runningEnabled: null,
+    pausedReason: '',
+  }
 }
 
 onMounted(async () => {
+  loadRetentionNotice()
   const accountsLoaded = await loadAccounts()
   if (accountsLoaded) {
     await loadConversations()
@@ -711,53 +1007,59 @@ onBeforeUnmount(() => {
 }
 .m-chip-dot.online { background: #16bf78; box-shadow: 0 0 0 2px rgba(22,191,120,0.18); }
 
-.m-filter-tabs {
+.m-msg-search {
+  height: 48px;
   display: flex;
-  gap: 6px;
-  margin-bottom: 12px;
-  margin-left: -16px;
-  margin-right: -16px;
-  padding-left: 16px;
-  padding-right: 16px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  margin-bottom: 14px;
+  border: 1px solid #e7ebf2;
+  border-radius: 14px;
+  background: #f8faff;
+  color: #8b98ad;
 }
-.m-filter-tabs::-webkit-scrollbar { display: none; }
+.m-msg-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #172445;
+  font-size: 15px;
+}
+.m-msg-search input::placeholder { color: #8b98ad; }
+.m-filter-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+  margin-bottom: 16px;
+}
 .m-filter-tab {
+  min-width: 0;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
-  background: transparent;
-  border: none;
-  color: #72809a;
-  font-size: 13px;
-  font-weight: 500;
-  padding: 6px 12px;
-  border-radius: 100px;
+  min-height: 46px;
+  background: #fff;
+  border: 1px solid #e6ebf2;
+  border-radius: 14px;
+  color: #62708b;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 7px 4px;
   cursor: pointer;
   white-space: nowrap;
-  flex-shrink: 0;
-  transition: all 0.15s;
 }
 .m-filter-tab.active {
-  background: rgba(13,107,255,0.1);
-  color: #0d6bff;
-  font-weight: 600;
+  background: #1478f5;
+  border-color: #1478f5;
+  color: #fff;
+  box-shadow: 0 6px 14px rgba(20, 120, 245, 0.2);
 }
-.m-filter-count {
-  background: rgba(13,107,255,0.12);
-  color: #0d6bff;
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 100px;
-  font-weight: 600;
-}
-.m-filter-tab.active .m-filter-count {
-  background: #0d6bff;
-  color: white;
-}
+.m-filter-count { font-size: 12px; font-weight: 500; }
+.m-filter-tab:not(.active) .m-filter-count { color: #7d8aa2; }
 
 .m-loading {
   display: flex;
@@ -797,22 +1099,26 @@ onBeforeUnmount(() => {
 .m-empty-desc { font-size: 13px; color: #8c98ae; }
 
 .m-msg-list {
-  background: white;
-  border-radius: 18px;
-  border: 1px solid #f0f4fa;
+  background: #fff;
+  border-radius: 16px;
+  border: 1px solid #edf0f5;
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(31,53,94,0.04);
+  box-shadow: 0 4px 16px rgba(31, 53, 94, 0.035);
 }
 .m-msg-item {
   display: flex;
-  gap: 12px;
-  padding: 14px 16px;
-  border-bottom: 1px solid #f4f7fc;
+  gap: 13px;
+  padding: 16px 14px;
+  border-bottom: 1px solid #edf1f5;
   cursor: pointer;
-  transition: background 0.15s;
 }
-.m-msg-item:last-child { border-bottom: none; }
 .m-msg-item:active { background: #f8faff; }
+.m-msg-list-total {
+  padding: 14px;
+  text-align: center;
+  color: #8c98ae;
+  font-size: 13px;
+}
 
 .m-msg-avatar {
   width: 44px;
@@ -1019,6 +1325,33 @@ onBeforeUnmount(() => {
 }
 .m-chat-more:active { background: rgba(13,107,255,0.08); }
 
+.m-chat-product-card {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #e7edf8;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(31, 53, 94, 0.06);
+}
+.m-chat-product-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #edf4ff;
+  color: #1677ff;
+}
+.m-chat-product-main { min-width: 0; }
+.m-chat-product-main strong, .m-chat-product-main span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-chat-product-main strong { color: #15213d; font-size: 14px; }
+.m-chat-product-main span { margin-top: 6px; color: #8c98ae; font-size: 12px; }
+.m-chat-product-actions { grid-column: 2; display: flex; gap: 8px; }
+.m-chat-product-actions button { min-width: 0; height: 32px; border-radius: 8px; padding: 0 10px; font-size: 12px; font-weight: 600; }
+.m-chat-product-secondary { border: 1px solid #e2eaf7; background: #f5f8ff; color: #31527f; }
+.m-chat-product-primary { border: 1px solid #1677ff; background: #1677ff; color: #fff; }
 .m-chat-body {
   flex: 1;
   overflow-y: auto;
@@ -1026,6 +1359,8 @@ onBeforeUnmount(() => {
   padding: 14px 0;
   min-height: 300px;
 }
+.m-chat-day-divider { display: flex; align-items: center; gap: 12px; margin: 2px 0 16px; color: #94a1b8; font-size: 12px; }
+.m-chat-day-divider::before, .m-chat-day-divider::after { content: ''; flex: 1; height: 1px; background: #dfe6f2; }
 .m-chat-loading, .m-chat-empty {
   display: flex;
   flex-direction: column;
@@ -1108,38 +1443,88 @@ onBeforeUnmount(() => {
 .m-bubble-send-state { margin-top: 3px; font-size: 10px; opacity: .8; }
 .m-bubble-send-state.failed { color: #fff; font-weight: 700; opacity: 1; }
 
-.m-chat-input {
-  position: sticky;
-  bottom: 0;
-  background: white;
-  border-top: 1px solid #eef2fa;
-  padding: 8px 10px max(8px, env(safe-area-inset-bottom));
-  display: flex;
-  flex-wrap: wrap;
+.m-chat-quick-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+  padding: 8px 0 10px;
+}
+.m-chat-quick-actions button {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 36px;
   align-items: center;
-  margin: 0 -16px;
-  padding-left: 12px;
-  padding-right: 12px;
-}
-.m-chat-send-error {
-  flex: 0 0 100%;
-  color: #c9363e;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid #e7edf8;
+  border-radius: 8px;
+  background: #fff;
+  color: #24507e;
   font-size: 11px;
-  line-height: 1.4;
+  font-weight: 600;
 }
-.m-chat-input input {
-  flex: 1;
-  height: 38px;
-  border: 1px solid #e8edf5;
-  border-radius: 100px;
-  padding: 0 16px;
-  font-size: 14px;
-  background: #f8faff;
+.m-chat-quick-actions span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-chat-quick-actions :deep(svg) { color: #1677ff; flex: 0 0 auto; }
+/* 会话级自动回复按钮3态样式（V1.13 引入） */
+.m-chat-quick-actions button.m-auto-reply-running {
+  border-color: #b7ebd4;
+  background: #e6f9ef;
+  color: #228c52;
+}
+.m-chat-quick-actions button.m-auto-reply-running :deep(svg) { color: #228c52; }
+.m-chat-quick-actions button.m-auto-reply-paused {
+  border-color: #ffe2b4;
+  background: #fff7e6;
+  color: #d68a1a;
+}
+.m-chat-quick-actions button.m-auto-reply-paused :deep(svg) { color: #d68a1a; }
+.m-chat-quick-actions button.m-auto-reply-disabled {
+  border-color: #f5c2c2;
+  background: #fdecec;
+  color: #d64545;
+}
+.m-chat-quick-actions button.m-auto-reply-disabled :deep(svg) { color: #d64545; }
+.m-chat-quick-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.m-chat-compose {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin: 0 -16px;
+  padding: 10px 12px max(10px, env(safe-area-inset-bottom));
+  background: #fff;
+  border-top: 1px solid #e7edf8;
+}
+.m-chat-send-error { grid-column: 1 / -1; color: #c9363e; font-size: 11px; line-height: 1.4; }
+.m-chat-attach {
+  width: 30px;
+  height: 30px;
+  margin-bottom: 7px;
+  padding: 0;
+  border: 1px solid #9eb0cb;
+  border-radius: 50%;
+  background: #fff;
+  color: #61718d;
+}
+.m-chat-compose textarea {
+  width: 100%;
+  min-height: 50px;
+  max-height: 88px;
+  box-sizing: border-box;
+  resize: none;
+  border: 1px solid #e3eaf5;
+  border-radius: 8px;
+  padding: 9px 10px;
+  color: #15213d;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
   outline: none;
-  transition: border-color 0.15s;
 }
-.m-chat-input input:focus { border-color: #0d6bff; background: white; }
+.m-chat-compose textarea:focus { border-color: #1677ff; }
 .m-msg-chat-open .m-chat-header {
   position: static;
   flex: 0 0 auto;
@@ -1149,15 +1534,15 @@ onBeforeUnmount(() => {
   min-height: 0;
   overscroll-behavior: contain;
 }
-.m-msg-chat-open .m-chat-input {
+.m-msg-chat-open .m-chat-compose {
   position: static;
   flex: 0 0 auto;
 }
 .m-msg-chat-open .m-safe-bottom { display: none; }
 .m-chat-send {
-  width: 38px;
+  min-width: 56px;
   height: 38px;
-  border-radius: 50%;
+  border-radius: 8px;
   border: none;
   background: linear-gradient(135deg, #0d6bff, #2580ff);
   color: white;
@@ -1177,4 +1562,17 @@ onBeforeUnmount(() => {
 }
 
 .m-safe-bottom { height: 80px; }
+
+.m-retention-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  background: rgba(13, 107, 255, 0.08);
+  border-radius: 8px;
+  font-size: 12px;
+  color: #0d6bff;
+  line-height: 1.4;
+}
 </style>
