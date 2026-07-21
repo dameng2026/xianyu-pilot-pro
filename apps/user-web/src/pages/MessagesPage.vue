@@ -17,6 +17,11 @@
           </div>
         </div>
 
+        <div v-if="retentionNotice" class="xya-msg-retention-notice">
+          <Icon name="info" />
+          <span>{{ retentionNotice }}</span>
+        </div>
+
         <div class="xya-msg-sidebar-toolbar">
           <select v-model="query.xianyuAccountId" class="xya-msg-select" :disabled="!accountsAvailable">
             <option value="">{{ accountsAvailable ? '全部账号' : '账号列表不可用' }}</option>
@@ -245,7 +250,7 @@
               <button type="button" class="xya-msg-ghost-btn" :disabled="switchingAccount || !contextAvailable" @click="triggerImagePick">发送图片</button>
               <button type="button" class="xya-msg-ghost-btn" :disabled="switchingAccount || !contextAvailable || !selected?.xyGoodsId" @click="sendGoodsLink(selected?.xyGoodsId)">发送商品链接</button>
               <button type="button" class="xya-msg-ghost-btn" :disabled="switchingAccount || aiSwitchLoading || !aiSettingsAvailable" @click="toggleAiAutoReply">
-                {{ aiSwitchLoading ? '处理中...' : aiAutoReplyEnabled === true ? '关闭当前自动回复' : aiAutoReplyEnabled === false ? '开启当前自动回复' : '自动回复状态未知' }}
+                {{ conversationAutoReplyButtonText }}
               </button>
               <input ref="imageInput" type="file" accept="image/*" hidden @change="handleImagePick" />
             </div>
@@ -364,8 +369,8 @@
             </div>
             <div>
               <span>当前状态</span>
-              <strong :class="{ 'success-text': aiAutoReplyEnabled === true, 'danger-text': aiAutoReplyEnabled === false }">
-                {{ aiAutoReplyEnabled === true ? 'AI 自动接待中' : aiAutoReplyEnabled === false ? '已暂停' : '状态未知' }}
+              <strong :class="conversationAutoReplyStatusClass">
+                {{ conversationAutoReplyStatusText }}
               </strong>
             </div>
             <div>
@@ -385,7 +390,7 @@
           </div>
           <div class="xya-msg-card-actions">
             <button type="button" class="xya-msg-primary-btn" :disabled="switchingAccount || aiSwitchLoading || !aiSettingsAvailable" @click="toggleAiAutoReply">
-              {{ aiAutoReplyEnabled === true ? '关闭自动回复' : aiAutoReplyEnabled === false ? '开启自动回复' : '自动回复状态未知' }}
+              {{ conversationAutoReplyButtonText }}
             </button>
             <button type="button" class="xya-msg-ghost-btn" @click="handleRefreshCurrentAccountLoginState">刷新登录状态</button>
           </div>
@@ -561,6 +566,7 @@ import {
 } from '../api/messages.js'
 import { checkLogin, sendImageMessage, sendMessage, startWebSocket, websocketStatus } from '../api/websocket.js'
 import { uploadImage } from '../api/misc.js'
+import { getRetentionInfo } from '../api/system.js'
 import { getCustomerOrders, getOrderDetail } from '../api/orders.js'
 import { imageUploadValidationMessage } from '../utils/imageUploadPolicy.js'
 import { getBusinessSettings, saveBusinessSettings } from '../api/businessSettings.js'
@@ -568,6 +574,8 @@ import { deleteQuickReplyTemplate, getAiCsSetting, getTokenBalance, listQuickRep
 import {
   getAutoReplyScopeProducts,
   getAutoReplyScopeStatus,
+  toggleConversationAutoReply,
+  getConversationAutoReplyStatus,
   updateAccountAutoReplyScope,
   updateProductAutoReplyScope,
 } from '../api/autoReplyScope.js'
@@ -643,6 +651,19 @@ const sendingImage = ref(false)
 const connectingWs = ref(false)
 const statusUpdating = ref(false)
 const error = ref('')
+const retentionNotice = ref('')
+async function loadRetentionNotice() {
+  try {
+    const info = await getRetentionInfo()
+    if (info && info.chatMessageCleanupEnabled && info.retentionDays > 0) {
+      retentionNotice.value = `聊天记录保留 ${info.retentionDays} 天，更早的消息打开会话后可自动加载`
+    } else {
+      retentionNotice.value = ''
+    }
+  } catch {
+    retentionNotice.value = ''
+  }
+}
 
 // === 滑块求解状态 ===
 const { solveStates, solveManually, getAccountSolveStatus } = useCaptchaSolver()
@@ -698,6 +719,19 @@ const accountsLoadError = ref('')
 const conversationsAvailable = ref(false)
 const contextAvailable = ref(false)
 const aiSwitchLoading = ref(false)
+// 会话级自动回复状态（V1.13 引入，支持人工干预暂停/手动关闭/自动恢复）
+// autoReplyPaused: 0=运行中 1=已暂停
+// autoReplyManualDisabled: 0=可自动恢复 1=手动关闭（禁止自动恢复，仅用户手动开启）
+// runningEnabled: 综合考虑账号级/全局开关 + 会话级暂停后的实际运行状态
+const conversationAutoReplyState = ref({
+  autoReplyPaused: 0,
+  autoReplyManualDisabled: 0,
+  lastManualReplyAt: 0,
+  lastAutoReplyAt: 0,
+  effectiveEnabled: null,
+  runningEnabled: null,
+  pausedReason: '',
+})
 const sseHealthy = ref(false)
 const lastSseActivity = ref(0)
 const deletedConversations = ref(new Set())
@@ -796,6 +830,40 @@ const aiRuntimeStatusText = computed(() => {
   if (aiAutoReplyEnabled.value && tokenBalanceError.value) return '自动回复已开启，Token 余额未知'
   if (aiAutoReplyEnabled.value && Number(tokenBalance.value) <= 0) return 'token为零'
   return aiAutoReplyEnabled.value ? 'AI 自动回复已开启' : 'AI 自动回复已关闭'
+})
+
+// 会话级自动回复按钮文案（3态：运行中/人工暂停/手动关闭）
+const conversationAutoReplyButtonText = computed(() => {
+  if (aiSwitchLoading.value) return '处理中...'
+  if (!aiSettingsAvailable.value) return '自动回复状态未知'
+  const state = conversationAutoReplyState.value
+  if (!selected.value) return '自动回复状态未知'
+  if (state.autoReplyManualDisabled === 1) return '手动关闭·点击开启'
+  if (state.autoReplyPaused === 1) return '人工暂停中·点击开启'
+  if (state.runningEnabled === true) return '运行中·点击关闭'
+  if (state.runningEnabled === false) return '已关闭·点击开启'
+  // 会话级状态未就绪时回退到账号/商品级状态
+  return aiAutoReplyEnabled.value === true ? '运行中·点击关闭' : aiAutoReplyEnabled.value === false ? '已关闭·点击开启' : '自动回复状态未知'
+})
+
+// 会话级自动回复当前状态文本（用于"当前状态"指标行）
+const conversationAutoReplyStatusText = computed(() => {
+  const state = conversationAutoReplyState.value
+  if (!selected.value) return aiAutoReplyEnabled.value === true ? 'AI 自动接待中' : aiAutoReplyEnabled.value === false ? '已暂停' : '状态未知'
+  if (state.autoReplyManualDisabled === 1) return '手动关闭'
+  if (state.autoReplyPaused === 1) return '人工暂停中'
+  if (state.runningEnabled === true) return 'AI 自动接待中'
+  if (state.runningEnabled === false) return '已暂停'
+  return aiAutoReplyEnabled.value === true ? 'AI 自动接待中' : aiAutoReplyEnabled.value === false ? '已暂停' : '状态未知'
+})
+
+// 会话级自动回复状态对应的样式 class
+const conversationAutoReplyStatusClass = computed(() => {
+  const state = conversationAutoReplyState.value
+  if (state.autoReplyManualDisabled === 1) return 'danger-text'
+  if (state.autoReplyPaused === 1) return 'warning-text'
+  if (state.runningEnabled === true) return 'success-text'
+  return ''
 })
 
 const currentAccountLoginText = computed(() => {
@@ -2389,6 +2457,44 @@ async function ensureGlobalEnabledBeforeScopeEnable() {
   return true
 }
 
+// 加载会话级自动回复状态（V1.13 引入）
+async function loadConversationAutoReplyStatus() {
+  const accountId = Number(selectedAccountId() || 0)
+  if (!accountId || !selected.value) {
+    conversationAutoReplyState.value = {
+      autoReplyPaused: 0,
+      autoReplyManualDisabled: 0,
+      lastManualReplyAt: 0,
+      lastAutoReplyAt: 0,
+      effectiveEnabled: null,
+      runningEnabled: null,
+      pausedReason: '',
+    }
+    return
+  }
+  try {
+    const params = { accountId }
+    if (selected.value.sid) params.sid = selected.value.sid
+    if (selected.value.peerUserId) params.peerUserId = selected.value.peerUserId
+    const res = await getConversationAutoReplyStatus(params)
+    const data = res?.data?.data || res?.data
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      conversationAutoReplyState.value = {
+        autoReplyPaused: Number(data.autoReplyPaused ?? data.auto_reply_paused ?? 0),
+        autoReplyManualDisabled: Number(data.autoReplyManualDisabled ?? data.auto_reply_manual_disabled ?? 0),
+        lastManualReplyAt: Number(data.lastManualReplyAt ?? data.last_manual_reply_at ?? 0),
+        lastAutoReplyAt: Number(data.lastAutoReplyAt ?? data.last_auto_reply_at ?? 0),
+        effectiveEnabled: data.effectiveEnabled ?? data.effective_enabled ?? null,
+        runningEnabled: data.runningEnabled ?? data.running_enabled ?? null,
+        pausedReason: data.pausedReason || data.paused_reason || '',
+      }
+    }
+  } catch (e) {
+    // 会话级状态加载失败不阻塞主流程，回退到账号/商品级显示
+    console.warn('[MSG] loadConversationAutoReplyStatus failed:', e)
+  }
+}
+
 async function toggleAiAutoReply() {
   if (aiSwitchLoading.value) return
   if (!aiSettingsAvailable.value || aiAutoReplyEnabled.value === null) {
@@ -2400,33 +2506,58 @@ async function toggleAiAutoReply() {
     error.value = '请先选择账号'
     return
   }
+  if (!selected.value) {
+    error.value = '请先选择会话'
+    return
+  }
   aiSwitchLoading.value = true
   try {
-    const newValue = !aiAutoReplyEnabled.value
-    const goodsId = String(selected.value?.xyGoodsId || '')
-    if (goodsId) {
-      if (newValue) {
-        const ensured = await ensureGlobalEnabledBeforeScopeEnable()
-        if (ensured == null) return
-      }
-      const product = aiScopeProducts.value.find(item => String(item.goodsId || '') === goodsId)
-      await updateProductAutoReplyScope({
-        itemId: product?.id || null,
-        goodsId,
-        accountId: Number(query.xianyuAccountId),
-        title: selected.value?.product || selected.value?.goodsTitle || '',
-        imageUrl: normalizeDisplayImage(selected.value?.goodsCoverPic || selected.value?.raw?.goodsCoverPic || ''),
-        enabled: newValue,
-      })
-    } else {
-      if (newValue) {
-        const ensured = await ensureGlobalEnabledBeforeScopeEnable()
-        if (ensured == null) return
-      }
-      await updateAccountAutoReplyScope(accountId, newValue)
+    // 优先调用会话级开关（V1.13 引入），基于会话级运行状态判断目标值
+    const state = conversationAutoReplyState.value
+    const currentRunning = state.runningEnabled === true
+      || (state.runningEnabled === null && aiAutoReplyEnabled.value === true)
+    const newValue = !currentRunning
+
+    // 开启前确保全局开关已开
+    if (newValue) {
+      const ensured = await ensureGlobalEnabledBeforeScopeEnable()
+      if (ensured == null) return
     }
-    await loadAiCsSetting()
-    await loadTokenBalanceValue()
+
+    let usedConversationToggle = false
+    try {
+      const payload = { accountId, enabled: newValue }
+      if (selected.value.sid) payload.sid = selected.value.sid
+      if (selected.value.peerUserId) payload.peerUserId = selected.value.peerUserId
+      await toggleConversationAutoReply(payload)
+      usedConversationToggle = true
+    } catch (convErr) {
+      // 会话级开关失败时回退到商品级/账号级开关
+      console.warn('[MSG] conversation-toggle failed, fallback to scope:', convErr)
+    }
+
+    if (!usedConversationToggle) {
+      const goodsId = String(selected.value?.xyGoodsId || '')
+      if (goodsId) {
+        const product = aiScopeProducts.value.find(item => String(item.goodsId || '') === goodsId)
+        await updateProductAutoReplyScope({
+          itemId: product?.id || null,
+          goodsId,
+          accountId: Number(query.xianyuAccountId),
+          title: selected.value?.product || selected.value?.goodsTitle || '',
+          imageUrl: normalizeDisplayImage(selected.value?.goodsCoverPic || selected.value?.raw?.goodsCoverPic || ''),
+          enabled: newValue,
+        })
+      } else {
+        await updateAccountAutoReplyScope(accountId, newValue)
+      }
+    }
+
+    await Promise.allSettled([
+      loadAiCsSetting(),
+      loadConversationAutoReplyStatus(),
+      loadTokenBalanceValue(),
+    ])
   } catch (e) {
     error.value = e.message || '自动回复开关更新失败'
   } finally {
@@ -2714,6 +2845,29 @@ function onSse(event) {
   const detail = event?.detail
   const data = detail?.payload || detail || {}
   const eventType = detail?.type || data.type || data.event || 'message'
+
+  // 会话级自动回复状态变更事件（V1.13 引入）
+  if (eventType === 'conversation_auto_reply_state') {
+    if (matchesAccountSelection(String(query.xianyuAccountId || ''), data)
+      && selected.value && isSameConversationByPayload(selected.value, data)) {
+      conversationAutoReplyState.value = {
+        autoReplyPaused: Number(data.autoReplyPaused ?? 0),
+        autoReplyManualDisabled: Number(data.autoReplyManualDisabled ?? 0),
+        lastManualReplyAt: Number(data.lastManualReplyAt ?? 0),
+        lastAutoReplyAt: Number(data.lastAutoReplyAt ?? 0),
+        effectiveEnabled: data.effectiveEnabled ?? null,
+        runningEnabled: data.runningEnabled ?? null,
+        pausedReason: data.pausedReason || '',
+      }
+      events.value.unshift({
+        text: `自动回复状态变更：${data.pausedReason || (data.autoReplyManualDisabled === 1 ? '手动关闭' : data.autoReplyPaused === 1 ? '人工暂停' : '已恢复')}`,
+        time: formatClock(Date.now()),
+      })
+      events.value = events.value.slice(0, 20)
+    }
+    return
+  }
+
   if (!accountSelectionReady.value) {
     return
   }
@@ -2883,6 +3037,14 @@ watch(() => selected.value?.xyGoodsId, () => {
   refreshAiScopeState()
 })
 
+// 选中会话变化时加载会话级自动回复状态（V1.13 引入）
+watch(() => {
+  const conv = selected.value
+  return conv ? `${conv.sid || ''}|${conv.peerUserId || ''}` : ''
+}, () => {
+  loadConversationAutoReplyStatus().catch(() => {})
+})
+
 // 选中会话变化时加载客户订单
 watch(() => {
   const conv = selected.value
@@ -2959,6 +3121,7 @@ async function handleManualCaptchaSolve() {
 onMounted(async () => {
   window.addEventListener('xya-sse-event', onSse)
   startMessagesPageCacheMaintenance()
+  loadRetentionNotice()
 
   visibilityChangeHandler = () => {
     if (document.hidden) {
@@ -3166,6 +3329,19 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 10px;
   margin-bottom: 14px;
+}
+
+.xya-msg-retention-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  background: rgba(13, 107, 255, 0.08);
+  border-radius: 8px;
+  font-size: 12px;
+  color: #0d6bff;
+  line-height: 1.4;
 }
 
 .xya-msg-select,
@@ -4054,6 +4230,10 @@ onBeforeUnmount(() => {
 
 .danger-text {
   color: #d64545;
+}
+
+.warning-text {
+  color: #d68a1a;
 }
 
 @media (max-width: 1280px) {
