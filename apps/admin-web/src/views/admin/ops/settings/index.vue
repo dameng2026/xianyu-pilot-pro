@@ -111,6 +111,97 @@
       </ElForm>
     </ElCard>
 
+    <!-- 数据保留策略 -->
+    <ElCard shadow="never" class="table-card mt-16">
+      <h4 class="section-title">数据保留策略</h4>
+      <AdminDataState
+        v-if="retentionState === 'loading'"
+        state="loading"
+        title="正在读取数据保留策略"
+        description="读取完成前不会开放编辑和保存。"
+      />
+      <AdminDataState
+        v-else-if="retentionState === 'error'"
+        state="error"
+        title="数据保留策略暂不可用"
+        :description="retentionError"
+        retry-text="重新读取"
+        @retry="loadRetentionConfig"
+      />
+      <ElForm v-else :model="retentionForm" label-width="150px" label-position="right" class="config-form">
+        <ElFormItem label="启用定时清理">
+          <ElSwitch v-model="retentionForm.enabled" />
+          <span class="form-tip">关闭后所有定时清理任务停止执行</span>
+        </ElFormItem>
+
+        <ElFormItem label="保留天数">
+          <ElInputNumber
+            v-model="retentionForm.retentionDays"
+            :min="1"
+            :max="365"
+            :step="1"
+            controls-position="right"
+            style="width: 160px"
+          />
+          <span class="form-tip">超过此天数的旧数据将被定时清理（范围 1-365，默认 14）</span>
+        </ElFormItem>
+
+        <ElFormItem label="清理时间">
+          <ElInput
+            :model-value="retentionForm.cleanupCron"
+            readonly
+            style="width: 240px"
+          />
+          <span class="form-tip">cron 表达式，默认每日凌晨 04:00，暂不开放编辑</span>
+        </ElFormItem>
+
+        <ElFormItem label="可清理类别">
+          <div class="retention-categories">
+            <div v-for="cat in categoryList" :key="cat.key" class="retention-cat-item">
+              <ElSwitch v-model="retentionForm.categories[cat.key]" />
+              <span class="retention-cat-label">{{ cat.label }}</span>
+            </div>
+          </div>
+          <div class="form-tip retention-protect-tip">
+            受保护数据（订单、Token 消耗、会员充值、用户账号等）永不清理。
+            聊天记录清理后可从闲鱼重新加载历史消息。
+          </div>
+        </ElFormItem>
+
+        <ElFormItem v-if="retentionForm.lastCleanup" label="最近清理统计">
+          <div class="retention-last-cleanup">
+            <span>时间：{{ formatCleanupTime(retentionForm.lastCleanup.time) }}</span>
+            <span>累计删除：{{ retentionForm.lastCleanup.totalDeleted }} 条</span>
+            <span v-if="Object.keys(retentionForm.lastCleanup.byCategory || {}).length > 0">
+              明细：{{ formatByCategory(retentionForm.lastCleanup.byCategory) }}
+            </span>
+          </div>
+        </ElFormItem>
+
+        <ElFormItem>
+          <div class="retention-actions">
+            <ElButton
+              type="primary"
+              :disabled="retentionState !== 'ready'"
+              :loading="retentionSaving"
+              @click="handleSaveRetention"
+            >
+              保存配置
+            </ElButton>
+            <ElButton
+              type="warning"
+              plain
+              :disabled="retentionState !== 'ready'"
+              :loading="retentionRunning"
+              @click="handleRunCleanupNow"
+            >
+              立即清理一次
+            </ElButton>
+          </div>
+        </ElFormItem>
+      </ElForm>
+    </ElCard>
+
     <!-- 联系方式 -->
     <ElCard shadow="never" class="table-card mt-16">
       <h4 class="section-title">联系方式</h4>
@@ -174,11 +265,17 @@
 
 <script setup lang="ts">
 import { reactive, ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { UploadFilled, Check, RefreshRight } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules, UploadRequestOptions } from 'element-plus'
 import request from '@/utils/http'
 import AdminDataState from '@/components/business/admin-data-state/index.vue'
+import {
+  fetchGetRetentionConfig,
+  fetchSaveRetentionConfig,
+  fetchRunRetentionCleanup,
+  type RetentionPolicyConfig
+} from '@/api/system-manage'
 
 defineOptions({ name: 'AdminSystemSettings' })
 
@@ -223,6 +320,142 @@ const rules: FormRules = {
   psbFilingNo: [{ max: 50, message: '不能超过 50 个字符', trigger: 'blur' }],
   contactPhone: [{ pattern: /^[\d\-()（）+\s]*$/, message: '请输入正确的电话号码', trigger: 'blur' }],
   contactEmail: [{ type: 'email', message: '请输入正确的邮箱格式', trigger: 'blur' }]
+}
+
+// ==================== 数据保留策略 ====================
+const retentionState = ref<'loading' | 'ready' | 'error'>('loading')
+const retentionError = ref('')
+const retentionSaving = ref(false)
+const retentionRunning = ref(false)
+
+const categoryList = [
+  { key: 'operationLog' as const, label: '操作日志' },
+  { key: 'clientErrorLog' as const, label: '前端错误日志' },
+  { key: 'notificationLog' as const, label: '通知投递日志' },
+  { key: 'notificationDedup' as const, label: '通知去重表' },
+  { key: 'chatMessage' as const, label: '聊天消息（可重新拉取）' },
+  { key: 'captchaRecord' as const, label: '滑块求解记录' },
+  { key: 'autoReplyLog' as const, label: '自动回复日志' },
+  { key: 'uploadRateEvent' as const, label: '上传限流计数' }
+]
+
+interface RetentionForm {
+  enabled: boolean
+  retentionDays: number
+  cleanupCron: string
+  categories: {
+    operationLog: boolean
+    clientErrorLog: boolean
+    notificationLog: boolean
+    notificationDedup: boolean
+    chatMessage: boolean
+    captchaRecord: boolean
+    autoReplyLog: boolean
+    uploadRateEvent: boolean
+  }
+  lastCleanup: { time: string; totalDeleted: number; byCategory: Record<string, number> } | null
+}
+
+const retentionForm = reactive<RetentionForm>({
+  enabled: true,
+  retentionDays: 14,
+  cleanupCron: '0 0 4 * * ?',
+  categories: {
+    operationLog: true,
+    clientErrorLog: true,
+    notificationLog: true,
+    notificationDedup: true,
+    chatMessage: true,
+    captchaRecord: true,
+    autoReplyLog: true,
+    uploadRateEvent: true
+  },
+  lastCleanup: null
+})
+
+const categoryLabelMap: Record<string, string> = Object.fromEntries(
+  categoryList.map(c => [c.key, c.label])
+)
+
+async function loadRetentionConfig() {
+  retentionState.value = 'loading'
+  retentionError.value = ''
+  try {
+    const res = await fetchGetRetentionConfig()
+    retentionForm.enabled = res.enabled !== false
+    retentionForm.retentionDays = res.retentionDays ?? 14
+    retentionForm.cleanupCron = res.cleanupCron ?? '0 0 4 * * ?'
+    const cats = res.categories || {}
+    for (const cat of categoryList) {
+      retentionForm.categories[cat.key] = cats[cat.key] !== false
+    }
+    retentionForm.lastCleanup = res.lastCleanup || null
+    retentionState.value = 'ready'
+  } catch (error: any) {
+    retentionError.value = error?.message || '读取失败，请检查网络或服务状态后重试。'
+    retentionState.value = 'error'
+  }
+}
+
+async function handleSaveRetention() {
+  if (retentionState.value !== 'ready') {
+    ElMessage.error('数据保留策略尚未成功读取，已阻止保存')
+    return
+  }
+  retentionSaving.value = true
+  try {
+    await fetchSaveRetentionConfig({
+      enabled: retentionForm.enabled,
+      retentionDays: retentionForm.retentionDays,
+      cleanupCron: retentionForm.cleanupCron,
+      categories: { ...retentionForm.categories }
+    })
+    ElMessage.success('数据保留策略保存成功')
+  } catch (e: any) {
+    ElMessage.error(e.message || '保存失败')
+  } finally {
+    retentionSaving.value = false
+  }
+}
+
+async function handleRunCleanupNow() {
+  try {
+    await ElMessageBox.confirm(
+      '立即执行一次数据清理？此操作将按当前配置删除超过保留期的旧数据，不可撤销。',
+      '确认清理',
+      { type: 'warning', confirmButtonText: '立即清理', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  retentionRunning.value = true
+  try {
+    const res = await fetchRunRetentionCleanup()
+    const total = res?.totalDeleted ?? 0
+    ElMessage.success(`清理完成，共删除 ${total} 条旧数据`)
+    await loadRetentionConfig()
+  } catch (e: any) {
+    ElMessage.error(e.message || '清理失败')
+  } finally {
+    retentionRunning.value = false
+  }
+}
+
+function formatCleanupTime(time: string): string {
+  if (!time) return '-'
+  try {
+    return new Date(time).toLocaleString('zh-CN', { hour12: false })
+  } catch {
+    return time
+  }
+}
+
+function formatByCategory(byCategory: Record<string, number>): string {
+  if (!byCategory) return ''
+  return Object.entries(byCategory)
+    .filter(([_, count]) => count > 0)
+    .map(([key, count]) => `${categoryLabelMap[key] || key}: ${count}`)
+    .join('，')
 }
 
 // 加载配置
@@ -313,7 +546,10 @@ function handleRemoveLogo() {
   ElMessage.success('LOGO已移除，保存后生效')
 }
 
-onMounted(() => { loadConfig() })
+onMounted(() => {
+  loadConfig()
+  loadRetentionConfig()
+})
 </script>
 
 <style scoped lang="scss">
@@ -349,4 +585,37 @@ onMounted(() => { loadConfig() })
 .upload-text { font-size: 14px; color: var(--art-gray-700); }
 .upload-text em { color: var(--el-color-primary); font-style: normal; }
 .upload-tip { font-size: 12px; color: var(--art-gray-500); margin-top: 4px; }
+
+// 数据保留策略
+.retention-categories {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px 24px;
+  width: 100%;
+  max-width: 600px;
+}
+.retention-cat-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.retention-cat-label {
+  font-size: 14px;
+  color: var(--art-gray-700);
+}
+.retention-protect-tip {
+  margin-top: 8px;
+  color: var(--el-color-warning);
+}
+.retention-last-cleanup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--art-gray-700);
+}
+.retention-actions {
+  display: flex;
+  gap: 12px;
+}
 </style>
