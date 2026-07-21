@@ -12,7 +12,7 @@ services:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
       MYSQL_USER: ${MYSQL_APP_USER:?MYSQL_APP_USER must be set}
       MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?MYSQL_APP_PASSWORD must be set}
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-time-zone=+08:00 --sort-buffer-size=4194304 --tmp-table-size=67108864 --max-heap-table-size=67108864
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-time-zone=+08:00 --sort-buffer-size=4194304 --tmp-table-size=67108864 --max-heap-table-size=67108864 --binlog-expire-logs-seconds=172800 --max-binlog-size=256M
     logging:
       driver: json-file
       options:
