@@ -757,9 +757,13 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
       }
     })();
 
+    // 注意：滑块求解接口不复用 toPublicCrawlerError 改写规则。
+    // 该改写规则仅适用于采集类接口（搜索/详情/店铺爬取），用于告诉用户"采集被风控，先去验证"。
+    // 滑块求解本身就是验证流程，套用该规则会出现"求解失败 → 请先完成验证"的自相矛盾提示，
+    // 且会掩盖真实的失败原因（如"未找到滑块按钮"、"Cookie Session 已过期"等）。
+    // 这里直接返回原始 error 字段，由前端根据 failureReason 分类展示。
     const response = {
       ...result,
-      ...(result.error ? { error: toPublicCrawlerError(result.error, '滑块验证处理失败，请稍后重试') } : {}),
       ...(productionLike ? { screenshotPath: undefined } : {}),
     };
     return res.status(result.ok ? 200 : 422).json(response);
@@ -767,7 +771,8 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
     console.error(`[SliderSolver] requestId=${(req as RequestWithTrace).requestId} errorType=${safeErrorType(e)}`);
     return res.status(500).json({
       ok: false,
-      error: toPublicCrawlerError(e, '滑块验证处理失败，请稍后重试'),
+      // 直接返回原始异常消息，便于前端诊断；兜底文案仅在消息为空时使用
+      error: (e instanceof Error && e.message) ? e.message : '滑块验证处理失败，请稍后重试',
       solved: false,
       captchaDetected: false,
       attempts: 0,

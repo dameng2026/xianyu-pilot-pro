@@ -78,7 +78,7 @@ export interface CaptchaSolveStats {
 
 /** 滑块求解统计参数 */
 export interface CaptchaStatsQuery {
-  days?: number // 7 / 30，省略表示全量
+  days?: number // 1=今天 / 7 / 30，省略或 <=0 表示全量
   userId?: number | string
   accountId?: number | string
 }
@@ -87,6 +87,43 @@ export interface CaptchaStatsQuery {
 export function getCaptchaSolveStats(params: CaptchaStatsQuery = {}) {
   return request.get<any>({ url: '/admin/captcha-records/stats', params })
     .then(value => requireRecordPayload<Record<string, any>>(value, '滑块求解统计') as CaptchaSolveStats)
+}
+
+/**
+ * 静默自动求解摘要：仅统计自动触发场景
+ * （ws_connect / cookie_keepalive / token_refresh），排除手动触发。
+ *
+ * 用于进入页面时展示"您不在场时滑块求解已自动为您解决 N 次"的惊喜提示。
+ */
+export interface CaptchaSilentSummary {
+  /** 起始时间（ISO yyyy-MM-dd'T'HH:mm:ss） */
+  since: string
+  /** 截止时间（ISO yyyy-MM-dd'T'HH:mm:ss） */
+  until: string
+  /** 自动触发求解总次数 */
+  total: number
+  /** 自动触发且成功的次数 */
+  success: number
+  /** 自动触发且失败的次数 */
+  fail: number
+  /** 涉及的账号数（去重） */
+  accountCount: number
+  /** 最近一次自动求解的时间（yyyy-MM-dd HH:mm:ss），无记录时为空字符串 */
+  lastSolveTime?: string
+}
+
+/** 静默摘要查询参数 */
+export interface CaptchaSilentSummaryQuery {
+  /** 起始时间（ISO yyyy-MM-dd'T'HH:mm:ss），省略时服务端回退为今天 0 点 */
+  since?: string
+  userId?: number | string
+  accountId?: number | string
+}
+
+/** 获取"用户不在场时"自动求解摘要（仅自动触发场景） */
+export function getCaptchaSilentSummary(params: CaptchaSilentSummaryQuery = {}) {
+  return request.get<any>({ url: '/admin/captcha-records/silent-summary', params })
+    .then(value => requireRecordPayload<Record<string, any>>(value, '滑块自动求解摘要') as CaptchaSilentSummary)
 }
 
 /** 分页查询明细记录 */

@@ -1,5 +1,36 @@
 <template>
   <div class="captcha-records-page">
+    <!-- 惊喜提示：用户不在场时的自动求解摘要 -->
+    <Transition name="surprise-pop">
+      <div v-if="surprise.visible" class="surprise-banner" role="status" aria-live="polite">
+        <div class="surprise-glow surprise-glow-1"></div>
+        <div class="surprise-glow surprise-glow-2"></div>
+        <button
+          class="surprise-close"
+          type="button"
+          aria-label="关闭提示"
+          @click="closeSurprise"
+        >
+          <ElIcon><Close /></ElIcon>
+        </button>
+        <div class="surprise-icon">
+          <ElIcon><MagicStick /></ElIcon>
+        </div>
+        <div class="surprise-body">
+          <div class="surprise-headline">在您离开的这段时间里</div>
+          <div class="surprise-stats">
+            滑块求解已自动为您化解
+            <span class="surprise-number">{{ surprise.displaySuccess }}</span>
+            次验证
+          </div>
+          <div class="surprise-meta">
+            共触发 {{ surprise.total }} 次｜成功 {{ surprise.success }} 次｜涉及 {{ surprise.accountCount }} 个账号
+            <span v-if="surprise.lastSolveTime">｜最近一次 {{ formatRelativeTime(surprise.lastSolveTime) }}</span>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
     <!-- 顶部标题区 -->
     <ElCard shadow="never" class="toolbar-card">
       <div class="page-title-row">
@@ -13,6 +44,7 @@
         </div>
         <div class="actions">
           <ElRadioGroup v-model="daysRange" size="default" @change="onRangeChange">
+            <ElRadioButton :value="1">今天</ElRadioButton>
             <ElRadioButton :value="7">近 7 天</ElRadioButton>
             <ElRadioButton :value="30">近 30 天</ElRadioButton>
             <ElRadioButton :value="0">全部</ElRadioButton>
@@ -301,16 +333,17 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, reactive, ref, watch } from 'vue'
+  import { computed, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
   import { useRoute, useRouter } from 'vue-router'
   import { ElTag, ElIcon } from 'element-plus'
-  import { Loading } from '@element-plus/icons-vue'
+  import { Close, Loading, MagicStick } from '@element-plus/icons-vue'
   import ArtLineChart from '@/components/core/charts/art-line-chart/index.vue'
   import AdminDataState from '@/components/business/admin-data-state/index.vue'
   import type { LineDataItem } from '@/types/component/chart'
   import {
     getCaptchaSolveStats,
     getCaptchaSolveRecords,
+    getCaptchaSilentSummary,
     type CaptchaSolveStats,
     type CaptchaRecordRow
   } from '@/api/captcha-records'
@@ -422,6 +455,7 @@
 
   const rangeLabel = computed(() => {
     if (daysRange.value === 0) return '全部历史'
+    if (daysRange.value === 1) return '今天'
     return `近 ${daysRange.value} 天`
   })
 

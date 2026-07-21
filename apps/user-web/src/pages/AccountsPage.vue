@@ -5,6 +5,57 @@
       <div v-if="error" class="global-notice error">{{ error }}</div>
       <div v-if="accountsLoadError" class="global-notice error">账号列表加载失败：{{ accountsLoadError }}</div>
       <div v-if="qrSuccessMsg" class="global-notice success">{{ qrSuccessMsg }}</div>
+      <!-- 滑块求解状态说明：常驻展示，告知用户各状态含义与对应处理方式 -->
+      <div class="solve-info-card">
+        <div class="solve-info-head">
+          <span class="solve-info-title">滑块求解说明</span>
+          <span class="solve-info-sub">每个账号每分钟仅可主动求解 1 次，失败后可立即点击"重试求解"</span>
+        </div>
+        <div class="solve-info-grid">
+          <div class="solve-info-item">
+            <span class="solve-info-dot dot-red"></span>
+            <div>
+              <strong>Cookie 失效</strong>
+              <p>账号登录态已过期或被闲鱼平台拒绝，滑块求解无法恢复，需点击"重新扫码"登录获取新 Cookie。</p>
+            </div>
+          </div>
+          <div class="solve-info-item">
+            <span class="solve-info-dot dot-orange"></span>
+            <div>
+              <strong>滑块求解失败</strong>
+              <p>系统已尝试自动拖动滑块但未通过，可点击"重试求解"再次尝试；多次失败建议手动完成验证。</p>
+            </div>
+          </div>
+          <div class="solve-info-item">
+            <span class="solve-info-dot dot-purple"></span>
+            <div>
+              <strong>WS Token 获取失败</strong>
+              <p>在线消息页面遇到滑块验证时系统会自动求解；若自动失败，WS 连接将断开，可在本页重试求解后重连 WS。</p>
+            </div>
+          </div>
+          <div class="solve-info-item">
+            <span class="solve-info-dot dot-blue"></span>
+            <div>
+              <strong>服务暂时不可用</strong>
+              <p>滑块求解服务（crawler-service）繁忙或不可达，可稍后点击重试；持续失败请联系管理员。</p>
+            </div>
+          </div>
+          <div class="solve-info-item">
+            <span class="solve-info-dot dot-gray"></span>
+            <div>
+              <strong>账号不活跃 / 已禁用</strong>
+              <p>账号超过 3 天未操作或已被禁用，滑块求解已被暂停，请先手动连接账号或联系管理员启用。</p>
+            </div>
+          </div>
+          <div class="solve-info-item">
+            <span class="solve-info-dot dot-green"></span>
+            <div>
+              <strong>求解成功</strong>
+              <p>滑块已通过且 Cookie 二次验证有效，可重新启动 WebSocket 连接恢复在线消息。</p>
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="grid stat-grid" style="grid-template-columns:repeat(5,1fr)">
         <StatCard title="账号总数" :value="accountMetric(stats.total)" change="本页统计" icon="users" />
         <StatCard title="正常账号" :value="accountMetric(stats.normal)" change="本页统计" icon="account" color="green" />
@@ -55,7 +106,7 @@
             <button class="link" @click="selectAccount(row.raw)">详情</button>
             <button class="link" @click="refreshProfile(row.raw.id)">刷新资料</button>
             <button class="link" @click="openRescanModal(row.raw)">重新扫码</button>
-            <button class="link solve-op-btn" :class="solveOpBtnClass(row.raw.id)" :title="solveOpBtnTitle(row.raw.id)" :disabled="manualRetryBusy === row.raw.id || isAccountSolving(row.raw.id)" @click="handleManualSolve(row.raw.id)">{{ solveOpBtnText(row.raw.id) }}</button>
+            <button class="link solve-op-btn" :class="solveOpBtnClass(row.raw.id)" :title="solveOpBtnTitle(row.raw.id)" :disabled="solveOpBtnDisabled(row.raw.id)" @click="handleManualSolve(row.raw.id)">{{ solveOpBtnText(row.raw.id) }}</button>
             <button class="link" :disabled="polishingAccountId === row.raw.id" @click="handleItemPolish(row.raw)">{{ polishingAccountId === row.raw.id ? '擦亮中...' : '一键擦亮' }}</button>
             <button class="link" :disabled="isWsBusy(row.raw.id)" @click="toggleWs(row.raw)">{{ isWsBusy(row.raw.id) ? '处理中...' : wsActionText(row.wsState) }}</button>
             <button class="link danger-text" @click="removeAccount(row.raw.id)">删除</button>
@@ -898,16 +949,51 @@ function captchaSolveBadge(accountId) {
 }
 
 const manualRetryBusy = ref(null)
+// 单账号手动求解冷却：每分钟最多 1 次主动求解；失败后点击"重试求解"不受冷却限制
+// key = accountId(string), value = 上次主动求解时间戳(ms)
+const manualSolveCooldown = reactive({})
+const MANUAL_SOLVE_COOLDOWN_MS = 60 * 1000  // 1 分钟
+
+// 判断账号是否处于冷却中（仅用于"主动求解"，重试求解不受限制）
+function manualSolveCooldownRemaining(accountId) {
+  const last = manualSolveCooldown[String(accountId)] || 0
+  if (!last) return 0
+  const remaining = MANUAL_SOLVE_COOLDOWN_MS - (Date.now() - last)
+  return remaining > 0 ? remaining : 0
+}
+
+// 冷却 tick：驱动 disabled/title 响应式更新（每秒刷新一次）
+const cooldownTick = ref(0)
+let cooldownTimer = null
+function ensureCooldownTimer() {
+  if (cooldownTimer) return
+  cooldownTimer = setInterval(() => { cooldownTick.value++ }, 1000)
+}
+ensureCooldownTimer()
+
 async function handleManualSolve(accountId) {
   if (!accountId || manualRetryBusy.value === accountId || isAccountSolving(accountId)) return
+  // 根据当前求解状态判断场景：已有失败状态时为"重试求解"，否则为"手动触发"
+  const state = getAccountSolveStatus(accountId)
+  const isRetry = !!(state && state.status === 'fail')
+  // 仅"主动求解"（非重试）受 1 分钟冷却限制
+  if (!isRetry) {
+    const remaining = manualSolveCooldownRemaining(accountId)
+    if (remaining > 0) {
+      const seconds = Math.ceil(remaining / 1000)
+      error.value = `该账号 ${seconds} 秒内已主动求解过，请稍后再试；如需立即重试，请等本次求解失败后点击"重试求解"`
+      setTimeout(() => { if (error.value && error.value.includes('已主动求解过')) error.value = '' }, 4000)
+      return
+    }
+  }
   manualRetryBusy.value = accountId
   try {
-    // 根据当前求解状态判断场景：已有失败状态时为"重试求解"，否则为"手动触发"
-    const state = getAccountSolveStatus(accountId)
-    const scene = state && state.status === 'fail' ? 'manual_retry' : 'manual'
+    const scene = isRetry ? 'manual_retry' : 'manual'
+    // 仅"主动求解"记录冷却开始时间（重试不记录）
+    if (!isRetry) manualSolveCooldown[String(accountId)] = Date.now()
     await solveManually(accountId, scene, {
       openReason: '用户在账号管理页点击滑块求解按钮',
-      solveReason: scene === 'manual_retry'
+      solveReason: isRetry
         ? '用户在账号管理页点击重试求解（上次求解失败）'
         : '用户在账号管理页主动触发滑块求解',
     })
@@ -990,8 +1076,14 @@ const captchaAlerts = computed(() => {
 // 操作列滑块求解按钮文字
 function solveOpBtnText(accountId) {
   if (manualRetryBusy.value === accountId || isAccountSolving(accountId)) return '求解中...'
+  void cooldownTick.value  // 响应冷却倒计时刷新
   const state = getAccountSolveStatus(accountId)
-  if (!state) return '滑块求解'
+  if (!state) {
+    // 无状态时检查冷却：冷却中显示倒计时
+    const remaining = manualSolveCooldownRemaining(accountId)
+    if (remaining > 0) return `冷却 ${Math.ceil(remaining / 1000)}s`
+    return '滑块求解'
+  }
   if (state.status === 'success') return '已求解'
   if (state.status === 'fail') return '重试求解'
   return '滑块求解'
@@ -1000,17 +1092,39 @@ function solveOpBtnText(accountId) {
 // 操作列滑块求解按钮状态样式类
 function solveOpBtnClass(accountId) {
   if (manualRetryBusy.value === accountId || isAccountSolving(accountId)) return 'solving'
+  void cooldownTick.value  // 响应冷却倒计时刷新
   const state = getAccountSolveStatus(accountId)
-  if (!state) return ''
+  if (!state) {
+    // 无状态但冷却中：标记为冷却样式
+    if (manualSolveCooldownRemaining(accountId) > 0) return 'cooldown'
+    return ''
+  }
   if (state.status === 'success') return 'success'
   if (state.status === 'fail') return 'fail'
   return ''
 }
 
+// 操作列滑块求解按钮是否禁用：求解中或冷却中（且非失败重试状态）禁用
+function solveOpBtnDisabled(accountId) {
+  if (manualRetryBusy.value === accountId || isAccountSolving(accountId)) return true
+  void cooldownTick.value  // 响应冷却倒计时刷新
+  const state = getAccountSolveStatus(accountId)
+  // 失败重试状态不受冷却限制
+  if (state && state.status === 'fail') return false
+  // 其他状态（含无状态/成功）受冷却限制
+  return manualSolveCooldownRemaining(accountId) > 0
+}
+
 // 操作列滑块求解按钮悬停提示
 function solveOpBtnTitle(accountId) {
+  void cooldownTick.value
   const state = getAccountSolveStatus(accountId)
-  if (!state) return '手动触发滑块求解'
+  if (!state) {
+    const remaining = manualSolveCooldownRemaining(accountId)
+    if (remaining > 0) return `该账号 ${Math.ceil(remaining / 1000)} 秒内已主动求解过，请稍后再试`
+    return '手动触发滑块求解'
+  }
+  if (state.status === 'fail') return state.reason || '点击重试求解'
   return state.reason || state.status || '滑块求解'
 }
 
@@ -2320,6 +2434,7 @@ onBeforeUnmount(() => {
   stopQrPolling()
   stopPolishPolling()
   void cleanupQrLogin()
+  if (cooldownTimer) { clearInterval(cooldownTimer); cooldownTimer = null }
 })
 </script>
 

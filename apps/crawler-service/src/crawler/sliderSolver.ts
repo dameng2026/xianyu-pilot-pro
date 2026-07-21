@@ -22,7 +22,6 @@ import {
   isProductionLike,
   isSafeBrowserResourceUrl,
   safeErrorType,
-  toPublicCrawlerError,
 } from '../policy.js';
 
 export interface SlideSolveOptions {
@@ -2286,7 +2285,8 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       solved: false,
       captchaDetected: false,
       attempts: 0,
-      error: toPublicCrawlerError(e, '滑块验证处理失败，请稍后重试'),
+      // 直接返回原始异常消息，便于前端诊断；不复用 toPublicCrawlerError（该规则仅用于采集接口）
+      error: (e instanceof Error && e.message) ? e.message : '滑块验证处理失败，请稍后重试',
       durationMs: Date.now() - startTime,
     };
   } finally {
