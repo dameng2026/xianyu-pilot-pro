@@ -40,7 +40,7 @@ defineProps({
   background: linear-gradient(
     90deg,
     var(--m-color-bg-subtle) 25%,
-    #e9ebef 37%,
+    var(--m-color-border-light) 37%,
     var(--m-color-bg-subtle) 63%
   );
   background-size: 400% 100%;
