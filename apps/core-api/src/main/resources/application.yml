@@ -156,6 +156,10 @@ xianyu:
     token: ${DATA_SYNC_API_TOKEN:HIDpsuvrKSlWfczLiFTJa0Ydhqm8gx7Q}
     # 发送端 HTTP 读取超时秒数
     read-timeout-seconds: ${DATA_SYNC_READ_TIMEOUT_SECONDS:120}
+  retention:
+    # 数据保留策略定时清理 cron（每日凌晨 04:00）
+    # 与 UploadStorageCleanupService 03:30 错开，避免抖动
+    cleanup-cron: ${DATA_RETENTION_CLEANUP_CRON:0 0 4 * * ?}
 
 ---
 spring:
