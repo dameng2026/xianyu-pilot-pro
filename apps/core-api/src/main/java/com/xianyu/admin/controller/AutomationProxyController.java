@@ -1626,6 +1626,78 @@ public class AutomationProxyController {
         return Result.ok(result);
     }
 
+    /**
+     * 滑块求解静默摘要（前台首页惊喜提示专用）。
+     * <p>
+     * 统计 [since, now] 时间段内，自动触发场景（ws_connect / cookie_keepalive / token_refresh）
+     * 且求解成功的次数。仅返回成功数据，不返回失败/总数，从源头确保"只提示好消息"。
+     * <p>
+     * 直接从 MySQL 读取（与 captchaRecords 同理），不依赖 Python 服务。
+     *
+     * @param since 起始时间（ISO 8601），前端传入上次访问本站的时间；
+     *              为空时回退为今天 0 点。
+     */
+    @GetMapping("/captcha/silent-summary")
+    public Result<Object> captchaSilentSummary(
+            @RequestParam(required = false) String since) {
+        Long tenantId = TenantContext.getCurrentTenantId();
+        if (tenantId == null || tenantId <= 0) {
+            throw new BizException(401, "租户上下文不能为空");
+        }
+
+        // 解析 since，兼容 ISO 8601（带 T）和 yyyy-MM-dd HH:mm:ss 两种格式
+        java.time.LocalDateTime startTime = null;
+        if (since != null && !since.isBlank()) {
+            try {
+                String normalized = since.trim().replace('T', ' ');
+                if (normalized.length() >= 19) {
+                    startTime = java.time.LocalDateTime.parse(normalized.substring(0, 19),
+                            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                }
+            } catch (Exception e) {
+                log.warn("silent-summary since 参数解析失败，回退为今天0点: since={}", since);
+            }
+        }
+        if (startTime == null) {
+            startTime = java.time.LocalDate.now().atStartOfDay();
+        }
+        // 防止 since 过早（超过 30 天），截断为 30 天前
+        java.time.LocalDateTime maxLookback = java.time.LocalDateTime.now().minusDays(30);
+        if (startTime.isBefore(maxLookback)) {
+            startTime = maxLookback;
+        }
+
+        java.sql.Timestamp sinceTs = java.sql.Timestamp.valueOf(startTime);
+
+        Map<String, Object> row = jdbcTemplate.queryForList(
+                "SELECT COUNT(*) AS success_count, "
+                        + "COUNT(DISTINCT account_id) AS account_count, "
+                        + "MAX(created_at) AS last_solve_time "
+                        + "FROM xianyu_captcha_solve_record "
+                        + "WHERE tenant_id = ? AND COALESCE(deleted, 0) = 0 "
+                        + "AND trigger_scene IN ('ws_connect', 'cookie_keepalive', 'token_refresh') "
+                        + "AND status = 'success' AND created_at >= ?",
+                tenantId, sinceTs
+        ).stream().findFirst().orElse(null);
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        long successCount = 0;
+        long accountCount = 0;
+        String lastSolveTime = "";
+        if (row != null) {
+            Object sc = row.get("success_count");
+            if (sc instanceof Number) successCount = ((Number) sc).longValue();
+            Object ac = row.get("account_count");
+            if (ac instanceof Number) accountCount = ((Number) ac).longValue();
+            Object lst = row.get("last_solve_time");
+            if (lst != null) lastSolveTime = String.valueOf(lst);
+        }
+        summary.put("success", successCount);
+        summary.put("accountCount", accountCount);
+        summary.put("lastSolveTime", lastSolveTime);
+        return Result.ok(summary);
+    }
+
     // ==================== RAG 知识库 ====================
     // 透传到 Python automation-service 的 /api/knowledge-base/rag/*
     // 本地 SimpleVectorStore + 阿里云 DashScope embedding

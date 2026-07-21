@@ -1,18 +1,27 @@
 <template>
   <div class="m-dr">
-    <div class="m-dr-stats-grid">
-      <div v-for="card in statCards" :key="card.key" class="m-dr-stat-card" @click="handleStatClick(card.key)">
-        <div class="m-dr-stat-icon" :class="`m-dr-stat-icon-${card.color}`">
-          <MIcon :name="card.icon" :size="20" />
+    <!-- 顶部 Hero：KPI 大卡 -->
+    <section class="m-dr-hero">
+      <div class="m-dr-hero-head">
+        <div class="m-dr-hero-badge">
+          <span class="m-dr-hero-dot"></span>
+          <span>发货追踪</span>
         </div>
-        <div class="m-dr-stat-info">
-          <div class="m-dr-stat-title">{{ card.title }}</div>
-          <div class="m-dr-stat-value">{{ statsLoading ? '—' : formatNumber(card.value) }}</div>
-          <div class="m-dr-stat-desc" :class="`m-dr-stat-desc-${card.color}`">{{ card.desc }}</div>
-        </div>
+        <h1 class="m-dr-hero-title">发货记录</h1>
+        <p class="m-dr-hero-sub">订单发货全流程 · 可追溯 · 可重试</p>
       </div>
-    </div>
+      <div class="m-dr-kpi-row">
+        <template v-for="(card, idx) in statCards" :key="card.key">
+          <div v-if="idx > 0" class="m-dr-kpi-divider"></div>
+          <div class="m-dr-kpi-cell" @click="handleStatClick(card.key)">
+            <div class="m-dr-kpi-value" :class="`m-dr-kpi-value--${card.color}`">{{ statsLoading ? '—' : formatNumber(card.value) }}</div>
+            <div class="m-dr-kpi-label">{{ card.title }}</div>
+          </div>
+        </template>
+      </div>
+    </section>
 
+    <!-- 搜索 -->
     <div class="m-dr-search-wrap">
       <div class="m-dr-search">
         <MIcon name="search" :size="18" class="m-dr-search-icon" />
@@ -32,13 +41,15 @@
       </div>
     </div>
 
+    <!-- 筛选 chips -->
     <div class="m-dr-filter-bar">
       <div class="m-dr-filter-grid">
         <button
           v-for="filter in filterOptions"
           :key="filter.key"
+          type="button"
           class="m-dr-filter-chip"
-          :class="{ 'm-dr-filter-chip-active': isFilterActive(filter) }"
+          :class="{ 'm-dr-filter-chip--active': isFilterActive(filter) }"
           @click="openFilter(filter)"
         >
           <span>{{ getFilterLabel(filter) }}</span>
@@ -47,21 +58,31 @@
       </div>
     </div>
 
+    <!-- 工具栏 -->
     <div class="m-dr-toolbar">
       <div class="m-dr-count">
-        共 <b>{{ recordsLoading ? '—' : total }}</b> 条记录
+        共 <b>{{ recordsLoading ? '—' : formatNumber(total) }}</b> 条记录
       </div>
-      <button v-if="hasFilters" class="m-dr-btn m-dr-btn-outline m-dr-btn-sm" @click="clearFilters">
+      <button v-if="hasFilters" type="button" class="m-dr-btn m-dr-btn-outline m-dr-btn-sm" @click="clearFilters">
         清除筛选
       </button>
     </div>
 
+    <!-- 骨架屏 -->
     <div v-if="recordsLoading && records.length === 0" class="m-dr-skeleton-list">
-      <div v-for="i in 5" :key="i" class="m-dr-skeleton-card">
-        <div class="m-dr-skeleton-img"></div>
-        <div class="m-dr-skeleton-body">
-          <div class="m-dr-skeleton-line m-dr-skeleton-title"></div>
-          <div class="m-dr-skeleton-line m-dr-skeleton-meta"></div>
+      <div v-for="i in 5" :key="i" class="m-dr-skeleton-item">
+        <div class="m-dr-skeleton-rail">
+          <div class="m-dr-skeleton-dot"></div>
+          <div class="m-dr-skeleton-line"></div>
+        </div>
+        <div class="m-dr-skeleton-card">
+          <div class="m-dr-skeleton-row">
+            <div class="m-dr-skeleton-thumb"></div>
+            <div class="m-dr-skeleton-body">
+              <div class="m-dr-skeleton-line m-dr-skeleton-title"></div>
+              <div class="m-dr-skeleton-line m-dr-skeleton-meta"></div>
+            </div>
+          </div>
           <div class="m-dr-skeleton-tags">
             <div class="m-dr-skeleton-tag"></div>
             <div class="m-dr-skeleton-tag"></div>
@@ -78,70 +99,80 @@
       @retry="loadRecords"
     />
 
+    <!-- 空状态 -->
     <div v-else-if="records.length === 0" class="m-dr-empty">
       <div class="m-dr-empty-icon">
         <MIcon name="truck" :size="48" />
       </div>
       <div class="m-dr-empty-text">{{ hasFilters ? '暂无符合条件的记录' : '暂无发货记录' }}</div>
       <div class="m-dr-empty-desc">{{ hasFilters ? '请尝试调整筛选条件' : '系统将自动记录发货情况' }}</div>
-      <button v-if="hasFilters" class="m-dr-btn m-dr-btn-primary m-dr-btn-sm" @click="clearFilters">清除筛选</button>
+      <button v-if="hasFilters" type="button" class="m-dr-btn m-dr-btn-primary m-dr-btn-sm" @click="clearFilters">清除筛选</button>
     </div>
 
-    <div v-else class="m-dr-list">
+    <!-- 时间线列表 -->
+    <div v-else class="m-dr-timeline">
       <div
         v-for="row in records"
         :key="row.id"
-        class="m-dr-record-card"
-        @click="showDetail(row)"
+        class="m-dr-tl-item"
       >
-        <div class="m-dr-record-img-wrap">
-          <img
-            v-if="row.goodsCoverPic"
-            :src="row.goodsCoverPic"
-            :alt="row.goodsTitleText"
-            class="m-dr-record-img"
-            referrerpolicy="no-referrer"
-            @error="onImgError($event, row)"
-          />
-          <div v-else class="m-dr-record-img-placeholder">
-            <MIcon name="bag" :size="24" />
-          </div>
+        <div class="m-dr-tl-rail">
+          <div class="m-dr-tl-dot" :class="statusTagClass(row)"></div>
+          <div class="m-dr-tl-line"></div>
         </div>
-        <div class="m-dr-record-body">
-          <div class="m-dr-record-name" :title="row.goodsTitleText">{{ row.goodsTitleText || '未命名商品' }}</div>
-          <div class="m-dr-record-meta">
-            <span class="m-dr-record-order" :title="row.orderId">订单: {{ row.orderId || '-' }}</span>
-            <span v-if="accountLabel(row)" class="m-dr-record-account">{{ accountLabel(row) }}</span>
+        <div class="m-dr-tl-content">
+          <div class="m-dr-tl-time">{{ displayTime(row) }}</div>
+          <div class="m-dr-tl-card" @click="showDetail(row)">
+            <div class="m-dr-tl-card-head">
+              <div class="m-dr-tl-card-img-wrap">
+                <img
+                  v-if="row.goodsCoverPic"
+                  :src="row.goodsCoverPic"
+                  :alt="row.goodsTitleText"
+                  class="m-dr-tl-card-img"
+                  referrerpolicy="no-referrer"
+                  @error="onImgError($event, row)"
+                />
+                <div v-else class="m-dr-tl-card-img-placeholder">
+                  <MIcon name="bag" :size="20" />
+                </div>
+              </div>
+              <div class="m-dr-tl-card-info">
+                <div class="m-dr-tl-card-name" :title="row.goodsTitleText">{{ row.goodsTitleText || '未命名商品' }}</div>
+                <div class="m-dr-tl-card-order" :title="row.orderId">订单 {{ row.orderId || '-' }}</div>
+              </div>
+              <span class="m-dr-tag" :class="statusTagClass(row)">{{ row.deliveryStatusText }}</span>
+            </div>
+            <div class="m-dr-tl-card-tags">
+              <span class="m-dr-tag m-dr-tag-light">{{ row.timingText }}</span>
+              <span class="m-dr-tag m-dr-tag-gray">{{ row.deliveryModeText }}</span>
+              <span v-if="accountLabel(row)" class="m-dr-tag m-dr-tag-blue">{{ accountLabel(row) }}</span>
+            </div>
+            <div v-if="deliveryContentPreview(row)" class="m-dr-tl-card-content">
+              {{ deliveryContentPreview(row) }}
+            </div>
+            <div class="m-dr-tl-card-foot">
+              <span v-if="row.deliveryProgressText && row.deliveryProgressText !== '0 / 0'" class="m-dr-tl-card-progress">
+                进度 {{ row.deliveryProgressText }}
+              </span>
+              <span class="m-dr-tl-card-arrow">
+                <MIcon name="chevronRight" :size="16" />
+              </span>
+            </div>
           </div>
-          <div class="m-dr-record-tags">
-            <span class="m-dr-tag" :class="statusTagClass(row)">{{ row.deliveryStatusText }}</span>
-            <span class="m-dr-tag m-dr-tag-light">{{ row.timingText }}</span>
-            <span class="m-dr-tag m-dr-tag-gray">{{ row.deliveryModeText }}</span>
-          </div>
-          <div v-if="deliveryContentPreview(row)" class="m-dr-record-content">
-            {{ deliveryContentPreview(row) }}
-          </div>
-          <div class="m-dr-record-footer">
-            <span class="m-dr-record-time">{{ displayTime(row) }}</span>
-            <span v-if="row.deliveryProgressText && row.deliveryProgressText !== '0 / 0'" class="m-dr-record-progress">
-              {{ row.deliveryProgressText }}
-            </span>
-          </div>
-        </div>
-        <div class="m-dr-record-arrow">
-          <MIcon name="chevronRight" :size="18" />
         </div>
       </div>
 
       <div v-if="loadingMore" class="m-dr-loading-more">加载中...</div>
       <div v-else-if="hasMore" class="m-dr-load-more">
-        <button class="m-dr-btn m-dr-btn-outline" @click="loadMore">加载更多</button>
+        <button type="button" class="m-dr-btn m-dr-btn-outline" @click="loadMore">加载更多</button>
       </div>
       <div v-else-if="records.length > 0" class="m-dr-no-more">没有更多记录</div>
     </div>
 
     <div class="m-dr-safe-bottom"></div>
 
+    <!-- 筛选 sheet -->
     <div v-if="activeFilter" class="m-dr-sheet-mask" @click="closeFilter"></div>
     <div v-if="activeFilter" class="m-dr-sheet" :class="{ 'm-dr-sheet-open': activeFilter }">
       <div class="m-dr-sheet-header">
@@ -159,8 +190,9 @@
           <button
             v-for="opt in getFilterOptions(activeFilter)"
             :key="String(opt.value)"
+            type="button"
             class="m-dr-sheet-option"
-            :class="{ 'm-dr-sheet-option-active': isOptionSelected(activeFilter, opt) }"
+            :class="{ 'm-dr-sheet-option--active': isOptionSelected(activeFilter, opt) }"
             @click="selectFilterOption(activeFilter, opt)"
           >
             <span>{{ opt.label }}</span>
@@ -169,11 +201,12 @@
         </div>
       </div>
       <div class="m-dr-sheet-footer">
-        <button class="m-dr-btn m-dr-btn-outline" @click="resetFilter(activeFilter)">重置</button>
-        <button class="m-dr-btn m-dr-btn-primary" @click="applyFilter">确定</button>
+        <button type="button" class="m-dr-btn m-dr-btn-outline" @click="resetFilter(activeFilter)">重置</button>
+        <button type="button" class="m-dr-btn m-dr-btn-primary" @click="applyFilter">确定</button>
       </div>
     </div>
 
+    <!-- 详情 sheet -->
     <div v-if="detailVisible" class="m-dr-sheet-mask" @click="closeDetail"></div>
     <div v-if="detailVisible" class="m-dr-sheet m-dr-sheet-open m-dr-detail-sheet">
       <div class="m-dr-sheet-header">
@@ -183,7 +216,10 @@
         </button>
       </div>
       <div class="m-dr-sheet-body">
-        <div v-if="detailLoading" class="m-dr-detail-loading">加载中...</div>
+        <div v-if="detailLoading" class="m-dr-detail-loading">
+          <div class="m-dr-spinner"></div>
+          <span>加载中...</span>
+        </div>
         <template v-else-if="detailView">
           <div class="m-dr-detail-goods">
             <img
@@ -216,7 +252,7 @@
               <span class="m-dr-detail-label">买家</span>
               <span class="m-dr-detail-value">
                 {{ detailView.buyerNameText }}
-                <span v-if="detailView.buyerIdText && detailView.buyerIdText !== '-'" class="muted">（{{ detailView.buyerIdText }}）</span>
+                <span v-if="detailView.buyerIdText && detailView.buyerIdText !== '-'" class="m-dr-detail-muted">（{{ detailView.buyerIdText }}）</span>
               </span>
             </div>
             <div class="m-dr-detail-row">
@@ -258,7 +294,7 @@
 
           <div
             v-if="detailView.errorMessageText && detailView.errorMessageText !== '-'"
-            class="m-dr-detail-block m-dr-detail-block-error"
+            class="m-dr-detail-block m-dr-detail-block--error"
           >
             <div class="m-dr-detail-block-title">失败原因</div>
             <div class="m-dr-detail-block-content">{{ detailView.errorMessageText }}</div>
@@ -274,8 +310,9 @@
         </template>
       </div>
       <div v-if="detailView && detailView.canRedeliver" class="m-dr-sheet-footer">
-        <button class="m-dr-btn m-dr-btn-outline" @click="closeDetail">关闭</button>
+        <button type="button" class="m-dr-btn m-dr-btn-outline" @click="closeDetail">关闭</button>
         <button
+          type="button"
           class="m-dr-btn m-dr-btn-primary"
           :disabled="retrying"
           @click="retryRecord(detailView)"
@@ -665,8 +702,9 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* === 根容器 === */
 .m-dr {
-  padding: 10px 16px 0;
+  padding: var(--m-space-3) var(--m-space-3) 0;
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -674,146 +712,189 @@ onBeforeUnmount(() => {
   overflow-x: hidden;
 }
 
-.m-dr-stats-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin-bottom: 12px;
+/* === Hero === */
+.m-dr-hero {
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-xl);
+  padding: var(--m-space-4);
+  margin-bottom: var(--m-space-3);
+  box-shadow: var(--m-shadow-card);
+}
+.m-dr-hero-head {
+  margin-bottom: var(--m-space-4);
+}
+.m-dr-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--m-space-1);
+  background: var(--m-color-info-bg);
+  color: var(--m-color-info-text);
+  padding: var(--m-space-1) var(--m-space-3);
+  border-radius: var(--m-radius-pill);
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-semibold);
+  margin-bottom: var(--m-space-3);
+  border: 1px solid var(--m-color-info-border);
+}
+.m-dr-hero-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--m-radius-circle);
+  background: var(--m-color-info);
+  animation: m-dr-pulse 1.6s ease-in-out infinite;
+}
+@keyframes m-dr-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+.m-dr-hero-title {
+  margin: 0 0 var(--m-space-1);
+  font-size: var(--m-font-size-h1);
+  font-weight: var(--m-font-weight-extrabold);
+  color: var(--m-color-text-primary);
+  line-height: var(--m-line-height-tight);
+  letter-spacing: -0.3px;
+}
+.m-dr-hero-sub {
+  margin: 0;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
 }
 
-.m-dr-stat-card {
-  background: white;
-  border-radius: 14px;
-  padding: 12px 10px;
+/* === KPI 行 === */
+.m-dr-kpi-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--m-space-2);
+  padding: var(--m-space-3);
+  background: var(--m-color-bg-subtle);
+  border-radius: var(--m-radius-lg);
+}
+.m-dr-kpi-cell {
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  box-shadow: 0 2px 8px rgba(31, 53, 94, 0.05);
-  border: 1px solid #f0f4fa;
-  cursor: pointer;
-  transition: transform 0.15s, box-shadow 0.15s;
-}
-.m-dr-stat-card:active {
-  transform: scale(0.98);
-}
-
-.m-dr-stat-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  padding: var(--m-space-2) var(--m-space-1);
+  cursor: pointer;
+  transition: transform 0.15s;
 }
-.m-dr-stat-icon-green {
-  background: linear-gradient(135deg, #dcfce7, #bbf7d0);
-  color: #16a34a;
+.m-dr-kpi-cell:active {
+  transform: scale(0.97);
 }
-.m-dr-stat-icon-orange {
-  background: linear-gradient(135deg, #fef3c7, #fde68a);
-  color: #f59e0b;
+.m-dr-kpi-value {
+  font-size: var(--m-font-size-hero);
+  font-weight: var(--m-font-weight-extrabold);
+  color: var(--m-color-text-primary);
+  line-height: var(--m-line-height-tight);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: var(--m-space-1);
 }
-.m-dr-stat-icon-blue {
-  background: linear-gradient(135deg, #dbeafe, #bfdbfe);
-  color: #2563eb;
+.m-dr-kpi-value--green {
+  color: var(--m-color-success);
+}
+.m-dr-kpi-value--orange {
+  color: var(--m-color-warning);
+}
+.m-dr-kpi-value--blue {
+  color: var(--m-color-info);
+}
+.m-dr-kpi-label {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-medium);
+}
+.m-dr-kpi-divider {
+  width: 1px;
+  background: var(--m-color-border-light);
+  align-self: stretch;
+  margin: var(--m-space-1) 0;
 }
 
-.m-dr-stat-info {
-  flex: 1;
-  min-width: 0;
-  text-align: center;
-}
-.m-dr-stat-title {
-  font-size: 11px;
-  color: #72809a;
-  margin-bottom: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.m-dr-stat-value {
-  font-size: 20px;
-  font-weight: 800;
-  color: #15213d;
-  line-height: 1.2;
-}
-.m-dr-stat-desc {
-  font-size: 10px;
-  font-weight: 500;
-  margin-top: 2px;
-}
-.m-dr-stat-desc-green { color: #16a34a; }
-.m-dr-stat-desc-orange { color: #f59e0b; }
-.m-dr-stat-desc-blue { color: #2563eb; }
-
+/* === 搜索 === */
 .m-dr-search-wrap {
-  margin-bottom: 10px;
+  margin-bottom: var(--m-space-3);
 }
 .m-dr-search {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: white;
-  border: 1px solid #e7edf7;
-  border-radius: 12px;
-  padding: 0 14px;
-  height: 46px;
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border);
+  border-radius: var(--m-radius-pill);
+  padding: 0 var(--m-space-4);
+  height: 40px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.m-dr-search:focus-within {
+  border-color: var(--m-color-primary);
+  box-shadow: 0 0 0 3px var(--m-color-primary-bg);
 }
 .m-dr-search-icon {
-  color: #8c98ae;
+  color: var(--m-color-text-tertiary);
   flex-shrink: 0;
+  margin-right: var(--m-space-2);
 }
 .m-dr-search-input {
   flex: 1;
   border: none;
   outline: none;
-  font-size: 14px;
-  color: #15213d;
   background: transparent;
+  font-size: var(--m-font-size-body);
+  color: var(--m-color-text-primary);
+  font-family: var(--m-font-family);
   min-width: 0;
 }
 .m-dr-search-input::placeholder {
-  color: #b0bacb;
+  color: var(--m-color-text-placeholder);
 }
 .m-dr-search-clear {
-  width: 28px;
-  height: 28px;
-  border: none;
-  background: #f0f4fa;
-  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #8c98ae;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
+  border-radius: var(--m-radius-circle);
   cursor: pointer;
   flex-shrink: 0;
+  margin-left: var(--m-space-2);
+  padding: 0;
+}
+.m-dr-search-clear:active {
+  background: var(--m-color-border);
 }
 
+/* === 筛选 chips === */
 .m-dr-filter-bar {
-  margin-bottom: 12px;
+  margin-bottom: var(--m-space-3);
 }
 .m-dr-filter-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--m-space-2);
 }
 .m-dr-filter-chip {
-  min-width: 0;
   display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 3px;
-  background: #fff;
-  border: 1px solid #e7ebf1;
-  color: #63718a;
-  padding: 0 9px;
-  border-radius: 9px;
-  font-size: 12px;
-  font-weight: 500;
+  justify-content: center;
+  gap: var(--m-space-1);
+  height: 32px;
+  padding: 0 var(--m-space-3);
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border);
+  border-radius: var(--m-radius-pill);
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-secondary);
+  font-weight: var(--m-font-weight-medium);
   cursor: pointer;
-  min-height: 40px;
+  transition: all 0.15s;
+  font-family: var(--m-font-family);
+  white-space: nowrap;
   overflow: hidden;
 }
 .m-dr-filter-chip span {
@@ -821,348 +902,457 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.m-dr-filter-chip-active {
-  border-color: #1478f5;
-  color: #1478f5;
-  background: #f3f8ff;
+.m-dr-filter-chip--active {
+  background: var(--m-color-primary-bg);
+  border-color: var(--m-color-primary);
+  color: var(--m-color-primary);
 }
 
+/* === 工具栏 === */
 .m-dr-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
-  gap: 10px;
+  margin-bottom: var(--m-space-3);
+  padding: 0 var(--m-space-1);
 }
 .m-dr-count {
-  font-size: 13px;
-  color: #5a6a85;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
 }
 .m-dr-count b {
-  color: #15213d;
-  font-weight: 700;
+  color: var(--m-color-text-primary);
+  font-weight: var(--m-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
 }
 
+/* === 按钮 === */
 .m-dr-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  border: none;
-  border-radius: 10px;
-  font-size: 13px;
-  font-weight: 600;
+  gap: var(--m-space-1);
+  height: 36px;
+  padding: 0 var(--m-space-4);
+  border: 1px solid transparent;
+  border-radius: var(--m-radius-md);
+  font-size: var(--m-font-size-body-sm);
+  font-weight: var(--m-font-weight-medium);
   cursor: pointer;
   transition: all 0.15s;
-  padding: 10px 16px;
-  min-height: 40px;
+  font-family: var(--m-font-family);
+  background: transparent;
+  color: var(--m-color-text-primary);
 }
-.m-dr-btn:active { transform: scale(0.97); }
-.m-dr-btn-primary {
-  background: linear-gradient(135deg, #0d6bff, #2580ff);
-  color: white;
-  box-shadow: 0 4px 12px rgba(13, 107, 255, 0.25);
-}
-.m-dr-btn-primary:disabled {
+.m-dr-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+.m-dr-btn-primary {
+  background: var(--m-color-primary);
+  color: var(--m-color-text-inverse);
+  border-color: var(--m-color-primary);
+}
+.m-dr-btn-primary:not(:disabled):active {
+  background: var(--m-color-primary-active);
+  border-color: var(--m-color-primary-active);
+}
 .m-dr-btn-outline {
-  background: white;
-  color: #5a6a85;
-  border: 1px solid #e7edf7;
+  background: var(--m-color-bg-card);
+  border-color: var(--m-color-border);
+  color: var(--m-color-text-secondary);
+}
+.m-dr-btn-outline:not(:disabled):active {
+  background: var(--m-color-bg-hover);
 }
 .m-dr-btn-sm {
-  padding: 8px 14px;
-  font-size: 12px;
-  min-height: 36px;
+  height: 28px;
+  padding: 0 var(--m-space-3);
+  font-size: var(--m-font-size-caption);
+  border-radius: var(--m-radius-sm);
 }
 
+/* === 骨架屏 === */
 .m-dr-skeleton-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--m-space-3);
+}
+.m-dr-skeleton-item {
+  display: flex;
+  gap: var(--m-space-3);
+}
+.m-dr-skeleton-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 12px;
+  flex-shrink: 0;
+  padding-top: var(--m-space-2);
+}
+.m-dr-skeleton-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--m-radius-circle);
+  background: var(--m-color-bg-subtle);
+  flex-shrink: 0;
+}
+.m-dr-skeleton-line {
+  flex: 1;
+  width: 2px;
+  background: var(--m-color-bg-subtle);
+  margin-top: var(--m-space-1);
+  min-height: 60px;
 }
 .m-dr-skeleton-card {
-  background: white;
-  border-radius: 16px;
-  padding: 12px;
+  flex: 1;
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3);
   display: flex;
-  gap: 12px;
-  border: 1px solid #f0f4fa;
+  flex-direction: column;
+  gap: var(--m-space-2);
 }
-.m-dr-skeleton-img {
-  width: 64px;
-  height: 64px;
-  border-radius: 10px;
-  background: linear-gradient(90deg, #f4f7fc 25%, #e8edf5 50%, #f4f7fc 75%);
-  background-size: 200% 100%;
-  animation: m-dr-skeleton 1.5s infinite;
+.m-dr-skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-3);
+}
+.m-dr-skeleton-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--m-radius-md);
+  background: var(--m-color-bg-subtle);
   flex-shrink: 0;
 }
 .m-dr-skeleton-body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--m-space-2);
 }
 .m-dr-skeleton-line {
-  height: 14px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, #f4f7fc 25%, #e8edf5 50%, #f4f7fc 75%);
-  background-size: 200% 100%;
-  animation: m-dr-skeleton 1.5s infinite;
+  height: 12px;
+  background: var(--m-color-bg-subtle);
+  border-radius: var(--m-radius-sm);
 }
-.m-dr-skeleton-title { width: 70%; }
-.m-dr-skeleton-meta { width: 50%; height: 12px; }
+.m-dr-skeleton-title {
+  width: 60%;
+}
+.m-dr-skeleton-meta {
+  width: 40%;
+  height: 10px;
+}
 .m-dr-skeleton-tags {
   display: flex;
-  gap: 8px;
+  gap: var(--m-space-2);
 }
 .m-dr-skeleton-tag {
-  width: 60px;
-  height: 20px;
-  border-radius: 100px;
-  background: linear-gradient(90deg, #f4f7fc 25%, #e8edf5 50%, #f4f7fc 75%);
-  background-size: 200% 100%;
-  animation: m-dr-skeleton 1.5s infinite;
+  width: 56px;
+  height: 18px;
+  background: var(--m-color-bg-subtle);
+  border-radius: var(--m-radius-pill);
 }
-@keyframes m-dr-skeleton {
+.m-dr-skeleton-card .m-dr-skeleton-line,
+.m-dr-skeleton-card .m-dr-skeleton-thumb,
+.m-dr-skeleton-card .m-dr-skeleton-tag,
+.m-dr-skeleton-dot,
+.m-dr-skeleton-line {
+  background: linear-gradient(90deg, var(--m-color-bg-subtle) 25%, var(--m-color-bg-hover) 50%, var(--m-color-bg-subtle) 75%);
+  background-size: 200% 100%;
+  animation: m-dr-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes m-dr-shimmer {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
 
+/* === 空状态 === */
 .m-dr-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--m-space-10) var(--m-space-4);
   text-align: center;
-  padding: 60px 20px;
 }
 .m-dr-empty-icon {
-  width: 80px;
-  height: 80px;
-  margin: 0 auto 16px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #e8f1ff, #d4e4ff);
-  color: #0d6bff;
+  width: 72px;
+  height: 72px;
+  border-radius: var(--m-radius-circle);
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: var(--m-space-4);
+}
+.m-dr-empty-text {
+  font-size: var(--m-font-size-body);
+  color: var(--m-color-text-primary);
+  font-weight: var(--m-font-weight-medium);
+  margin-bottom: var(--m-space-1);
+}
+.m-dr-empty-desc {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  margin-bottom: var(--m-space-4);
+}
+
+/* === 时间线列表 === */
+.m-dr-timeline {
+  display: flex;
+  flex-direction: column;
+}
+.m-dr-tl-item {
+  display: flex;
+  gap: var(--m-space-3);
+  align-items: stretch;
+}
+.m-dr-tl-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 14px;
+  flex-shrink: 0;
+  padding-top: var(--m-space-3);
+}
+.m-dr-tl-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--m-radius-circle);
+  background: var(--m-color-text-disabled);
+  flex-shrink: 0;
+  border: 2px solid var(--m-color-bg-card);
+  box-shadow: 0 0 0 1px var(--m-color-border-light);
+  z-index: 1;
+}
+.m-dr-tl-dot.m-dr-tag-green {
+  background: var(--m-color-success);
+  box-shadow: 0 0 0 1px var(--m-color-success-border);
+}
+.m-dr-tl-dot.m-dr-tag-red {
+  background: var(--m-color-danger);
+  box-shadow: 0 0 0 1px var(--m-color-danger-border);
+}
+.m-dr-tl-dot.m-dr-tag-orange {
+  background: var(--m-color-warning);
+  box-shadow: 0 0 0 1px var(--m-color-warning-border);
+}
+.m-dr-tl-dot.m-dr-tag-blue {
+  background: var(--m-color-info);
+  box-shadow: 0 0 0 1px var(--m-color-info-border);
+}
+.m-dr-tl-dot.m-dr-tag-gray {
+  background: var(--m-color-text-disabled);
+  box-shadow: 0 0 0 1px var(--m-color-border);
+}
+.m-dr-tl-line {
+  flex: 1;
+  width: 2px;
+  background: var(--m-color-border-light);
+  margin-top: var(--m-space-1);
+  min-height: 24px;
+}
+.m-dr-tl-item:last-child .m-dr-tl-line {
+  display: none;
+}
+.m-dr-tl-content {
+  flex: 1;
+  min-width: 0;
+  padding-bottom: var(--m-space-3);
+}
+.m-dr-tl-time {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-medium);
+  margin-bottom: var(--m-space-2);
+  font-variant-numeric: tabular-nums;
+}
+.m-dr-tl-card {
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3);
+  box-shadow: var(--m-shadow-card);
+  transition: transform 0.15s, box-shadow 0.15s;
+  cursor: pointer;
+}
+.m-dr-tl-card:active {
+  transform: scale(0.99);
+  box-shadow: var(--m-shadow-elevated);
+}
+.m-dr-tl-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-3);
+  margin-bottom: var(--m-space-2);
+}
+.m-dr-tl-card-img-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--m-radius-md);
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--m-color-bg-subtle);
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.m-dr-empty-text {
-  font-size: 16px;
-  font-weight: 600;
-  color: #15213d;
-  margin-bottom: 6px;
-}
-.m-dr-empty-desc {
-  font-size: 13px;
-  color: #8c98ae;
-  margin-bottom: 20px;
-}
-
-.m-dr-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.m-dr-record-card {
-  background: #fff;
-  border-radius: 16px;
-  padding: 12px;
-  display: flex;
-  gap: 12px;
-  box-shadow: 0 4px 14px rgba(31, 53, 94, 0.04);
-  border: 1px solid #edf1f5;
-  cursor: pointer;
-  transition: transform 0.15s;
-}
-.m-dr-record-card:active { transform: scale(0.99); }
-
-.m-dr-record-img-wrap {
-  width: 70px;
-  height: 70px;
-  border-radius: 9px;
-  overflow: hidden;
-  flex-shrink: 0;
-  background: #f4f7fc;
-}
-.m-dr-record-img {
+.m-dr-tl-card-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  display: block;
 }
-.m-dr-record-img-placeholder {
-  width: 100%;
-  height: 100%;
+.m-dr-tl-card-img-placeholder {
+  color: var(--m-color-text-tertiary);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #b0bacb;
-  background: linear-gradient(135deg, #f4f7fc, #eaf0fa);
 }
-
-.m-dr-record-body {
+.m-dr-tl-card-info {
   flex: 1;
   min-width: 0;
 }
-.m-dr-record-name {
-  font-size: 14px;
-  font-weight: 700;
-  color: #15213d;
-  line-height: 1.4;
+.m-dr-tl-card-name {
+  font-size: var(--m-font-size-body-sm);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
+  line-height: var(--m-line-height-tight);
   overflow: hidden;
   text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  word-break: break-all;
-  margin-bottom: 4px;
+  white-space: nowrap;
+  margin-bottom: var(--m-space-1);
 }
-.m-dr-record-meta {
+.m-dr-tl-card-order {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.m-dr-tl-card-tags {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 6px;
   flex-wrap: wrap;
+  gap: var(--m-space-2);
+  margin-bottom: var(--m-space-2);
 }
-.m-dr-record-order {
-  font-size: 11px;
-  color: #8c98ae;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 140px;
-}
-.m-dr-record-account {
-  font-size: 11px;
-  color: #5a6a85;
-  background: #f0f4fa;
-  padding: 2px 8px;
-  border-radius: 100px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100px;
-}
-.m-dr-record-tags {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 6px;
-}
-.m-dr-tag {
-  font-size: 10px;
-  font-weight: 500;
-  padding: 3px 8px;
-  border-radius: 100px;
-  white-space: nowrap;
-}
-.m-dr-tag-green {
-  background: rgba(22, 163, 74, 0.1);
-  color: #16a34a;
-}
-.m-dr-tag-red {
-  background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
-}
-.m-dr-tag-orange {
-  background: rgba(245, 158, 11, 0.1);
-  color: #f59e0b;
-}
-.m-dr-tag-blue {
-  background: rgba(37, 99, 235, 0.1);
-  color: #2563eb;
-}
-.m-dr-tag-gray {
-  background: rgba(140, 152, 174, 0.12);
-  color: #7f8a9d;
-}
-.m-dr-tag-light {
-  background: rgba(13, 107, 255, 0.08);
-  color: #0d6bff;
-}
-
-.m-dr-record-content {
-  font-size: 12px;
-  color: #5a6a85;
-  background: #f8fafc;
-  border-radius: 8px;
-  padding: 6px 8px;
-  margin-bottom: 6px;
-  line-height: 1.5;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+.m-dr-tl-card-content {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-secondary);
+  line-height: var(--m-line-height-base);
+  background: var(--m-color-bg-subtle);
+  border-radius: var(--m-radius-md);
+  padding: var(--m-space-2) var(--m-space-3);
+  margin-bottom: var(--m-space-2);
   word-break: break-all;
 }
-
-.m-dr-record-footer {
+.m-dr-tl-card-foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--m-space-2);
 }
-.m-dr-record-time {
-  font-size: 11px;
-  color: #8c98ae;
+.m-dr-tl-card-progress {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
-.m-dr-record-progress {
-  font-size: 11px;
-  color: #5a6a85;
-  font-weight: 600;
-  background: #f0f4fa;
-  padding: 2px 8px;
-  border-radius: 100px;
-}
-
-.m-dr-record-arrow {
+.m-dr-tl-card-arrow {
+  color: var(--m-color-text-disabled);
   display: flex;
   align-items: center;
-  color: #c0c8d6;
-  flex-shrink: 0;
 }
 
+/* === 标签 === */
+.m-dr-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 var(--m-space-2);
+  border-radius: var(--m-radius-sm);
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-medium);
+  line-height: 1;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.m-dr-tag-green {
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success-text);
+  border-color: var(--m-color-success-border);
+}
+.m-dr-tag-red {
+  background: var(--m-color-danger-bg);
+  color: var(--m-color-danger-text);
+  border-color: var(--m-color-danger-border);
+}
+.m-dr-tag-orange {
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning-text);
+  border-color: var(--m-color-warning-border);
+}
+.m-dr-tag-blue {
+  background: var(--m-color-info-bg);
+  color: var(--m-color-info-text);
+  border-color: var(--m-color-info-border);
+}
+.m-dr-tag-gray {
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-secondary);
+  border-color: var(--m-color-border);
+}
+.m-dr-tag-light {
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
+  border-color: transparent;
+}
+
+/* === 加载更多 === */
 .m-dr-loading-more,
-.m-dr-load-more,
 .m-dr-no-more {
   text-align: center;
-  padding: 20px;
-  font-size: 13px;
-  color: #8c98ae;
+  padding: var(--m-space-4) 0;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
 }
-.m-dr-load-more .m-dr-btn {
-  padding: 8px 24px;
+.m-dr-load-more {
+  display: flex;
+  justify-content: center;
+  padding: var(--m-space-3) 0;
 }
-
 .m-dr-safe-bottom {
-  height: calc(84px + env(safe-area-inset-bottom));
+  height: var(--m-space-6);
 }
 
+/* === Sheet === */
 .m-dr-sheet-mask {
   position: fixed;
   inset: 0;
-  background: rgba(15, 25, 50, 0.4);
-  z-index: 200;
-  backdrop-filter: blur(2px);
+  background: var(--m-mask-modal);
+  z-index: 100;
+  animation: m-dr-mask-in 0.2s ease-out;
 }
-
+@keyframes m-dr-mask-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 .m-dr-sheet {
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
-  background: white;
-  border-radius: 20px 20px 0 0;
-  z-index: 201;
-  transform: translateY(100%);
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  max-height: 85vh;
+  max-height: 80vh;
+  background: var(--m-color-bg-card);
+  border-radius: var(--m-radius-2xl) var(--m-radius-2xl) 0 0;
+  z-index: 101;
   display: flex;
   flex-direction: column;
-  padding-bottom: env(safe-area-inset-bottom);
+  transform: translateY(100%);
+  transition: transform 0.25s ease-out;
+  box-shadow: var(--m-shadow-elevated);
 }
 .m-dr-sheet-open {
   transform: translateY(0);
@@ -1171,209 +1361,273 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid #f0f4fa;
+  padding: var(--m-space-4);
+  border-bottom: 1px solid var(--m-color-border-light);
+  flex-shrink: 0;
 }
 .m-dr-sheet-header h3 {
   margin: 0;
-  font-size: 17px;
-  font-weight: 700;
-  color: #15213d;
+  font-size: var(--m-font-size-h3);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
 }
 .m-dr-sheet-close {
-  width: 36px;
-  height: 36px;
-  border: none;
-  background: #f5f7fb;
-  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #5a6a85;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
+  border-radius: var(--m-radius-circle);
   cursor: pointer;
+  padding: 0;
+}
+.m-dr-sheet-close:active {
+  background: var(--m-color-border);
 }
 .m-dr-sheet-body {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 20px;
+  padding: var(--m-space-4);
+  -webkit-overflow-scrolling: touch;
 }
 .m-dr-sheet-search {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: #f5f7fb;
-  border-radius: 10px;
-  padding: 0 12px;
-  margin-bottom: 12px;
-  height: 42px;
+  background: var(--m-color-bg-subtle);
+  border-radius: var(--m-radius-pill);
+  padding: 0 var(--m-space-3);
+  height: 36px;
+  margin-bottom: var(--m-space-3);
 }
 .m-dr-sheet-search-icon {
-  color: #8c98ae;
+  color: var(--m-color-text-tertiary);
   flex-shrink: 0;
+  margin-right: var(--m-space-2);
 }
 .m-dr-sheet-search-input {
   flex: 1;
   border: none;
   outline: none;
   background: transparent;
-  font-size: 14px;
+  font-size: var(--m-font-size-body-sm);
+  color: var(--m-color-text-primary);
+  font-family: var(--m-font-family);
+  min-width: 0;
+}
+.m-dr-sheet-search-input::placeholder {
+  color: var(--m-color-text-placeholder);
 }
 .m-dr-sheet-options {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--m-space-1);
 }
 .m-dr-sheet-option {
-  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 12px;
-  border: none;
-  background: transparent;
-  border-radius: 10px;
-  font-size: 15px;
-  color: #15213d;
+  width: 100%;
+  padding: var(--m-space-3);
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-md);
+  font-size: var(--m-font-size-body-sm);
+  color: var(--m-color-text-primary);
   cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--m-font-family);
   text-align: left;
 }
-.m-dr-sheet-option:active { background: #f5f7fb; }
-.m-dr-sheet-option-active {
-  background: #eef4ff;
-  color: #0d6bff;
-  font-weight: 600;
+.m-dr-sheet-option:active {
+  background: var(--m-color-bg-hover);
+}
+.m-dr-sheet-option--active {
+  background: var(--m-color-primary-bg);
+  border-color: var(--m-color-primary);
+  color: var(--m-color-primary);
+  font-weight: var(--m-font-weight-semibold);
 }
 .m-dr-sheet-check {
-  color: #0d6bff;
+  color: var(--m-color-primary);
   flex-shrink: 0;
 }
 .m-dr-sheet-footer {
   display: flex;
-  gap: 10px;
-  padding: 12px 20px 16px;
-  border-top: 1px solid #f0f4fa;
+  gap: var(--m-space-3);
+  padding: var(--m-space-4);
+  border-top: 1px solid var(--m-color-border-light);
+  flex-shrink: 0;
 }
 .m-dr-sheet-footer .m-dr-btn {
   flex: 1;
 }
 
-.m-dr-detail-loading {
-  text-align: center;
-  padding: 40px 0;
-  color: #8c98ae;
-  font-size: 14px;
+/* === 详情 sheet === */
+.m-dr-detail-sheet {
+  max-height: 90vh;
 }
-
+.m-dr-detail-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--m-space-8) 0;
+  gap: var(--m-space-3);
+  color: var(--m-color-text-tertiary);
+  font-size: var(--m-font-size-caption);
+}
+.m-dr-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--m-color-border);
+  border-top-color: var(--m-color-primary);
+  border-radius: var(--m-radius-circle);
+  animation: m-dr-spin 0.8s linear infinite;
+}
+@keyframes m-dr-spin {
+  to { transform: rotate(360deg); }
+}
 .m-dr-detail-goods {
   display: flex;
-  gap: 12px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #f0f4fa;
-  margin-bottom: 16px;
+  align-items: center;
+  gap: var(--m-space-3);
+  padding: var(--m-space-3);
+  background: var(--m-color-bg-subtle);
+  border-radius: var(--m-radius-lg);
+  margin-bottom: var(--m-space-4);
 }
 .m-dr-detail-thumb {
-  width: 64px;
-  height: 64px;
-  border-radius: 10px;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--m-radius-md);
   object-fit: cover;
-  background: #f4f7fc;
   flex-shrink: 0;
 }
 .m-dr-detail-thumb-placeholder {
-  width: 64px;
-  height: 64px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #f4f7fc, #eaf0fa);
+  width: 56px;
+  height: 56px;
+  border-radius: var(--m-radius-md);
+  background: var(--m-color-bg-card);
+  color: var(--m-color-text-tertiary);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #b0bacb;
   flex-shrink: 0;
 }
 .m-dr-detail-goods-info {
   flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
 }
 .m-dr-detail-goods-name {
-  font-size: 15px;
-  font-weight: 700;
-  color: #15213d;
-  line-height: 1.4;
-  margin-bottom: 4px;
+  font-size: var(--m-font-size-body);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
+  line-height: var(--m-line-height-tight);
+  margin-bottom: var(--m-space-1);
   word-break: break-all;
 }
 .m-dr-detail-goods-id {
-  font-size: 12px;
-  color: #8c98ae;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
-
 .m-dr-detail-grid {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-bottom: 16px;
+  gap: var(--m-space-1);
+  margin-bottom: var(--m-space-4);
 }
 .m-dr-detail-row {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  font-size: 14px;
-  line-height: 1.6;
+  justify-content: space-between;
+  gap: var(--m-space-3);
+  padding: var(--m-space-2) 0;
+  border-bottom: 1px solid var(--m-color-border-light);
+}
+.m-dr-detail-row:last-child {
+  border-bottom: none;
 }
 .m-dr-detail-label {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
   flex-shrink: 0;
-  width: 80px;
-  color: #72809a;
+  min-width: 64px;
 }
 .m-dr-detail-value {
-  flex: 1;
-  color: #15213d;
+  font-size: var(--m-font-size-body-sm);
+  color: var(--m-color-text-primary);
+  text-align: right;
   word-break: break-all;
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--m-space-1);
+  flex: 1;
 }
-.m-dr-detail-value .muted {
-  color: #8c98ae;
+.m-dr-detail-muted {
+  color: var(--m-color-text-tertiary);
+  font-size: var(--m-font-size-caption);
 }
-
 .m-dr-detail-block {
-  margin-bottom: 16px;
+  background: var(--m-color-bg-subtle);
+  border-radius: var(--m-radius-md);
+  padding: var(--m-space-3);
+  margin-bottom: var(--m-space-3);
 }
 .m-dr-detail-block-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #5a6a85;
-  margin-bottom: 8px;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-semibold);
+  margin-bottom: var(--m-space-2);
 }
 .m-dr-detail-block-content {
-  font-size: 14px;
-  color: #15213d;
-  line-height: 1.6;
-  background: #f8fafc;
-  border: 1px solid #eef2fa;
-  border-radius: 10px;
-  padding: 12px;
+  font-size: var(--m-font-size-body-sm);
+  color: var(--m-color-text-primary);
+  line-height: var(--m-line-height-base);
+  word-break: break-all;
   white-space: pre-wrap;
-  word-break: break-word;
 }
-.m-dr-detail-block-error .m-dr-detail-block-title {
-  color: #ef4444;
+.m-dr-detail-block--error {
+  background: var(--m-color-danger-bg);
+  border: 1px solid var(--m-color-danger-border);
 }
-.m-dr-detail-block-error .m-dr-detail-block-content {
-  background: #fff5f5;
-  border-color: #ffd0d0;
-  color: #b91c1c;
+.m-dr-detail-block--error .m-dr-detail-block-title {
+  color: var(--m-color-danger-text);
+}
+.m-dr-detail-block--error .m-dr-detail-block-content {
+  color: var(--m-color-danger-text);
 }
 
+/* === 响应式（窄屏）=== */
 @media (max-width: 360px) {
-  .m-dr { padding: 10px 12px 0; }
-  .m-dr-stats-grid { gap: 6px; }
-  .m-dr-stat-card { padding: 10px 6px; }
-  .m-dr-stat-icon { width: 32px; height: 32px; }
-  .m-dr-stat-value { font-size: 18px; }
-  .m-dr-stat-title { font-size: 10px; }
-  .m-dr-record-img-wrap { width: 60px; height: 60px; }
-  .m-dr-filter-chip { font-size: 11px; padding: 0 6px; }
+  .m-dr {
+    padding: var(--m-space-2) var(--m-space-2) 0;
+  }
+  .m-dr-hero {
+    padding: var(--m-space-3);
+  }
+  .m-dr-kpi-row {
+    padding: var(--m-space-2);
+    gap: var(--m-space-1);
+  }
+  .m-dr-kpi-value {
+    font-size: var(--m-font-size-h1);
+  }
+  .m-dr-filter-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .m-dr-tl-card {
+    padding: var(--m-space-2);
+  }
+  .m-dr-tl-card-img-wrap {
+    width: 40px;
+    height: 40px;
+  }
 }
 </style>

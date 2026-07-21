@@ -3,7 +3,6 @@ package com.xianyu.admin.service;
 import com.xianyu.admin.common.PageResult;
 import com.xianyu.admin.common.PageUtils;
 import com.xianyu.admin.dto.AdminCaptchaSolveRecordVO;
-import com.xianyu.admin.dto.CaptchaSilentSummaryVO;
 import com.xianyu.admin.dto.CaptchaSolveStatsVO;
 import com.xianyu.admin.mapper.XianyuCaptchaSolveRecordMapper;
 import org.slf4j.Logger;
@@ -136,40 +135,6 @@ public class AdminCaptchaSolveRecordService {
             records.add(mapRowToVO(row));
         }
         return new PageResult<>(records, safeCurrent, safeSize, total);
-    }
-
-    /**
-     * 静默自动求解摘要：统计 [since, now] 时间段内自动触发场景
-     * （ws_connect / cookie_keepalive / token_refresh）的求解次数与成功数，
-     * 排除手动触发（manual / manual_retry）。
-     *
-     * 用于前台进入页面时展示"您不在场时滑块求解已自动为您解决 N 次"的惊喜提示。
-     *
-     * @param since 起始时间（必填，来自前端 sessionStorage 记录的上次访问时间）
-     *              为 null 时回退为今天 0 点
-     * @param userId    用户 ID 过滤（与 accountId 互斥）
-     * @param accountId 账号 ID 过滤（优先于 userId）
-     */
-    public CaptchaSilentSummaryVO silentSummary(LocalDateTime since, Long userId, Long accountId) {
-        LocalDateTime startTime = since != null ? since : LocalDate.now().atStartOfDay();
-        LocalDateTime endTime = LocalDateTime.now();
-        // 防止 since 过早（超过 365 天），截断为 365 天前
-        LocalDateTime maxLookback = LocalDateTime.now().minusDays(365);
-        if (startTime.isBefore(maxLookback)) {
-            startTime = maxLookback;
-        }
-
-        Map<String, Object> row = recordMapper.selectSilentSummary(startTime, endTime, userId, accountId);
-
-        CaptchaSilentSummaryVO vo = new CaptchaSilentSummaryVO();
-        vo.setSince(startTime.format(DATETIME_FORMATTER).replace(' ', 'T'));
-        vo.setUntil(endTime.format(DATETIME_FORMATTER).replace(' ', 'T'));
-        vo.setTotal(getLong(row, "total"));
-        vo.setSuccess(getLong(row, "success_count"));
-        vo.setFail(getLong(row, "fail_count"));
-        vo.setAccountCount(getLong(row, "account_count"));
-        vo.setLastSolveTime(formatDateTime(row.get("last_solve_time")));
-        return vo;
     }
 
     // ==================== 私有辅助方法 ====================

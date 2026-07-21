@@ -1,38 +1,38 @@
 <template>
   <div class="m-data">
-    <div class="m-hero-card">
-      <div class="m-hero-glow m-hero-glow-1"></div>
-      <div class="m-hero-glow m-hero-glow-2"></div>
-      <div class="m-hero-pattern"></div>
-      <div class="m-hero-content">
-        <div class="m-hero-badge">
-          <span class="m-hero-dot"></span>
+    <!-- 顶部 KPI 大卡 + 日期 tabs -->
+    <section class="m-data-hero">
+      <div class="m-data-hero-head">
+        <div class="m-data-hero-badge">
+          <span class="m-data-hero-dot"></span>
           <span>实时数据</span>
         </div>
-        <h1 class="m-hero-title">数据面板</h1>
-        <p class="m-hero-sub">{{ scopeLabel }} · 更新于 {{ updatedAt }}</p>
+        <h1 class="m-data-hero-title">数据面板</h1>
+        <p class="m-data-hero-sub">{{ scopeLabel }} · 更新于 {{ updatedAt }}</p>
       </div>
-      <div class="m-hero-stats">
-        <div class="m-hero-stat">
-          <div class="m-hero-stat-value">{{ metricText(stats.orderCount) }}</div>
-          <div class="m-hero-stat-label">今日订单</div>
+
+      <div class="m-data-kpi-row">
+        <div class="m-data-kpi-cell">
+          <div class="m-data-kpi-value">{{ metricText(stats.orderCount) }}</div>
+          <div class="m-data-kpi-label">今日订单</div>
         </div>
-        <div class="m-hero-stat-divider"></div>
-        <div class="m-hero-stat">
-          <div class="m-hero-stat-value m-hero-stat-green">{{ metricText(stats.deliverySuccessCount) }}</div>
-          <div class="m-hero-stat-label">发货成功</div>
+        <div class="m-data-kpi-divider"></div>
+        <div class="m-data-kpi-cell">
+          <div class="m-data-kpi-value m-data-kpi-value--success">{{ metricText(stats.deliverySuccessCount) }}</div>
+          <div class="m-data-kpi-label">发货成功</div>
         </div>
-        <div class="m-hero-stat-divider"></div>
-        <div class="m-hero-stat">
-          <div class="m-hero-stat-value m-hero-stat-orange">{{ metricText(stats.pendingDeliveryCount) }}</div>
-          <div class="m-hero-stat-label">待处理</div>
+        <div class="m-data-kpi-divider"></div>
+        <div class="m-data-kpi-cell">
+          <div class="m-data-kpi-value m-data-kpi-value--warning">{{ metricText(stats.pendingDeliveryCount) }}</div>
+          <div class="m-data-kpi-label">待处理</div>
         </div>
       </div>
-      <div class="m-hero-date-tabs">
+
+      <div class="m-data-date-tabs">
         <button
           v-for="tab in dateTabs"
           :key="tab.value"
-          class="m-hero-date-tab"
+          class="m-data-date-tab"
           :class="{ active: activeDate === tab.value }"
           :disabled="tab.disabled"
           @click="switchDate(tab.value)"
@@ -40,57 +40,59 @@
           {{ tab.label }}
         </button>
       </div>
-    </div>
+    </section>
 
-    <div v-if="loading" class="m-loading-wrap">
-      <div class="m-loading-spinner"></div>
-      <div class="m-loading-text">加载数据中...</div>
+    <div v-if="loading" class="m-data-loading">
+      <div class="m-data-spinner"></div>
+      <div class="m-data-loading-text">加载数据中...</div>
     </div>
 
     <MobileUnavailableState v-else-if="loadError" title="数据面板暂时无法加载" :description="loadError" @retry="loadAll" />
 
     <template v-else>
-      <div v-if="!hasData" class="m-empty">
-        <div class="m-empty-icon">
+      <div v-if="!hasData" class="m-data-empty">
+        <div class="m-data-empty-icon">
           <MIcon name="pieChart" :size="48" />
         </div>
-        <div class="m-empty-text">暂无数据</div>
-        <div class="m-empty-desc">当前时间段还没有运营数据，稍后再来看看</div>
+        <div class="m-data-empty-title">暂无数据</div>
+        <div class="m-data-empty-desc">当前时间段还没有运营数据，稍后再来看看</div>
       </div>
 
       <template v-else>
-        <div class="m-metric-grid">
+        <!-- 核心指标卡 2×3 -->
+        <div class="m-data-metric-grid">
           <div
             v-for="metric in displayMetrics"
             :key="metric.key"
-            class="m-metric-card"
+            class="m-data-metric-card"
           >
-            <div class="m-metric-head">
-              <span class="m-metric-label">{{ metric.label }}</span>
-              <div class="m-metric-icon" :style="{ background: metric.iconBg }">
-                <MIcon :name="metric.icon" :size="18" :style="{ color: metric.iconColor }" />
+            <div class="m-data-metric-head">
+              <span class="m-data-metric-label">{{ metric.label }}</span>
+              <div class="m-data-metric-icon" :class="`m-data-metric-icon--${metric.key}`">
+                <MIcon :name="metric.icon" :size="18" />
               </div>
             </div>
-            <div class="m-metric-value" :style="{ color: metric.valueColor || '#15213d' }">{{ metric.display }}</div>
-            <div class="m-metric-sub">{{ metric.sub }}</div>
+            <div class="m-data-metric-value" :class="`m-data-metric-value--${metric.key}`">{{ metric.display }}</div>
+            <div class="m-data-metric-sub">{{ metric.sub }}</div>
           </div>
         </div>
 
-        <div class="m-section m-trend-section">
-          <div class="m-section-header">
-            <div class="m-section-title-wrap">
-              <div class="m-section-title-icon m-title-icon-blue">
+        <!-- 业务趋势卡 -->
+        <section class="m-data-card">
+          <div class="m-data-card-header">
+            <div class="m-data-card-title-wrap">
+              <div class="m-data-card-title-icon m-data-title-icon--primary">
                 <MIcon name="trendingUp" :size="18" />
               </div>
-              <h2 class="m-section-title">业务趋势</h2>
-              <span class="m-section-hint">近 {{ trendDays }} 天走势</span>
+              <h2 class="m-data-card-title">业务趋势</h2>
+              <span class="m-data-card-hint">近 {{ trendDays }} 天走势</span>
             </div>
-            <div class="m-trend-pills">
+            <div class="m-data-trend-pills">
               <button
                 v-for="opt in trendRangeOptions"
                 :key="opt.value"
                 type="button"
-                class="m-trend-pill"
+                class="m-data-trend-pill"
                 :class="{ active: trendDays === opt.value }"
                 @click="switchTrendRange(opt.value)"
               >
@@ -98,101 +100,105 @@
               </button>
             </div>
           </div>
-          <div v-if="trendHasData" ref="trendChartEl" class="m-echart-box"></div>
-          <div v-if="trendHasData" class="m-trend-legend">
-            <span v-for="series in trendSeries" :key="series.name" class="m-trend-legend-item">
+          <div v-if="trendHasData" ref="trendChartEl" class="m-data-echart-box"></div>
+          <div v-if="trendHasData" class="m-data-trend-legend">
+            <span v-for="series in trendSeries" :key="series.name" class="m-data-trend-legend-item">
               <i :style="{ background: series.color }"></i>{{ series.name }}
             </span>
           </div>
-          <div v-else class="m-chart-empty">
+          <div v-else class="m-data-chart-empty">
             <MIcon name="trend" :size="32" />
             <span>暂无趋势数据</span>
           </div>
-        </div>
+        </section>
 
-        <div class="m-section">
-          <div class="m-section-header">
-            <div class="m-section-title-wrap">
-              <div class="m-section-title-icon m-title-icon-blue">
+        <!-- 数据概览 2×2 -->
+        <section class="m-data-card">
+          <div class="m-data-card-header">
+            <div class="m-data-card-title-wrap">
+              <div class="m-data-card-title-icon m-data-title-icon--primary">
                 <MIcon name="activity" :size="18" />
               </div>
-              <h2 class="m-section-title">数据概览</h2>
+              <h2 class="m-data-card-title">数据概览</h2>
             </div>
           </div>
-          <div class="m-overview-grid">
-            <div v-for="item in overviewItems" :key="item.label" class="m-overview-card">
-              <div class="m-overview-icon" :style="{ background: item.iconBg }">
-                <MIcon :name="item.icon" :size="20" :style="{ color: item.color }" />
+          <div class="m-data-overview-grid">
+            <div v-for="item in overviewItems" :key="item.label" class="m-data-overview-card">
+              <div class="m-data-overview-icon" :class="`m-data-overview-icon--${item.icon}`">
+                <MIcon :name="item.icon" :size="20" />
               </div>
-              <div class="m-overview-info">
-                <div class="m-overview-label">{{ item.label }}</div>
-                <div class="m-overview-value" :style="{ color: item.color }">{{ item.value }}</div>
+              <div class="m-data-overview-info">
+                <div class="m-data-overview-label">{{ item.label }}</div>
+                <div class="m-data-overview-value" :class="`m-data-overview-value--${item.icon}`">{{ item.value }}</div>
               </div>
-              <div class="m-overview-bar-wrap">
-                <div class="m-overview-bar">
-                  <div class="m-overview-bar-fill m-bar-shine" :style="{ width: item.pct + '%', background: `linear-gradient(90deg, ${item.color}, ${item.color}dd)` }"></div>
+              <div class="m-data-overview-bar-wrap">
+                <div class="m-data-overview-bar">
+                  <div class="m-data-overview-bar-fill" :class="`m-data-overview-bar-fill--${item.icon}`" :style="{ width: item.pct + '%' }"></div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
+        </section>
 
-        <div class="m-alert-grid">
-          <div v-for="alert in alertItems" :key="alert.label" class="m-alert-card" :style="{ background: alert.bg }">
-            <div class="m-alert-icon" :style="{ background: alert.iconBg }">
-              <MIcon :name="alert.icon" :size="20" :style="{ color: alert.color }" />
+        <!-- 告警卡 3 列 -->
+        <div class="m-data-alert-grid">
+          <div v-for="alert in alertItems" :key="alert.label" class="m-data-alert-card" :class="`m-data-alert-card--${alert.icon}`">
+            <div class="m-data-alert-icon" :class="`m-data-alert-icon--${alert.icon}`">
+              <MIcon :name="alert.icon" :size="20" />
             </div>
-            <div class="m-alert-info">
-              <div class="m-alert-value" :style="{ color: alert.color }">{{ alert.value }}</div>
-              <div class="m-alert-label">{{ alert.label }}</div>
+            <div class="m-data-alert-info">
+              <div class="m-data-alert-value" :class="`m-data-alert-value--${alert.icon}`">{{ alert.value }}</div>
+              <div class="m-data-alert-label">{{ alert.label }}</div>
             </div>
           </div>
         </div>
 
-        <div class="m-section">
-          <div class="m-section-header">
-            <div class="m-section-title-wrap">
-              <div class="m-section-title-icon">
+        <!-- 快捷入口 4 列 -->
+        <section class="m-data-card">
+          <div class="m-data-card-header">
+            <div class="m-data-card-title-wrap">
+              <div class="m-data-card-title-icon m-data-title-icon--neutral">
                 <MIcon name="grid" :size="18" />
               </div>
-              <h2 class="m-section-title">快捷入口</h2>
+              <h2 class="m-data-card-title">快捷入口</h2>
             </div>
           </div>
-          <div class="m-quick-grid">
-            <button v-for="quick in quickEntries" :key="quick.key" class="m-quick-item" @click="$emit('navigate', quick.key)">
-              <div class="m-quick-icon" :style="{ background: quick.iconBg }">
-                <MIcon :name="quick.icon" :size="22" :style="{ color: quick.color }" />
+          <div class="m-data-quick-grid">
+            <button v-for="quick in quickEntries" :key="quick.key" class="m-data-quick-item" @click="$emit('navigate', quick.key)">
+              <div class="m-data-quick-icon" :class="`m-data-quick-icon--${quick.key}`">
+                <MIcon :name="quick.icon" :size="20" />
               </div>
-              <span class="m-quick-label">{{ quick.label }}</span>
+              <span class="m-data-quick-label">{{ quick.label }}</span>
             </button>
           </div>
-        </div>
+        </section>
 
-        <div class="m-section">
-          <div class="m-section-header">
-            <div class="m-section-title-wrap">
-              <div class="m-section-title-icon" style="background: linear-gradient(135deg, #fef3c7, #fde68a); color: #d97706;">
+        <!-- 最新动态 -->
+        <section class="m-data-card">
+          <div class="m-data-card-header">
+            <div class="m-data-card-title-wrap">
+              <div class="m-data-card-title-icon m-data-title-icon--warning">
                 <MIcon name="bell" :size="18" />
               </div>
-              <h2 class="m-section-title">最新动态</h2>
+              <h2 class="m-data-card-title">最新动态</h2>
             </div>
-            <button class="m-section-more" @click="$emit('navigate', 'messages')">
+            <button class="m-data-card-more" @click="$emit('navigate', 'messages')">
               查看全部
               <MIcon name="chevronRight" :size="14" />
             </button>
           </div>
-          <div class="m-notice-list">
-            <div v-for="(notice, idx) in noticeList" :key="notice.id || idx" class="m-notice-item">
-              <div class="m-notice-icon" :style="{ background: notice.iconBg }">
-                <MIcon :name="notice.icon" :size="16" :style="{ color: notice.color }" />
+          <div class="m-data-notice-list">
+            <div v-for="(notice, idx) in noticeList" :key="notice.id || idx" class="m-data-notice-item">
+              <div class="m-data-notice-icon" :class="`m-data-notice-icon--${notice.icon}`">
+                <MIcon :name="notice.icon" :size="16" />
               </div>
-              <div class="m-notice-content">
-                <div class="m-notice-title">{{ notice.title }}</div>
-                <div class="m-notice-desc">{{ notice.desc }}</div>
+              <div class="m-data-notice-content">
+                <div class="m-data-notice-title">{{ notice.title }}</div>
+                <div class="m-data-notice-desc">{{ notice.desc }}</div>
               </div>
-              <div class="m-notice-time">{{ notice.time }}</div>
+              <div class="m-data-notice-time">{{ notice.time }}</div>
             </div>
-            <div v-if="!notificationsLoadError && noticeList.length === 0" class="m-notice-empty">
+            <div v-if="!notificationsLoadError && noticeList.length === 0" class="m-data-notice-empty">
               暂无最新通知
             </div>
           </div>
@@ -203,23 +209,24 @@
             :description="notificationsLoadError"
             @retry="loadNotifications"
           />
-        </div>
+        </section>
 
-        <div v-if="trendHasData" class="m-section">
-          <div class="m-section-header">
-            <div class="m-section-title-wrap">
-              <div class="m-section-title-icon m-title-icon-purple">
+        <!-- 趋势明细表 -->
+        <section v-if="trendHasData" class="m-data-card">
+          <div class="m-data-card-header">
+            <div class="m-data-card-title-wrap">
+              <div class="m-data-card-title-icon m-data-title-icon--purple">
                 <MIcon name="list" :size="18" />
               </div>
-              <h2 class="m-section-title">趋势明细</h2>
-              <span class="m-section-hint">按日展示指标</span>
+              <h2 class="m-data-card-title">趋势明细</h2>
+              <span class="m-data-card-hint">按日展示指标</span>
             </div>
-            <button class="m-section-more" @click="$emit('navigate', 'data-detail')">
+            <button class="m-data-card-more" @click="$emit('navigate', 'data-detail')">
               查看详情
               <MIcon name="chevronRight" :size="14" />
             </button>
           </div>
-          <div class="m-table-wrap">
+          <div class="m-data-table-wrap">
             <table class="m-data-table">
               <thead>
                 <tr>
@@ -232,18 +239,18 @@
               <tbody>
                 <tr v-for="(row, idx) in trendRows" :key="row.date" :class="{ 'row-alt': idx % 2 === 1 }">
                   <td class="td-date">{{ row.shortDate }}</td>
-                  <td class="td-num"><span class="m-num-pill m-num-green">{{ row.success }}</span></td>
-                  <td class="td-num"><span v-if="row.fail > 0" class="m-num-dot m-dot-red"></span>{{ row.fail }}</td>
-                  <td class="td-num"><span v-if="row.aiReply > 0" class="m-num-pill m-num-purple">{{ row.aiReply }}</span><span v-else class="m-num-muted">0</span></td>
+                  <td class="td-num"><span class="m-data-num-pill m-data-num-pill--success">{{ row.success }}</span></td>
+                  <td class="td-num"><span v-if="row.fail > 0" class="m-data-num-dot m-data-num-dot--danger"></span>{{ row.fail }}</td>
+                  <td class="td-num"><span v-if="row.aiReply > 0" class="m-data-num-pill m-data-num-pill--purple">{{ row.aiReply }}</span><span v-else class="m-data-num-muted">0</span></td>
                 </tr>
               </tbody>
             </table>
           </div>
-        </div>
+        </section>
       </template>
     </template>
 
-    <div class="m-safe-bottom"></div>
+    <div class="m-data-safe-bottom"></div>
   </div>
 </template>
 
@@ -817,8 +824,9 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* === 根容器 === */
 .m-data {
-  padding: 12px 14px 0;
+  padding: var(--m-space-3) var(--m-space-3) 0;
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -826,998 +834,864 @@ onBeforeUnmount(() => {
   overflow-x: hidden;
 }
 
-.m-hero-card {
-  background: linear-gradient(145deg, #052560 0%, #0a4299 30%, #0d55d4 65%, #1570ff 100%);
-  border-radius: 24px;
-  padding: 20px 18px 16px;
-  margin-bottom: 16px;
-  position: relative;
-  overflow: hidden;
-  box-shadow: 0 12px 40px rgba(10, 66, 153, 0.4), 0 4px 12px rgba(13, 85, 212, 0.25);
+/* === 顶部 Hero：KPI 大卡 + 日期 tabs === */
+.m-data-hero {
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-xl);
+  padding: var(--m-space-4);
+  margin-bottom: var(--m-space-3);
+  box-shadow: var(--m-shadow-card);
 }
-
-.m-hero-glow {
-  position: absolute;
-  border-radius: 50%;
-  pointer-events: none;
+.m-data-hero-head {
+  margin-bottom: var(--m-space-4);
 }
-
-.m-hero-glow-1 {
-  top: -60px;
-  right: -40px;
-  width: 220px;
-  height: 220px;
-  background: radial-gradient(circle, rgba(99, 179, 255, 0.45) 0%, transparent 70%);
-}
-
-.m-hero-glow-2 {
-  bottom: -80px;
-  left: -30px;
-  width: 180px;
-  height: 180px;
-  background: radial-gradient(circle, rgba(59, 130, 246, 0.3) 0%, transparent 70%);
-}
-
-.m-hero-pattern {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-image: radial-gradient(circle at 20% 80%, rgba(255,255,255,0.03) 0%, transparent 50%),
-                    radial-gradient(circle at 80% 20%, rgba(255,255,255,0.05) 0%, transparent 50%);
-  pointer-events: none;
-}
-
-.m-hero-content {
-  position: relative;
-  z-index: 1;
-  margin-bottom: 16px;
-}
-
-.m-hero-badge {
+.m-data-hero-badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  background: rgba(255, 255, 255, 0.18);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  padding: 5px 12px;
-  border-radius: 100px;
-  font-size: 11px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.95);
-  margin-bottom: 12px;
-  border: 1px solid rgba(255,255,255,0.1);
+  gap: var(--m-space-1);
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success-text);
+  padding: var(--m-space-1) var(--m-space-3);
+  border-radius: var(--m-radius-pill);
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-semibold);
+  margin-bottom: var(--m-space-3);
+  border: 1px solid var(--m-color-success-border);
 }
-
-.m-hero-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #4ade80;
-  box-shadow: 0 0 10px #4ade80, 0 0 20px rgba(74, 222, 128, 0.5);
-  animation: m-pulse 2s ease-in-out infinite;
+.m-data-hero-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--m-radius-circle);
+  background: var(--m-color-success);
+  animation: m-data-pulse 1.6s ease-in-out infinite;
 }
-
-@keyframes m-pulse {
+@keyframes m-data-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.6; transform: scale(0.9); }
+  50% { opacity: 0.5; transform: scale(0.85); }
 }
-
-.m-hero-title {
-  margin: 0 0 6px;
-  font-size: 28px;
-  font-weight: 800;
-  color: #ffffff;
-  line-height: 1.15;
-  letter-spacing: -0.5px;
-  text-shadow: 0 2px 8px rgba(0,0,0,0.15);
+.m-data-hero-title {
+  margin: 0 0 var(--m-space-1);
+  font-size: var(--m-font-size-h1);
+  font-weight: var(--m-font-weight-extrabold);
+  color: var(--m-color-text-primary);
+  line-height: var(--m-line-height-tight);
+  letter-spacing: -0.3px;
 }
-
-.m-hero-sub {
+.m-data-hero-sub {
   margin: 0;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.78);
-  line-height: 1.5;
-  font-weight: 500;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  line-height: var(--m-line-height-base);
 }
 
-.m-hero-stats {
-  position: relative;
-  z-index: 1;
+/* KPI 行 */
+.m-data-kpi-row {
   display: flex;
-  align-items: center;
-  background: rgba(255,255,255,0.1);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border-radius: 16px;
-  padding: 14px 12px;
-  margin-bottom: 14px;
-  border: 1px solid rgba(255,255,255,0.08);
+  align-items: stretch;
+  padding: var(--m-space-3) 0;
+  border-top: 1px solid var(--m-color-border-light);
+  border-bottom: 1px solid var(--m-color-border-light);
+  margin-bottom: var(--m-space-3);
 }
-
-.m-hero-stat {
+.m-data-kpi-cell {
   flex: 1;
+  min-width: 0;
   text-align: center;
+  padding: 0 var(--m-space-2);
 }
-
-.m-hero-stat-value {
-  font-size: 22px;
-  font-weight: 800;
-  color: #ffffff;
-  line-height: 1.1;
+.m-data-kpi-value {
+  font-size: var(--m-font-size-hero);
+  font-weight: var(--m-font-weight-extrabold);
+  color: var(--m-color-text-primary);
+  line-height: var(--m-line-height-tight);
   font-variant-numeric: tabular-nums;
-  text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  letter-spacing: -0.5px;
 }
-
-.m-hero-stat-green {
-  color: #86efac;
+.m-data-kpi-value--success {
+  color: var(--m-color-success);
 }
-
-.m-hero-stat-orange {
-  color: #fdba74;
+.m-data-kpi-value--warning {
+  color: var(--m-color-warning-text);
 }
-
-.m-hero-stat-label {
-  font-size: 10px;
-  color: rgba(255,255,255,0.65);
-  margin-top: 4px;
-  font-weight: 500;
-}
-
-.m-hero-stat-divider {
+.m-data-kpi-divider {
   width: 1px;
-  height: 32px;
-  background: rgba(255,255,255,0.15);
+  align-self: stretch;
+  background: var(--m-color-border-light);
+}
+.m-data-kpi-label {
+  margin-top: var(--m-space-1);
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-medium);
 }
 
-.m-hero-date-tabs {
-  position: relative;
-  z-index: 1;
+/* 日期 tabs */
+.m-data-date-tabs {
   display: flex;
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 14px;
-  padding: 4px;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(255,255,255,0.08);
+  gap: var(--m-space-1);
+  background: var(--m-color-bg-subtle);
+  padding: var(--m-space-1);
+  border-radius: var(--m-radius-md);
 }
-
-.m-hero-date-tab {
+.m-data-date-tab {
   flex: 1;
-  height: 34px;
   border: none;
   background: transparent;
-  border-radius: 10px;
-  font-size: 12px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.6);
+  padding: var(--m-space-2) var(--m-space-3);
+  border-radius: var(--m-radius-md);
+  font-size: var(--m-font-size-caption);
+  font-weight: var(--m-font-weight-medium);
+  color: var(--m-color-text-secondary);
   cursor: pointer;
-  transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.15s;
+  font-family: inherit;
 }
-
-.m-hero-date-tab.active {
-  background: white;
-  color: #0d55d4;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  font-weight: 700;
+.m-data-date-tab.active {
+  background: var(--m-color-bg-card);
+  color: var(--m-color-primary);
+  font-weight: var(--m-font-weight-semibold);
+  box-shadow: var(--m-shadow-card);
 }
-
-.m-hero-date-tab:disabled {
-  color: rgba(255, 255, 255, 0.3);
+.m-data-date-tab:disabled {
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
-.m-loading-wrap {
-  padding: 80px 0;
-  text-align: center;
+/* === Loading === */
+.m-data-loading {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
+  justify-content: center;
+  padding: var(--m-space-12) var(--m-space-4);
+  gap: var(--m-space-3);
 }
-
-.m-loading-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid #e8f1ff;
-  border-top-color: #0d6bff;
-  border-radius: 50%;
-  animation: m-spin 0.8s linear infinite;
+.m-data-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2.5px solid var(--m-color-border);
+  border-top-color: var(--m-color-primary);
+  border-radius: var(--m-radius-circle);
+  animation: m-data-spin 0.8s linear infinite;
 }
-
-@keyframes m-spin {
+@keyframes m-data-spin {
   to { transform: rotate(360deg); }
 }
-
-.m-loading-text {
-  font-size: 13px;
-  color: #8c98ae;
-  font-weight: 500;
+.m-data-loading-text {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
 }
 
-.m-empty {
-  padding: 60px 16px;
-  text-align: center;
-  color: #8c98ae;
-}
-
-.m-empty-icon {
-  width: 88px;
-  height: 88px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #e8f1ff, #d4e4ff);
-  color: #0d6bff;
+/* === Empty === */
+.m-data-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  margin: 0 auto 16px;
-  opacity: 0.7;
+  padding: var(--m-space-12) var(--m-space-4);
+  gap: var(--m-space-2);
+}
+.m-data-empty-icon {
+  color: var(--m-color-text-disabled);
+  margin-bottom: var(--m-space-2);
+}
+.m-data-empty-title {
+  font-size: var(--m-font-size-body);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-secondary);
+}
+.m-data-empty-desc {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
 }
 
-.m-empty-text {
-  font-size: 17px;
-  font-weight: 700;
-  color: #5a6a85;
-  margin-bottom: 8px;
-}
-
-.m-empty-desc {
-  font-size: 13px;
-  color: #9aa6bd;
-  line-height: 1.6;
-}
-
-.m-metric-grid {
+/* === 核心指标卡 2×3 === */
+.m-data-metric-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: var(--m-space-3);
+  margin-bottom: var(--m-space-3);
 }
-
-.m-metric-card {
-  background: white;
-  border-radius: 20px;
-  padding: 16px;
-  box-shadow: 0 4px 16px rgba(31, 53, 94, 0.07), 0 1px 3px rgba(31, 53, 94, 0.04);
-  border: 1px solid #f0f4fa;
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s;
-  position: relative;
-  overflow: hidden;
+.m-data-metric-card {
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3);
+  box-shadow: var(--m-shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: var(--m-space-2);
 }
-
-.m-metric-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: linear-gradient(90deg, transparent, rgba(13,107,255,0.1), transparent);
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-
-.m-metric-card:active {
-  transform: scale(0.97);
-  box-shadow: 0 2px 8px rgba(31, 53, 94, 0.08);
-}
-
-.m-metric-card:active::before {
-  opacity: 1;
-}
-
-.m-metric-head {
+.m-data-metric-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
 }
-
-.m-metric-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: #72809a;
+.m-data-metric-label {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-medium);
 }
-
-.m-metric-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
+.m-data-metric-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--m-radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.m-data-metric-icon--orderCount {
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
+}
+.m-data-metric-icon--deliverySuccessCount {
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success);
+}
+.m-data-metric-icon--pendingDeliveryCount {
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning);
+}
+.m-data-metric-icon--deliveryFailCount {
+  background: var(--m-color-danger-bg);
+  color: var(--m-color-danger);
+}
+.m-data-metric-icon--aiReplyCount {
+  background: var(--m-color-purple-bg);
+  color: var(--m-color-purple);
+}
+.m-data-metric-icon--itemCount {
+  background: var(--m-color-cyan-bg);
+  color: var(--m-color-cyan);
+}
+.m-data-metric-value {
+  font-size: var(--m-font-size-h1);
+  font-weight: var(--m-font-weight-extrabold);
+  color: var(--m-color-text-primary);
+  line-height: var(--m-line-height-tight);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.3px;
+}
+.m-data-metric-value--deliverySuccessCount {
+  color: var(--m-color-success-text);
+}
+.m-data-metric-value--deliveryFailCount {
+  color: var(--m-color-danger-text);
+}
+.m-data-metric-value--pendingDeliveryCount {
+  color: var(--m-color-warning-text);
+}
+.m-data-metric-value--aiReplyCount {
+  color: var(--m-color-purple);
+}
+.m-data-metric-sub {
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-tertiary);
 }
 
-.m-metric-value {
-  font-size: 28px;
-  font-weight: 800;
+/* === 通用卡片容器 === */
+.m-data-card {
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-xl);
+  padding: var(--m-space-4);
+  margin-bottom: var(--m-space-3);
+  box-shadow: var(--m-shadow-card);
+}
+.m-data-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--m-space-3);
+  gap: var(--m-space-2);
+}
+.m-data-card-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-2);
+  min-width: 0;
+}
+.m-data-card-title-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--m-radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.m-data-title-icon--primary {
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
+}
+.m-data-title-icon--purple {
+  background: var(--m-color-purple-bg);
+  color: var(--m-color-purple);
+}
+.m-data-title-icon--warning {
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning);
+}
+.m-data-title-icon--neutral {
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
+}
+.m-data-card-title {
+  margin: 0;
+  font-size: var(--m-font-size-h3);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
+}
+.m-data-card-hint {
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-tertiary);
+  margin-left: var(--m-space-1);
+}
+.m-data-card-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: transparent;
+  border: none;
+  font-size: var(--m-font-size-caption);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-primary);
+  cursor: pointer;
+  padding: var(--m-space-1) var(--m-space-2);
+  border-radius: var(--m-radius-md);
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.m-data-card-more:active {
+  background: var(--m-color-primary-bg);
+}
+
+/* === 趋势 pills === */
+.m-data-trend-pills {
+  display: flex;
+  gap: var(--m-space-1);
+  flex-shrink: 0;
+}
+.m-data-trend-pill {
+  border: none;
+  background: var(--m-color-bg-subtle);
+  padding: var(--m-space-1) var(--m-space-2);
+  border-radius: var(--m-radius-pill);
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-medium);
+  color: var(--m-color-text-tertiary);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.m-data-trend-pill.active {
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
+  font-weight: var(--m-font-weight-semibold);
+}
+
+/* === ECharts 容器 === */
+.m-data-echart-box {
+  width: 100%;
+  height: 180px;
+  min-height: 180px;
+}
+.m-data-trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--m-space-3);
+  margin-top: var(--m-space-2);
+  padding-top: var(--m-space-2);
+  border-top: 1px solid var(--m-color-border-light);
+}
+.m-data-trend-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--m-space-1);
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-secondary);
+}
+.m-data-trend-legend-item i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--m-radius-sm);
+}
+.m-data-chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--m-space-2);
+  padding: var(--m-space-8) var(--m-space-4);
+  color: var(--m-color-text-disabled);
+  font-size: var(--m-font-size-caption);
+}
+
+/* === 数据概览 2×2 === */
+.m-data-overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--m-space-3);
+}
+.m-data-overview-card {
+  background: var(--m-color-bg-subtle);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--m-space-2);
+}
+.m-data-overview-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--m-radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.m-data-overview-icon--checkCircle {
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success);
+}
+.m-data-overview-icon--bag {
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
+}
+.m-data-overview-icon--bot {
+  background: var(--m-color-purple-bg);
+  color: var(--m-color-purple);
+}
+.m-data-overview-icon--clock {
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning);
+}
+.m-data-overview-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.m-data-overview-label {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-medium);
+}
+.m-data-overview-value {
+  font-size: var(--m-font-size-h2);
+  font-weight: var(--m-font-weight-bold);
+  color: var(--m-color-text-primary);
+  line-height: var(--m-line-height-tight);
+  font-variant-numeric: tabular-nums;
+}
+.m-data-overview-value--checkCircle {
+  color: var(--m-color-success-text);
+}
+.m-data-overview-value--bag {
+  color: var(--m-color-primary);
+}
+.m-data-overview-value--bot {
+  color: var(--m-color-purple);
+}
+.m-data-overview-value--clock {
+  color: var(--m-color-warning-text);
+}
+.m-data-overview-bar-wrap {
+  margin-top: var(--m-space-1);
+}
+.m-data-overview-bar {
+  height: 4px;
+  background: var(--m-color-border);
+  border-radius: var(--m-radius-pill);
+  overflow: hidden;
+}
+.m-data-overview-bar-fill {
+  height: 100%;
+  border-radius: var(--m-radius-pill);
+  transition: width 0.4s ease;
+}
+.m-data-overview-bar-fill--checkCircle {
+  background: var(--m-color-success);
+}
+.m-data-overview-bar-fill--bag {
+  background: var(--m-color-primary);
+}
+.m-data-overview-bar-fill--bot {
+  background: var(--m-color-purple);
+}
+.m-data-overview-bar-fill--clock {
+  background: var(--m-color-warning);
+}
+
+/* === 告警卡 3 列 === */
+.m-data-alert-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--m-space-2);
+  margin-bottom: var(--m-space-3);
+}
+.m-data-alert-card {
+  border: 1px solid var(--m-color-border);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3) var(--m-space-2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--m-space-2);
+  background: var(--m-color-bg-card);
+}
+.m-data-alert-card--alertTriangle {
+  background: var(--m-color-warning-bg);
+  border-color: var(--m-color-warning-border);
+}
+.m-data-alert-card--message {
+  background: var(--m-color-primary-bg);
+  border-color: var(--m-color-info-border);
+}
+.m-data-alert-card--wifiOff {
+  background: var(--m-color-danger-bg);
+  border-color: var(--m-color-danger-border);
+}
+.m-data-alert-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--m-radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.m-data-alert-icon--alertTriangle {
+  background: var(--m-color-bg-card);
+  color: var(--m-color-warning-text);
+}
+.m-data-alert-icon--message {
+  background: var(--m-color-bg-card);
+  color: var(--m-color-primary);
+}
+.m-data-alert-icon--wifiOff {
+  background: var(--m-color-bg-card);
+  color: var(--m-color-danger-text);
+}
+.m-data-alert-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.m-data-alert-value {
+  font-size: var(--m-font-size-h2);
+  font-weight: var(--m-font-weight-bold);
+  color: var(--m-color-text-primary);
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
-
-.m-metric-sub {
-  font-size: 10px;
-  color: #9aa6bd;
-  margin-top: 7px;
-  font-weight: 500;
+.m-data-alert-value--alertTriangle {
+  color: var(--m-color-warning-text);
 }
-
-.m-section {
-  background: white;
-  border-radius: 22px;
-  padding: 18px;
-  margin-bottom: 16px;
-  box-shadow: 0 4px 16px rgba(31, 53, 94, 0.06), 0 1px 3px rgba(31, 53, 94, 0.03);
-  border: 1px solid #f0f4fa;
+.m-data-alert-value--message {
+  color: var(--m-color-primary);
 }
-
-.m-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 18px;
+.m-data-alert-value--wifiOff {
+  color: var(--m-color-danger-text);
 }
-
-.m-section-title-wrap {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.m-section-title-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #e8f1ff, #d0e2ff);
-  color: #0d6bff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.m-title-icon-blue {
-  background: linear-gradient(135deg, #e8f1ff, #c5dcff);
-  color: #0d6bff;
-}
-
-.m-title-icon-purple {
-  background: linear-gradient(135deg, #f0ebff, #d4c5ff);
-  color: #8b5cf6;
-}
-
-.m-section-title {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 700;
-  color: #15213d;
-}
-
-.m-section-hint {
-  font-size: 11px;
-  color: #8c98ae;
-  background: #f5f8ff;
-  padding: 3px 10px;
-  border-radius: 100px;
-  font-weight: 500;
-}
-
-.m-trend-pills {
-  display: flex;
-  background: #f5f8ff;
-  border-radius: 12px;
-  padding: 4px;
-}
-
-.m-trend-pill {
-  border: none;
-  background: transparent;
-  border-radius: 8px;
-  padding: 5px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #8c98ae;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.m-trend-pill.active {
-  background: white;
-  color: #0d6bff;
-  box-shadow: 0 2px 8px rgba(13, 107, 255, 0.12);
-  font-weight: 700;
-}
-
-.m-echart-box {
-  width: 100%;
-  height: 200px;
-}
-
-.m-trend-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 2px 8px 0;
-}
-
-.m-trend-legend-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  color: #72809a;
-}
-
-.m-trend-legend-item i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-}
-
-.m-chart-empty {
-  height: 140px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  font-size: 13px;
-  color: #9aa6bd;
-}
-
-.m-overview-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-.m-overview-card {
-  background: linear-gradient(145deg, #f8faff, #f5f8ff);
-  border-radius: 16px;
-  padding: 14px;
-  border: 1px solid #f0f4fa;
-  transition: transform 0.15s;
-}
-
-.m-overview-card:active {
-  transform: scale(0.98);
-}
-
-.m-overview-icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 10px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-}
-
-.m-overview-info {
-  margin-bottom: 12px;
-}
-
-.m-overview-label {
-  font-size: 11px;
-  color: #8c98ae;
-  margin-bottom: 4px;
-  font-weight: 500;
-}
-
-.m-overview-value {
-  font-size: 24px;
-  font-weight: 800;
-  line-height: 1.1;
-  font-variant-numeric: tabular-nums;
-}
-
-.m-overview-bar-wrap {
-  margin-top: auto;
-}
-
-.m-overview-bar {
-  height: 7px;
-  background: #e8eef8;
-  border-radius: 100px;
-  overflow: hidden;
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
-}
-
-.m-overview-bar-fill {
-  height: 100%;
-  border-radius: 100px;
-  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
-  position: relative;
-  overflow: hidden;
-}
-
-.m-bar-shine::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
-  animation: m-bar-shine 2.5s ease-in-out infinite;
-}
-
-@keyframes m-bar-shine {
-  0% { left: -100%; }
-  50%, 100% { left: 100%; }
-}
-
-.m-alert-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  margin-bottom: 16px;
-}
-
-.m-alert-card {
-  border-radius: 18px;
-  padding: 14px 12px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid rgba(0,0,0,0.04);
-  box-shadow: 0 2px 10px rgba(31, 53, 94, 0.05);
-  transition: transform 0.15s;
-}
-
-.m-alert-card:active {
-  transform: scale(0.96);
-}
-
-.m-alert-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 3px 10px rgba(0,0,0,0.08);
-}
-
-.m-alert-info {
+.m-data-alert-label {
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-medium);
   text-align: center;
 }
 
-.m-alert-value {
-  font-size: 22px;
-  font-weight: 800;
-  line-height: 1.1;
-  font-variant-numeric: tabular-nums;
-}
-
-.m-alert-label {
-  font-size: 11px;
-  color: #72809a;
-  margin-top: 3px;
-  font-weight: 500;
-}
-
-.m-quick-grid {
+/* === 快捷入口 4 列 === */
+.m-data-quick-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 12px 8px;
+  gap: var(--m-space-2);
 }
-
-.m-quick-item {
+.m-data-quick-item {
+  border: none;
+  background: transparent;
+  padding: var(--m-space-2) var(--m-space-1);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  background: transparent;
-  border: none;
-  padding: 8px 4px;
+  gap: var(--m-space-2);
   cursor: pointer;
-  border-radius: 14px;
-  transition: all 0.15s;
+  font-family: inherit;
+  transition: transform 0.15s;
 }
-
-.m-quick-item:active {
-  transform: scale(0.92);
-  background: #f5f8ff;
+.m-data-quick-item:active {
+  transform: scale(0.96);
 }
-
-.m-quick-icon {
-  width: 52px;
-  height: 52px;
-  border-radius: 16px;
+.m-data-quick-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--m-radius-lg);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 3px 12px rgba(0,0,0,0.06);
-  transition: box-shadow 0.15s;
+}
+.m-data-quick-icon--products {
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
+}
+.m-data-quick-icon--orders {
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success);
+}
+.m-data-quick-icon--messages {
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning);
+}
+.m-data-quick-icon--workflow {
+  background: var(--m-color-purple-bg);
+  color: var(--m-color-purple);
+}
+.m-data-quick-icon--accounts {
+  background: var(--m-color-danger-bg);
+  color: var(--m-color-danger);
+}
+.m-data-quick-icon--auto-delivery {
+  background: var(--m-color-cyan-bg);
+  color: var(--m-color-cyan);
+}
+.m-data-quick-icon--data {
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning-text);
+}
+.m-data-quick-icon--profile {
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-secondary);
+}
+.m-data-quick-label {
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-secondary);
+  text-align: center;
+  line-height: 1.3;
+  font-weight: var(--m-font-weight-medium);
 }
 
-.m-quick-item:active .m-quick-icon {
-  box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-}
-
-.m-quick-label {
-  font-size: 11px;
-  color: #5a6a85;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.m-section-more {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  background: transparent;
-  border: none;
-  font-size: 12px;
-  color: #0d6bff;
-  font-weight: 600;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 8px;
-  transition: background 0.15s;
-}
-
-.m-section-more:active {
-  background: #f0f6ff;
-}
-
-.m-notice-list {
+/* === 最新动态列表 === */
+.m-data-notice-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--m-space-1);
 }
-
-.m-notice-item {
+.m-data-notice-item {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  padding: 12px 8px;
-  border-radius: 12px;
+  gap: var(--m-space-3);
+  padding: var(--m-space-2) var(--m-space-1);
+  border-radius: var(--m-radius-md);
   transition: background 0.15s;
 }
-
-.m-notice-item:active {
-  background: #f8faff;
+.m-data-notice-item:active {
+  background: var(--m-color-bg-subtle);
 }
-
-.m-notice-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+.m-data-notice-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--m-radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
 }
-
-.m-notice-content {
+.m-data-notice-icon--checkCircle {
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success);
+}
+.m-data-notice-icon--alertTriangle {
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning);
+}
+.m-data-notice-icon--bag {
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
+}
+.m-data-notice-icon--bot {
+  background: var(--m-color-purple-bg);
+  color: var(--m-color-purple);
+}
+.m-data-notice-icon--bell {
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
+}
+.m-data-notice-icon--message {
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
+}
+.m-data-notice-content {
   flex: 1;
   min-width: 0;
 }
-
-.m-notice-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #15213d;
-  margin-bottom: 3px;
-}
-
-.m-notice-desc {
-  font-size: 11px;
-  color: #8c98ae;
-  line-height: 1.5;
+.m-data-notice-title {
+  font-size: var(--m-font-size-body-sm);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
+  margin-bottom: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.m-notice-time {
-  font-size: 10px;
-  color: #b3bdcf;
-  font-weight: 500;
+.m-data-notice-desc {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  line-height: var(--m-line-height-base);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-data-notice-time {
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-medium);
   flex-shrink: 0;
   margin-top: 2px;
 }
-
-.m-notice-empty {
-  padding: 24px 12px;
+.m-data-notice-empty {
+  padding: var(--m-space-6) var(--m-space-3);
   text-align: center;
-  font-size: 12px;
-  color: #b3bdcf;
-  font-weight: 500;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-medium);
 }
 
-.m-table-wrap {
+/* === 趋势明细表 === */
+.m-data-table-wrap {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  margin: 0 -6px;
-  padding: 0 6px;
+  margin: 0 calc(-1 * var(--m-space-1));
+  padding: 0 var(--m-space-1);
 }
-
 .m-data-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--m-font-size-caption);
+  font-variant-numeric: tabular-nums;
 }
-
 .m-data-table th {
   text-align: left;
-  padding: 10px 12px;
-  font-weight: 600;
-  color: #8c98ae;
-  font-size: 11px;
-  border-bottom: 1.5px solid #f0f4fa;
+  padding: var(--m-space-2) var(--m-space-3);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-tertiary);
+  font-size: var(--m-font-size-tiny);
+  border-bottom: 1px solid var(--m-color-border);
   white-space: nowrap;
-  background: #fafbff;
+  background: var(--m-color-bg-subtle);
 }
-
 .m-data-table th:first-child {
-  border-radius: 10px 0 0 0;
+  border-radius: var(--m-radius-md) 0 0 0;
 }
-
 .m-data-table th:last-child {
-  border-radius: 0 10px 0 0;
+  border-radius: 0 var(--m-radius-md) 0 0;
 }
-
 .m-data-table td {
-  padding: 12px;
-  color: #15213d;
-  border-bottom: 1px solid #f5f7fb;
-  font-variant-numeric: tabular-nums;
-  font-weight: 500;
+  padding: var(--m-space-3);
+  color: var(--m-color-text-primary);
+  border-bottom: 1px solid var(--m-color-border-light);
+  font-weight: var(--m-font-weight-medium);
 }
-
 .m-data-table tr:last-child td {
   border-bottom: none;
 }
-
 .m-data-table tr:last-child td:first-child {
-  border-radius: 0 0 0 10px;
+  border-radius: 0 0 0 var(--m-radius-md);
 }
-
 .m-data-table tr:last-child td:last-child {
-  border-radius: 0 0 10px 0;
+  border-radius: 0 0 var(--m-radius-md) 0;
 }
-
-.m-data-table tr.row-alt {
-  background: #fafbff;
-}
-
 .m-data-table tr.row-alt td {
-  background: #fafbff;
+  background: var(--m-color-bg-subtle);
 }
-
-.td-date {
-  font-weight: 600;
-  color: #5a6a85;
+.m-data-table .td-date {
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-secondary);
   white-space: nowrap;
 }
-
-.td-num {
+.m-data-table .td-num {
   text-align: left;
 }
-
-.m-num-pill {
+.m-data-num-pill {
   display: inline-flex;
   align-items: center;
-  padding: 4px 10px;
-  border-radius: 100px;
-  font-size: 11px;
-  font-weight: 700;
+  padding: var(--m-space-1) var(--m-space-2);
+  border-radius: var(--m-radius-pill);
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-bold);
 }
-
-.m-num-green {
-  background: linear-gradient(135deg, #e2f8ee, #d4f5e2);
-  color: #16bf78;
+.m-data-num-pill--success {
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success-text);
 }
-
-.m-num-purple {
-  background: linear-gradient(135deg, #f0ebff, #e8dfff);
-  color: #8b5cf6;
+.m-data-num-pill--purple {
+  background: var(--m-color-purple-bg);
+  color: var(--m-color-purple);
 }
-
-.m-num-dot {
+.m-data-num-dot {
   display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  margin-right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--m-radius-circle);
+  margin-right: var(--m-space-1);
   vertical-align: middle;
 }
-
-.m-dot-red {
-  background: #ef4444;
-  box-shadow: 0 0 6px rgba(239, 68, 68, 0.4);
+.m-data-num-dot--danger {
+  background: var(--m-color-danger);
+}
+.m-data-num-muted {
+  color: var(--m-color-text-disabled);
+  font-weight: var(--m-font-weight-medium);
 }
 
-.m-num-muted {
-  color: #c4cddb;
-  font-weight: 500;
+/* === 底部安全区 === */
+.m-data-safe-bottom {
+  height: 80px;
 }
 
-.m-tip-card {
-  background: linear-gradient(135deg, #f5f9ff 0%, #fafbff 50%, #fffdf5 100%);
-  border: 1px solid #e6eefc;
-  border-radius: 20px;
-  padding: 16px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
-  position: relative;
-  overflow: hidden;
-}
-
-.m-tip-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: linear-gradient(90deg, #fbbf24, #f59e0b, #fbbf24);
-}
-
-.m-tip-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #fef3c7, #fde68a);
-  color: #d97706;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(217, 119, 6, 0.15);
-}
-
-.m-tip-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.m-tip-title {
-  font-size: 14px;
-  font-weight: 700;
-  color: #15213d;
-  margin-bottom: 4px;
-}
-
-.m-tip-desc {
-  font-size: 11px;
-  color: #72809a;
-  line-height: 1.6;
-}
-
-.m-tip-btn {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  height: 36px;
-  padding: 0 14px;
-  border: none;
-  border-radius: 18px;
-  background: linear-gradient(135deg, #0d6bff, #2580ff);
-  color: white;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 4px 14px rgba(13, 107, 255, 0.3);
-  transition: transform 0.15s, box-shadow 0.15s;
-}
-
-.m-tip-btn:active {
-  transform: scale(0.96);
-  box-shadow: 0 2px 8px rgba(13, 107, 255, 0.25);
-}
-
-.m-safe-bottom {
-  height: 90px;
-}
-
-@media (max-width: 375px) {
+/* === 响应式：小屏适配 === */
+@media (max-width: 360px) {
   .m-data {
-    padding-left: 12px;
-    padding-right: 12px;
+    padding: var(--m-space-2) var(--m-space-2) 0;
   }
-  .m-hero-card {
-    padding: 18px 16px 14px;
-    border-radius: 20px;
+  .m-data-hero {
+    padding: var(--m-space-3);
   }
-  .m-hero-title {
-    font-size: 26px;
+  .m-data-kpi-value {
+    font-size: var(--m-font-size-h1);
   }
-  .m-hero-stats {
-    padding: 12px 10px;
+  .m-data-metric-value {
+    font-size: var(--m-font-size-h2);
   }
-  .m-hero-stat-value {
-    font-size: 20px;
+  .m-data-quick-grid {
+    gap: var(--m-space-1);
   }
-  .m-metric-value {
-    font-size: 24px;
-  }
-  .m-metric-grid {
-    gap: 10px;
-  }
-  .m-metric-card {
-    padding: 14px;
-  }
-  .m-section {
-    padding: 16px;
-  }
-  .m-overview-value {
-    font-size: 22px;
-  }
-  .m-alert-icon {
+  .m-data-quick-icon {
     width: 40px;
     height: 40px;
+    border-radius: var(--m-radius-md);
   }
-  .m-alert-value {
-    font-size: 20px;
+  .m-data-quick-label {
+    font-size: 9px;
   }
-  .m-quick-icon {
-    width: 48px;
-    height: 48px;
+  .m-data-alert-grid {
+    gap: var(--m-space-1);
   }
-}
-
-@media (max-width: 360px) {
-  .m-hero-card {
-    padding: 16px 14px 12px;
-    border-radius: 18px;
+  .m-data-alert-icon {
+    width: 32px;
+    height: 32px;
   }
-  .m-hero-title {
-    font-size: 24px;
+  .m-data-alert-value {
+    font-size: var(--m-font-size-h3);
   }
-  .m-hero-stats {
-    padding: 10px 8px;
+  .m-data-overview-grid {
+    gap: var(--m-space-2);
   }
-  .m-hero-stat-value {
-    font-size: 18px;
-  }
-  .m-metric-value {
-    font-size: 22px;
-  }
-  .m-metric-icon {
-    width: 36px;
-    height: 36px;
-  }
-  .m-overview-value {
-    font-size: 20px;
-  }
-  .m-alert-grid {
-    gap: 8px;
-  }
-  .m-alert-card {
-    padding: 12px 8px;
-  }
-  .m-alert-icon {
-    width: 38px;
-    height: 38px;
-    border-radius: 12px;
-  }
-  .m-alert-value {
-    font-size: 18px;
-  }
-  .m-alert-label {
-    font-size: 10px;
-  }
-  .m-quick-icon {
-    width: 44px;
-    height: 44px;
-    border-radius: 14px;
-  }
-  .m-quick-label {
-    font-size: 10px;
+  .m-data-echart-box {
+    height: 150px;
+    min-height: 150px;
   }
 }
 </style>

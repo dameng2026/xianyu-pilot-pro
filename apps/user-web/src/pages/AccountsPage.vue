@@ -858,6 +858,8 @@ const selected = ref(null)
 const selectedId = ref(null)
 const wsMap = reactive({})
 const wsBusyMap = reactive({})
+// 滑块求解成功后正在自动连接 WebSocket 的账号 ID 集合（用于横幅文案与状态展示）
+const autoConnectingWs = reactive(new Set())
 const selectedWs = computed(() => wsMap[selected.value?.id] || {})
 const selectedWsState = computed(() => accountWsConnectionState(selected.value, selectedWs.value))
 const selectedAuthDisplay = computed(() => resolveAccountAuthDisplayState(selected.value, selectedWs.value))
@@ -991,12 +993,17 @@ async function handleManualSolve(accountId) {
     const scene = isRetry ? 'manual_retry' : 'manual'
     // 仅"主动求解"记录冷却开始时间（重试不记录）
     if (!isRetry) manualSolveCooldown[String(accountId)] = Date.now()
-    await solveManually(accountId, scene, {
+    const result = await solveManually(accountId, scene, {
       openReason: '用户在账号管理页点击滑块求解按钮',
       solveReason: isRetry
         ? '用户在账号管理页点击重试求解（上次求解失败）'
         : '用户在账号管理页主动触发滑块求解',
     })
+    // 求解成功且 Cookie 已恢复 → 自动连接 WebSocket，避免用户忽略状态反复点击求解
+    if (result?.success && result?.recovered) {
+      const account = accounts.value.find(a => a.id === accountId)
+      if (account) autoConnectWsAfterSolve(account)
+    }
   } finally {
     manualRetryBusy.value = null
   }
@@ -1024,7 +1031,10 @@ const captchaAlerts = computed(() => {
       type = 'success'
       statusText = '求解成功'
       reason = state.reason || '滑块求解成功，Cookie 已恢复'
-      nextAction = '可重新启动 WebSocket 连接'
+      // 求解成功后已自动连接 WebSocket 时，提示用户留意在线状态变化；否则提示可手动连接
+      nextAction = autoConnectingWs.has(accountId)
+        ? '正在自动连接 WebSocket，请留意在线状态'
+        : '可重新启动 WebSocket 连接'
     } else if (state.status === 'retrying') {
       type = 'solving'
       statusText = '求解中'
@@ -2065,6 +2075,81 @@ async function toggleWs(account) {
   }
 }
 
+// ============================================================
+// 滑块求解成功后自动连接 WebSocket + 实时刷新连接状态
+// ============================================================
+// WS 连接状态轮询定时器（求解成功后自动连接时使用，实时刷新连接状态）
+const wsPollTimers = {}
+
+function stopWsPolling(accountId) {
+  const key = String(accountId)
+  if (wsPollTimers[key]) {
+    clearInterval(wsPollTimers[key])
+    delete wsPollTimers[key]
+  }
+}
+
+// 轮询刷新 WS 连接状态，直到状态稳定（已连接或失败终态）
+function pollWsStatusUntilStable(accountId, { intervalMs = 2500, maxRounds = 8, onStable } = {}) {
+  if (!accountId) return
+  const key = String(accountId)
+  stopWsPolling(accountId)  // 避免重复轮询
+  let round = 0
+  const tick = async () => {
+    round++
+    try {
+      await loadWsStatus(accountId)
+    } catch { /* 忽略单次查询失败 */ }
+    const ws = wsMap[accountId] || {}
+    const phase = String(ws.status || '').toLowerCase()
+    const stable = ws.connected === true
+      || ['disconnected', 'stopped', 'auth_failed', 'token_failed', 'register_failed', 'expired'].includes(phase)
+    if (stable || round >= maxRounds) {
+      stopWsPolling(accountId)
+      if (typeof onStable === 'function') onStable(ws)
+    }
+  }
+  tick()  // 立即先查一次
+  wsPollTimers[key] = setInterval(tick, intervalMs)
+}
+
+// 滑块求解成功后自动连接 WebSocket，并实时刷新连接状态
+async function autoConnectWsAfterSolve(account) {
+  if (!account?.id) return
+  const accountId = account.id
+  // 已连接或已在处理中（如用户手动点了连接）则跳过
+  if (wsMap[accountId]?.connected === true) return
+  if (isWsBusy(accountId)) return
+  wsBusyMap[accountId] = true
+  autoConnectingWs.add(accountId)
+  try {
+    // 求解刚恢复 Cookie，刷新本地鉴权状态
+    await refreshAccountAuthBeforeConnect(accountId)
+    // 启动 WebSocket 连接
+    const res = await startWebSocket(accountId, { forceReconnect: true })
+    const data = requireResponseObject(res, 'WebSocket 启动')
+    if (typeof data.connected === 'boolean') {
+      wsMap[accountId] = data
+    }
+    qrSuccessMsg.value = data.connected
+      ? (data.optimistic ? '滑块求解成功，正在自动连接 WebSocket…' : '滑块求解成功，WebSocket 已连接')
+      : (data.message || '正在自动连接 WebSocket…')
+    setTimeout(() => {
+      if (qrSuccessMsg.value?.includes('自动连接') || qrSuccessMsg.value?.includes('WebSocket 已连接')) qrSuccessMsg.value = ''
+    }, 5000)
+    // 实时刷新连接状态直到稳定；轮询结束后清除自动连接标记
+    pollWsStatusUntilStable(accountId, {
+      onStable: () => autoConnectingWs.delete(accountId),
+    })
+  } catch (e) {
+    // 静默处理，不打断求解成功的提示；用户仍可手动点击"连接"
+    autoConnectingWs.delete(accountId)
+    console.warn('求解成功后自动连接 WebSocket 失败:', e)
+  } finally {
+    wsBusyMap[accountId] = false
+  }
+}
+
 async function removeAccount(accountId) {
   pendingDeleteId.value = accountId
   modal.value = 'confirmDelete'
@@ -2435,6 +2520,8 @@ onBeforeUnmount(() => {
   stopPolishPolling()
   void cleanupQrLogin()
   if (cooldownTimer) { clearInterval(cooldownTimer); cooldownTimer = null }
+  // 清理所有 WS 状态轮询定时器（求解成功后自动连接时创建）
+  Object.keys(wsPollTimers).forEach(key => stopWsPolling(key))
 })
 </script>
 

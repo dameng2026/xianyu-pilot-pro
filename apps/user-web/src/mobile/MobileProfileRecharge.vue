@@ -182,7 +182,7 @@ onMounted(() => {
 
 <style scoped>
 .m-profile-recharge {
-  padding: 12px 16px 0;
+  padding: var(--m-space-3) var(--m-space-4) 0;
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -190,14 +190,15 @@ onMounted(() => {
   overflow-x: hidden;
 }
 
+/* === 加载中 === */
 .m-recharge-loading {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 40px 0;
-  color: #8c98ae;
-  font-size: 13px;
+  gap: var(--m-space-2);
+  padding: var(--m-space-10) 0;
+  color: var(--m-color-text-tertiary);
+  font-size: var(--m-font-size-body-sm);
 }
 .m-recharge-loading :deep(svg) {
   animation: mRechargeSpin 1.2s linear infinite;
@@ -207,33 +208,34 @@ onMounted(() => {
   to { transform: rotate(360deg); }
 }
 
+/* === 充值记录列表 === */
 .m-recharge-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--m-space-3);
 }
 .m-recharge-item {
-  background: white;
-  border-radius: 14px;
-  padding: 12px 14px;
-  box-shadow: 0 2px 8px rgba(31,53,94,0.04);
-  border: 1px solid #f0f4fa;
+  background: var(--m-color-bg-card);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3) var(--m-space-4);
+  box-shadow: var(--m-shadow-card);
+  border: 1px solid var(--m-color-border-light);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--m-space-2);
 }
 
 .m-recharge-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--m-space-3);
 }
 .m-recharge-icon {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #e8f7ef, #d4f0e0);
-  color: #16bf78;
+  border-radius: var(--m-radius-md);
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -244,65 +246,65 @@ onMounted(() => {
   min-width: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--m-space-1);
   align-items: center;
 }
 .m-recharge-source-tag {
-  font-size: 14px;
-  font-weight: 600;
-  color: #15213d;
+  font-size: var(--m-font-size-body);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
 }
 .m-recharge-status-tag {
   display: inline-flex;
   align-items: center;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 100px;
+  font-size: var(--m-font-size-caption);
+  font-weight: var(--m-font-weight-semibold);
+  padding: var(--m-space-1) var(--m-space-2);
+  border-radius: var(--m-radius-pill);
 }
 .m-recharge-status-tag.success {
-  background: rgba(22,191,120,0.12);
-  color: #16bf78;
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success-text);
 }
 .m-recharge-status-tag.pending {
-  background: rgba(255,159,34,0.12);
-  color: #ff9f22;
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning-text);
 }
 .m-recharge-status-tag.failed {
-  background: rgba(239,68,68,0.1);
-  color: #ef4444;
+  background: var(--m-color-danger-bg);
+  color: var(--m-color-danger-text);
 }
 .m-recharge-amount {
-  font-size: 16px;
-  font-weight: 800;
-  color: #16bf78;
+  font-size: var(--m-font-size-h3);
+  font-weight: var(--m-font-weight-extrabold);
+  color: var(--m-color-success-text);
   flex-shrink: 0;
 }
 
 .m-recharge-meta {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  color: #8c98ae;
+  gap: var(--m-space-1);
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
 }
 .m-recharge-time {
-  font-size: 12px;
+  font-size: var(--m-font-size-caption);
 }
 .m-recharge-order {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
+  gap: var(--m-space-1);
+  font-size: var(--m-font-size-caption);
   min-width: 0;
 }
 .m-recharge-order-label {
-  color: #b0bacb;
+  color: var(--m-color-text-tertiary);
   flex-shrink: 0;
 }
 .m-recharge-order-value {
-  color: #5a6a85;
-  font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+  color: var(--m-color-text-secondary);
+  font-family: var(--m-font-family-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -310,43 +312,45 @@ onMounted(() => {
 }
 
 .m-recharge-remark {
-  font-size: 12px;
-  color: #8c98ae;
-  background: #f5f8ff;
-  border-radius: 8px;
-  padding: 6px 8px;
-  line-height: 1.5;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  background: var(--m-color-bg-subtle);
+  border-radius: var(--m-radius-md);
+  padding: var(--m-space-2) var(--m-space-2);
+  line-height: var(--m-line-height-base);
   overflow-wrap: anywhere;
 }
 
+/* === 空状态 === */
 .m-recharge-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 60px 0;
-  color: #b0bacb;
+  gap: var(--m-space-3);
+  padding: var(--m-space-12) 0;
+  color: var(--m-color-text-tertiary);
 }
-.m-recharge-empty :deep(svg) { color: #d4dce8; }
+.m-recharge-empty :deep(svg) { color: var(--m-color-text-disabled); }
 .m-recharge-empty p {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--m-font-size-body-sm);
 }
 
+/* === 分页 === */
 .m-recharge-pager {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 16px 0;
+  gap: var(--m-space-3);
+  padding: var(--m-space-4) 0;
 }
 .m-recharge-page-btn {
   width: 36px;
   height: 36px;
-  border-radius: 50%;
-  border: 1px solid #e1e8f3;
-  background: white;
-  color: #15213d;
+  border-radius: var(--m-radius-circle);
+  border: 1px solid var(--m-color-border);
+  background: var(--m-color-bg-card);
+  color: var(--m-color-text-primary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -354,20 +358,20 @@ onMounted(() => {
   flex-shrink: 0;
 }
 .m-recharge-page-btn:disabled {
-  color: #c4cddb;
-  background: #f5f7fb;
+  color: var(--m-color-text-disabled);
+  background: var(--m-color-bg-subtle);
   cursor: not-allowed;
 }
-.m-recharge-page-btn:not(:disabled):active { background: #f0f4fa; }
+.m-recharge-page-btn:not(:disabled):active { background: var(--m-color-bg-hover); }
 .m-recharge-page-info {
-  font-size: 13px;
-  color: #15213d;
-  font-weight: 600;
+  font-size: var(--m-font-size-body-sm);
+  color: var(--m-color-text-primary);
+  font-weight: var(--m-font-weight-semibold);
 }
 .m-recharge-page-total {
-  font-size: 11px;
-  color: #8c98ae;
-  font-weight: 400;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-regular);
 }
 
 .m-safe-bottom { height: 60px; }

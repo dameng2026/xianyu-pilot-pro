@@ -1,36 +1,5 @@
 <template>
   <div class="captcha-records-page">
-    <!-- 惊喜提示：用户不在场时的自动求解摘要 -->
-    <Transition name="surprise-pop">
-      <div v-if="surprise.visible" class="surprise-banner" role="status" aria-live="polite">
-        <div class="surprise-glow surprise-glow-1"></div>
-        <div class="surprise-glow surprise-glow-2"></div>
-        <button
-          class="surprise-close"
-          type="button"
-          aria-label="关闭提示"
-          @click="closeSurprise"
-        >
-          <ElIcon><Close /></ElIcon>
-        </button>
-        <div class="surprise-icon">
-          <ElIcon><MagicStick /></ElIcon>
-        </div>
-        <div class="surprise-body">
-          <div class="surprise-headline">在您离开的这段时间里</div>
-          <div class="surprise-stats">
-            滑块求解已自动为您化解
-            <span class="surprise-number">{{ surprise.displaySuccess }}</span>
-            次验证
-          </div>
-          <div class="surprise-meta">
-            共触发 {{ surprise.total }} 次｜成功 {{ surprise.success }} 次｜涉及 {{ surprise.accountCount }} 个账号
-            <span v-if="surprise.lastSolveTime">｜最近一次 {{ formatRelativeTime(surprise.lastSolveTime) }}</span>
-          </div>
-        </div>
-      </div>
-    </Transition>
-
     <!-- 顶部标题区 -->
     <ElCard shadow="never" class="toolbar-card">
       <div class="page-title-row">
@@ -333,17 +302,16 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
+  import { computed, reactive, ref, watch } from 'vue'
   import { useRoute, useRouter } from 'vue-router'
   import { ElTag, ElIcon } from 'element-plus'
-  import { Close, Loading, MagicStick } from '@element-plus/icons-vue'
+  import { Loading } from '@element-plus/icons-vue'
   import ArtLineChart from '@/components/core/charts/art-line-chart/index.vue'
   import AdminDataState from '@/components/business/admin-data-state/index.vue'
   import type { LineDataItem } from '@/types/component/chart'
   import {
     getCaptchaSolveStats,
     getCaptchaSolveRecords,
-    getCaptchaSilentSummary,
     type CaptchaSolveStats,
     type CaptchaRecordRow
   } from '@/api/captcha-records'
@@ -629,129 +597,6 @@
     if (rate >= 0.7) return 'warning'
     return 'danger'
   }
-
-  // ==================== 惊喜提示：用户不在场时的自动求解摘要 ====================
-
-  // sessionStorage key：记录上次访问本页面的时间（ISO 字符串）
-  const LAST_VISIT_KEY = 'captcha_records_last_visit'
-  // 距上次访问至少 5 分钟才显示提示，避免频繁刷新页面时打扰
-  const MIN_INTERVAL_MS = 5 * 60 * 1000
-
-  const surprise = reactive({
-    visible: false,
-    total: 0,
-    success: 0,
-    fail: 0,
-    accountCount: 0,
-    since: '',
-    until: '',
-    lastSolveTime: '',
-    // 动画展示用，从 0 递增到 success
-    displaySuccess: 0
-  })
-
-  let countUpRaf = 0
-
-  function easeOutCubic(t: number): number {
-    return 1 - Math.pow(1 - t, 3)
-  }
-
-  function animateCountUp(from: number, to: number, duration = 1500) {
-    if (typeof window === 'undefined' || !window.requestAnimationFrame) {
-      surprise.displaySuccess = to
-      return
-    }
-    cancelAnimationFrame(countUpRaf)
-    const start = performance.now()
-    const step = (now: number) => {
-      const elapsed = now - start
-      const t = Math.min(1, elapsed / duration)
-      const eased = easeOutCubic(t)
-      surprise.displaySuccess = Math.round(from + (to - from) * eased)
-      if (t < 1) {
-        countUpRaf = requestAnimationFrame(step)
-      }
-    }
-    countUpRaf = requestAnimationFrame(step)
-  }
-
-  function closeSurprise() {
-    surprise.visible = false
-  }
-
-  /**
-   * 计算"刚刚 / N 分钟前 / N 小时前 / N 天前"相对时间文案
-   */
-  function formatRelativeTime(value: string): string {
-    if (!value) return ''
-    const t = new Date(value.replace(' ', 'T')).getTime()
-    if (isNaN(t)) return ''
-    const diff = Date.now() - t
-    if (diff < 60 * 1000) return '刚刚'
-    if (diff < 60 * 60 * 1000) return Math.floor(diff / 60000) + ' 分钟前'
-    if (diff < 24 * 60 * 60 * 1000) return Math.floor(diff / 3600000) + ' 小时前'
-    return Math.floor(diff / (24 * 3600000)) + ' 天前'
-  }
-
-  /**
-   * 进入页面时加载"用户不在场时"自动求解摘要。
-   * 1. 读取 sessionStorage 中的上次访问时间
-   * 2. 距上次访问 < 5 分钟则跳过（避免刷新打扰）
-   * 3. 调用 silent-summary 接口（仅统计 ws_connect/cookie_keepalive/token_refresh）
-   * 4. 若 total > 0，显示惊喜提示并触发数字递增动画
-   * 5. 立即写入新的访问时间
-   */
-  async function loadSurprise() {
-    const now = Date.now()
-    const lastVisitStr = sessionStorage.getItem(LAST_VISIT_KEY)
-    let lastVisit: Date | null = null
-    if (lastVisitStr) {
-      const t = Date.parse(lastVisitStr)
-      if (!isNaN(t)) lastVisit = new Date(t)
-    }
-
-    // 立即更新访问时间，确保下次进入时基线正确
-    sessionStorage.setItem(LAST_VISIT_KEY, new Date(now).toISOString())
-
-    // 首次访问或距上次访问 < 5 分钟，不显示提示
-    if (!lastVisit || now - lastVisit.getTime() < MIN_INTERVAL_MS) {
-      return
-    }
-
-    try {
-      const params: any = { since: lastVisit.toISOString() }
-      if (accountIdFilter.value) params.accountId = accountIdFilter.value
-      else if (userIdFilter.value) params.userId = userIdFilter.value
-
-      const data = await getCaptchaSilentSummary(params)
-      surprise.total = data.total || 0
-      surprise.success = data.success || 0
-      surprise.fail = data.fail || 0
-      surprise.accountCount = data.accountCount || 0
-      surprise.since = data.since || ''
-      surprise.until = data.until || ''
-      surprise.lastSolveTime = data.lastSolveTime || ''
-
-      // 有自动求解记录才显示提示
-      if (surprise.total > 0) {
-        surprise.visible = true
-        // 等待 Transition 进入后再触发数字动画
-        requestAnimationFrame(() => animateCountUp(0, surprise.success, 1500))
-      }
-    } catch (error: any) {
-      // 静默失败，不打扰用户
-      // eslint-disable-next-line no-console
-      console.warn('滑块自动求解摘要加载失败:', error?.message)
-    }
-  }
-
-  onMounted(() => {
-    loadSurprise()
-  })
-
-  onBeforeUnmount(() => {
-    if (countUpRaf) cancelAnimationFrame(countUpRaf)
-  })
 
   // ==================== 路由 query 变化触发加载 ====================
 

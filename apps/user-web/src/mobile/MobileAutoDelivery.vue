@@ -1,41 +1,53 @@
 <template>
   <div class="m-ad">
-    <div class="m-ad-stats-grid">
+    <!-- 顶部 Hero -->
+    <section class="m-ad-hero">
+      <div class="m-ad-hero-head">
+        <div class="m-ad-hero-badge">
+          <span class="m-ad-hero-dot"></span>
+          <span>自动发货</span>
+        </div>
+        <h1 class="m-ad-hero-title">自动发货管理</h1>
+        <p class="m-ad-hero-sub">付款后自动处理订单发货</p>
+      </div>
+      <div class="m-ad-hero-kpi" @click="filterEnabled">
+        <div class="m-ad-hero-kpi-icon m-ad-hero-kpi-icon--primary">
+          <MIcon name="bag" :size="22" />
+        </div>
+        <div class="m-ad-hero-kpi-info">
+          <div class="m-ad-hero-kpi-label">已启用自动发货</div>
+          <div class="m-ad-hero-kpi-value">{{ statsLoading ? '—' : formatNumber(stats.enabledGoods) }}</div>
+          <div class="m-ad-hero-kpi-sub">全部商品</div>
+        </div>
+        <MIcon name="chevronRight" :size="20" class="m-ad-hero-kpi-arrow" />
+      </div>
+    </section>
+
+    <!-- 统计 2×2 -->
+    <div class="m-ad-stat-grid">
       <div v-for="card in statCards" :key="card.key" class="m-ad-stat-card" @click="handleStatClick(card.key)">
-        <div class="m-ad-stat-icon" :class="`m-ad-stat-icon-${card.color}`">
+        <div class="m-ad-stat-icon" :class="`m-ad-stat-icon--${card.color}`">
           <MIcon :name="card.icon" :size="20" />
         </div>
         <div class="m-ad-stat-info">
           <div class="m-ad-stat-title">{{ card.title }}</div>
-          <div class="m-ad-stat-value">{{ statsLoading ? '—' : formatNumber(card.value) }}</div>
-          <div class="m-ad-stat-desc" :class="`m-ad-stat-desc-${card.color}`">{{ card.desc }}</div>
+          <div class="m-ad-stat-value" :class="`m-ad-stat-value--${card.color}`">{{ statsLoading ? '—' : formatNumber(card.value) }}</div>
+          <div class="m-ad-stat-desc">{{ card.desc }}</div>
         </div>
       </div>
     </div>
 
-    <div class="m-ad-enabled-card" @click="filterEnabled">
-      <div class="m-ad-enabled-icon">
-        <MIcon name="bag" :size="22" />
-      </div>
-      <div class="m-ad-enabled-info">
-        <div class="m-ad-enabled-title">已启用自动发货</div>
-        <div class="m-ad-enabled-value">{{ statsLoading ? '—' : formatNumber(stats.enabledGoods) }}</div>
-        <div class="m-ad-enabled-desc">全部商品</div>
-      </div>
-      <div class="m-ad-enabled-arrow">
-        <MIcon name="chevronRight" :size="20" />
-      </div>
-    </div>
-
+    <!-- 提示 -->
     <div class="m-ad-notice">
       <div class="m-ad-notice-icon">
-        <MIcon name="info" :size="18" />
+        <MIcon name="info" :size="16" />
       </div>
       <div class="m-ad-notice-text">
         <b>付款后发货</b>会在系统定时扫描自动执行；<b>确认收货后赠送</b>和<b>好评后赠送</b>可在发货记录页手动触发，也可接入 E店易插件自动化。
       </div>
     </div>
 
+    <!-- 搜索 -->
     <div class="m-ad-search-wrap">
       <div class="m-ad-search">
         <MIcon name="search" :size="18" class="m-ad-search-icon" />
@@ -55,13 +67,14 @@
       </div>
     </div>
 
+    <!-- 筛选 -->
     <div class="m-ad-filter-bar">
       <div class="m-ad-filter-grid">
         <button
           v-for="filter in filterOptions"
           :key="filter.key"
           class="m-ad-filter-chip"
-          :class="{ 'm-ad-filter-chip-active': isFilterActive(filter) }"
+          :class="{ 'm-ad-filter-chip--active': isFilterActive(filter) }"
           @click="openFilter(filter)"
         >
           <span>{{ getFilterLabel(filter) }}</span>
@@ -70,20 +83,22 @@
       </div>
     </div>
 
+    <!-- 工具栏 -->
     <div class="m-ad-toolbar">
       <div class="m-ad-count">
         共 <b>{{ productsLoading ? '—' : total }}</b> 个商品
       </div>
       <div class="m-ad-toolbar-actions">
-        <button class="m-ad-btn m-ad-btn-primary" @click="toggleBatchMode">
+        <button class="m-ad-btn m-ad-btn-primary m-ad-btn-sm" @click="toggleBatchMode">
           {{ batchMode ? '取消批量' : '批量设置' }}
         </button>
-        <button class="m-ad-btn m-ad-btn-outline" @click="goToSourceLibrary">
+        <button class="m-ad-btn m-ad-btn-outline m-ad-btn-sm" @click="goToSourceLibrary">
           货源库
         </button>
       </div>
     </div>
 
+    <!-- 批量栏 -->
     <div v-if="batchMode" class="m-ad-batch-bar">
       <label class="m-ad-batch-select-all">
         <input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll" />
@@ -95,6 +110,7 @@
       </button>
     </div>
 
+    <!-- 加载骨架 -->
     <div v-if="productsLoading && products.length === 0" class="m-ad-skeleton-list">
       <div v-for="i in 5" :key="i" class="m-ad-skeleton-card">
         <div class="m-ad-skeleton-img"></div>
@@ -111,6 +127,7 @@
 
     <MobileUnavailableState v-else-if="loadError" compact title="数据加载失败" :description="loadError" @retry="loadData" />
 
+    <!-- 空状态 -->
     <div v-else-if="products.length === 0" class="m-ad-empty">
       <div class="m-ad-empty-icon">
         <MIcon name="bag" :size="48" />
@@ -121,12 +138,13 @@
       <button v-else class="m-ad-btn m-ad-btn-primary m-ad-btn-sm" @click="goToProducts">前往商品管理</button>
     </div>
 
+    <!-- 商品列表（行式卡片） -->
     <div v-else class="m-ad-list">
       <div
         v-for="prod in products"
         :key="prod.id"
         class="m-ad-product-card"
-        :class="{ 'm-ad-product-batch': batchMode }"
+        :class="{ 'm-ad-product-card--batch': batchMode }"
       >
         <div v-if="batchMode" class="m-ad-product-check">
           <input type="checkbox" :checked="selectedIds.has(prod.id)" @change="toggleSelect(prod.id)" :aria-label="`选择商品 ${prod.name}`" />
@@ -143,13 +161,13 @@
               <div class="m-ad-product-name" @click="goToConfig(prod)" :title="prod.name">{{ prod.name || '未命名商品' }}</div>
               <div class="m-ad-product-meta">
                 <span class="m-ad-product-id" @click="copyId(prod)" role="button" tabindex="0" aria-label="复制商品ID">ID: {{ prod.id }}</span>
-                <span class="m-ad-product-price" :class="{ 'm-ad-price-special': isAbnormalPrice(prod) }">¥{{ formatPrice(prod.price) }}</span>
+                <span class="m-ad-product-price" :class="{ 'm-ad-price--abnormal': isAbnormalPrice(prod) }">¥{{ formatPrice(prod.price) }}</span>
               </div>
               <div class="m-ad-product-tags">
-                <span class="m-ad-tag m-ad-tag-green">{{ getDeliveryModeLabel(prod) }}</span>
-                <span v-if="getConfigStatus(prod) === 'unconfigured'" class="m-ad-tag m-ad-tag-gray">未配置</span>
-                <span v-else-if="getConfigStatus(prod) === 'abnormal'" class="m-ad-tag m-ad-tag-red">配置异常</span>
-                <span v-else-if="prod.sourceName" class="m-ad-tag m-ad-tag-light">货源：{{ prod.sourceName }}</span>
+                <span class="m-ad-tag m-ad-tag--success">{{ getDeliveryModeLabel(prod) }}</span>
+                <span v-if="getConfigStatus(prod) === 'unconfigured'" class="m-ad-tag m-ad-tag--neutral">未配置</span>
+                <span v-else-if="getConfigStatus(prod) === 'abnormal'" class="m-ad-tag m-ad-tag--danger">配置异常</span>
+                <span v-else-if="prod.sourceName" class="m-ad-tag m-ad-tag--info">货源：{{ prod.sourceName }}</span>
               </div>
             </div>
             <div class="m-ad-product-right">
@@ -160,7 +178,7 @@
               <button class="m-ad-config-btn" @click="goToConfig(prod)" :aria-label="`配置商品 ${prod.name}`">配置</button>
               <button
                 class="m-ad-switch"
-                :class="{ 'm-ad-switch-on': prod.deliveryEnabled, 'm-ad-switch-loading': prod.switchLoading }"
+                :class="{ 'm-ad-switch--on': prod.deliveryEnabled, 'm-ad-switch--loading': prod.switchLoading }"
                 :disabled="prod.switchLoading"
                 @click="toggleDelivery(prod)"
                 role="switch"
@@ -183,8 +201,10 @@
 
     <div class="m-ad-safe-bottom"></div>
 
+    <!-- 筛选 Sheet -->
     <div v-if="activeFilter" class="m-ad-sheet-mask" @click="closeFilter"></div>
-    <div v-if="activeFilter" class="m-ad-sheet" :class="{ 'm-ad-sheet-open': activeFilter }">
+    <div v-if="activeFilter" class="m-ad-sheet" :class="{ 'm-ad-sheet--open': activeFilter }">
+      <div class="m-ad-sheet-handle"></div>
       <div class="m-ad-sheet-header">
         <h3>{{ activeFilter.title }}</h3>
         <button class="m-ad-sheet-close" @click="closeFilter" aria-label="关闭">
@@ -201,7 +221,7 @@
             v-for="opt in getFilterOptions(activeFilter)"
             :key="opt.value"
             class="m-ad-sheet-option"
-            :class="{ 'm-ad-sheet-option-active': isOptionSelected(activeFilter, opt) }"
+            :class="{ 'm-ad-sheet-option--active': isOptionSelected(activeFilter, opt) }"
             @click="selectFilterOption(activeFilter, opt)"
           >
             <span>{{ opt.label }}</span>
@@ -215,8 +235,10 @@
       </div>
     </div>
 
+    <!-- 批量操作 Sheet -->
     <div v-if="showBatchDialog" class="m-ad-sheet-mask" @click.self="showBatchDialog = false"></div>
-    <div v-if="showBatchDialog" class="m-ad-sheet m-ad-sheet-open">
+    <div v-if="showBatchDialog" class="m-ad-sheet m-ad-sheet--open">
+      <div class="m-ad-sheet-handle"></div>
       <div class="m-ad-sheet-header">
         <h3>批量操作</h3>
         <button class="m-ad-sheet-close" @click="showBatchDialog = false" aria-label="关闭">
@@ -241,8 +263,10 @@
       </div>
     </div>
 
+    <!-- 帮助 Sheet -->
     <div v-if="showHelp" class="m-ad-sheet-mask" @click="showHelp = false"></div>
-    <div v-if="showHelp" class="m-ad-sheet m-ad-sheet-open" style="height: 70vh;">
+    <div v-if="showHelp" class="m-ad-sheet m-ad-sheet--open" style="height: 70vh;">
+      <div class="m-ad-sheet-handle"></div>
       <div class="m-ad-sheet-header">
         <h3>自动发货帮助</h3>
         <button class="m-ad-sheet-close" @click="showHelp = false" aria-label="关闭">
@@ -277,6 +301,7 @@
     </div>
   </div>
 </template>
+
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
@@ -756,8 +781,9 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* === 根容器 === */
 .m-ad {
-  padding: 10px 16px 0;
+  padding: var(--m-space-3) var(--m-space-3) 0;
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -765,413 +791,499 @@ onBeforeUnmount(() => {
   overflow-x: hidden;
 }
 
-.m-ad-stats-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-bottom: 10px;
+/* === Hero === */
+.m-ad-hero {
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-xl);
+  padding: var(--m-space-4);
+  margin-bottom: var(--m-space-3);
+  box-shadow: var(--m-shadow-card);
 }
-
-.m-ad-stat-card {
-  background: white;
-  border-radius: 16px;
-  padding: 14px;
+.m-ad-hero-head {
+  margin-bottom: var(--m-space-4);
+}
+.m-ad-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--m-space-1);
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success-text);
+  padding: var(--m-space-1) var(--m-space-3);
+  border-radius: var(--m-radius-pill);
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-semibold);
+  margin-bottom: var(--m-space-3);
+  border: 1px solid var(--m-color-success-border);
+}
+.m-ad-hero-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--m-radius-circle);
+  background: var(--m-color-success);
+  animation: m-ad-pulse 1.6s ease-in-out infinite;
+}
+@keyframes m-ad-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+.m-ad-hero-title {
+  margin: 0 0 var(--m-space-1);
+  font-size: var(--m-font-size-h1);
+  font-weight: var(--m-font-weight-extrabold);
+  color: var(--m-color-text-primary);
+  line-height: var(--m-line-height-tight);
+  letter-spacing: -0.3px;
+}
+.m-ad-hero-sub {
+  margin: 0;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+}
+.m-ad-hero-kpi {
   display: flex;
   align-items: center;
-  gap: 12px;
-  box-shadow: 0 2px 8px rgba(31, 53, 94, 0.05);
-  border: 1px solid #f0f4fa;
+  gap: var(--m-space-3);
+  padding: var(--m-space-3);
+  background: var(--m-color-bg-subtle);
+  border-radius: var(--m-radius-lg);
   cursor: pointer;
-  transition: transform 0.15s, box-shadow 0.15s;
+  transition: transform 0.15s;
 }
-.m-ad-stat-card:active {
-  transform: scale(0.98);
+.m-ad-hero-kpi:active {
+  transform: scale(0.99);
 }
-
-.m-ad-stat-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
+.m-ad-hero-kpi-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--m-radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
-.m-ad-stat-icon-green {
-  background: linear-gradient(135deg, #dcfce7, #bbf7d0);
-  color: #16a34a;
+.m-ad-hero-kpi-icon--primary {
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
 }
-.m-ad-stat-icon-orange {
-  background: linear-gradient(135deg, #fef3c7, #fde68a);
-  color: #f59e0b;
+.m-ad-hero-kpi-info {
+  flex: 1;
+  min-width: 0;
 }
-.m-ad-stat-icon-blue {
-  background: linear-gradient(135deg, #dbeafe, #bfdbfe);
-  color: #2563eb;
+.m-ad-hero-kpi-label {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-medium);
+}
+.m-ad-hero-kpi-value {
+  font-size: var(--m-font-size-h1);
+  font-weight: var(--m-font-weight-extrabold);
+  color: var(--m-color-text-primary);
+  line-height: var(--m-line-height-tight);
+  font-variant-numeric: tabular-nums;
+}
+.m-ad-hero-kpi-sub {
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-tertiary);
+}
+.m-ad-hero-kpi-arrow {
+  color: var(--m-color-text-disabled);
+  flex-shrink: 0;
 }
 
+/* === 统计 2×2 === */
+.m-ad-stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--m-space-3);
+  margin-bottom: var(--m-space-3);
+}
+.m-ad-stat-card {
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3);
+  box-shadow: var(--m-shadow-card);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--m-space-3);
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.m-ad-stat-card:active {
+  transform: scale(0.98);
+}
+.m-ad-stat-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--m-radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.m-ad-stat-icon--green {
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success);
+}
+.m-ad-stat-icon--orange {
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning);
+}
+.m-ad-stat-icon--blue {
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
+}
 .m-ad-stat-info {
   flex: 1;
   min-width: 0;
 }
 .m-ad-stat-title {
-  font-size: 12px;
-  color: #72809a;
-  margin-bottom: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-medium);
 }
 .m-ad-stat-value {
-  font-size: 22px;
-  font-weight: 800;
-  color: #15213d;
-  line-height: 1.2;
-}
-.m-ad-stat-desc {
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--m-font-size-h2);
+  font-weight: var(--m-font-weight-extrabold);
+  color: var(--m-color-text-primary);
+  line-height: var(--m-line-height-tight);
+  font-variant-numeric: tabular-nums;
   margin-top: 2px;
 }
-.m-ad-stat-desc-green { color: #16a34a; }
-.m-ad-stat-desc-orange { color: #f59e0b; }
-.m-ad-stat-desc-blue { color: #2563eb; }
-
-.m-ad-enabled-card {
-  background: white;
-  border-radius: 16px;
-  padding: 14px 16px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  box-shadow: 0 2px 8px rgba(31, 53, 94, 0.05);
-  border: 1px solid #f0f4fa;
-  margin-bottom: 12px;
-  cursor: pointer;
-  transition: transform 0.15s;
+.m-ad-stat-value--green {
+  color: var(--m-color-success-text);
 }
-.m-ad-enabled-card:active { transform: scale(0.99); }
-
-.m-ad-enabled-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #dbeafe, #bfdbfe);
-  color: #2563eb;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
+.m-ad-stat-value--orange {
+  color: var(--m-color-warning-text);
 }
-.m-ad-enabled-info { flex: 1; }
-.m-ad-enabled-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #15213d;
+.m-ad-stat-value--blue {
+  color: var(--m-color-primary);
 }
-.m-ad-enabled-value {
-  font-size: 22px;
-  font-weight: 800;
-  color: #15213d;
-  line-height: 1.2;
-}
-.m-ad-enabled-desc {
-  font-size: 11px;
-  color: #16a34a;
-  font-weight: 500;
-}
-.m-ad-enabled-arrow {
-  color: #b0bacb;
-  flex-shrink: 0;
+.m-ad-stat-desc {
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-tertiary);
+  margin-top: 2px;
 }
 
+/* === 提示 === */
 .m-ad-notice {
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  border-radius: 12px;
-  padding: 12px 14px;
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: var(--m-space-2);
+  padding: var(--m-space-3);
+  background: var(--m-color-info-bg);
+  border: 1px solid var(--m-color-info-border);
+  border-radius: var(--m-radius-lg);
+  margin-bottom: var(--m-space-3);
 }
 .m-ad-notice-icon {
-  color: #f59e0b;
+  color: var(--m-color-info-text);
   flex-shrink: 0;
   margin-top: 1px;
 }
 .m-ad-notice-text {
-  font-size: 12px;
-  color: #92400e;
-  line-height: 1.6;
-  flex: 1;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-secondary);
+  line-height: var(--m-line-height-base);
 }
 .m-ad-notice-text b {
-  font-weight: 600;
+  color: var(--m-color-info-text);
+  font-weight: var(--m-font-weight-semibold);
 }
 
+/* === 搜索 === */
 .m-ad-search-wrap {
-  margin-bottom: 12px;
+  margin-bottom: var(--m-space-3);
 }
 .m-ad-search {
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: white;
-  border: 1px solid #e7edf7;
-  border-radius: 12px;
-  padding: 0 14px;
-  height: 48px;
+  gap: var(--m-space-2);
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-2) var(--m-space-3);
+}
+.m-ad-search:focus-within {
+  border-color: var(--m-color-primary);
+  box-shadow: 0 0 0 3px var(--m-color-primary-bg);
 }
 .m-ad-search-icon {
-  color: #8c98ae;
+  color: var(--m-color-text-tertiary);
   flex-shrink: 0;
 }
 .m-ad-search-input {
   flex: 1;
+  min-width: 0;
   border: none;
   outline: none;
-  font-size: 14px;
-  color: #15213d;
   background: transparent;
-  min-width: 0;
+  font-size: var(--m-font-size-body-sm);
+  color: var(--m-color-text-primary);
+  font-family: inherit;
 }
 .m-ad-search-input::placeholder {
-  color: #b0bacb;
+  color: var(--m-color-text-placeholder);
 }
 .m-ad-search-clear {
-  width: 28px;
-  height: 28px;
+  background: transparent;
   border: none;
-  background: #f0f4fa;
-  border-radius: 50%;
+  color: var(--m-color-text-tertiary);
+  cursor: pointer;
+  padding: var(--m-space-1);
+  border-radius: var(--m-radius-circle);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #8c98ae;
-  cursor: pointer;
-  flex-shrink: 0;
+}
+.m-ad-search-clear:active {
+  background: var(--m-color-bg-subtle);
 }
 
-.m-ad-filter-bar { margin-bottom: 16px; }
+/* === 筛选 === */
+.m-ad-filter-bar {
+  margin-bottom: var(--m-space-3);
+}
 .m-ad-filter-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  display: flex;
+  gap: var(--m-space-2);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 2px;
 }
 .m-ad-filter-chip {
-  min-width: 0;
   display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 3px;
-  background: #fff;
-  border: 1px solid #e7ebf1;
-  color: #63718a;
-  padding: 0 9px;
-  border-radius: 9px;
-  font-size: 12px;
-  font-weight: 500;
+  gap: var(--m-space-1);
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border);
+  border-radius: var(--m-radius-pill);
+  padding: var(--m-space-1) var(--m-space-3);
+  font-size: var(--m-font-size-caption);
+  font-weight: var(--m-font-weight-medium);
+  color: var(--m-color-text-secondary);
   cursor: pointer;
-  min-height: 42px;
-  overflow: hidden;
-}
-.m-ad-filter-chip span {
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: inherit;
+  transition: all 0.15s;
 }
-.m-ad-filter-chip-active {
-  border-color: #1478f5;
-  color: #1478f5;
-  background: #f3f8ff;
+.m-ad-filter-chip--active {
+  background: var(--m-color-primary-bg);
+  border-color: var(--m-color-primary);
+  color: var(--m-color-primary);
 }
 
+/* === 工具栏 === */
 .m-ad-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
-  gap: 10px;
+  margin-bottom: var(--m-space-2);
 }
 .m-ad-count {
-  font-size: 13px;
-  color: #5a6a85;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
 }
 .m-ad-count b {
-  color: #15213d;
-  font-weight: 700;
+  color: var(--m-color-text-primary);
+  font-weight: var(--m-font-weight-bold);
 }
 .m-ad-toolbar-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--m-space-2);
 }
 
+/* === 按钮 === */
 .m-ad-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--m-space-1);
   border: none;
-  border-radius: 10px;
-  font-size: 13px;
-  font-weight: 600;
+  border-radius: var(--m-radius-md);
+  font-size: var(--m-font-size-caption);
+  font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
+  font-family: inherit;
   transition: all 0.15s;
-  padding: 10px 16px;
-  min-height: 40px;
+  padding: var(--m-space-2) var(--m-space-3);
 }
-.m-ad-btn:active { transform: scale(0.97); }
+.m-ad-btn-sm {
+  padding: var(--m-space-1) var(--m-space-2);
+  font-size: var(--m-font-size-tiny);
+}
 .m-ad-btn-primary {
-  background: linear-gradient(135deg, #0d6bff, #2580ff);
-  color: white;
-  box-shadow: 0 4px 12px rgba(13, 107, 255, 0.25);
+  background: var(--m-color-primary);
+  color: var(--m-color-text-inverse);
+}
+.m-ad-btn-primary:active {
+  background: var(--m-color-primary-active);
 }
 .m-ad-btn-primary:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 .m-ad-btn-outline {
-  background: white;
-  color: #5a6a85;
-  border: 1px solid #e7edf7;
+  background: var(--m-color-bg-card);
+  color: var(--m-color-primary);
+  border: 1px solid var(--m-color-primary);
 }
-.m-ad-btn-sm {
-  padding: 8px 14px;
-  font-size: 12px;
-  min-height: 36px;
+.m-ad-btn-outline:active {
+  background: var(--m-color-primary-bg);
 }
 
+/* === 批量栏 === */
 .m-ad-batch-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  background: #eef4ff;
-  border-radius: 12px;
-  padding: 10px 14px;
-  margin-bottom: 12px;
+  gap: var(--m-space-3);
+  padding: var(--m-space-2) var(--m-space-3);
+  background: var(--m-color-primary-bg);
+  border-radius: var(--m-radius-md);
+  margin-bottom: var(--m-space-3);
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-secondary);
 }
 .m-ad-batch-select-all {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: #15213d;
+  gap: var(--m-space-1);
   cursor: pointer;
+  font-weight: var(--m-font-weight-medium);
 }
 .m-ad-batch-count {
-  font-size: 12px;
-  color: #0d6bff;
-  font-weight: 600;
   flex: 1;
+  color: var(--m-color-primary);
+  font-weight: var(--m-font-weight-semibold);
 }
 
+/* === 骨架屏 === */
 .m-ad-skeleton-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--m-space-3);
 }
 .m-ad-skeleton-card {
-  background: white;
-  border-radius: 16px;
-  padding: 12px;
   display: flex;
-  gap: 12px;
-  border: 1px solid #f0f4fa;
+  gap: var(--m-space-3);
+  padding: var(--m-space-3);
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-lg);
 }
 .m-ad-skeleton-img {
-  width: 64px;
-  height: 64px;
-  border-radius: 10px;
-  background: linear-gradient(90deg, #f4f7fc 25%, #e8edf5 50%, #f4f7fc 75%);
-  background-size: 200% 100%;
-  animation: m-ad-skeleton 1.5s infinite;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--m-radius-md);
+  background: var(--m-color-bg-subtle);
   flex-shrink: 0;
+  animation: m-ad-shimmer 1.5s ease-in-out infinite;
 }
-.m-ad-skeleton-body { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.m-ad-skeleton-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--m-space-2);
+}
 .m-ad-skeleton-line {
-  height: 14px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, #f4f7fc 25%, #e8edf5 50%, #f4f7fc 75%);
-  background-size: 200% 100%;
-  animation: m-ad-skeleton 1.5s infinite;
+  height: 12px;
+  border-radius: var(--m-radius-sm);
+  background: var(--m-color-bg-subtle);
+  animation: m-ad-shimmer 1.5s ease-in-out infinite;
 }
-.m-ad-skeleton-title { width: 70%; }
-.m-ad-skeleton-meta { width: 40%; height: 12px; }
-.m-ad-skeleton-tags { display: flex; gap: 8px; }
+.m-ad-skeleton-title {
+  width: 60%;
+}
+.m-ad-skeleton-meta {
+  width: 40%;
+}
+.m-ad-skeleton-tags {
+  display: flex;
+  gap: var(--m-space-2);
+}
 .m-ad-skeleton-tag {
-  width: 70px;
-  height: 20px;
-  border-radius: 100px;
-  background: linear-gradient(90deg, #f4f7fc 25%, #e8edf5 50%, #f4f7fc 75%);
-  background-size: 200% 100%;
-  animation: m-ad-skeleton 1.5s infinite;
+  height: 18px;
+  width: 60px;
+  border-radius: var(--m-radius-pill);
+  background: var(--m-color-bg-subtle);
+  animation: m-ad-shimmer 1.5s ease-in-out infinite;
 }
-@keyframes m-ad-skeleton {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+@keyframes m-ad-shimmer {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
 }
 
+/* === 空状态 === */
 .m-ad-empty {
-  text-align: center;
-  padding: 60px 20px;
-}
-.m-ad-empty-icon {
-  width: 80px;
-  height: 80px;
-  margin: 0 auto 16px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #e8f1ff, #d4e4ff);
-  color: #0d6bff;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  padding: var(--m-space-12) var(--m-space-4);
+  gap: var(--m-space-2);
 }
-.m-ad-empty-text { font-size: 16px; font-weight: 600; color: #15213d; margin-bottom: 6px; }
-.m-ad-empty-desc { font-size: 13px; color: #8c98ae; margin-bottom: 20px; }
+.m-ad-empty-icon {
+  color: var(--m-color-text-disabled);
+  margin-bottom: var(--m-space-2);
+}
+.m-ad-empty-text {
+  font-size: var(--m-font-size-body);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-secondary);
+}
+.m-ad-empty-desc {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  margin-bottom: var(--m-space-2);
+}
 
+/* === 商品列表（行式卡片） === */
 .m-ad-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--m-space-2);
 }
-
 .m-ad-product-card {
-  background: #fff;
-  border-radius: 16px;
-  padding: 11px;
   display: flex;
-  gap: 10px;
-  box-shadow: 0 4px 14px rgba(31, 53, 94, 0.04);
-  border: 1px solid #edf1f5;
+  gap: var(--m-space-3);
+  padding: var(--m-space-3);
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-lg);
+  box-shadow: var(--m-shadow-card);
+  transition: transform 0.15s;
 }
-.m-ad-product-batch { padding-left: 8px; }
-
+.m-ad-product-card:active {
+  transform: scale(0.99);
+}
+.m-ad-product-card--batch {
+  border-color: var(--m-color-primary);
+}
 .m-ad-product-check {
   display: flex;
   align-items: center;
   flex-shrink: 0;
 }
 .m-ad-product-check input {
-  width: 20px;
-  height: 20px;
-  accent-color: #0d6bff;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--m-color-primary);
+  cursor: pointer;
 }
-
 .m-ad-product-img-wrap {
-  width: 70px;
-  height: 70px;
-  border-radius: 9px;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--m-radius-md);
   overflow: hidden;
   flex-shrink: 0;
-  background: #f4f7fc;
+  background: var(--m-color-bg-subtle);
   cursor: pointer;
 }
 .m-ad-product-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  display: block;
 }
 .m-ad-product-img-placeholder {
   width: 100%;
@@ -1179,355 +1291,399 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #b0bacb;
-  background: linear-gradient(135deg, #f4f7fc, #eaf0fa);
+  color: var(--m-color-text-disabled);
 }
-
-.m-ad-product-body { flex: 1; min-width: 0; }
+.m-ad-product-body {
+  flex: 1;
+  min-width: 0;
+}
 .m-ad-product-top {
   display: flex;
-  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--m-space-2);
 }
-.m-ad-product-info { flex: 1; min-width: 0; }
+.m-ad-product-info {
+  flex: 1;
+  min-width: 0;
+}
 .m-ad-product-name {
-  font-size: 14px;
-  font-weight: 700;
-  color: #15213d;
-  line-height: 1.4;
+  font-size: var(--m-font-size-body-sm);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  word-break: break-all;
+  white-space: nowrap;
   cursor: pointer;
-  margin-bottom: 4px;
 }
 .m-ad-product-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 6px;
+  gap: var(--m-space-2);
+  margin-top: 2px;
 }
 .m-ad-product-id {
-  font-size: 11px;
-  color: #8c98ae;
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-tertiary);
   cursor: pointer;
+  font-variant-numeric: tabular-nums;
 }
-.m-ad-product-id:active { color: #0d6bff; }
 .m-ad-product-price {
-  font-size: 15px;
-  font-weight: 700;
-  color: #16a34a;
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-secondary);
+  font-weight: var(--m-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
 }
-.m-ad-price-special { color: #ef4444; }
+.m-ad-price--abnormal {
+  color: var(--m-color-danger-text);
+}
 .m-ad-product-tags {
   display: flex;
-  gap: 6px;
   flex-wrap: wrap;
+  gap: var(--m-space-1);
+  margin-top: var(--m-space-1);
 }
 .m-ad-tag {
-  font-size: 10px;
-  font-weight: 500;
-  padding: 3px 8px;
-  border-radius: 100px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 120px;
-}
-.m-ad-tag-green {
-  background: rgba(22, 163, 74, 0.1);
-  color: #16a34a;
-}
-.m-ad-tag-gray {
-  background: rgba(140, 152, 174, 0.12);
-  color: #7f8a9d;
-}
-.m-ad-tag-red {
-  background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
-}
-.m-ad-tag-light {
-  background: rgba(13, 107, 255, 0.08);
-  color: #0d6bff;
-}
-
-.m-ad-product-right {
-  display: grid;
-  grid-template-columns: auto auto;
+  display: inline-flex;
   align-items: center;
-  justify-items: end;
-  column-gap: 10px;
-  row-gap: 8px;
+  padding: 1px var(--m-space-2);
+  border-radius: var(--m-radius-pill);
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-medium);
+}
+.m-ad-tag--success {
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success-text);
+}
+.m-ad-tag--neutral {
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
+}
+.m-ad-tag--danger {
+  background: var(--m-color-danger-bg);
+  color: var(--m-color-danger-text);
+}
+.m-ad-tag--info {
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
+}
+.m-ad-product-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--m-space-1);
   flex-shrink: 0;
 }
 .m-ad-stock-badge {
-  grid-column: 1 / -1;
-  padding: 5px 9px;
-  border-radius: 8px;
-  text-align: center;
-  min-width: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--m-space-1) var(--m-space-2);
+  border-radius: var(--m-radius-md);
   cursor: pointer;
+  min-width: 56px;
 }
 .m-ad-stock-badge span {
-  display: block;
-  font-size: 10px;
-  font-weight: 500;
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-medium);
 }
 .m-ad-stock-badge strong {
-  display: block;
-  font-size: 13px;
-  font-weight: 700;
+  font-size: var(--m-font-size-caption);
+  font-weight: var(--m-font-weight-bold);
+  font-variant-numeric: tabular-nums;
 }
 .m-ad-stock-ok {
-  background: rgba(22, 163, 74, 0.1);
-  color: #16a34a;
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success-text);
 }
 .m-ad-stock-low {
-  background: rgba(245, 158, 11, 0.1);
-  color: #f59e0b;
+  background: var(--m-color-danger-bg);
+  color: var(--m-color-danger-text);
 }
 .m-ad-stock-unknown {
-  background: rgba(140, 152, 174, 0.1);
-  color: #7f8a9d;
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
 }
-
 .m-ad-config-btn {
-  background: none;
-  border: none;
-  color: #0d6bff;
-  font-size: 13px;
-  font-weight: 600;
+  border: 1px solid var(--m-color-primary);
+  background: var(--m-color-bg-card);
+  color: var(--m-color-primary);
+  border-radius: var(--m-radius-md);
+  padding: var(--m-space-1) var(--m-space-2);
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
-  padding: 4px 0;
+  font-family: inherit;
+}
+.m-ad-config-btn:active {
+  background: var(--m-color-primary-bg);
 }
 
+/* === Switch 开关 === */
 .m-ad-switch {
-  width: 44px;
-  height: 26px;
-  border-radius: 13px;
-  background: #e7edf7;
-  border: none;
   position: relative;
+  width: 40px;
+  height: 22px;
+  border: none;
+  background: var(--m-color-text-disabled);
+  border-radius: var(--m-radius-pill);
   cursor: pointer;
   transition: background 0.2s;
-  padding: 0;
   flex-shrink: 0;
+  padding: 0;
 }
-.m-ad-switch:disabled {
-  opacity: 0.6;
+.m-ad-switch--on {
+  background: var(--m-color-success);
+}
+.m-ad-switch--loading {
+  opacity: 0.5;
   cursor: not-allowed;
 }
-.m-ad-switch-on {
-  background: linear-gradient(135deg, #0d6bff, #2580ff);
+.m-ad-switch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .m-ad-switch-knob {
   position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: white;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+  width: 18px;
+  height: 18px;
+  left: 2px;
+  top: 2px;
+  background: var(--m-color-bg-card);
+  border-radius: var(--m-radius-circle);
   transition: transform 0.2s;
+  box-shadow: var(--m-shadow-card);
 }
-.m-ad-switch-on .m-ad-switch-knob {
+.m-ad-switch--on .m-ad-switch-knob {
   transform: translateX(18px);
 }
 
+/* === 加载更多 === */
 .m-ad-loading-more,
-.m-ad-load-more,
 .m-ad-no-more {
   text-align: center;
-  padding: 20px;
-  font-size: 13px;
-  color: #8c98ae;
+  padding: var(--m-space-4);
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
 }
-.m-ad-load-more .m-ad-btn {
-  padding: 8px 24px;
+.m-ad-load-more {
+  display: flex;
+  justify-content: center;
+  padding: var(--m-space-3);
 }
 
+/* === 底部安全区 === */
 .m-ad-safe-bottom {
-  height: calc(84px + env(safe-area-inset-bottom));
+  height: 80px;
 }
 
+/* === Sheet === */
 .m-ad-sheet-mask {
   position: fixed;
   inset: 0;
-  background: rgba(15, 25, 50, 0.4);
-  z-index: 200;
-  backdrop-filter: blur(2px);
+  background: var(--m-mask-modal);
+  z-index: 1000;
 }
-
 .m-ad-sheet {
   position: fixed;
+  bottom: 0;
   left: 0;
   right: 0;
-  bottom: 0;
-  background: white;
-  border-radius: 20px 20px 0 0;
-  z-index: 201;
-  transform: translateY(100%);
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  max-height: 80vh;
+  max-width: 480px;
+  margin: 0 auto;
+  max-height: 85vh;
+  background: var(--m-color-bg-card);
+  border-radius: var(--m-radius-2xl) var(--m-radius-2xl) 0 0;
   display: flex;
   flex-direction: column;
-  padding-bottom: env(safe-area-inset-bottom);
+  overflow: hidden;
+  z-index: 1001;
+  transform: translateY(100%);
+  transition: transform 0.3s ease;
 }
-.m-ad-sheet-open {
+.m-ad-sheet--open {
   transform: translateY(0);
+}
+.m-ad-sheet-handle {
+  width: 36px;
+  height: 4px;
+  background: var(--m-color-border);
+  border-radius: var(--m-radius-pill);
+  margin: var(--m-space-2) auto var(--m-space-1);
+  flex-shrink: 0;
 }
 .m-ad-sheet-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid #f0f4fa;
+  padding: var(--m-space-2) var(--m-space-4) var(--m-space-3);
+  border-bottom: 1px solid var(--m-color-border-light);
+  flex-shrink: 0;
 }
 .m-ad-sheet-header h3 {
   margin: 0;
-  font-size: 17px;
-  font-weight: 700;
-  color: #15213d;
+  font-size: var(--m-font-size-h3);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
 }
 .m-ad-sheet-close {
-  width: 36px;
-  height: 36px;
+  background: transparent;
   border: none;
-  background: #f5f7fb;
-  border-radius: 50%;
+  color: var(--m-color-text-tertiary);
+  cursor: pointer;
+  padding: var(--m-space-1);
+  border-radius: var(--m-radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #5a6a85;
-  cursor: pointer;
+}
+.m-ad-sheet-close:active {
+  background: var(--m-color-bg-subtle);
 }
 .m-ad-sheet-body {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 20px;
+  -webkit-overflow-scrolling: touch;
+  padding: var(--m-space-4);
 }
 .m-ad-sheet-search {
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: #f5f7fb;
-  border-radius: 10px;
-  padding: 0 12px;
-  margin-bottom: 12px;
-  height: 42px;
+  gap: var(--m-space-2);
+  background: var(--m-color-bg-subtle);
+  border-radius: var(--m-radius-md);
+  padding: var(--m-space-2) var(--m-space-3);
+  margin-bottom: var(--m-space-3);
 }
-.m-ad-sheet-search-icon { color: #8c98ae; flex-shrink: 0; }
+.m-ad-sheet-search-icon {
+  color: var(--m-color-text-tertiary);
+  flex-shrink: 0;
+}
 .m-ad-sheet-search-input {
   flex: 1;
   border: none;
   outline: none;
   background: transparent;
-  font-size: 14px;
+  font-size: var(--m-font-size-body-sm);
+  color: var(--m-color-text-primary);
+  font-family: inherit;
+}
+.m-ad-sheet-search-input::placeholder {
+  color: var(--m-color-text-placeholder);
 }
 .m-ad-sheet-options {
   display: flex;
   flex-direction: column;
-  gap: 4px;
 }
 .m-ad-sheet-option {
-  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 12px;
-  border: none;
+  padding: var(--m-space-3);
   background: transparent;
-  border-radius: 10px;
-  font-size: 15px;
-  color: #15213d;
+  border: none;
+  border-bottom: 1px solid var(--m-color-border-light);
+  font-size: var(--m-font-size-body-sm);
+  color: var(--m-color-text-primary);
   cursor: pointer;
+  font-family: inherit;
   text-align: left;
 }
-.m-ad-sheet-option:active { background: #f5f7fb; }
-.m-ad-sheet-option-active {
-  background: #eef4ff;
-  color: #0d6bff;
-  font-weight: 600;
+.m-ad-sheet-option:active {
+  background: var(--m-color-bg-subtle);
 }
-.m-ad-sheet-check { color: #0d6bff; flex-shrink: 0; }
+.m-ad-sheet-option--active {
+  color: var(--m-color-primary);
+  font-weight: var(--m-font-weight-semibold);
+}
+.m-ad-sheet-check {
+  color: var(--m-color-primary);
+}
 .m-ad-sheet-footer {
   display: flex;
-  gap: 10px;
-  padding: 12px 20px 16px;
-  border-top: 1px solid #f0f4fa;
+  gap: var(--m-space-3);
+  padding: var(--m-space-3) var(--m-space-4);
+  border-top: 1px solid var(--m-color-border-light);
+  flex-shrink: 0;
 }
-.m-ad-sheet-footer .m-ad-btn { flex: 1; }
+.m-ad-sheet-footer .m-ad-btn {
+  flex: 1;
+}
 
+/* === 批量表单 === */
 .m-ad-batch-hint {
-  font-size: 14px;
-  color: #5a6a85;
-  margin-bottom: 16px;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-secondary);
+  margin-bottom: var(--m-space-3);
 }
-.m-ad-batch-hint b { color: #0d6bff; font-weight: 700; }
+.m-ad-batch-hint b {
+  color: var(--m-color-primary);
+  font-weight: var(--m-font-weight-bold);
+}
 .m-ad-form-row {
-  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--m-space-2);
 }
 .m-ad-form-row label {
-  display: block;
-  font-size: 13px;
-  font-weight: 600;
-  color: #15213d;
-  margin-bottom: 8px;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-medium);
 }
 .m-ad-select {
-  width: 100%;
-  height: 44px;
-  border: 1px solid #e7edf7;
-  border-radius: 10px;
-  padding: 0 12px;
-  font-size: 14px;
-  color: #15213d;
-  background: white;
-  outline: none;
+  border: 1px solid var(--m-color-border);
+  border-radius: var(--m-radius-md);
+  padding: var(--m-space-2) var(--m-space-3);
+  font-size: var(--m-font-size-body-sm);
+  color: var(--m-color-text-primary);
+  background: var(--m-color-bg-card);
+  font-family: inherit;
 }
 
-.m-ad-help-body {
-  font-size: 14px;
-  color: #5a6a85;
-  line-height: 1.7;
+/* === 帮助 === */
+.m-ad-help-body h4 {
+  font-size: var(--m-font-size-body-sm);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
+  margin: 0 0 var(--m-space-2);
 }
 .m-ad-help-section {
-  margin-bottom: 20px;
-}
-.m-ad-help-section h4 {
-  margin: 0 0 10px;
-  font-size: 15px;
-  font-weight: 700;
-  color: #15213d;
+  margin-bottom: var(--m-space-4);
 }
 .m-ad-help-section ul,
 .m-ad-help-section ol {
   margin: 0;
-  padding-left: 20px;
+  padding-left: var(--m-space-5);
 }
 .m-ad-help-section li {
-  margin-bottom: 6px;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-secondary);
+  line-height: var(--m-line-height-relaxed);
 }
 .m-ad-help-section p {
-  margin: 0 0 6px;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-secondary);
+  line-height: var(--m-line-height-relaxed);
+  margin: var(--m-space-1) 0;
 }
 
+/* === 响应式 === */
 @media (max-width: 360px) {
-  .m-ad { padding: 10px 12px 0; }
-  .m-ad-stats-grid { gap: 8px; }
-  .m-ad-stat-card { padding: 12px; gap: 10px; }
-  .m-ad-stat-icon { width: 40px; height: 40px; }
-  .m-ad-stat-value { font-size: 20px; }
-  .m-ad-product-img-wrap { width: 56px; height: 56px; }
-  .m-ad-stock-badge { min-width: 58px; padding: 3px 8px; }
-  .m-ad-stock-badge strong { font-size: 12px; }
-}
-
-@media (min-width: 430px) {
-  .m-ad-stats-grid { gap: 12px; }
-  .m-ad-stat-card { padding: 16px; }
+  .m-ad {
+    padding: var(--m-space-2) var(--m-space-2) 0;
+  }
+  .m-ad-hero {
+    padding: var(--m-space-3);
+  }
+  .m-ad-stat-grid {
+    gap: var(--m-space-2);
+  }
+  .m-ad-stat-value {
+    font-size: var(--m-font-size-h3);
+  }
+  .m-ad-product-img-wrap {
+    width: 48px;
+    height: 48px;
+  }
 }
 </style>

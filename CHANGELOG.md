@@ -6,6 +6,36 @@
 
 ---
 
+## [1.8.0] - 2026-07-22
+
+### ✨ 新增
+
+#### 前台用户端 - 首页滑块自动守护惊喜提示
+- 首页右侧动画弹窗，展示用户不在场时滑块求解功能自动化解的验证次数
+- 仅提示成功次数（好消息），不涉及失败/总数，从后端 SQL 层面确保只返回 `status='success'` 数据
+- 弹窗从右侧弹性滑入，5 秒后自动滑出，全程无需用户操作
+- 每个浏览会话仅显示一次（`sessionStorage` 标记），距上次访问 < 3 分钟不弹（刷新场景）
+- 数字递增动画（easeOutCubic），同时往"最近通知"板块插入守护记录
+- 后端新增 `GET /api/captcha/silent-summary` 接口：直接查 MySQL，按 `tenant_id` 过滤，仅统计自动触发场景（`ws_connect` / `cookie_keepalive` / `token_refresh`）的成功次数
+
+#### 后台管理端 - 滑块求解记录"今天"筛选
+- 滑块求解记录页面时间范围新增"今天"按钮（`days=1`），与"近 7 天""近 30 天""全部"并列
+
+### ♻️ 优化
+
+#### 移动端设计令牌系统化重构
+- 19 个移动端页面统一迁移至 CSS 设计令牌系统（`var(--m-color-*` / `var(--m-space-*` / `var(--m-radius-*` / `var(--m-shadow-*`）
+- 移除硬编码颜色/尺寸/渐变，统一 BEM 类名命名空间，提升主题一致性与可维护性
+- 涉及页面：数据面板（MobileData / MobileDataDetail）、自动化（MobileAutomation）、账号（MobileAccounts / MobileAccountDetail）、商品（MobileProducts / MobileProductDetail / MobileProductPublish）、订单（MobileOrders / MobileOrderDetail）、消息（MobileMessages）、通知（MobileNotifications）、商机（MobileOpportunity）、发货源（MobileDeliverySourceLibrary）、自动发货配置（MobileAutoDeliveryConfig）、个人中心（MobileProfile / MobileProfileLedger / MobileProfileRecharge / MobileProfileSecurity）
+- 全局导航栏组件（MobileLite.vue / nav.js / MobileIcons.js）未改动，符合导航栏一致性规则
+
+#### 桌面端账号管理 - 滑块求解后自动连接 WebSocket
+- 滑块求解成功且 Cookie 恢复后，自动发起 WebSocket 连接，无需用户手动操作
+- 轮询 WS 连接状态直至稳定（已连接/失败终态），提示文案随状态动态变化
+- 避免用户求解成功后忽略在线状态而反复点击求解按钮
+
+---
+
 ## [1.7.0] - 2026-07-21
 
 ### ✨ 新增

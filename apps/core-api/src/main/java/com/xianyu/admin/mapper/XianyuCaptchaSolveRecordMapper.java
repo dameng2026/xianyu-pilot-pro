@@ -146,36 +146,4 @@ public interface XianyuCaptchaSolveRecordMapper {
                     @Param("accountName") String accountName,
                     @Param("startTime") LocalDateTime startTime,
                     @Param("endTime") LocalDateTime endTime);
-
-    /**
-     * 静默自动求解摘要：仅统计自动触发场景（ws_connect / cookie_keepalive / token_refresh），
-     * 排除手动触发（manual / manual_retry）。
-     *
-     * 用于前台进入页面时展示"您不在场时滑块求解已自动为您解决 N 次"的惊喜提示。
-     *
-     * @param startTime 起始时间（必填，来自前端 since 参数）
-     * @param endTime   截止时间（必填，通常为当前时间）
-     * @param userId    用户 ID 过滤（与 accountId 互斥）
-     * @param accountId 账号 ID 过滤（优先于 userId）
-     */
-    @Select("<script>" +
-            "SELECT COUNT(*) AS total, " +
-            "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count, " +
-            "SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END) AS fail_count, " +
-            "COUNT(DISTINCT account_id) AS account_count, " +
-            "MAX(created_at) AS last_solve_time " +
-            "FROM xianyu_captcha_solve_record " +
-            "WHERE COALESCE(deleted, 0) = 0 " +
-            "AND trigger_scene IN ('ws_connect', 'cookie_keepalive', 'token_refresh') " +
-            "<if test='startTime != null'> AND created_at &gt;= #{startTime} </if>" +
-            "<if test='endTime != null'> AND created_at &lt;= #{endTime} </if>" +
-            "<if test='accountId != null'> AND account_id = #{accountId} </if>" +
-            "<if test='userId != null and accountId == null'>" +
-            "  AND account_id IN (SELECT id FROM xianyu_account WHERE COALESCE(user_id, created_by_user_id) = #{userId}) " +
-            "</if>" +
-            "</script>")
-    Map<String, Object> selectSilentSummary(@Param("startTime") LocalDateTime startTime,
-                                             @Param("endTime") LocalDateTime endTime,
-                                             @Param("userId") Long userId,
-                                             @Param("accountId") Long accountId);
 }

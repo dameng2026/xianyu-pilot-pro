@@ -1,128 +1,141 @@
 <template>
   <div class="m-auto">
-    <div class="m-page-header">
-      <h1>自动化</h1>
-      <p class="m-page-sub">工作流与自动运营</p>
-    </div>
-
-    <!-- 工作流统计卡片 -->
-    <div class="m-auto-stats">
-      <div class="m-stat-card m-stat-purple">
-        <div class="m-stat-icon">
-          <MIcon name="workflow" :size="20" />
+    <!-- 顶部 Hero：KPI 大卡 -->
+    <section class="m-auto-hero">
+      <div class="m-auto-hero-head">
+        <div class="m-auto-hero-badge">
+          <span class="m-auto-hero-dot"></span>
+          <span>自动化运营</span>
         </div>
-        <div class="m-stat-info">
-          <div class="m-stat-val">{{ overviewMetric('workflowCount') }}</div>
-          <div class="m-stat-label">工作流</div>
-        </div>
-        <div class="m-stat-extra">启用 {{ overviewMetric('enabledCount') }}</div>
+        <h1 class="m-auto-hero-title">自动化中心</h1>
+        <p class="m-auto-hero-sub">工作流 · 自动回复 · 定时任务</p>
       </div>
-      <div class="m-stat-card m-stat-blue">
-        <div class="m-stat-icon">
-          <MIcon name="activity" :size="20" />
+      <div class="m-auto-kpi-row">
+        <div class="m-auto-kpi-cell">
+          <div class="m-auto-kpi-value">{{ overviewMetric('workflowCount') }}</div>
+          <div class="m-auto-kpi-label">工作流</div>
+          <div class="m-auto-kpi-sub">启用 {{ overviewMetric('enabledCount') }}</div>
         </div>
-        <div class="m-stat-info">
-          <div class="m-stat-val">{{ overviewMetric('todayExecutionCount') }}</div>
-          <div class="m-stat-label">今日执行</div>
+        <div class="m-auto-kpi-divider"></div>
+        <div class="m-auto-kpi-cell">
+          <div class="m-auto-kpi-value">{{ overviewMetric('todayExecutionCount') }}</div>
+          <div class="m-auto-kpi-label">今日执行</div>
         </div>
-      </div>
-      <div class="m-stat-card m-stat-green">
-        <div class="m-stat-icon">
-          <MIcon name="shield" :size="20" />
-        </div>
-        <div class="m-stat-info">
-          <div class="m-stat-val">{{ overviewMetric('successRate', '%') }}</div>
-          <div class="m-stat-label">成功率</div>
+        <div class="m-auto-kpi-divider"></div>
+        <div class="m-auto-kpi-cell">
+          <div class="m-auto-kpi-value m-auto-kpi-value--success">{{ overviewMetric('successRate', '%') }}</div>
+          <div class="m-auto-kpi-label">成功率</div>
         </div>
       </div>
-    </div>
+    </section>
 
     <MobileUnavailableState v-if="overviewError" compact title="自动化统计暂时不可用" :description="overviewError" @retry="loadOverview" />
 
-    <!-- 自动化功能（复用为 Tab 切换入口） -->
-    <div class="m-section">
-      <div class="m-section-header">
-        <h2>自动化功能</h2>
+    <!-- 自动化功能 2×2 入口网格 -->
+    <section class="m-auto-card">
+      <div class="m-auto-card-header">
+        <div class="m-auto-card-title-wrap">
+          <div class="m-auto-card-title-icon m-auto-title-icon--primary">
+            <MIcon name="grid" :size="18" />
+          </div>
+          <h2 class="m-auto-card-title">自动化功能</h2>
+        </div>
       </div>
       <div class="m-auto-grid">
-        <div class="m-auto-item" :class="{ 'm-auto-active': activeTab === 'workflow' }" @click="switchTab('workflow')">
-          <div class="m-auto-icon m-auto-blue">
-            <MIcon name="workflow" :size="26" />
+        <div class="m-auto-entry" :class="{ 'm-auto-entry--active': activeTab === 'workflow' }" @click="switchTab('workflow')">
+          <div class="m-auto-entry-icon m-auto-entry-icon--primary">
+            <MIcon name="workflow" :size="20" />
           </div>
-          <div class="m-auto-title">工作流</div>
-          <div class="m-auto-desc">设计自动化流程</div>
-          <MIcon name="chevronRight" :size="16" class="m-auto-arrow" />
+          <div class="m-auto-entry-info">
+            <div class="m-auto-entry-title">工作流</div>
+            <div class="m-auto-entry-desc">设计自动化流程</div>
+          </div>
+          <MIcon name="chevronRight" :size="16" class="m-auto-entry-arrow" />
         </div>
-        <div class="m-auto-item" @click="$emit('navigate', 'auto-delivery')">
-          <div class="m-auto-icon m-auto-green">
-            <MIcon name="truck" :size="26" />
+        <div class="m-auto-entry" @click="$emit('navigate', 'auto-delivery')">
+          <div class="m-auto-entry-icon m-auto-entry-icon--success">
+            <MIcon name="truck" :size="20" />
           </div>
-          <div class="m-auto-title">自动发货</div>
-          <div class="m-auto-desc">自动处理订单发货</div>
-          <MIcon name="chevronRight" :size="16" class="m-auto-arrow" />
+          <div class="m-auto-entry-info">
+            <div class="m-auto-entry-title">自动发货</div>
+            <div class="m-auto-entry-desc">自动处理订单发货</div>
+          </div>
+          <MIcon name="chevronRight" :size="16" class="m-auto-entry-arrow" />
         </div>
-        <div class="m-auto-item" :class="{ 'm-auto-active': activeTab === 'autoReply' }" @click="switchTab('autoReply')">
-          <div class="m-auto-icon m-auto-purple">
-            <MIcon name="reply" :size="26" />
+        <div class="m-auto-entry" :class="{ 'm-auto-entry--active': activeTab === 'autoReply' }" @click="switchTab('autoReply')">
+          <div class="m-auto-entry-icon m-auto-entry-icon--purple">
+            <MIcon name="reply" :size="20" />
           </div>
-          <div class="m-auto-title">自动回复</div>
-          <div class="m-auto-desc">买家消息自动回复</div>
-          <MIcon name="chevronRight" :size="16" class="m-auto-arrow" />
+          <div class="m-auto-entry-info">
+            <div class="m-auto-entry-title">自动回复</div>
+            <div class="m-auto-entry-desc">买家消息自动回复</div>
+          </div>
+          <MIcon name="chevronRight" :size="16" class="m-auto-entry-arrow" />
         </div>
-        <div class="m-auto-item" :class="{ 'm-auto-active': activeTab === 'scheduled' }" @click="switchTab('scheduled')">
-          <div class="m-auto-icon m-auto-orange">
-            <MIcon name="clock" :size="26" />
+        <div class="m-auto-entry" :class="{ 'm-auto-entry--active': activeTab === 'scheduled' }" @click="switchTab('scheduled')">
+          <div class="m-auto-entry-icon m-auto-entry-icon--warning">
+            <MIcon name="clock" :size="20" />
           </div>
-          <div class="m-auto-title">定时任务</div>
-          <div class="m-auto-desc">定时执行运营任务</div>
-          <MIcon name="chevronRight" :size="16" class="m-auto-arrow" />
+          <div class="m-auto-entry-info">
+            <div class="m-auto-entry-title">定时任务</div>
+            <div class="m-auto-entry-desc">定时执行运营任务</div>
+          </div>
+          <MIcon name="chevronRight" :size="16" class="m-auto-entry-arrow" />
         </div>
       </div>
-    </div>
+    </section>
 
     <!-- Tab 内容区 -->
-    <div class="m-section">
+    <section class="m-auto-card">
       <!-- 工作流 Tab -->
       <template v-if="activeTab === 'workflow'">
-        <div class="m-section-header">
-          <h2>工作流列表</h2>
-          <button class="m-section-action" :disabled="workflowsLoading" @click="loadWorkflows">
-            <MIcon name="refresh" :size="14" />刷新
+        <div class="m-auto-card-header">
+          <div class="m-auto-card-title-wrap">
+            <div class="m-auto-card-title-icon m-auto-title-icon--primary">
+              <MIcon name="workflow" :size="18" />
+            </div>
+            <h2 class="m-auto-card-title">工作流列表</h2>
+          </div>
+          <button class="m-auto-card-action" :disabled="workflowsLoading" @click="loadWorkflows">
+            <MIcon name="refresh" :size="14" />
+            <span>刷新</span>
           </button>
         </div>
 
-        <div v-if="workflowsLoading" class="m-loading">
-          <div class="m-loading-spinner"></div>
+        <div v-if="workflowsLoading" class="m-auto-loading">
+          <div class="m-auto-spinner"></div>
           <span>加载工作流...</span>
         </div>
 
         <MobileUnavailableState v-else-if="workflowsError" compact title="工作流列表暂时无法加载" :description="workflowsError" @retry="loadWorkflows" />
 
-        <div v-else-if="workflows.length === 0" class="m-empty-mini">
-          <MIcon name="workflow" :size="32" />
-          <span>暂无工作流</span>
+        <div v-else-if="workflows.length === 0" class="m-auto-empty">
+          <div class="m-auto-empty-icon"><MIcon name="workflow" :size="40" /></div>
+          <div class="m-auto-empty-text">暂无工作流</div>
         </div>
 
-        <div v-else class="m-wf-list">
+        <div v-else class="m-auto-wf-list">
           <div
             v-for="wf in workflows"
             :key="wf.id"
-            class="m-wf-card"
+            class="m-auto-wf-card"
             @click="openWorkflowDetail(wf)"
           >
-            <div class="m-wf-top">
-              <div class="m-wf-name">{{ wf.name || '未命名工作流' }}</div>
-              <span class="m-wf-badge" :class="workflowStatusClass(wf.status)">{{ workflowStatusText(wf.status) }}</span>
+            <div class="m-auto-wf-top">
+              <div class="m-auto-wf-name">{{ wf.name || '未命名工作流' }}</div>
+              <span class="m-auto-wf-badge" :class="workflowStatusClass(wf.status)">{{ workflowStatusText(wf.status) }}</span>
             </div>
-            <div v-if="wf.description" class="m-wf-desc">{{ truncate(wf.description, 50) }}</div>
-            <div class="m-wf-meta">
-              <span class="m-wf-meta-item">执行 {{ wf.executionCount ?? '—' }}</span>
-              <span class="m-wf-meta-item">v{{ wf.version ?? '—' }}</span>
-              <span v-if="wf.enabled !== undefined" class="m-wf-meta-item">{{ wf.enabled ? '已启用' : '未启用' }}</span>
+            <div v-if="wf.description" class="m-auto-wf-desc">{{ truncate(wf.description, 50) }}</div>
+            <div class="m-auto-wf-meta">
+              <span class="m-auto-wf-meta-item">执行 {{ wf.executionCount ?? '—' }}</span>
+              <span class="m-auto-wf-meta-dot"></span>
+              <span class="m-auto-wf-meta-item">v{{ wf.version ?? '—' }}</span>
+              <span v-if="wf.enabled !== undefined" class="m-auto-wf-meta-dot"></span>
+              <span v-if="wf.enabled !== undefined" class="m-auto-wf-meta-item">{{ wf.enabled ? '已启用' : '未启用' }}</span>
             </div>
-            <div class="m-wf-actions">
-              <button class="m-wf-btn" @click.stop="openWorkflowDetail(wf)">查看</button>
-              <button class="m-wf-btn m-wf-btn-ghost" @click.stop="hintDesktopEdit">编辑</button>
+            <div class="m-auto-wf-actions">
+              <button class="m-auto-btn m-auto-btn-outline m-auto-btn-sm" @click.stop="openWorkflowDetail(wf)">查看</button>
+              <button class="m-auto-btn m-auto-btn-ghost m-auto-btn-sm" @click.stop="hintDesktopEdit">编辑</button>
             </div>
           </div>
         </div>
@@ -130,52 +143,58 @@
 
       <!-- 自动回复 Tab -->
       <template v-else-if="activeTab === 'autoReply'">
-        <div class="m-section-header">
-          <h2>自动回复规则</h2>
-          <button class="m-section-action" :disabled="autoReplyLoading" @click="loadAutoReplyRules">
-            <MIcon name="refresh" :size="14" />刷新
+        <div class="m-auto-card-header">
+          <div class="m-auto-card-title-wrap">
+            <div class="m-auto-card-title-icon m-auto-title-icon--purple">
+              <MIcon name="reply" :size="18" />
+            </div>
+            <h2 class="m-auto-card-title">自动回复规则</h2>
+          </div>
+          <button class="m-auto-card-action" :disabled="autoReplyLoading" @click="loadAutoReplyRules">
+            <MIcon name="refresh" :size="14" />
+            <span>刷新</span>
           </button>
         </div>
 
-        <div v-if="autoReplyLoading" class="m-loading">
-          <div class="m-loading-spinner"></div>
+        <div v-if="autoReplyLoading" class="m-auto-loading">
+          <div class="m-auto-spinner"></div>
           <span>加载自动回复规则...</span>
         </div>
 
         <MobileUnavailableState v-else-if="autoReplyError" compact title="自动回复规则暂时无法加载" :description="autoReplyError" @retry="loadAutoReplyRules" />
 
-        <div v-else-if="autoReplyRules.length === 0" class="m-empty-mini">
-          <MIcon name="reply" :size="32" />
-          <span>暂无自动回复规则</span>
+        <div v-else-if="autoReplyRules.length === 0" class="m-auto-empty">
+          <div class="m-auto-empty-icon"><MIcon name="reply" :size="40" /></div>
+          <div class="m-auto-empty-text">暂无自动回复规则</div>
         </div>
 
-        <div v-else class="m-rule-list">
-          <div v-for="rule in autoReplyRules" :key="rule.id" class="m-rule-card">
-            <div class="m-rule-head">
-              <div class="m-rule-name">{{ rule.name || rule.ruleName || '未命名规则' }}</div>
-              <label class="m-switch" :class="{ 'is-disabled': togglingRuleId === rule.id }">
+        <div v-else class="m-auto-rule-list">
+          <div v-for="rule in autoReplyRules" :key="rule.id" class="m-auto-rule-card">
+            <div class="m-auto-rule-head">
+              <div class="m-auto-rule-name">{{ rule.name || rule.ruleName || '未命名规则' }}</div>
+              <label class="m-auto-switch" :class="{ 'is-disabled': togglingRuleId === rule.id }">
                 <input
                   type="checkbox"
                   :checked="isRuleEnabled(rule)"
                   :disabled="togglingRuleId === rule.id"
                   @change="toggleRule(rule, $event)"
                 />
-                <span class="m-switch-slider"></span>
+                <span class="m-auto-switch-slider"></span>
               </label>
             </div>
-            <div v-if="ruleTriggerText(rule)" class="m-rule-row">
-              <span class="m-rule-label">触发</span>
-              <span class="m-rule-value">{{ ruleTriggerText(rule) }}</span>
+            <div v-if="ruleTriggerText(rule)" class="m-auto-rule-row">
+              <span class="m-auto-rule-label">触发</span>
+              <span class="m-auto-rule-value">{{ ruleTriggerText(rule) }}</span>
             </div>
-            <div v-if="ruleActionText(rule)" class="m-rule-row">
-              <span class="m-rule-label">动作</span>
-              <span class="m-rule-value">{{ ruleActionText(rule) }}</span>
+            <div v-if="ruleActionText(rule)" class="m-auto-rule-row">
+              <span class="m-auto-rule-label">动作</span>
+              <span class="m-auto-rule-value">{{ ruleActionText(rule) }}</span>
             </div>
-            <div class="m-rule-foot">
-              <span class="m-rule-status" :class="isRuleEnabled(rule) ? 'm-rule-on' : 'm-rule-off'">
+            <div class="m-auto-rule-foot">
+              <span class="m-auto-rule-status" :class="isRuleEnabled(rule) ? 'm-auto-rule-on' : 'm-auto-rule-off'">
                 {{ isRuleEnabled(rule) ? '启用中' : '已停用' }}
               </span>
-              <button class="m-wf-btn m-wf-btn-ghost" @click="hintDesktopEdit">编辑</button>
+              <button class="m-auto-btn m-auto-btn-ghost m-auto-btn-sm" @click="hintDesktopEdit">编辑</button>
             </div>
           </div>
         </div>
@@ -183,192 +202,209 @@
 
       <!-- 定时任务 Tab -->
       <template v-else-if="activeTab === 'scheduled'">
-        <div class="m-section-header">
-          <h2>定时任务</h2>
-          <button class="m-section-action" :disabled="scheduledLoading" @click="loadScheduledTasks">
-            <MIcon name="refresh" :size="14" />刷新
+        <div class="m-auto-card-header">
+          <div class="m-auto-card-title-wrap">
+            <div class="m-auto-card-title-icon m-auto-title-icon--warning">
+              <MIcon name="clock" :size="18" />
+            </div>
+            <h2 class="m-auto-card-title">定时任务</h2>
+          </div>
+          <button class="m-auto-card-action" :disabled="scheduledLoading" @click="loadScheduledTasks">
+            <MIcon name="refresh" :size="14" />
+            <span>刷新</span>
           </button>
         </div>
 
-        <div v-if="scheduledLoading" class="m-loading">
-          <div class="m-loading-spinner"></div>
+        <div v-if="scheduledLoading" class="m-auto-loading">
+          <div class="m-auto-spinner"></div>
           <span>加载定时任务...</span>
         </div>
 
         <MobileUnavailableState v-else-if="scheduledError" compact title="定时任务暂时无法加载" :description="scheduledError" @retry="loadScheduledTasks" />
 
-        <div v-else-if="scheduledTasks.length === 0" class="m-empty-mini">
-          <MIcon name="clock" :size="32" />
-          <span>暂无定时任务</span>
-          <button class="m-empty-action" @click="hintDesktopEdit">定时任务请在桌面端管理</button>
+        <div v-else-if="scheduledTasks.length === 0" class="m-auto-empty">
+          <div class="m-auto-empty-icon"><MIcon name="clock" :size="40" /></div>
+          <div class="m-auto-empty-text">暂无定时任务</div>
+          <button class="m-auto-btn m-auto-btn-ghost m-auto-btn-sm" @click="hintDesktopEdit">定时任务请在桌面端管理</button>
         </div>
 
-        <div v-else class="m-task-list">
-          <div v-for="task in scheduledTasks" :key="task.id" class="m-task-card">
-            <div class="m-rule-head">
-              <div class="m-rule-name">{{ task.taskName || task.name || '未命名任务' }}</div>
-              <label class="m-switch" :class="{ 'is-disabled': togglingTaskId === task.id }">
+        <div v-else class="m-auto-task-list">
+          <div v-for="task in scheduledTasks" :key="task.id" class="m-auto-task-card">
+            <div class="m-auto-rule-head">
+              <div class="m-auto-rule-name">{{ task.taskName || task.name || '未命名任务' }}</div>
+              <label class="m-auto-switch" :class="{ 'is-disabled': togglingTaskId === task.id }">
                 <input
                   type="checkbox"
                   :checked="isTaskEnabled(task)"
                   :disabled="togglingTaskId === task.id"
                   @change="toggleTask(task, $event)"
                 />
-                <span class="m-switch-slider"></span>
+                <span class="m-auto-switch-slider"></span>
               </label>
             </div>
-            <div v-if="task.taskType" class="m-rule-row">
-              <span class="m-rule-label">类型</span>
-              <span class="m-rule-value">{{ taskTypeText(task.taskType) }}</span>
+            <div v-if="task.taskType" class="m-auto-rule-row">
+              <span class="m-auto-rule-label">类型</span>
+              <span class="m-auto-rule-value">{{ taskTypeText(task.taskType) }}</span>
             </div>
-            <div v-if="task.lastRunTime" class="m-rule-row">
-              <span class="m-rule-label">上次</span>
-              <span class="m-rule-value">{{ formatDateTime(task.lastRunTime) }}</span>
+            <div v-if="task.lastRunTime" class="m-auto-rule-row">
+              <span class="m-auto-rule-label">上次</span>
+              <span class="m-auto-rule-value">{{ formatDateTime(task.lastRunTime) }}</span>
             </div>
-            <div v-if="task.nextRunTime" class="m-rule-row">
-              <span class="m-rule-label">下次</span>
-              <span class="m-rule-value">{{ formatDateTime(task.nextRunTime) }}</span>
+            <div v-if="task.nextRunTime" class="m-auto-rule-row">
+              <span class="m-auto-rule-label">下次</span>
+              <span class="m-auto-rule-value">{{ formatDateTime(task.nextRunTime) }}</span>
             </div>
-            <div class="m-rule-foot">
-              <span class="m-rule-status" :class="isTaskEnabled(task) ? 'm-rule-on' : 'm-rule-off'">
+            <div class="m-auto-rule-foot">
+              <span class="m-auto-rule-status" :class="isTaskEnabled(task) ? 'm-auto-rule-on' : 'm-auto-rule-off'">
                 {{ isTaskEnabled(task) ? '启用中' : '已停用' }}
               </span>
-              <button class="m-wf-btn m-wf-btn-ghost" @click="hintDesktopEdit">编辑</button>
+              <button class="m-auto-btn m-auto-btn-ghost m-auto-btn-sm" @click="hintDesktopEdit">编辑</button>
             </div>
           </div>
         </div>
       </template>
-    </div>
+    </section>
 
     <!-- 最近执行记录（仅在工作流 Tab 显示） -->
-    <div v-if="activeTab === 'workflow'" class="m-section">
-      <div class="m-section-header">
-        <h2>最近执行</h2>
-        <button class="m-section-action" :disabled="execLoading" @click="loadExecutions">
-          <MIcon name="refresh" :size="14" />刷新
+    <section v-if="activeTab === 'workflow'" class="m-auto-card">
+      <div class="m-auto-card-header">
+        <div class="m-auto-card-title-wrap">
+          <div class="m-auto-card-title-icon m-auto-title-icon--neutral">
+            <MIcon name="activity" :size="18" />
+          </div>
+          <h2 class="m-auto-card-title">最近执行</h2>
+        </div>
+        <button class="m-auto-card-action" :disabled="execLoading" @click="loadExecutions">
+          <MIcon name="refresh" :size="14" />
+          <span>刷新</span>
         </button>
       </div>
 
-      <div v-if="execLoading" class="m-loading">
-        <div class="m-loading-spinner"></div>
+      <div v-if="execLoading" class="m-auto-loading">
+        <div class="m-auto-spinner"></div>
         <span>加载执行记录...</span>
       </div>
 
       <MobileUnavailableState v-else-if="execError" compact title="执行记录暂时无法加载" :description="execError" @retry="loadExecutions" />
 
-      <div v-else-if="executions.length === 0" class="m-empty-mini">
-        <MIcon name="clock" :size="32" />
-        <span>暂无执行记录</span>
+      <div v-else-if="executions.length === 0" class="m-auto-empty">
+        <div class="m-auto-empty-icon"><MIcon name="clock" :size="40" /></div>
+        <div class="m-auto-empty-text">暂无执行记录</div>
       </div>
 
-      <div v-else class="m-exec-list">
+      <div v-else class="m-auto-exec-list">
         <div
           v-for="exec in executions"
           :key="exec.executionId || exec.id"
-          class="m-exec-item"
+          class="m-auto-exec-item"
           @click="openWorkflowDetail({ id: exec.workflowId || exec.definitionId, name: exec.workflowName || exec.name })"
         >
-          <div class="m-exec-top">
-            <div class="m-exec-name">{{ exec.workflowName || exec.name || '未命名工作流' }}</div>
-            <span class="m-exec-badge" :class="execStatusClass(exec.status)">{{ execStatusText(exec.status) }}</span>
+          <div class="m-auto-exec-top">
+            <div class="m-auto-exec-name">{{ exec.workflowName || exec.name || '未命名工作流' }}</div>
+            <span class="m-auto-exec-badge" :class="execStatusClass(exec.status)">{{ execStatusText(exec.status) }}</span>
           </div>
-          <div class="m-exec-meta">
-            <span class="m-exec-id">#{{ shortId(exec.executionId || exec.id) }}</span>
-            <span class="m-exec-time">{{ formatTime(exec.startTime || exec.startedAt || exec.createdAt) }}</span>
+          <div class="m-auto-exec-meta">
+            <span class="m-auto-exec-id">#{{ shortId(exec.executionId || exec.id) }}</span>
+            <span class="m-auto-exec-time">{{ formatTime(exec.startTime || exec.startedAt || exec.createdAt) }}</span>
           </div>
-          <div v-if="exec.progress != null" class="m-exec-progress">
-            <div class="m-exec-progress-bar">
-              <div class="m-exec-progress-fill" :style="{ width: `${exec.progress || 0}%` }"></div>
+          <div v-if="exec.progress != null" class="m-auto-exec-progress">
+            <div class="m-auto-exec-progress-bar">
+              <div class="m-auto-exec-progress-fill" :style="{ width: `${exec.progress || 0}%` }"></div>
             </div>
-            <span class="m-exec-progress-text">{{ exec.progress || 0 }}%</span>
+            <span class="m-auto-exec-progress-text">{{ exec.progress || 0 }}%</span>
           </div>
-          <div v-if="exec.status === 'failed' && exec.errorMessage" class="m-exec-error">
+          <div v-if="exec.status === 'failed' && exec.errorMessage" class="m-auto-exec-error">
             <MIcon name="warning" :size="12" />
             <span>{{ truncate(exec.errorMessage, 60) }}</span>
           </div>
-          <div v-else-if="exec.status === 'running' && exec.estimatedMinutes > 0" class="m-exec-eta">
+          <div v-else-if="exec.status === 'running' && exec.estimatedMinutes > 0" class="m-auto-exec-eta">
             <MIcon name="clock" :size="12" />
             <span>预计 {{ exec.estimatedMinutes }} 分钟</span>
           </div>
         </div>
       </div>
-    </div>
+    </section>
 
     <!-- 更多功能 -->
-    <div class="m-section">
-      <div class="m-section-header">
-        <h2>更多功能</h2>
+    <section class="m-auto-card">
+      <div class="m-auto-card-header">
+        <div class="m-auto-card-title-wrap">
+          <div class="m-auto-card-title-icon m-auto-title-icon--neutral">
+            <MIcon name="grid" :size="18" />
+          </div>
+          <h2 class="m-auto-card-title">更多功能</h2>
+        </div>
       </div>
-      <div class="m-menu-list">
-        <div class="m-menu-item" @click="$emit('navigate', 'delivery-records')">
-          <div class="m-menu-icon" style="background:linear-gradient(135deg,#e2f8ee,#cdf2df);color:#16bf78">
+      <div class="m-auto-menu">
+        <div class="m-auto-menu-item" @click="$emit('navigate', 'delivery-records')">
+          <div class="m-auto-menu-icon m-auto-menu-icon--success">
             <MIcon name="package" :size="20" />
           </div>
-          <div class="m-menu-info">
-            <div class="m-menu-title">发货记录</div>
-            <div class="m-menu-desc">查看发货历史</div>
+          <div class="m-auto-menu-info">
+            <div class="m-auto-menu-title">发货记录</div>
+            <div class="m-auto-menu-desc">查看发货历史</div>
           </div>
-          <MIcon name="chevronRight" :size="16" class="m-menu-arrow" />
+          <MIcon name="chevronRight" :size="16" class="m-auto-menu-arrow" />
         </div>
-        <div class="m-menu-item" @click="$emit('navigate', 'card-warehouse')">
-          <div class="m-menu-icon" style="background:linear-gradient(135deg,#f0ebff,#e2d8ff);color:#8b5cf6">
+        <div class="m-auto-menu-item" @click="$emit('navigate', 'card-warehouse')">
+          <div class="m-auto-menu-icon m-auto-menu-icon--purple">
             <MIcon name="box" :size="20" />
           </div>
-          <div class="m-menu-info">
-            <div class="m-menu-title">卡密仓库</div>
-            <div class="m-menu-desc">数字商品库存管理</div>
+          <div class="m-auto-menu-info">
+            <div class="m-auto-menu-title">卡密仓库</div>
+            <div class="m-auto-menu-desc">数字商品库存管理</div>
           </div>
-          <MIcon name="chevronRight" :size="16" class="m-menu-arrow" />
+          <MIcon name="chevronRight" :size="16" class="m-auto-menu-arrow" />
         </div>
       </div>
-    </div>
+    </section>
 
-    <div class="m-safe-bottom"></div>
+    <div class="m-auto-safe-bottom"></div>
 
     <!-- 工作流详情底部 Sheet（只读） -->
-    <transition name="m-sheet">
-      <div v-if="sheetOpen" class="m-sheet-mask" @click="closeSheet">
-        <div class="m-sheet" @click.stop>
-          <div class="m-sheet-handle"></div>
-          <div class="m-sheet-header">
-            <div class="m-sheet-title">{{ selectedWorkflow?.name || '工作流详情' }}</div>
-            <button class="m-sheet-close" @click="closeSheet" aria-label="关闭">
+    <transition name="m-auto-sheet">
+      <div v-if="sheetOpen" class="m-auto-sheet-mask" @click="closeSheet">
+        <div class="m-auto-sheet" @click.stop>
+          <div class="m-auto-sheet-handle"></div>
+          <div class="m-auto-sheet-header">
+            <div class="m-auto-sheet-title">{{ selectedWorkflow?.name || '工作流详情' }}</div>
+            <button class="m-auto-sheet-close" @click="closeSheet" aria-label="关闭">
               <MIcon name="close" :size="20" />
             </button>
           </div>
 
-          <div v-if="workflowDetailLoading" class="m-loading">
-            <div class="m-loading-spinner"></div>
+          <div v-if="workflowDetailLoading" class="m-auto-loading">
+            <div class="m-auto-spinner"></div>
             <span>加载工作流详情...</span>
           </div>
 
           <MobileUnavailableState v-else-if="workflowDetailError" compact title="工作流详情暂时无法加载" :description="workflowDetailError" :retryable="true" @retry="() => selectedWorkflow?.id && openWorkflowDetail({ id: selectedWorkflow.id, name: selectedWorkflow.name })" />
 
-          <div v-else class="m-sheet-body">
-            <div v-if="selectedWorkflow?.description" class="m-sheet-desc">{{ selectedWorkflow.description }}</div>
-            <div class="m-sheet-meta">
+          <div v-else class="m-auto-sheet-body">
+            <div v-if="selectedWorkflow?.description" class="m-auto-sheet-desc">{{ selectedWorkflow.description }}</div>
+            <div class="m-auto-sheet-meta">
               <span>状态：{{ workflowStatusText(selectedWorkflow?.status) }}</span>
               <span v-if="selectedWorkflow?.version != null">v{{ selectedWorkflow.version }}</span>
               <span v-if="selectedWorkflow?.executionCount != null">执行 {{ selectedWorkflow.executionCount }} 次</span>
             </div>
 
-            <div class="m-sheet-section-title">节点列表（{{ workflowNodes.length }}）</div>
-            <div v-if="workflowNodes.length === 0" class="m-empty-mini">
-              <MIcon name="workflow" :size="28" />
-              <span>该工作流暂无节点</span>
+            <div class="m-auto-sheet-section-title">节点列表（{{ workflowNodes.length }}）</div>
+            <div v-if="workflowNodes.length === 0" class="m-auto-empty">
+              <div class="m-auto-empty-icon"><MIcon name="workflow" :size="32" /></div>
+              <div class="m-auto-empty-text">该工作流暂无节点</div>
             </div>
-            <div v-else class="m-node-list">
-              <div v-for="(node, idx) in workflowNodes" :key="node.id || idx" class="m-node-item">
-                <div class="m-node-index">{{ idx + 1 }}</div>
-                <div class="m-node-body">
-                  <div class="m-node-name">{{ node.name || node.nodeName || '未命名节点' }}</div>
-                  <div class="m-node-type">{{ nodeTypeLabel(node.type || node.nodeType) }}</div>
-                  <div v-if="node.desc || node.description" class="m-node-desc">{{ node.desc || node.description }}</div>
+            <div v-else class="m-auto-node-list">
+              <div v-for="(node, idx) in workflowNodes" :key="node.id || idx" class="m-auto-node-item">
+                <div class="m-auto-node-index">{{ idx + 1 }}</div>
+                <div class="m-auto-node-body">
+                  <div class="m-auto-node-name">{{ node.name || node.nodeName || '未命名节点' }}</div>
+                  <div class="m-auto-node-type">{{ nodeTypeLabel(node.type || node.nodeType) }}</div>
+                  <div v-if="node.desc || node.description" class="m-auto-node-desc">{{ node.desc || node.description }}</div>
                 </div>
               </div>
             </div>
 
-            <div class="m-sheet-notice">
+            <div class="m-auto-sheet-notice">
               <MIcon name="info" :size="14" />
               <span>节点编辑、连线调整等复杂操作请前往桌面端完成。</span>
             </div>
@@ -378,8 +414,8 @@
     </transition>
 
     <!-- 轻提示 -->
-    <transition name="m-toast">
-      <div v-if="toast" class="m-toast">{{ toast }}</div>
+    <transition name="m-auto-toast">
+      <div v-if="toast" class="m-auto-toast">{{ toast }}</div>
     </transition>
   </div>
 </template>
@@ -748,343 +784,503 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* === 根容器 === */
 .m-auto {
-  padding: 12px 16px 0;
+  padding: var(--m-space-3) var(--m-space-3) 0;
   width: 100%;
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
   overflow-x: hidden;
 }
-.m-page-header { margin-bottom: 16px; }
-.m-page-header h1 { margin: 0 0 4px; font-size: 26px; font-weight: 800; color: #15213d; }
-.m-page-sub { margin: 0; font-size: 13px; color: #8c98ae; }
 
-.m-auto-stats {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 14px;
-  margin-left: -16px;
-  margin-right: -16px;
-  padding-left: 16px;
-  padding-right: 16px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
+/* === Hero === */
+.m-auto-hero {
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-xl);
+  padding: var(--m-space-4);
+  margin-bottom: var(--m-space-3);
+  box-shadow: var(--m-shadow-card);
 }
-.m-auto-stats::-webkit-scrollbar { display: none; }
-.m-stat-card {
-  flex: 0 0 auto;
-  width: 124px;
-  border-radius: 16px;
-  padding: 14px;
-  position: relative;
-  overflow: hidden;
+.m-auto-hero-head {
+  margin-bottom: var(--m-space-4);
+}
+.m-auto-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--m-space-1);
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
+  padding: var(--m-space-1) var(--m-space-3);
+  border-radius: var(--m-radius-pill);
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-semibold);
+  margin-bottom: var(--m-space-3);
+  border: 1px solid var(--m-color-info-border);
+}
+.m-auto-hero-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--m-radius-circle);
+  background: var(--m-color-primary);
+  animation: m-auto-pulse 1.6s ease-in-out infinite;
+}
+@keyframes m-auto-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+.m-auto-hero-title {
+  margin: 0 0 var(--m-space-1);
+  font-size: var(--m-font-size-h1);
+  font-weight: var(--m-font-weight-extrabold);
+  color: var(--m-color-text-primary);
+  line-height: var(--m-line-height-tight);
+  letter-spacing: -0.3px;
+}
+.m-auto-hero-sub {
+  margin: 0;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+}
+
+/* KPI 行 */
+.m-auto-kpi-row {
+  display: flex;
+  align-items: stretch;
+  padding: var(--m-space-3) 0;
+  border-top: 1px solid var(--m-color-border-light);
+  border-bottom: 1px solid var(--m-color-border-light);
+}
+.m-auto-kpi-cell {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  padding: 0 var(--m-space-2);
+}
+.m-auto-kpi-value {
+  font-size: var(--m-font-size-hero);
+  font-weight: var(--m-font-weight-extrabold);
+  color: var(--m-color-text-primary);
+  line-height: var(--m-line-height-tight);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+}
+.m-auto-kpi-value--success {
+  color: var(--m-color-success);
+}
+.m-auto-kpi-divider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--m-color-border-light);
+}
+.m-auto-kpi-label {
+  margin-top: var(--m-space-1);
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-medium);
+}
+.m-auto-kpi-sub {
+  margin-top: 2px;
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-tertiary);
+}
+
+/* === 通用卡片 === */
+.m-auto-card {
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-xl);
+  padding: var(--m-space-4);
+  margin-bottom: var(--m-space-3);
+  box-shadow: var(--m-shadow-card);
+}
+.m-auto-card-header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
+  margin-bottom: var(--m-space-3);
+  gap: var(--m-space-2);
 }
-.m-stat-purple {
-  background: linear-gradient(135deg, #f0ebff, #e2d8ff);
-  color: #5b3fb0;
+.m-auto-card-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-2);
+  min-width: 0;
 }
-.m-stat-blue {
-  background: linear-gradient(135deg, #e8f1ff, #d4e4ff);
-  color: #0d6bff;
-}
-.m-stat-green {
-  background: linear-gradient(135deg, #e2f8ee, #cdf2df);
-  color: #16bf78;
-}
-.m-stat-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  background: rgba(255,255,255,0.6);
+.m-auto-card-title-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--m-radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
-.m-stat-info { flex: 1; min-width: 0; }
-.m-stat-val { font-size: 20px; font-weight: 800; line-height: 1.1; }
-.m-stat-label { font-size: 11px; opacity: 0.8; margin-top: 2px; }
-.m-stat-extra {
-  position: absolute;
-  top: 8px;
-  right: 10px;
-  font-size: 10px;
-  background: rgba(255,255,255,0.6);
-  padding: 2px 6px;
-  border-radius: 100px;
-  font-weight: 600;
+.m-auto-title-icon--primary {
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
 }
-
-.m-section {
-  background: white;
-  border-radius: 20px;
-  padding: 16px;
-  margin-bottom: 14px;
-  box-shadow: 0 2px 8px rgba(31,53,94,0.04);
-  border: 1px solid #f0f4fa;
+.m-auto-title-icon--purple {
+  background: var(--m-color-purple-bg);
+  color: var(--m-color-purple);
 }
-.m-section-header {
-  margin-bottom: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.m-auto-title-icon--warning {
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning);
 }
-.m-section-header h2 { margin: 0; font-size: 17px; font-weight: 700; color: #15213d; }
-.m-section-action {
-  background: none;
-  border: none;
-  color: #0d6bff;
-  font-size: 12px;
+.m-auto-title-icon--neutral {
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
+}
+.m-auto-card-title {
+  margin: 0;
+  font-size: var(--m-font-size-h3);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
+}
+.m-auto-card-action {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--m-space-1);
+  background: transparent;
+  border: none;
+  font-size: var(--m-font-size-caption);
+  font-weight: var(--m-font-weight-medium);
+  color: var(--m-color-primary);
   cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 100px;
+  padding: var(--m-space-1) var(--m-space-2);
+  border-radius: var(--m-radius-md);
+  font-family: inherit;
+  transition: background 0.15s;
 }
-.m-section-action:active { background: rgba(13,107,255,0.08); }
-.m-section-action:disabled { opacity: 0.5; }
+.m-auto-card-action:active {
+  background: var(--m-color-primary-bg);
+}
+.m-auto-card-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 
+/* === 2×2 入口网格 === */
 .m-auto-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: var(--m-space-3);
 }
-.m-auto-item {
-  background: #f8faff;
-  border-radius: 14px;
-  padding: 16px 12px;
-  position: relative;
+.m-auto-entry {
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3);
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-3);
   cursor: pointer;
-  transition: background 0.15s, box-shadow 0.15s;
-  border: 2px solid transparent;
+  transition: transform 0.15s, border-color 0.15s;
 }
-.m-auto-item:active { background: #eef4ff; }
-.m-auto-item.m-auto-active {
-  background: #eef4ff;
-  border-color: #0d6bff;
-  box-shadow: 0 4px 12px rgba(13,107,255,0.12);
+.m-auto-entry:active {
+  transform: scale(0.98);
 }
-.m-auto-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 13px;
+.m-auto-entry--active {
+  border-color: var(--m-color-primary);
+  background: var(--m-color-primary-bg);
+}
+.m-auto-entry-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--m-radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 10px;
+  flex-shrink: 0;
 }
-.m-auto-blue { background: linear-gradient(135deg,#e8f1ff,#d0e2ff); color: #0d6bff; }
-.m-auto-green { background: linear-gradient(135deg,#e2f8ee,#cdf2df); color: #16bf78; }
-.m-auto-purple { background: linear-gradient(135deg,#f0ebff,#e2d8ff); color: #8b5cf6; }
-.m-auto-orange { background: linear-gradient(135deg,#fff4e0,#ffe7c2); color: #ff9f22; }
-.m-auto-title { font-size: 14px; font-weight: 600; color: #15213d; margin-bottom: 2px; }
-.m-auto-desc { font-size: 11px; color: #8c98ae; }
-.m-auto-arrow {
-  position: absolute;
-  top: 14px;
-  right: 12px;
-  color: #c4cddb;
+.m-auto-entry-icon--primary {
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
+}
+.m-auto-entry-icon--success {
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success);
+}
+.m-auto-entry-icon--purple {
+  background: var(--m-color-purple-bg);
+  color: var(--m-color-purple);
+}
+.m-auto-entry-icon--warning {
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning);
+}
+.m-auto-entry-info {
+  flex: 1;
+  min-width: 0;
+}
+.m-auto-entry-title {
+  font-size: var(--m-font-size-h3);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
+  line-height: var(--m-line-height-tight);
+}
+.m-auto-entry-desc {
+  margin-top: 2px;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-auto-entry-arrow {
+  color: var(--m-color-text-disabled);
+  flex-shrink: 0;
 }
 
-@media (max-width: 360px) {
-  .m-auto-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .m-auto-item {
-    min-height: 112px;
-  }
-}
-
-.m-loading {
+/* === Loading === */
+.m-auto-loading {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 30px 20px;
-  color: #8c98ae;
-  font-size: 13px;
+  justify-content: center;
+  padding: var(--m-space-8) var(--m-space-4);
+  gap: var(--m-space-2);
 }
-.m-loading-spinner {
+.m-auto-spinner {
   width: 24px;
   height: 24px;
-  border: 3px solid #e8edf5;
-  border-top-color: #0d6bff;
-  border-radius: 50%;
-  animation: m-spin 0.8s linear infinite;
+  border: 2.5px solid var(--m-color-border);
+  border-top-color: var(--m-color-primary);
+  border-radius: var(--m-radius-circle);
+  animation: m-auto-spin 0.8s linear infinite;
 }
-@keyframes m-spin { to { transform: rotate(360deg); } }
+@keyframes m-auto-spin {
+  to { transform: rotate(360deg); }
+}
 
-.m-empty-mini {
+/* === Empty === */
+.m-auto-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 24px;
-  color: #b0bacb;
-  font-size: 13px;
+  justify-content: center;
+  padding: var(--m-space-8) var(--m-space-4);
+  gap: var(--m-space-2);
 }
-.m-empty-action {
-  margin-top: 4px;
-  background: #f0f4fa;
-  border: none;
-  color: #5a6a85;
-  font-size: 12px;
-  padding: 6px 14px;
-  border-radius: 100px;
-  cursor: pointer;
+.m-auto-empty-icon {
+  color: var(--m-color-text-disabled);
+  margin-bottom: var(--m-space-1);
 }
-.m-empty-action:active { background: #e7edf7; }
+.m-auto-empty-text {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-medium);
+}
 
-/* 工作流卡片 */
-.m-wf-list {
+/* === 工作流列表 === */
+.m-auto-wf-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--m-space-2);
 }
-.m-wf-card {
-  background: #f8faff;
-  border-radius: 12px;
-  padding: 12px;
+.m-auto-wf-card {
+  background: var(--m-color-bg-subtle);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3);
   cursor: pointer;
-  transition: background 0.15s;
-  border: 1px solid transparent;
+  transition: transform 0.15s;
 }
-.m-wf-card:active { background: #eef4ff; border-color: #d4e4ff; }
-.m-wf-top {
+.m-auto-wf-card:active {
+  transform: scale(0.99);
+}
+.m-auto-wf-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 4px;
+  gap: var(--m-space-2);
+  margin-bottom: var(--m-space-1);
 }
-.m-wf-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: #15213d;
+.m-auto-wf-name {
+  font-size: var(--m-font-size-body);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.m-auto-wf-badge {
+  flex-shrink: 0;
+  padding: var(--m-space-1) var(--m-space-2);
+  border-radius: var(--m-radius-pill);
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-semibold);
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
+}
+.m-wf-published {
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success-text);
+}
+.m-wf-draft {
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning-text);
+}
+.m-wf-archived {
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
+}
+.m-wf-unknown {
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
+}
+.m-auto-wf-desc {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  line-height: var(--m-line-height-base);
+  margin-bottom: var(--m-space-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.m-auto-wf-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-2);
+  margin-bottom: var(--m-space-2);
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-tertiary);
+}
+.m-auto-wf-meta-item {
+  font-weight: var(--m-font-weight-medium);
+}
+.m-auto-wf-meta-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: var(--m-radius-circle);
+  background: var(--m-color-text-disabled);
+}
+.m-auto-wf-actions {
+  display: flex;
+  gap: var(--m-space-2);
+}
+
+/* === 按钮 === */
+.m-auto-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--m-space-1);
+  border: none;
+  border-radius: var(--m-radius-md);
+  font-size: var(--m-font-size-caption);
+  font-weight: var(--m-font-weight-semibold);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+  padding: var(--m-space-2) var(--m-space-3);
+}
+.m-auto-btn-sm {
+  padding: var(--m-space-1) var(--m-space-2);
+  font-size: var(--m-font-size-tiny);
+}
+.m-auto-btn-primary {
+  background: var(--m-color-primary);
+  color: var(--m-color-text-inverse);
+}
+.m-auto-btn-primary:active {
+  background: var(--m-color-primary-active);
+}
+.m-auto-btn-outline {
+  background: var(--m-color-bg-card);
+  color: var(--m-color-primary);
+  border: 1px solid var(--m-color-primary);
+}
+.m-auto-btn-outline:active {
+  background: var(--m-color-primary-bg);
+}
+.m-auto-btn-ghost {
+  background: transparent;
+  color: var(--m-color-text-secondary);
+}
+.m-auto-btn-ghost:active {
+  background: var(--m-color-bg-subtle);
+}
+
+/* === 规则/任务卡 === */
+.m-auto-rule-list,
+.m-auto-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--m-space-2);
+}
+.m-auto-rule-card,
+.m-auto-task-card {
+  background: var(--m-color-bg-subtle);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3);
+}
+.m-auto-rule-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--m-space-2);
+  margin-bottom: var(--m-space-2);
+}
+.m-auto-rule-name {
+  font-size: var(--m-font-size-body);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.m-wf-badge {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 100px;
-  font-weight: 600;
+.m-auto-rule-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--m-space-2);
+  margin-bottom: var(--m-space-1);
+  font-size: var(--m-font-size-caption);
+}
+.m-auto-rule-label {
+  color: var(--m-color-text-tertiary);
   flex-shrink: 0;
+  min-width: 36px;
 }
-.m-wf-published { background: #e2f8ee; color: #16bf78; }
-.m-wf-draft { background: #e8f1ff; color: #0d6bff; }
-.m-wf-archived { background: #f0f4fa; color: #72809a; }
-.m-wf-unknown { background: #f0f4fa; color: #72809a; }
-.m-wf-desc {
-  font-size: 12px;
-  color: #8c98ae;
-  margin-bottom: 6px;
-  line-height: 1.4;
+.m-auto-rule-value {
+  color: var(--m-color-text-secondary);
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
 }
-.m-wf-meta {
-  display: flex;
-  gap: 12px;
-  font-size: 11px;
-  color: #8c98ae;
-  margin-bottom: 8px;
-}
-.m-wf-actions {
-  display: flex;
-  gap: 8px;
-}
-.m-wf-btn {
-  background: #0d6bff;
-  color: white;
-  border: none;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 5px 14px;
-  border-radius: 100px;
-  cursor: pointer;
-}
-.m-wf-btn:active { transform: scale(0.96); }
-.m-wf-btn-ghost {
-  background: white;
-  color: #5a6a85;
-  border: 1px solid #e0e7f0;
-}
-.m-wf-btn-ghost:active { background: #f8faff; }
-
-/* 自动回复 / 定时任务 卡片 */
-.m-rule-list, .m-task-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.m-rule-card, .m-task-card {
-  background: #f8faff;
-  border-radius: 12px;
-  padding: 12px;
-  border: 1px solid transparent;
-}
-.m-rule-head {
+.m-auto-rule-foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
+  margin-top: var(--m-space-2);
+  padding-top: var(--m-space-2);
+  border-top: 1px solid var(--m-color-border-light);
 }
-.m-rule-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: #15213d;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.m-auto-rule-status {
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-semibold);
+  padding: var(--m-space-1) var(--m-space-2);
+  border-radius: var(--m-radius-pill);
 }
-.m-rule-row {
-  display: flex;
-  gap: 8px;
-  font-size: 12px;
-  margin-bottom: 4px;
-  line-height: 1.4;
+.m-auto-rule-on {
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success-text);
 }
-.m-rule-label {
-  color: #8c98ae;
-  flex-shrink: 0;
-  min-width: 32px;
+.m-auto-rule-off {
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
 }
-.m-rule-value {
-  color: #15213d;
-  flex: 1;
-  min-width: 0;
-  word-break: break-all;
-}
-.m-rule-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 8px;
-}
-.m-rule-status {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 100px;
-  font-weight: 600;
-}
-.m-rule-on { background: #e2f8ee; color: #16bf78; }
-.m-rule-off { background: #f0f4fa; color: #72809a; }
 
-/* 开关 */
-.m-switch {
+/* === Switch 开关 === */
+.m-auto-switch {
   position: relative;
   display: inline-block;
   width: 40px;
@@ -1092,338 +1288,442 @@ onMounted(() => {
   flex-shrink: 0;
   cursor: pointer;
 }
-.m-switch input {
+.m-auto-switch input {
   opacity: 0;
   width: 0;
   height: 0;
+  position: absolute;
 }
-.m-switch-slider {
+.m-auto-switch-slider {
   position: absolute;
   inset: 0;
-  background: #d4dae5;
-  border-radius: 100px;
+  background: var(--m-color-text-disabled);
+  border-radius: var(--m-radius-pill);
   transition: background 0.2s;
 }
-.m-switch-slider::before {
+.m-auto-switch-slider::before {
   content: '';
   position: absolute;
   width: 18px;
   height: 18px;
   left: 2px;
   top: 2px;
-  background: white;
-  border-radius: 50%;
+  background: var(--m-color-bg-card);
+  border-radius: var(--m-radius-circle);
   transition: transform 0.2s;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  box-shadow: var(--m-shadow-card);
 }
-.m-switch input:checked + .m-switch-slider {
-  background: #16bf78;
+.m-auto-switch input:checked + .m-auto-switch-slider {
+  background: var(--m-color-success);
 }
-.m-switch input:checked + .m-switch-slider::before {
+.m-auto-switch input:checked + .m-auto-switch-slider::before {
   transform: translateX(18px);
 }
-.m-switch.is-disabled {
-  opacity: 0.6;
+.m-auto-switch.is-disabled {
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
-.m-exec-list {
+/* === 执行记录 === */
+.m-auto-exec-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--m-space-2);
 }
-.m-exec-item {
-  background: #f8faff;
-  border-radius: 12px;
-  padding: 12px;
+.m-auto-exec-item {
+  background: var(--m-color-bg-subtle);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3);
   cursor: pointer;
-  transition: background 0.15s;
-  border: 1px solid transparent;
+  transition: transform 0.15s;
 }
-.m-exec-item:active { background: #eef4ff; border-color: #d4e4ff; }
-.m-exec-top {
+.m-auto-exec-item:active {
+  transform: scale(0.99);
+}
+.m-auto-exec-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 4px;
+  gap: var(--m-space-2);
+  margin-bottom: var(--m-space-1);
 }
-.m-exec-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: #15213d;
-  flex: 1;
-  min-width: 0;
+.m-auto-exec-name {
+  font-size: var(--m-font-size-body-sm);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
-.m-exec-badge {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 100px;
-  font-weight: 600;
+.m-auto-exec-badge {
   flex-shrink: 0;
+  padding: var(--m-space-1) var(--m-space-2);
+  border-radius: var(--m-radius-pill);
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-semibold);
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
 }
-.m-exec-success { background: #e2f8ee; color: #16bf78; }
-.m-exec-failed { background: #ffefef; color: #ef4444; }
-.m-exec-running { background: #e8f1ff; color: #0d6bff; }
-.m-exec-queued { background: #fff4e0; color: #ff9f22; }
-.m-exec-partial_success { background: #fff4e0; color: #f0a020; }
-.m-exec-unknown { background: #f0f4fa; color: #72809a; }
-
-.m-exec-meta {
-  display: flex;
-  gap: 12px;
-  font-size: 11px;
-  color: #8c98ae;
-  margin-bottom: 6px;
+.m-exec-success {
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success-text);
 }
-.m-exec-id { font-family: monospace; }
-
-.m-exec-progress {
+.m-exec-failed {
+  background: var(--m-color-danger-bg);
+  color: var(--m-color-danger-text);
+}
+.m-exec-running {
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
+}
+.m-exec-queued {
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning-text);
+}
+.m-exec-partial_success {
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning-text);
+}
+.m-exec-unknown {
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
+}
+.m-auto-exec-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--m-space-2);
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-tertiary);
 }
-.m-exec-progress-bar {
+.m-auto-exec-id {
+  font-weight: var(--m-font-weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+.m-auto-exec-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-2);
+  margin-top: var(--m-space-2);
+}
+.m-auto-exec-progress-bar {
   flex: 1;
   height: 4px;
-  background: #e8edf5;
-  border-radius: 100px;
+  background: var(--m-color-border);
+  border-radius: var(--m-radius-pill);
   overflow: hidden;
 }
-.m-exec-progress-fill {
+.m-auto-exec-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #0d6bff, #3b9bff);
-  transition: width 0.3s;
+  background: var(--m-color-primary);
+  border-radius: var(--m-radius-pill);
+  transition: width 0.3s ease;
 }
-.m-exec-progress-text { font-size: 11px; color: #0d6bff; font-weight: 600; min-width: 32px; }
-
-.m-exec-error {
-  margin-top: 6px;
-  font-size: 11px;
-  color: #ef4444;
+.m-auto-exec-progress-text {
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.m-auto-exec-error {
   display: flex;
   align-items: flex-start;
-  gap: 4px;
-  background: #ffefef;
-  padding: 6px 8px;
-  border-radius: 8px;
-  line-height: 1.4;
+  gap: var(--m-space-1);
+  margin-top: var(--m-space-2);
+  padding: var(--m-space-2);
+  background: var(--m-color-danger-bg);
+  color: var(--m-color-danger-text);
+  border-radius: var(--m-radius-md);
+  font-size: var(--m-font-size-tiny);
+  line-height: var(--m-line-height-base);
 }
-.m-exec-error :deep(svg) { flex-shrink: 0; margin-top: 1px; }
-.m-exec-eta {
-  margin-top: 6px;
-  font-size: 11px;
-  color: #0d6bff;
+.m-auto-exec-eta {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--m-space-1);
+  margin-top: var(--m-space-2);
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-tertiary);
 }
 
-.m-menu-list { display: flex; flex-direction: column; gap: 2px; }
-.m-menu-item {
+/* === 更多功能菜单 === */
+.m-auto-menu {
+  display: flex;
+  flex-direction: column;
+}
+.m-auto-menu-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 4px;
+  gap: var(--m-space-3);
+  padding: var(--m-space-3) 0;
+  border-bottom: 1px solid var(--m-color-border-light);
   cursor: pointer;
-  border-radius: 10px;
-  transition: background 0.15s;
 }
-.m-menu-item:active { background: #f8faff; }
-.m-menu-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 11px;
+.m-auto-menu-item:last-child {
+  border-bottom: none;
+}
+.m-auto-menu-item:active {
+  background: var(--m-color-bg-subtle);
+}
+.m-auto-menu-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--m-radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
-.m-menu-info { flex: 1; }
-.m-menu-title { font-size: 14px; font-weight: 600; color: #15213d; margin-bottom: 2px; }
-.m-menu-desc { font-size: 12px; color: #8c98ae; }
-.m-menu-arrow { color: #c4cddb; flex-shrink: 0; }
+.m-auto-menu-icon--success {
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success);
+}
+.m-auto-menu-icon--purple {
+  background: var(--m-color-purple-bg);
+  color: var(--m-color-purple);
+}
+.m-auto-menu-info {
+  flex: 1;
+  min-width: 0;
+}
+.m-auto-menu-title {
+  font-size: var(--m-font-size-body);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
+}
+.m-auto-menu-desc {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  margin-top: 2px;
+}
+.m-auto-menu-arrow {
+  color: var(--m-color-text-disabled);
+  flex-shrink: 0;
+}
 
-.m-safe-bottom { height: 80px; }
+/* === 底部安全区 === */
+.m-auto-safe-bottom {
+  height: 80px;
+}
 
-/* 底部 Sheet */
-.m-sheet-mask {
+/* === 工作流详情 Sheet === */
+.m-auto-sheet-mask {
   position: fixed;
   inset: 0;
-  background: rgba(15,25,50,0.5);
-  z-index: 300;
+  background: var(--m-mask-modal);
+  z-index: 1000;
   display: flex;
   align-items: flex-end;
   justify-content: center;
 }
-.m-sheet {
-  background: white;
+.m-auto-sheet {
   width: 100%;
-  max-width: 560px;
+  max-width: 480px;
   max-height: 85vh;
-  border-radius: 20px 20px 0 0;
+  background: var(--m-color-bg-card);
+  border-radius: var(--m-radius-2xl) var(--m-radius-2xl) 0 0;
   display: flex;
   flex-direction: column;
-  padding: 8px 16px calc(20px + env(safe-area-inset-bottom));
-  box-shadow: 0 -8px 32px rgba(15,25,50,0.18);
+  overflow: hidden;
 }
-.m-sheet-handle {
+.m-auto-sheet-handle {
   width: 36px;
   height: 4px;
-  background: #e0e7f0;
-  border-radius: 100px;
-  margin: 4px auto 8px;
+  background: var(--m-color-border);
+  border-radius: var(--m-radius-pill);
+  margin: var(--m-space-2) auto var(--m-space-1);
+  flex-shrink: 0;
 }
-.m-sheet-header {
+.m-auto-sheet-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #f0f4fa;
-  margin-bottom: 12px;
+  padding: var(--m-space-2) var(--m-space-4) var(--m-space-3);
+  border-bottom: 1px solid var(--m-color-border-light);
+  flex-shrink: 0;
 }
-.m-sheet-title {
-  font-size: 17px;
-  font-weight: 700;
-  color: #15213d;
-  flex: 1;
-  min-width: 0;
+.m-auto-sheet-title {
+  font-size: var(--m-font-size-h3);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.m-sheet-close {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
+.m-auto-sheet-close {
+  background: transparent;
   border: none;
-  background: #f0f4fa;
-  color: #5a6a85;
+  color: var(--m-color-text-tertiary);
+  cursor: pointer;
+  padding: var(--m-space-1);
+  border-radius: var(--m-radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
-  flex-shrink: 0;
 }
-.m-sheet-close:active { background: #e7edf7; }
-.m-sheet-body {
+.m-auto-sheet-close:active {
+  background: var(--m-color-bg-subtle);
+}
+.m-auto-sheet-body {
+  flex: 1;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  padding: var(--m-space-4);
 }
-.m-sheet-desc {
-  font-size: 13px;
-  color: #5a6a85;
-  line-height: 1.5;
-  margin-bottom: 8px;
+.m-auto-sheet-desc {
+  font-size: var(--m-font-size-body-sm);
+  color: var(--m-color-text-secondary);
+  line-height: var(--m-line-height-base);
+  margin-bottom: var(--m-space-3);
 }
-.m-sheet-meta {
+.m-auto-sheet-meta {
   display: flex;
-  gap: 12px;
   flex-wrap: wrap;
-  font-size: 12px;
-  color: #8c98ae;
-  margin-bottom: 14px;
+  gap: var(--m-space-2) var(--m-space-3);
+  margin-bottom: var(--m-space-4);
+  padding: var(--m-space-3);
+  background: var(--m-color-bg-subtle);
+  border-radius: var(--m-radius-md);
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-secondary);
 }
-.m-sheet-section-title {
-  font-size: 14px;
-  font-weight: 700;
-  color: #15213d;
-  margin: 6px 0 10px;
+.m-auto-sheet-section-title {
+  font-size: var(--m-font-size-body-sm);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
+  margin-bottom: var(--m-space-2);
 }
-.m-node-list {
+.m-auto-node-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-bottom: 14px;
+  gap: var(--m-space-2);
+  margin-bottom: var(--m-space-4);
 }
-.m-node-item {
+.m-auto-node-item {
   display: flex;
-  gap: 10px;
-  padding: 10px;
-  background: #f8faff;
-  border-radius: 10px;
+  align-items: flex-start;
+  gap: var(--m-space-3);
+  padding: var(--m-space-3);
+  background: var(--m-color-bg-subtle);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-md);
 }
-.m-node-index {
+.m-auto-node-index {
   width: 24px;
   height: 24px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #0d6bff, #3b9bff);
-  color: white;
-  font-size: 12px;
-  font-weight: 700;
+  border-radius: var(--m-radius-circle);
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
   display: flex;
   align-items: center;
   justify-content: center;
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-bold);
   flex-shrink: 0;
 }
-.m-node-body { flex: 1; min-width: 0; }
-.m-node-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: #15213d;
-  margin-bottom: 2px;
+.m-auto-node-body {
+  flex: 1;
+  min-width: 0;
 }
-.m-node-type {
-  font-size: 11px;
-  color: #0d6bff;
-  background: #e8f1ff;
-  display: inline-block;
-  padding: 1px 8px;
-  border-radius: 100px;
-  font-weight: 600;
+.m-auto-node-name {
+  font-size: var(--m-font-size-body-sm);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
 }
-.m-node-desc {
-  font-size: 12px;
-  color: #8c98ae;
-  margin-top: 4px;
-  line-height: 1.4;
+.m-auto-node-type {
+  margin-top: 2px;
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-tertiary);
 }
-.m-sheet-notice {
+.m-auto-node-desc {
+  margin-top: var(--m-space-1);
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  line-height: var(--m-line-height-base);
+}
+.m-auto-sheet-notice {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
-  background: #f5f0ff;
-  color: #5b3fb0;
-  font-size: 12px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  line-height: 1.4;
+  gap: var(--m-space-2);
+  padding: var(--m-space-3);
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning-text);
+  border-radius: var(--m-radius-md);
+  font-size: var(--m-font-size-caption);
+  line-height: var(--m-line-height-base);
 }
-.m-sheet-notice :deep(svg) { flex-shrink: 0; margin-top: 1px; }
 
-.m-sheet-enter-active, .m-sheet-leave-active {
-  transition: opacity 0.2s;
-}
-.m-sheet-enter-active .m-sheet, .m-sheet-leave-active .m-sheet {
-  transition: transform 0.25s ease;
-}
-.m-sheet-enter-from, .m-sheet-leave-to { opacity: 0; }
-.m-sheet-enter-from .m-sheet, .m-sheet-leave-to .m-sheet { transform: translateY(100%); }
-
-/* 轻提示 */
-.m-toast {
+/* === Toast === */
+.m-auto-toast {
   position: fixed;
+  bottom: 100px;
   left: 50%;
-  bottom: calc(96px + env(safe-area-inset-bottom));
   transform: translateX(-50%);
-  background: rgba(21,33,61,0.92);
-  color: white;
-  font-size: 13px;
-  padding: 10px 18px;
-  border-radius: 100px;
-  z-index: 400;
-  box-shadow: 0 6px 20px rgba(15,25,50,0.25);
-  max-width: 80vw;
+  background: rgba(31, 35, 41, 0.9);
+  color: var(--m-color-text-inverse);
+  padding: var(--m-space-2) var(--m-space-4);
+  border-radius: var(--m-radius-pill);
+  font-size: var(--m-font-size-caption);
+  font-weight: var(--m-font-weight-medium);
+  z-index: 2000;
+  max-width: 80%;
   text-align: center;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
-.m-toast-enter-active, .m-toast-leave-active {
+
+/* === Sheet / Toast 过渡 === */
+.m-auto-sheet-enter-active,
+.m-auto-sheet-leave-active {
+  transition: opacity 0.25s;
+}
+.m-auto-sheet-enter-active .m-auto-sheet,
+.m-auto-sheet-leave-active .m-auto-sheet {
+  transition: transform 0.3s ease;
+}
+.m-auto-sheet-enter-from,
+.m-auto-sheet-leave-to {
+  opacity: 0;
+}
+.m-auto-sheet-enter-from .m-auto-sheet,
+.m-auto-sheet-leave-to .m-auto-sheet {
+  transform: translateY(100%);
+}
+.m-auto-toast-enter-active,
+.m-auto-toast-leave-active {
   transition: opacity 0.2s, transform 0.2s;
 }
-.m-toast-enter-from, .m-toast-leave-to {
+.m-auto-toast-enter-from,
+.m-auto-toast-leave-to {
   opacity: 0;
   transform: translateX(-50%) translateY(10px);
+}
+
+/* === 响应式 === */
+@media (max-width: 360px) {
+  .m-auto {
+    padding: var(--m-space-2) var(--m-space-2) 0;
+  }
+  .m-auto-hero {
+    padding: var(--m-space-3);
+  }
+  .m-auto-kpi-value {
+    font-size: var(--m-font-size-h1);
+  }
+  .m-auto-grid {
+    gap: var(--m-space-2);
+  }
+  .m-auto-entry {
+    padding: var(--m-space-2);
+  }
+  .m-auto-entry-icon {
+    width: 32px;
+    height: 32px;
+  }
+  .m-auto-entry-title {
+    font-size: var(--m-font-size-body);
+  }
 }
 </style>

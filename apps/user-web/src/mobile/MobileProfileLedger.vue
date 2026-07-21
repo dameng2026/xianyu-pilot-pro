@@ -253,7 +253,7 @@ onMounted(() => {
 
 <style scoped>
 .m-profile-ledger {
-  padding: 12px 16px 0;
+  padding: var(--m-space-3) var(--m-space-4) 0;
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -261,45 +261,47 @@ onMounted(() => {
   overflow-x: hidden;
 }
 
+/* === 类型筛选 === */
 .m-ledger-filters {
   display: flex;
-  background: white;
-  border-radius: 12px;
-  padding: 4px;
-  margin-bottom: 12px;
-  gap: 4px;
-  box-shadow: 0 2px 8px rgba(31,53,94,0.04);
-  border: 1px solid #f0f4fa;
+  background: var(--m-color-bg-card);
+  border-radius: var(--m-radius-md);
+  padding: var(--m-space-1);
+  margin-bottom: var(--m-space-3);
+  gap: var(--m-space-1);
+  box-shadow: var(--m-shadow-card);
+  border: 1px solid var(--m-color-border-light);
   overflow-x: auto;
 }
 .m-ledger-filter {
   flex: 1;
   border: none;
   background: transparent;
-  color: #8c98ae;
-  font-size: 13px;
-  font-weight: 600;
-  padding: 8px 10px;
-  border-radius: 8px;
+  color: var(--m-color-text-tertiary);
+  font-size: var(--m-font-size-body-sm);
+  font-weight: var(--m-font-weight-semibold);
+  padding: var(--m-space-2) var(--m-space-3);
+  border-radius: var(--m-radius-sm);
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.15s;
   min-width: 0;
 }
 .m-ledger-filter.active {
-  background: linear-gradient(135deg, #0d6bff, #2580ff);
-  color: white;
-  box-shadow: 0 2px 8px rgba(13,107,255,0.25);
+  background: var(--m-color-primary);
+  color: var(--m-color-text-inverse);
+  box-shadow: var(--m-shadow-fab);
 }
 
+/* === 加载中 === */
 .m-ledger-loading {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 40px 0;
-  color: #8c98ae;
-  font-size: 13px;
+  gap: var(--m-space-2);
+  padding: var(--m-space-10) 0;
+  color: var(--m-color-text-tertiary);
+  font-size: var(--m-font-size-body-sm);
 }
 .m-ledger-loading :deep(svg) {
   animation: mLedgerSpin 1.2s linear infinite;
@@ -309,64 +311,65 @@ onMounted(() => {
   to { transform: rotate(360deg); }
 }
 
+/* === 流水列表 === */
 .m-ledger-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--m-space-3);
 }
 .m-ledger-item {
-  background: white;
-  border-radius: 14px;
-  padding: 12px 14px;
-  box-shadow: 0 2px 8px rgba(31,53,94,0.04);
-  border: 1px solid #f0f4fa;
+  background: var(--m-color-bg-card);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3) var(--m-space-4);
+  box-shadow: var(--m-shadow-card);
+  border: 1px solid var(--m-color-border-light);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--m-space-2);
 }
 .m-ledger-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--m-space-3);
 }
 .m-ledger-type-tag {
   display: inline-flex;
   align-items: center;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 9px;
-  border-radius: 100px;
-  background: #eef1f5;
-  color: #6f7c91;
+  font-size: var(--m-font-size-caption);
+  font-weight: var(--m-font-weight-semibold);
+  padding: var(--m-space-1) var(--m-space-2);
+  border-radius: var(--m-radius-pill);
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-secondary);
 }
 .m-ledger-type-tag.green {
-  background: rgba(22,191,120,0.12);
-  color: #16bf78;
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success-text);
 }
 .m-ledger-type-tag.red {
-  background: rgba(239,68,68,0.1);
-  color: #ef4444;
+  background: var(--m-color-danger-bg);
+  color: var(--m-color-danger-text);
 }
 .m-ledger-type-tag.orange {
-  background: rgba(255,159,34,0.12);
-  color: #ff9f22;
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning-text);
 }
 .m-ledger-amount {
-  font-size: 16px;
-  font-weight: 800;
+  font-size: var(--m-font-size-h3);
+  font-weight: var(--m-font-weight-extrabold);
   flex-shrink: 0;
 }
-.m-ledger-amount.plus { color: #16bf78; }
-.m-ledger-amount.minus { color: #ef4444; }
+.m-ledger-amount.plus { color: var(--m-color-success-text); }
+.m-ledger-amount.minus { color: var(--m-color-danger-text); }
 
 .m-ledger-mid {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  font-size: 12px;
-  color: #8c98ae;
+  gap: var(--m-space-3);
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
 }
 .m-ledger-module {
   overflow: hidden;
@@ -377,53 +380,55 @@ onMounted(() => {
 }
 .m-ledger-time {
   flex-shrink: 0;
-  font-size: 11px;
-  color: #b0bacb;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
 }
 
 .m-ledger-balance {
-  font-size: 12px;
-  color: #5a6a85;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-secondary);
 }
 
 .m-ledger-remark {
-  font-size: 12px;
-  color: #8c98ae;
-  background: #f5f8ff;
-  border-radius: 8px;
-  padding: 6px 8px;
-  line-height: 1.5;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  background: var(--m-color-bg-subtle);
+  border-radius: var(--m-radius-md);
+  padding: var(--m-space-2);
+  line-height: var(--m-line-height-base);
   overflow-wrap: anywhere;
 }
 
+/* === 空状态 === */
 .m-ledger-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 60px 0;
-  color: #b0bacb;
+  gap: var(--m-space-3);
+  padding: var(--m-space-12) 0;
+  color: var(--m-color-text-tertiary);
 }
-.m-ledger-empty :deep(svg) { color: #d4dce8; }
+.m-ledger-empty :deep(svg) { color: var(--m-color-text-disabled); }
 .m-ledger-empty p {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--m-font-size-body-sm);
 }
 
+/* === 分页 === */
 .m-ledger-pager {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 16px 0;
+  gap: var(--m-space-3);
+  padding: var(--m-space-4) 0;
 }
 .m-ledger-page-btn {
   width: 36px;
   height: 36px;
-  border-radius: 50%;
-  border: 1px solid #e1e8f3;
-  background: white;
-  color: #15213d;
+  border-radius: var(--m-radius-circle);
+  border: 1px solid var(--m-color-border);
+  background: var(--m-color-bg-card);
+  color: var(--m-color-text-primary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -431,20 +436,20 @@ onMounted(() => {
   flex-shrink: 0;
 }
 .m-ledger-page-btn:disabled {
-  color: #c4cddb;
-  background: #f5f7fb;
+  color: var(--m-color-text-disabled);
+  background: var(--m-color-bg-subtle);
   cursor: not-allowed;
 }
-.m-ledger-page-btn:not(:disabled):active { background: #f0f4fa; }
+.m-ledger-page-btn:not(:disabled):active { background: var(--m-color-bg-hover); }
 .m-ledger-page-info {
-  font-size: 13px;
-  color: #15213d;
-  font-weight: 600;
+  font-size: var(--m-font-size-body-sm);
+  color: var(--m-color-text-primary);
+  font-weight: var(--m-font-weight-semibold);
 }
 .m-ledger-page-total {
-  font-size: 11px;
-  color: #8c98ae;
-  font-weight: 400;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-regular);
 }
 
 .m-safe-bottom { height: 60px; }

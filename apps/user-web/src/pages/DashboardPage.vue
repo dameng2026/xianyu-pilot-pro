@@ -220,6 +220,27 @@
         </section>
       </div>
     </Teleport>
+
+    <!-- 惊喜提示：用户不在场时滑块自动求解成功次数（右侧滑入，自动消失，仅好消息） -->
+    <Teleport to="body">
+      <Transition name="surprise-slide">
+        <div v-if="surpriseVisible" class="surprise-toast" role="status" aria-live="polite">
+          <div class="surprise-toast-glow"></div>
+          <div class="surprise-toast-icon">🛡️</div>
+          <div class="surprise-toast-body">
+            <div class="surprise-toast-title">在您离开的这段时间</div>
+            <div class="surprise-toast-stats">
+              滑块求解已自动为您化解
+              <span class="surprise-toast-num">{{ surpriseDisplayNum }}</span>
+              次验证
+            </div>
+            <div v-if="surpriseData.accountCount > 0" class="surprise-toast-meta">
+              守护 {{ surpriseData.accountCount }} 个账号的在线状态
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -232,6 +253,7 @@ import { shortText, timeText } from '../utils/format.js'
 import { getNavigationHome, NAVIGATION_HOME_PERSISTENT_KEY } from '../api/navigation.js'
 import { readPersistentCache } from '../utils/persistentCache.js'
 import { getSseStatus } from '../utils/sse.js'
+import { getCaptchaSilentSummary } from '../api/captcha.js'
 
 const emit = defineEmits(['navigate'])
 
@@ -856,6 +878,104 @@ watch(displaySlides, (slides) => {
   }
 }, { immediate: true })
 
+// ============================================================
+// 惊喜提示：用户不在场时滑块自动求解成功次数
+// ============================================================
+// - localStorage 记录上次访问首页的时间，作为 since 查询
+// - sessionStorage 防止同一浏览会话内刷新重复弹窗
+// - 仅查询自动触发场景（ws_connect/cookie_keepalive/token_refresh）的成功次数
+// - 弹窗从右侧滑入，5 秒后自动滑出，全程无需用户操作
+const LAST_VISIT_KEY = 'xya_home_last_visit'
+const SURPRISE_SESSION_KEY = 'xya_captcha_surprise_shown'
+const SURPRISE_DISPLAY_MS = 5000
+const SURPRISE_MIN_INTERVAL_MS = 3 * 60 * 1000 // 距上次访问 < 3 分钟不弹（刷新页面）
+
+const surpriseVisible = ref(false)
+const surpriseDisplayNum = ref(0)
+const surpriseData = reactive({ success: 0, accountCount: 0, lastSolveTime: '' })
+let surpriseHideTimer = null
+let surpriseCountRaf = 0
+
+function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3) }
+
+function animateSurpriseNum(target) {
+  if (!window.requestAnimationFrame) { surpriseDisplayNum.value = target; return }
+  cancelAnimationFrame(surpriseCountRaf)
+  const start = performance.now()
+  const duration = 1200
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / duration)
+    surpriseDisplayNum.value = Math.round(easeOutCubic(t) * target)
+    if (t < 1) surpriseCountRaf = requestAnimationFrame(step)
+  }
+  surpriseCountRaf = requestAnimationFrame(step)
+}
+
+function hideSurprise() {
+  surpriseVisible.value = false
+  if (surpriseHideTimer) { clearTimeout(surpriseHideTimer); surpriseHideTimer = null }
+}
+
+/**
+ * 进入首页时加载"用户不在场时"自动求解成功摘要。
+ * 仅展示好消息（成功次数），不涉及失败/总数。
+ * 弹窗从右侧滑入，5 秒后自动滑出。
+ */
+async function loadSurprise() {
+  const now = Date.now()
+  // 本次 session 已展示过则跳过（防止刷新重复弹）
+  if (sessionStorage.getItem(SURPRISE_SESSION_KEY)) return
+
+  const lastVisitStr = localStorage.getItem(LAST_VISIT_KEY)
+  let lastVisit = null
+  if (lastVisitStr) {
+    const t = Date.parse(lastVisitStr)
+    if (!isNaN(t)) lastVisit = t
+  }
+
+  // 首次访问或距上次访问 < 3 分钟，不弹（刷新场景）
+  if (!lastVisit || now - lastVisit < SURPRISE_MIN_INTERVAL_MS) {
+    localStorage.setItem(LAST_VISIT_KEY, new Date(now).toISOString())
+    return
+  }
+
+  try {
+    const res = await getCaptchaSilentSummary({ since: new Date(lastVisit).toISOString() })
+    const data = res?.data || res || {}
+    const success = Number(data.success) || 0
+    if (success <= 0) return // 无新成功记录，不弹
+
+    // 标记本次 session 已展示
+    sessionStorage.setItem(SURPRISE_SESSION_KEY, '1')
+    surpriseData.success = success
+    surpriseData.accountCount = Number(data.accountCount) || 0
+    surpriseData.lastSolveTime = data.lastSolveTime || ''
+
+    // 同时往"最近通知"板块插入一条好消息
+    notifications.value.unshift({
+      id: `captcha-surprise-${now}`,
+      title: '滑块自动守护',
+      typeLabel: '系统',
+      typeClass: 'success',
+      isUnread: true,
+      time: '刚刚',
+      text: `您不在场时已自动为您解决 ${success} 次滑块验证，账号在线状态持续守护中。`
+    })
+
+    // 显示弹窗 + 数字递增动画
+    surpriseVisible.value = true
+    requestAnimationFrame(() => animateSurpriseNum(success))
+
+    // 5 秒后自动消失
+    surpriseHideTimer = setTimeout(hideSurprise, SURPRISE_DISPLAY_MS)
+  } catch (e) {
+    // 静默失败，不打扰用户
+  } finally {
+    // 无论是否弹出，都更新访问时间
+    localStorage.setItem(LAST_VISIT_KEY, new Date(now).toISOString())
+  }
+}
+
 onMounted(() => {
   window.addEventListener('xya-sse-event', onSse)
   window.addEventListener('xya-sse-status', onSseStatus)
@@ -869,6 +989,8 @@ onMounted(() => {
       markNavigationUnavailable()
     }
   })
+  // 加载惊喜提示（异步，不阻塞首页渲染）
+  loadSurprise()
 })
 
 onBeforeUnmount(() => {
@@ -880,6 +1002,8 @@ onBeforeUnmount(() => {
   })
   carouselImagePreloads.clear()
   if (autoTimer) clearInterval(autoTimer)
+  if (surpriseHideTimer) clearTimeout(surpriseHideTimer)
+  if (surpriseCountRaf) cancelAnimationFrame(surpriseCountRaf)
 })
 </script>
 
@@ -1689,6 +1813,143 @@ onBeforeUnmount(() => {
   .announcement-strip {
     flex-wrap: wrap;
     padding: 16px;
+  }
+}
+</style>
+
+<!-- 惊喜弹窗样式（非 scoped，因为弹窗通过 Teleport 挂载到 body） -->
+<style>
+.surprise-toast {
+  position: fixed;
+  top: 100px;
+  right: 28px;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 320px;
+  max-width: 380px;
+  padding: 20px 24px;
+  border-radius: 18px;
+  color: #fff;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%);
+  box-shadow:
+    0 16px 48px -12px rgba(139, 92, 246, 0.55),
+    0 4px 16px rgba(99, 102, 241, 0.3);
+  overflow: hidden;
+}
+
+.surprise-toast-glow {
+  position: absolute;
+  top: -50%;
+  right: -10%;
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.18), transparent 70%);
+  pointer-events: none;
+}
+
+.surprise-toast-icon {
+  position: relative;
+  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  animation: surprise-icon-bounce 1.8s ease-in-out infinite;
+}
+
+@keyframes surprise-icon-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.surprise-toast-body {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.surprise-toast-title {
+  font-size: 13px;
+  opacity: 0.9;
+  margin-bottom: 2px;
+  letter-spacing: 0.3px;
+}
+
+.surprise-toast-stats {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.4;
+  margin-bottom: 4px;
+}
+
+.surprise-toast-num {
+  display: inline-block;
+  font-size: 36px;
+  font-weight: 800;
+  margin: 0 4px;
+  vertical-align: -5px;
+  line-height: 1;
+  background: linear-gradient(180deg, #ffffff 0%, #fef3c7 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 2px 8px rgba(255, 255, 255, 0.5));
+  font-variant-numeric: tabular-nums;
+}
+
+.surprise-toast-meta {
+  font-size: 12px;
+  opacity: 0.82;
+}
+
+/* 右侧滑入/滑出动画 */
+.surprise-slide-enter-active {
+  transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.4s ease;
+}
+
+.surprise-slide-leave-active {
+  transition: transform 0.4s cubic-bezier(0.4, 0, 0.6, 1), opacity 0.3s ease;
+}
+
+.surprise-slide-enter-from {
+  transform: translateX(120%);
+  opacity: 0;
+}
+
+.surprise-slide-leave-to {
+  transform: translateX(120%);
+  opacity: 0;
+}
+
+@media (max-width: 768px) {
+  .surprise-toast {
+    top: auto;
+    bottom: 24px;
+    right: 16px;
+    left: 16px;
+    max-width: none;
+    min-width: 0;
+    padding: 16px 18px;
+    gap: 12px;
+  }
+  .surprise-toast-icon {
+    width: 42px;
+    height: 42px;
+    font-size: 22px;
+  }
+  .surprise-toast-stats {
+    font-size: 14px;
+  }
+  .surprise-toast-num {
+    font-size: 28px;
   }
 }
 </style>
