@@ -24,10 +24,10 @@
 ### ♻️ 优化
 
 #### 移动端设计令牌系统化重构
-- 19 个移动端页面 + 5 个移动端通用组件统一迁移至 CSS 设计令牌系统（`var(--m-color-*` / `var(--m-space-*` / `var(--m-radius-*` / `var(--m-shadow-*`）
+- 19 个移动端页面 + 6 个移动端通用组件统一迁移至 CSS 设计令牌系统（`var(--m-color-*` / `var(--m-space-*` / `var(--m-radius-*` / `var(--m-shadow-*`）
 - 移除硬编码颜色/尺寸/渐变，统一 BEM 类名命名空间，提升主题一致性与可维护性
 - 涉及页面：数据面板（MobileData / MobileDataDetail）、自动化（MobileAutomation）、账号（MobileAccounts / MobileAccountDetail）、商品（MobileProducts / MobileProductDetail / MobileProductPublish）、订单（MobileOrders / MobileOrderDetail）、消息（MobileMessages）、通知（MobileNotifications）、商机（MobileOpportunity）、发货源（MobileDeliverySourceLibrary）、自动发货配置（MobileAutoDeliveryConfig）、个人中心（MobileProfile / MobileProfileLedger / MobileProfileRecharge / MobileProfileSecurity）
-- 涉及组件：MobileCategoryPicker（分类选择器）、MobileLocationPicker（地区选择器）、MobilePaymentModal（支付弹窗）、MobileOrderShipForm（订单发货表单）、MobileProductLinkPicker（商品链接选择器）
+- 涉及组件：MobileCategoryPicker（分类选择器）、MobileLocationPicker（地区选择器）、MobilePaymentModal（支付弹窗）、MobileOrderShipForm（订单发货表单）、MobileProductLinkPicker（商品链接选择器）、MobileImageUploader（图片上传器）
 - 全局导航栏组件（MobileLite.vue / nav.js / MobileIcons.js）未改动，符合导航栏一致性规则
 
 #### 桌面端账号管理 - 滑块求解后自动连接 WebSocket
