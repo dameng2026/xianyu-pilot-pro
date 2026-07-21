@@ -27,6 +27,16 @@ public class AdminCaptchaSolveRecordVO {
     private String screenshotPath;
     /** 去除元数据前缀后的纯错误描述 */
     private String errorMessageText;
+    /** 优先级: 0=普通 1=VIP 2=SVIP */
+    private Integer priority;
+    /** 失败原因分类: slider_fail/cookie_invalid/service_unavailable/timeout/account_inactive/account_disabled/precheck_rejected/stale_terminated */
+    private String failureReason;
+    /** 入队时间 */
+    private LocalDateTime queuedAt;
+    /** 开始处理时间 */
+    private LocalDateTime startedAt;
+    /** 完成处理时间 */
+    private LocalDateTime finishedAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -62,6 +72,16 @@ public class AdminCaptchaSolveRecordVO {
     public void setScreenshotPath(String screenshotPath) { this.screenshotPath = screenshotPath; }
     public String getErrorMessageText() { return errorMessageText; }
     public void setErrorMessageText(String errorMessageText) { this.errorMessageText = errorMessageText; }
+    public Integer getPriority() { return priority; }
+    public void setPriority(Integer priority) { this.priority = priority; }
+    public String getFailureReason() { return failureReason; }
+    public void setFailureReason(String failureReason) { this.failureReason = failureReason; }
+    public LocalDateTime getQueuedAt() { return queuedAt; }
+    public void setQueuedAt(LocalDateTime queuedAt) { this.queuedAt = queuedAt; }
+    public LocalDateTime getStartedAt() { return startedAt; }
+    public void setStartedAt(LocalDateTime startedAt) { this.startedAt = startedAt; }
+    public LocalDateTime getFinishedAt() { return finishedAt; }
+    public void setFinishedAt(LocalDateTime finishedAt) { this.finishedAt = finishedAt; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }

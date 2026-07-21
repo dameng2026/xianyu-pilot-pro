@@ -343,6 +343,62 @@
       </div>
     </div>
 
+    <div v-if="showFaceVerifyModal" class="m-modal-overlay" @click="closeFaceVerifyModal">
+      <div class="m-face-modal" @click.stop>
+        <div class="m-face-header">
+          <h3>人脸验证提醒</h3>
+          <button class="m-face-close" @click="closeFaceVerifyModal">
+            <MIcon name="x" :size="20" />
+          </button>
+        </div>
+        <div class="m-face-body">
+          <div v-if="faceVerifyLoading" class="m-face-loading">
+            <div class="m-qr-spinner"></div>
+            <p>正在加载验证提醒...</p>
+          </div>
+          <div v-else-if="faceVerifyError" class="m-face-error">
+            <MIcon name="alertCircle" :size="36" class="m-qr-error-icon" />
+            <p>{{ faceVerifyError }}</p>
+          </div>
+          <div v-else-if="faceVerifyItems.length === 0" class="m-face-empty">
+            <MIcon name="shieldCheck" :size="40" class="m-face-empty-icon" />
+            <p>暂无待处理的人机验证</p>
+            <span>当前账号最近没有新的验证提醒</span>
+          </div>
+          <div v-else class="m-face-list">
+            <article
+              v-for="item in faceVerifyItems"
+              :key="item.id"
+              class="m-face-item"
+              :class="{ read: Number(item.readFlag) === 1 }"
+            >
+              <div class="m-face-item-head">
+                <strong>{{ item.title || '人机验证提醒' }}</strong>
+                <span class="m-face-badge" :class="Number(item.readFlag) === 1 ? 'm-face-badge-read' : 'm-face-badge-pending'">
+                  {{ Number(item.readFlag) === 1 ? '已读' : '待处理' }}
+                </span>
+              </div>
+              <p class="m-face-item-content">{{ item.content || '请尽快回到闲鱼完成验证。' }}</p>
+              <div class="m-face-item-foot">
+                <span class="m-face-item-time">{{ item.createdTime || item.time || '' }}</span>
+                <button
+                  class="m-face-mark-btn"
+                  :disabled="faceVerifyMarkingId === item.id || Number(item.readFlag) === 1"
+                  @click="markFaceVerificationRead(item)"
+                >
+                  {{ faceVerifyMarkingId === item.id ? '处理中...' : (Number(item.readFlag) === 1 ? '已标记' : '标记已读') }}
+                </button>
+              </div>
+            </article>
+          </div>
+        </div>
+        <div class="m-face-footer">
+          <button class="m-face-btn m-face-btn-cancel" @click="closeFaceVerifyModal">关闭</button>
+          <button class="m-face-btn m-face-btn-refresh" :disabled="faceVerifyLoading" @click="faceVerify">刷新</button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="toast.show" class="m-toast" :class="'m-toast-' + toast.type">
       {{ toast.message }}
     </div>
@@ -358,8 +414,12 @@ import {
   refreshAccountProfile as apiRefreshProfile,
   updateAccount,
   deleteAccount as apiDeleteAccount,
-  updateAccountCookie
+  updateAccountCookie,
+  checkAccountAuth,
+  getAccountFaceVerifications,
+  markAccountFaceVerificationRead
 } from '../api/accounts.js'
+import { refreshItems } from '../api/items.js'
 import { generateQrLogin, getQrLoginStatus, cleanupQrLogin } from '../api/qrlogin.js'
 import { accountCookieLabel, accountCookieStatus, accountWsConnectionState } from '../utils/accountAuth.js'
 import { resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
@@ -407,6 +467,12 @@ const confirmDialog = reactive({
   danger: false,
   action: null
 })
+
+const showFaceVerifyModal = ref(false)
+const faceVerifyLoading = ref(false)
+const faceVerifyError = ref('')
+const faceVerifyItems = ref([])
+const faceVerifyMarkingId = ref(null)
 
 const toast = reactive({
   show: false,
@@ -616,18 +682,77 @@ function creditStatusClass(level) {
   return 'm-credit-poor'
 }
 
-function handleDiagnosisClick(type) {
-  if (type === 'cookie') {
-    showToast('Cookie管理功能开发中', 'info')
-  } else if (type === 'verify') {
-    showToast('人脸验证功能开发中', 'info')
-  } else if (type === 'ws') {
-    showToast('消息守护配置开发中', 'info')
+async function handleDiagnosisClick(type) {
+  if (!account.value?.id) return
+  if (type === 'ws') {
+    showToast('消息连接的启停与诊断请在桌面端进行', 'info')
+    return
+  }
+  if (type === 'cookie' || type === 'verify') {
+    showToast('正在校验登录状态...', 'info')
+    try {
+      const res = await checkAccountAuth(account.value.id)
+      const data = res?.data || res || {}
+      const message = data.loginStatusMessage || data.login_status_message
+      const usable = data.usable === true
+      const cookieStatus = Number(data.cookieStatus ?? data.cookie_status)
+      if (type === 'cookie') {
+        if (message) {
+          showToast(message, usable ? 'success' : 'error')
+        } else if (cookieStatus === 1) {
+          showToast('Cookie 有效，可正常同步商品和接收消息', 'success')
+        } else if (cookieStatus === 0) {
+          showToast('Cookie 已失效，请重新扫码登录', 'error')
+        } else if (cookieStatus === 2) {
+          showToast('Cookie 即将过期，建议重新扫码', 'info')
+        } else {
+          showToast('Cookie 状态未知，请刷新资料后重试', 'info')
+        }
+      } else {
+        const needVerify = account.value.needVerify || account.value.needFaceVerify
+        if (needVerify) {
+          showToast(message || '账号需要完成人脸/人机验证，请前往闲鱼 APP 处理', 'info')
+        } else if (usable) {
+          showToast('账号验证通过，可正常进行发布等操作', 'success')
+        } else {
+          showToast(message || '账号验证未通过，请重新登录', 'error')
+        }
+      }
+      await loadAccount()
+    } catch (error) {
+      showToast(error?.message || '登录校验失败', 'error')
+    }
   }
 }
 
 function viewFullProfile() {
-  showToast('完整资料页开发中', 'info')
+  const acc = account.value
+  if (!acc) return
+  const userId = acc.externalUid || acc.unb || acc.uid
+  if (!userId) {
+    showToast('未获取到闲鱼用户ID，无法打开主页', 'error')
+    return
+  }
+  const url = `https://www.goofish.com/personal?userId=${userId}`
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+async function markFaceVerificationRead(item) {
+  if (!item?.id || faceVerifyMarkingId.value) return
+  faceVerifyMarkingId.value = item.id
+  try {
+    await markAccountFaceVerificationRead(item.id)
+    item.readFlag = 1
+    showToast('已标记已读', 'success')
+  } catch (error) {
+    showToast(error?.message || '标记已读失败', 'error')
+  } finally {
+    faceVerifyMarkingId.value = null
+  }
+}
+
+function closeFaceVerifyModal() {
+  showFaceVerifyModal.value = false
 }
 
 function editCookie() {
@@ -666,20 +791,56 @@ async function refreshProfileAction() {
   }
 }
 
-function syncProducts() {
-  showToast('商品同步功能开发中', 'info')
+async function syncProducts() {
+  if (!account.value?.id) return
+  showToast('正在提交同步任务...', 'info')
+  try {
+    await refreshItems({ xianyuAccountId: Number(account.value.id) })
+    showToast('已开始同步，请稍后查看商品列表', 'success')
+  } catch (error) {
+    showToast(error?.message || '同步请求失败', 'error')
+  }
 }
 
 function goAutoDelivery() {
   emit('navigate', 'auto-delivery')
 }
 
-function faceVerify() {
-  showToast('人脸验证功能开发中', 'info')
+async function faceVerify() {
+  if (!account.value?.id) return
+  showFaceVerifyModal.value = true
+  faceVerifyLoading.value = true
+  faceVerifyError.value = ''
+  faceVerifyItems.value = []
+  faceVerifyMarkingId.value = null
+  try {
+    const res = await getAccountFaceVerifications({ accountId: account.value.id, current: 1, size: 20 })
+    const data = res?.data || res
+    let records = []
+    if (Array.isArray(data)) {
+      records = data
+    } else if (data && typeof data === 'object') {
+      for (const key of ['records', 'items', 'list', 'rows']) {
+        if (Array.isArray(data[key])) {
+          records = data[key]
+          break
+        }
+      }
+    }
+    faceVerifyItems.value = records
+    if (records.length === 0) {
+      showToast('暂无人脸验证任务', 'info')
+    }
+  } catch (error) {
+    faceVerifyError.value = error?.message || '加载人脸验证提醒失败'
+    showToast(faceVerifyError.value, 'error')
+  } finally {
+    faceVerifyLoading.value = false
+  }
 }
 
 function openMessageGuard() {
-  showToast('消息守护功能开发中', 'info')
+  showToast('消息守护配置请在桌面端进行', 'info')
 }
 
 function openMoreMenu() {
@@ -688,7 +849,7 @@ function openMoreMenu() {
 
 function setAsCurrent() {
   showMoreMenu.value = false
-  showToast('设为当前账号功能开发中', 'info')
+  showToast('当前账号由系统自动选择，暂不支持手动设置', 'info')
 }
 
 function editNote() {
@@ -882,7 +1043,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopQrPolling()
-  if (showQrModal.value || showMoreMenu.value || showEditNoteModal.value || showCookieModal.value || showConfirmDialog.value) {
+  if (showQrModal.value || showMoreMenu.value || showEditNoteModal.value || showCookieModal.value || showConfirmDialog.value || showFaceVerifyModal.value) {
     document.body.style.overflow = ''
   }
 })
@@ -1672,5 +1833,173 @@ defineExpose({ openMoreMenu })
 .m-toast-info {
   background: rgba(100, 116, 139, 0.95);
   color: white;
+}
+
+.m-face-modal {
+  background: white;
+  border-radius: 20px;
+  width: 100%;
+  max-width: 380px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  animation: fadeIn 0.2s ease;
+}
+.m-face-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid #f0f4fa;
+}
+.m-face-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #15213d;
+}
+.m-face-close {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: #f4f7fc;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+.m-face-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+.m-face-loading, .m-face-error, .m-face-empty {
+  text-align: center;
+  padding: 30px 20px;
+}
+.m-face-loading p, .m-face-error p {
+  margin: 12px 0 0;
+  font-size: 14px;
+  color: #64748b;
+}
+.m-face-empty-icon {
+  color: #16bf78;
+  margin-bottom: 8px;
+}
+.m-face-empty p {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #15213d;
+}
+.m-face-empty span {
+  font-size: 12px;
+  color: #8c98ae;
+}
+.m-face-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.m-face-item {
+  background: #f8faff;
+  border: 1px solid #e7edf8;
+  border-radius: 10px;
+  padding: 12px;
+}
+.m-face-item.read {
+  background: #f4f7fc;
+  opacity: 0.7;
+}
+.m-face-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  gap: 8px;
+}
+.m-face-item-head strong {
+  font-size: 14px;
+  font-weight: 700;
+  color: #15213d;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-face-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 100px;
+  flex-shrink: 0;
+}
+.m-face-badge-pending {
+  background: rgba(255, 159, 34, 0.15);
+  color: #ff9f22;
+}
+.m-face-badge-read {
+  background: rgba(140, 152, 174, 0.15);
+  color: #8c98ae;
+}
+.m-face-item-content {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.5;
+}
+.m-face-item-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.m-face-item-time {
+  font-size: 11px;
+  color: #b0bbd0;
+}
+.m-face-mark-btn {
+  border: none;
+  background: none;
+  color: #0d6bff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+.m-face-mark-btn:disabled {
+  color: #b0bbd0;
+  cursor: not-allowed;
+}
+.m-face-footer {
+  display: flex;
+  gap: 10px;
+  padding: 16px;
+  border-top: 1px solid #f0f4fa;
+}
+.m-face-btn {
+  flex: 1;
+  height: 44px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+}
+.m-face-btn-cancel {
+  background: #f4f7fc;
+  color: #64748b;
+}
+.m-face-btn-refresh {
+  background: linear-gradient(135deg, #0d6bff, #2580ff);
+  color: white;
+}
+.m-face-btn-refresh:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 </style>

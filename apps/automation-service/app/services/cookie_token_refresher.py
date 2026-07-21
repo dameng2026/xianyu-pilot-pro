@@ -357,22 +357,32 @@ async def _do_cookie_keepalive(state: AccountRefreshState) -> bool:
                         logger, ws_err, operation="stop_ws_after_captcha",
                         tenant_id=state.tenant_id, account_id=state.account_id, level=logging.WARNING,
                     )
-                # 自动触发滑块求解（cookie_keepalive 场景），失败不影响主流程
+                # 自动触发滑块求解（cookie_keepalive 场景），通过优先级队列处理
                 try:
-                    from .captcha_solver import handle_captcha_for_account
-                    asyncio.create_task(handle_captcha_for_account(
+                    from .captcha_queue import enqueue_solve
+                    from .captcha_precheck import lookup_account_priority
+                    priority = await lookup_account_priority(state.account_id, state.tenant_id)
+                    record_id = await enqueue_solve(
                         account_id=state.account_id,
                         tenant_id=state.tenant_id,
-                        response=None,
-                        auto_solve=True,
                         trigger_scene="cookie_keepalive",
                         open_reason="Cookie 保活失败自动触发",
                         solve_reason=f"Cookie 保活触发滑块验证（{err_str}）",
-                    ))
-                    logger.info("Cookie 保活触发滑块，已异步启动自动求解 accountId=%d", state.account_id)
+                        priority=priority,
+                    )
+                    if record_id is None:
+                        logger.info(
+                            "Cookie 保活触发滑块求解入队去重跳过 accountId=%d（30 分钟内已入队）",
+                            state.account_id,
+                        )
+                    else:
+                        logger.info(
+                            "Cookie 保活触发滑块，已入队优先级队列 accountId=%d priority=%d recordId=%d",
+                            state.account_id, priority, record_id,
+                        )
                 except Exception as solve_err:
                     log_service_failure(
-                        logger, solve_err, operation="auto_solve_after_cookie_keepalive_captcha",
+                        logger, solve_err, operation="enqueue_auto_solve_after_cookie_keepalive_captcha",
                         tenant_id=state.tenant_id, account_id=state.account_id, level=logging.DEBUG,
                     )
             elif "SESSION_EXPIRED" in err_str or "登入失败" in err_str:

@@ -1273,6 +1273,9 @@ async def websocket_start(
             # - 求解失败：返回原始失败提示
             try:
                 from app.services.captcha_solver import handle_captcha_for_account
+                from app.services.captcha_precheck import lookup_account_priority
+                # 查询账号优先级，写入记录用于展示
+                priority = await lookup_account_priority(account_id, tenant_id)
                 captcha_result = await handle_captcha_for_account(
                     account_id=account_id,
                     tenant_id=tenant_id,
@@ -1281,6 +1284,7 @@ async def websocket_start(
                     trigger_scene="ws_connect",
                     open_reason="WS 连接鉴权失败自动触发",
                     solve_reason="用户手动点击连接失败（auth_failed），自动尝试滑块求解恢复",
+                    priority=priority,
                 )
                 recovered = bool(captcha_result.get("recovered"))
                 auto_solve_result = captcha_result.get("autoSolveResult") or {}

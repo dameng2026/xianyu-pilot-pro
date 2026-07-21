@@ -67,9 +67,7 @@
 
     <MobileUnavailableState v-if="notificationsLoadError" compact title="最近通知暂时不可用" :description="notificationsLoadError" @retry="loadNotifications" />
 
-    <section class="m-desktop-tip"><span class="m-desktop-tip-icon"><MIcon name="monitor" :size="21" /></span><div><b>复杂操作建议使用桌面版</b><p>商品发布、批量管理和规则编辑在桌面端更适合完成。</p></div><button @click="emit('force-desktop')"><MIcon name="desktop" :size="18" /></button></section>
-
-    <div class="m-bottom-actions"><button class="m-btn m-btn-outline" @click="emit('logout')"><MIcon name="logout" :size="18" />退出登录</button><button class="m-btn m-btn-primary" @click="emit('force-desktop')">进入桌面版<MIcon name="chevronRight" :size="18" /></button></div>
+    <div class="m-bottom-actions"><button class="m-btn m-btn-outline" @click="emit('logout')"><MIcon name="logout" :size="18" />退出登录</button></div>
     <div class="m-safe-bottom"></div>
   </div>
 </template>

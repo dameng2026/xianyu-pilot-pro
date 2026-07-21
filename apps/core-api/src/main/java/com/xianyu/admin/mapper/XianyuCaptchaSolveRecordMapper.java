@@ -33,11 +33,11 @@ public interface XianyuCaptchaSolveRecordMapper {
             "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count, " +
             "SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END) AS fail_count " +
             "FROM xianyu_captcha_solve_record " +
-            "WHERE deleted = 0 " +
+            "WHERE COALESCE(deleted, 0) = 0 " +
             "<if test='startTime != null'> AND created_at &gt;= #{startTime} </if>" +
             "<if test='accountId != null'> AND account_id = #{accountId} </if>" +
             "<if test='userId != null and accountId == null'>" +
-            "  AND account_id IN (SELECT id FROM xianyu_account WHERE COALESCE(user_id, created_by_user_id) = #{userId} AND deleted = 0) " +
+            "  AND account_id IN (SELECT id FROM xianyu_account WHERE COALESCE(user_id, created_by_user_id) = #{userId}) " +
             "</if>" +
             "</script>")
     Map<String, Object> selectKpi(@Param("startTime") LocalDateTime startTime,
@@ -53,11 +53,11 @@ public interface XianyuCaptchaSolveRecordMapper {
             "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count, " +
             "SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END) AS fail_count " +
             "FROM xianyu_captcha_solve_record " +
-            "WHERE deleted = 0 " +
+            "WHERE COALESCE(deleted, 0) = 0 " +
             "<if test='startTime != null'> AND created_at &gt;= #{startTime} </if>" +
             "<if test='accountId != null'> AND account_id = #{accountId} </if>" +
             "<if test='userId != null and accountId == null'>" +
-            "  AND account_id IN (SELECT id FROM xianyu_account WHERE COALESCE(user_id, created_by_user_id) = #{userId} AND deleted = 0) " +
+            "  AND account_id IN (SELECT id FROM xianyu_account WHERE COALESCE(user_id, created_by_user_id) = #{userId}) " +
             "</if>" +
             "GROUP BY DATE(created_at) " +
             "ORDER BY date ASC" +
@@ -78,11 +78,11 @@ public interface XianyuCaptchaSolveRecordMapper {
             "SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END) AS fail_count, " +
             "MAX(created_at) AS last_solve_time " +
             "FROM xianyu_captcha_solve_record " +
-            "WHERE deleted = 0 " +
+            "WHERE COALESCE(deleted, 0) = 0 " +
             "<if test='startTime != null'> AND created_at &gt;= #{startTime} </if>" +
             "<if test='accountId != null'> AND account_id = #{accountId} </if>" +
             "<if test='userId != null and accountId == null'>" +
-            "  AND account_id IN (SELECT id FROM xianyu_account WHERE COALESCE(user_id, created_by_user_id) = #{userId} AND deleted = 0) " +
+            "  AND account_id IN (SELECT id FROM xianyu_account WHERE COALESCE(user_id, created_by_user_id) = #{userId}) " +
             "</if>" +
             "GROUP BY account_id " +
             "ORDER BY total DESC" +
@@ -96,12 +96,14 @@ public interface XianyuCaptchaSolveRecordMapper {
      */
     @Select("<script>" +
             "SELECT id, tenant_id, account_id, account_name, event_desc, open_reason, solve_reason, " +
-            "trigger_scene, result, status, engine, retry_count, error_message, created_at, updated_at " +
+            "trigger_scene, result, status, engine, retry_count, error_message, " +
+            "priority, failure_reason, queued_at, started_at, finished_at, " +
+            "created_at, updated_at " +
             "FROM xianyu_captcha_solve_record " +
-            "WHERE deleted = 0 " +
+            "WHERE COALESCE(deleted, 0) = 0 " +
             "<if test='accountId != null'> AND account_id = #{accountId} </if>" +
             "<if test='userId != null and accountId == null'>" +
-            "  AND account_id IN (SELECT id FROM xianyu_account WHERE COALESCE(user_id, created_by_user_id) = #{userId} AND deleted = 0) " +
+            "  AND account_id IN (SELECT id FROM xianyu_account WHERE COALESCE(user_id, created_by_user_id) = #{userId}) " +
             "</if>" +
             "<if test='status != null and status != \"\"'> AND status = #{status} </if>" +
             "<if test='triggerScene != null and triggerScene != \"\"'> AND trigger_scene = #{triggerScene} </if>" +
@@ -126,10 +128,10 @@ public interface XianyuCaptchaSolveRecordMapper {
      */
     @Select("<script>" +
             "SELECT COUNT(*) FROM xianyu_captcha_solve_record " +
-            "WHERE deleted = 0 " +
+            "WHERE COALESCE(deleted, 0) = 0 " +
             "<if test='accountId != null'> AND account_id = #{accountId} </if>" +
             "<if test='userId != null and accountId == null'>" +
-            "  AND account_id IN (SELECT id FROM xianyu_account WHERE COALESCE(user_id, created_by_user_id) = #{userId} AND deleted = 0) " +
+            "  AND account_id IN (SELECT id FROM xianyu_account WHERE COALESCE(user_id, created_by_user_id) = #{userId}) " +
             "</if>" +
             "<if test='status != null and status != \"\"'> AND status = #{status} </if>" +
             "<if test='triggerScene != null and triggerScene != \"\"'> AND trigger_scene = #{triggerScene} </if>" +

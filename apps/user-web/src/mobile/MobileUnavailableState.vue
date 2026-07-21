@@ -1,66 +1,100 @@
 <template>
-  <section class="m-unavailable" :class="{ compact }" role="alert">
-    <div class="m-unavailable-icon"><MIcon name="warning" :size="compact ? 20 : 28" /></div>
-    <div class="m-unavailable-copy">
-      <strong>{{ title }}</strong>
-      <p>{{ description }}</p>
+  <div class="m-error" :class="{ 'm-error-compact': compact }">
+    <div class="m-error-icon">
+      <MIcon name="alertTriangle" :size="compact ? 48 : 64" :stroke-width="1.5" />
     </div>
-    <button v-if="retryable" type="button" class="m-unavailable-retry" @click="emit('retry')">重试</button>
-  </section>
+    <div class="m-error-title">{{ title }}</div>
+    <div v-if="description" class="m-error-desc">{{ description }}</div>
+    <details v-if="details" class="m-error-details">
+      <summary>详情</summary>
+      <pre>{{ details }}</pre>
+    </details>
+    <button v-if="retryable" class="m-error-retry" @click="$emit('retry')">
+      重新加载
+    </button>
+  </div>
 </template>
 
 <script setup>
 import MIcon from './MIcon.vue'
 
 defineProps({
-  title: { type: String, default: '数据暂时无法加载' },
-  description: { type: String, default: '请检查网络连接后重试。' },
+  title: { type: String, default: '数据加载失败' },
+  description: { type: String, default: '' },
   compact: { type: Boolean, default: false },
-  retryable: { type: Boolean, default: true }
+  retryable: { type: Boolean, default: true },
+  details: { type: String, default: '' }
 })
 
-const emit = defineEmits(['retry'])
+defineEmits(['retry'])
 </script>
 
 <style scoped>
-.m-unavailable {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  margin: 12px 0;
-  padding: 16px;
-  border: 1px solid #ffd0d0;
-  border-radius: 16px;
-  background: linear-gradient(135deg, #fff8f8, #fffdfd);
-}
-.m-unavailable.compact { padding: 12px; border-radius: 13px; }
-.m-unavailable-icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
+.m-error {
+  padding: var(--m-space-12) var(--m-space-6);
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  background: #fff0f0;
-  color: #e5484d;
+  text-align: center;
 }
-.compact .m-unavailable-icon { width: 34px; height: 34px; }
-.m-unavailable-copy { min-width: 0; }
-.m-unavailable-copy strong { display: block; color: #8a1c1c; font-size: 14px; }
-.m-unavailable-copy p { margin: 4px 0 0; color: #9c4a4a; font-size: 12px; line-height: 1.5; }
-.m-unavailable-retry {
-  border: 0;
-  border-radius: 999px;
-  padding: 7px 13px;
-  background: #e5484d;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
+.m-error-compact {
+  padding: var(--m-space-6) var(--m-space-4);
+}
+
+.m-error-icon {
+  color: var(--m-color-warning);
+  margin-bottom: var(--m-space-4);
+}
+
+.m-error-title {
+  font-size: var(--m-font-size-h3);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-secondary);
+}
+
+.m-error-desc {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  margin-top: var(--m-space-1);
+  max-width: 80%;
+}
+
+.m-error-details {
+  margin-top: var(--m-space-3);
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  max-width: 100%;
+}
+
+.m-error-details summary {
+  cursor: pointer;
+  color: var(--m-color-primary);
+}
+
+.m-error-details pre {
+  margin-top: var(--m-space-2);
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--m-color-bg-subtle);
+  padding: var(--m-space-2);
+  border-radius: var(--m-radius-md);
+  font-family: var(--m-font-family-mono);
+  font-size: var(--m-font-size-tiny);
+}
+
+.m-error-retry {
+  margin-top: var(--m-space-4);
+  padding: 8px var(--m-space-4);
+  border: 1px solid var(--m-color-border);
+  background: transparent;
+  color: var(--m-color-text-primary);
+  border-radius: var(--m-radius-md);
+  font-size: var(--m-font-size-body-sm);
   cursor: pointer;
 }
-@media (max-width: 380px) {
-  .m-unavailable { grid-template-columns: auto minmax(0, 1fr); }
-  .m-unavailable-retry { grid-column: 2; justify-self: start; }
+
+.m-error-retry:active {
+  background: var(--m-color-bg-hover);
 }
 </style>

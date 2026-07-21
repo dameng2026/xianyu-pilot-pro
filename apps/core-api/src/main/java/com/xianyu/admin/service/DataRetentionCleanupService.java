@@ -161,7 +161,7 @@ public class DataRetentionCleanupService {
             case "chatMessage":
                 return "DELETE FROM xianyu_chat_message WHERE message_time < UNIX_TIMESTAMP(NOW() - INTERVAL ? DAY) * 1000 LIMIT ?";
             case "captchaRecord":
-                return "DELETE FROM xianyu_captcha_solve_record WHERE created_time < DATE_SUB(NOW(), INTERVAL ? DAY) LIMIT ?";
+                return "DELETE FROM xianyu_captcha_solve_record WHERE created_at < DATE_SUB(NOW(), INTERVAL ? DAY) LIMIT ?";
             case "autoReplyLog":
                 return "DELETE FROM auto_reply_log WHERE created_time < DATE_SUB(NOW(), INTERVAL ? DAY) LIMIT ?";
             case "uploadRateEvent":

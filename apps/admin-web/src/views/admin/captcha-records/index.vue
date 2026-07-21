@@ -213,6 +213,14 @@
               <span v-else class="muted">—</span>
             </template>
           </ElTableColumn>
+          <ElTableColumn label="失败原因" width="140">
+            <template #default="{ row }">
+              <ElTag v-if="row.failureReason" :type="failureReasonTagType(row.failureReason)" size="small" effect="plain">
+                {{ failureReasonLabel(row.failureReason) }}
+              </ElTag>
+              <span v-else class="muted">—</span>
+            </template>
+          </ElTableColumn>
           <ElTableColumn label="引擎" prop="engine" width="110">
             <template #default="{ row }">{{ row.engine || '—' }}</template>
           </ElTableColumn>
@@ -259,6 +267,12 @@
           <ElDescriptionsItem label="结果">
             <ElTag v-if="detailDrawer.row.result" :type="resultTagType(detailDrawer.row.result)" size="small" effect="plain">
               {{ resultLabel(detailDrawer.row.result) }}
+            </ElTag>
+            <span v-else>—</span>
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="失败原因">
+            <ElTag v-if="detailDrawer.row.failureReason" :type="failureReasonTagType(detailDrawer.row.failureReason)" size="small" effect="plain">
+              {{ failureReasonLabel(detailDrawer.row.failureReason) }}
             </ElTag>
             <span v-else>—</span>
           </ElDescriptionsItem>
@@ -340,13 +354,41 @@
   const resultLabel = (result?: string) => {
     if (result === 'slider_success') return '滑块通过'
     if (result === 'slider_fail') return '滑块失败'
+    if (result === 'precheck_fail') return '预校验拒绝'
+    if (result === 'stale_terminated') return '超时终止'
     return result || '—'
   }
 
   const resultTagType = (result?: string): any => {
     if (result === 'slider_success') return 'success'
     if (result === 'slider_fail') return 'danger'
+    if (result === 'precheck_fail') return 'warning'
+    if (result === 'stale_terminated') return 'info'
     return 'info'
+  }
+
+  // 失败原因分类标签（与 Python captcha_queue.py / captcha_precheck.py 保持一致）
+  const failureReasonLabel = (reason?: string) => {
+    const map: Record<string, string> = {
+      slider_fail: '滑块未通过',
+      cookie_invalid: 'Cookie 失效',
+      service_unavailable: '服务不可用',
+      timeout: '求解超时',
+      account_inactive: '账号不活跃',
+      account_disabled: '账号已禁用',
+      precheck_rejected: '预校验拒绝',
+      stale_terminated: '超时终止',
+    }
+    return (reason && map[reason]) || reason || '—'
+  }
+
+  const failureReasonTagType = (reason?: string): any => {
+    if (reason === 'cookie_invalid') return 'danger'
+    if (reason === 'account_inactive' || reason === 'account_disabled') return 'warning'
+    if (reason === 'precheck_rejected') return 'warning'
+    if (reason === 'stale_terminated') return 'info'
+    if (reason === 'service_unavailable' || reason === 'timeout') return 'warning'
+    return 'danger'
   }
 
   // ==================== 入口过滤参数（从路由 query 读取） ====================

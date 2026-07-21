@@ -48,16 +48,51 @@
             <strong>{{ stats.aiReplyCount }}</strong>
             <small>今日预警</small>
           </div>
+          <!-- 处理中：后端 DashboardSummaryVO 暂未提供独立的"告警处理中"计数，
+               此处复用 pendingDeliveryCount（待发货）作为"待处理"代理指标 -->
           <div class="m-alert-item m-alert-orange">
             <span>处理中</span>
-            <strong>0</strong>
+            <strong>{{ stats.pendingDeliveryCount }}</strong>
             <small>待处理</small>
           </div>
+          <!-- 已解决：后端 DashboardSummaryVO 暂未提供独立的"告警已解决"计数，
+               此处复用 deliverySuccessCount（发货成功）作为"已处理"代理指标 -->
           <div class="m-alert-item m-alert-red">
             <span>已解决</span>
-            <strong>0</strong>
+            <strong>{{ stats.deliverySuccessCount }}</strong>
             <small>已处理</small>
           </div>
+        </div>
+      </section>
+
+      <section class="m-detail-card m-trend-detail">
+        <div class="m-section-header">
+          <div>
+            <span class="m-section-kicker">销售走势</span>
+            <h2>近 {{ trendDays }} 天趋势</h2>
+          </div>
+          <div class="m-trend-pills">
+            <button
+              v-for="opt in trendRangeOptions"
+              :key="opt.value"
+              type="button"
+              class="m-trend-pill"
+              :class="{ active: trendDays === opt.value }"
+              @click="switchTrendRange(opt.value)"
+            >
+              {{ opt.label }}
+            </button>
+          </div>
+        </div>
+        <div v-if="trendHasData" ref="trendChartEl" class="m-trend-chart"></div>
+        <div v-else class="m-chart-empty">
+          <MIcon name="chart" :size="30" />
+          <span>{{ trendError || '暂无趋势数据' }}</span>
+        </div>
+        <div v-if="trendHasData" class="m-trend-legend">
+          <span v-for="series in trendSeries" :key="series.name" class="m-trend-legend-item">
+            <i :style="{ background: series.color }"></i>{{ series.name }}
+          </span>
         </div>
       </section>
 
@@ -145,8 +180,8 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import * as echarts from 'echarts/core'
-import { PieChart } from 'echarts/charts'
-import { LegendComponent, TooltipComponent } from 'echarts/components'
+import { PieChart, LineChart } from 'echarts/charts'
+import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { getDashboardSummary, getDashboardSalesTrend } from '../api/dashboard.js'
 import { getNavigationNotifications } from '../api/navigation.js'
@@ -155,7 +190,7 @@ import { getSseStatus } from '../utils/sse.js'
 import MIcon from './MIcon.vue'
 import MobileUnavailableState from './MobileUnavailableState.vue'
 
-echarts.use([PieChart, LegendComponent, TooltipComponent, CanvasRenderer])
+echarts.use([PieChart, LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
 const emit = defineEmits(['navigate', 'force-desktop', 'back'])
 const loading = ref(true)
@@ -165,14 +200,34 @@ const notifications = ref([])
 const recentEvents = ref([])
 const sseStatus = ref(getSseStatus())
 const distributionChartEl = ref(null)
+const trendChartEl = ref(null)
 let distributionChart = null
+let trendChart = null
+
+// 销售趋势时间范围切换器：7天 / 14天 / 30天，对齐 PC 端 DataPage.vue 的可选项
+const trendRangeOptions = [
+  { label: '7天', value: 7 },
+  { label: '14天', value: 14 },
+  { label: '30天', value: 30 }
+]
+const trendDays = ref(7)
+const trendError = ref('')
+const trend = ref({
+  dates: [],
+  deliverySuccess: [],
+  deliveryFail: [],
+  aiReply: []
+})
 
 const stats = reactive({
   deliverySuccessCount: 0,
   deliveryFailCount: 0,
   pendingDeliveryCount: 0,
   itemCount: 0,
-  aiReplyCount: 0
+  sellingGoodsCount: 0,
+  aiReplyCount: 0,
+  wsOnlineRate: null,
+  todayOrderCount: 0
 })
 
 const distributionData = computed(() => [
@@ -192,12 +247,46 @@ const deliverySuccessRate = computed(() => {
   const total = deliveryTotal.value
   return total > 0 ? (Number(stats.deliverySuccessCount) || 0) / total * 100 : 0
 })
+// WS 在线率：后端 DashboardSummaryVO 已直接返回 wsOnlineRate（0-100），无需前端再统计
+const wsOnlineRateValue = computed(() => {
+  if (stats.wsOnlineRate === null || stats.wsOnlineRate === undefined) return '--'
+  return `${Math.round(Number(stats.wsOnlineRate) || 0)}%`
+})
+const wsOnlineRateProgress = computed(() => {
+  if (stats.wsOnlineRate === null || stats.wsOnlineRate === undefined) return 0
+  return Math.min(100, Math.max(0, Math.round(Number(stats.wsOnlineRate) || 0)))
+})
+// 商品在售率：sellingGoodsCount / goodsCount * 100，作为商品数量进度条的填充比例
+const goodsSellingRate = computed(() => {
+  const total = Number(stats.itemCount) || 0
+  const selling = Number(stats.sellingGoodsCount) || 0
+  if (total <= 0) return 0
+  return Math.min(100, Math.round((selling / total) * 100))
+})
+// AI 预警数进度：以 aiReplyCount 占今日订单+AI回复基数的比例作为视觉填充
+const aiAlertProgress = computed(() => {
+  const orders = Number(stats.todayOrderCount) || 0
+  const replies = Number(stats.aiReplyCount) || 0
+  const base = Math.max(orders + replies, 1)
+  return Math.min(100, Math.round((replies / base) * 100))
+})
 const statusItems = computed(() => [
   { label: '发货成功率', value: deliveryTotal.value > 0 ? `${deliverySuccessRate.value.toFixed(1)}%` : '--', progress: deliverySuccessRate.value, icon: 'pieChart', tone: 'green' },
-  { label: '商品数量', value: stats.itemCount, progress: 0, icon: 'bag', tone: 'blue' },
-  { label: 'WS在线率', value: '--', progress: 0, icon: 'chart', tone: 'orange' },
-  { label: 'AI预警数', value: stats.aiReplyCount, progress: 0, icon: 'bot', tone: 'purple' }
+  { label: '商品数量', value: stats.itemCount, progress: goodsSellingRate.value, icon: 'bag', tone: 'blue' },
+  { label: 'WS在线率', value: wsOnlineRateValue.value, progress: wsOnlineRateProgress.value, icon: 'chart', tone: 'orange' },
+  { label: 'AI预警数', value: stats.aiReplyCount, progress: aiAlertProgress.value, icon: 'bot', tone: 'purple' }
 ])
+
+// 销售趋势图系列配置（复用 MobileData.vue 的配色风格）
+const trendSeries = [
+  { name: '发货成功', color: '#16bf78', key: 'deliverySuccess' },
+  { name: '发货失败', color: '#ef4444', key: 'deliveryFail' },
+  { name: 'AI 回复', color: '#8b5cf6', key: 'aiReply' }
+]
+const trendHasData = computed(() => {
+  const arr = trend.value.deliverySuccess || []
+  return arr.length > 0 && arr.some(v => Number(v) > 0)
+})
 const quickEntries = [
   { key: 'accounts', label: '账号管理', icon: 'user', tone: 'blue' },
   { key: 'products', label: '商品管理', icon: 'bag', tone: 'green' },
@@ -241,8 +330,87 @@ function initDistributionChart() {
   updateDistributionChart()
 }
 
+// 销售趋势折线图：复用 MobileData.vue 的 tooltip + 渐变填充风格
+function initTrendChart() {
+  if (!trendChartEl.value || !trendHasData.value) return
+  trendChart?.dispose()
+  trendChart = echarts.init(trendChartEl.value, null, { renderer: 'canvas' })
+  updateTrendChart()
+}
+
+function updateTrendChart() {
+  if (!trendChart || !trendHasData.value) return
+  const dates = trend.value.dates || []
+  const labels = dates.map(d => {
+    const s = String(d || '')
+    return s.length >= 5 ? s.slice(5) : s
+  })
+  const seriesData = trendSeries.map(series => ({
+    ...series,
+    data: (trend.value[series.key] || []).map(value => Number(value) || 0)
+  }))
+  trendChart.setOption({
+    grid: { left: 8, right: 12, top: 20, bottom: 28, containLabel: true },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(21, 33, 61, 0.96)',
+      borderColor: 'rgba(255,255,255,0.08)',
+      borderWidth: 1,
+      borderRadius: 16,
+      padding: [14, 18],
+      textStyle: { color: '#fff', fontSize: 12 },
+      axisPointer: {
+        type: 'line',
+        lineStyle: { color: 'rgba(13, 107, 255, 0.3)', width: 2, type: 'dashed' },
+        shadowStyle: { color: 'rgba(13, 107, 255, 0.06)' }
+      },
+      formatter: function(params) {
+        const lines = params.map(item => `<div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+          <span style="width:8px;height:8px;border-radius:50%;background:${item.color};display:inline-block"></span>
+          <span style="color:rgba(255,255,255,0.8)">${item.seriesName}</span>
+          <span style="font-weight:700;margin-left:auto;font-size:14px;color:#fff">${item.value}<span style="font-size:11px;font-weight:500;color:rgba(255,255,255,0.6);margin-left:2px">次</span></span>
+        </div>`).join('')
+        return `<div style="font-weight:600;margin-bottom:8px;font-size:13px">${params[0]?.axisValue || ''}</div>${lines}`
+      }
+    },
+    xAxis: {
+      type: 'category',
+      data: labels,
+      boundaryGap: false,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: '#8c98ae', fontSize: 11, margin: 12, fontWeight: 500 }
+    },
+    yAxis: { type: 'value', show: false, min: 0, splitLine: { show: false } },
+    series: seriesData.map((series, index) => ({
+      name: series.name,
+      type: 'line',
+      data: series.data,
+      smooth: true,
+      smoothMonotone: 'x',
+      symbol: 'circle',
+      symbolSize: 5,
+      showSymbol: series.data.length <= 7,
+      lineStyle: { color: series.color, width: index === 0 ? 3 : 2.5 },
+      itemStyle: { color: series.color, borderColor: '#fff', borderWidth: 2 },
+      areaStyle: index === 0 ? {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(22, 191, 120, 0.24)' },
+          { offset: 1, color: 'rgba(22, 191, 120, 0.01)' }
+        ])
+      } : undefined,
+      emphasis: {
+        focus: 'series',
+        scale: true,
+        itemStyle: { color: series.color, borderColor: '#fff', borderWidth: 3 }
+      }
+    }))
+  }, true)
+}
+
 function resizeChart() {
   distributionChart?.resize()
+  trendChart?.resize()
 }
 
 async function loadSummary() {
@@ -254,8 +422,28 @@ async function loadSummary() {
     deliveryFailCount: Number(data.deliveryFailCount) || 0,
     pendingDeliveryCount: Number(data.pendingDeliveryCount) || 0,
     itemCount: Number(data.goodsCount) || 0,
-    aiReplyCount: Number(data.autoReplyCount ?? data.aiReplyCount) || 0
+    sellingGoodsCount: Number(data.sellingGoodsCount) || 0,
+    aiReplyCount: Number(data.autoReplyCount ?? data.aiReplyCount) || 0,
+    wsOnlineRate: data.wsOnlineRate === null || data.wsOnlineRate === undefined ? null : Number(data.wsOnlineRate),
+    todayOrderCount: Number(data.todayOrderCount ?? data.orderCount) || 0
   })
+}
+
+async function loadTrend() {
+  const response = await getDashboardSalesTrend({ days: trendDays.value })
+  const data = response?.data
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('趋势数据响应格式异常')
+  const dates = data.dates
+  if (!Array.isArray(dates)) throw new Error('趋势数据响应格式异常')
+  const deliverySuccess = data.deliverySuccess || data.series?.deliverySuccess || []
+  const deliveryFail = data.deliveryFail || data.series?.deliveryFail || new Array(dates.length).fill(0)
+  const aiReply = data.aiReplyCount || data.aiReply || data.autoReply || data.series?.aiReply || new Array(dates.length).fill(0)
+  trend.value = {
+    dates: dates.slice(-trendDays.value),
+    deliverySuccess: (Array.isArray(deliverySuccess) ? deliverySuccess : []).slice(-trendDays.value),
+    deliveryFail: (Array.isArray(deliveryFail) ? deliveryFail : []).slice(-trendDays.value),
+    aiReply: (Array.isArray(aiReply) ? aiReply : []).slice(-trendDays.value)
+  }
 }
 
 async function loadNotifications() {
@@ -268,16 +456,18 @@ async function loadAll() {
   loading.value = true
   loadError.value = ''
   notificationsError.value = ''
+  trendError.value = ''
   const [summaryResult, trendResult, notificationsResult] = await Promise.allSettled([
     loadSummary(),
-    getDashboardSalesTrend(),
+    loadTrend(),
     loadNotifications()
   ])
   if (summaryResult.status === 'rejected') {
     loadError.value = summaryResult.reason?.message || '请检查网络连接后重试。'
   }
   if (trendResult.status === 'rejected') {
-    recentEvents.value = []
+    trend.value = { dates: [], deliverySuccess: [], deliveryFail: [], aiReply: [] }
+    trendError.value = trendResult.reason?.message || '趋势数据加载失败'
   }
   if (notificationsResult.status === 'rejected') {
     notifications.value = []
@@ -286,6 +476,22 @@ async function loadAll() {
   loading.value = false
   await nextTick()
   initDistributionChart()
+  initTrendChart()
+}
+
+async function switchTrendRange(days) {
+  if (trendDays.value === days) return
+  trendDays.value = days
+  trendError.value = ''
+  await loadTrend().catch(error => {
+    trendError.value = error?.message || '趋势数据加载失败'
+  })
+  await nextTick()
+  if (!trendChart && trendHasData.value) {
+    initTrendChart()
+  } else {
+    updateTrendChart()
+  }
 }
 
 function onSseEvent(event) {
@@ -345,6 +551,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('xya-sse-status', onSseStatus)
   distributionChart?.dispose()
   distributionChart = null
+  trendChart?.dispose()
+  trendChart = null
 })
 </script>
 
@@ -366,6 +574,14 @@ onBeforeUnmount(() => {
 .m-distribution-name { overflow: hidden; color: #8190a3; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .m-distribution-name i { display: inline-block; width: 7px; height: 7px; margin-right: 4px; border-radius: 50%; }
 .m-distribution-row strong { color: #20344e; font-size: 18px; }
+.m-trend-detail .m-section-header { gap: 8px; flex-wrap: wrap; }
+.m-trend-pills { display: inline-flex; background: #f2f5fa; border-radius: 8px; padding: 3px; gap: 2px; }
+.m-trend-pill { border: 0; background: transparent; color: #7c8ca2; font-size: 11px; font-weight: 600; padding: 5px 10px; border-radius: 6px; cursor: pointer; transition: background .2s, color .2s; }
+.m-trend-pill.active { background: #fff; color: #1674d1; box-shadow: 0 1px 3px rgba(22,116,209,.12); font-weight: 700; }
+.m-trend-chart { height: 200px; min-width: 0; }
+.m-trend-legend { display: flex; flex-wrap: wrap; gap: 12px; padding: 8px 2px 0; }
+.m-trend-legend-item { display: inline-flex; align-items: center; gap: 5px; color: #7c8ca2; font-size: 11px; }
+.m-trend-legend-item i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
 .m-alert-summary > .m-section-header > :deep(svg) { color: #df8a18; }
 .m-alert-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .m-alert-item { min-width: 0; padding: 11px 9px; border-radius: 8px; }

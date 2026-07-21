@@ -156,6 +156,15 @@
               </div>
             </div>
             <div class="m-form-field">
+              <label class="m-field-label">发货地区</label>
+              <div class="m-field-select" @click="showLocationPicker = true">
+                <span :class="{ placeholder: !formData.addressText }">
+                  {{ formData.addressText || '请选择发货地区' }}
+                </span>
+                <MIcon name="chevronRight" :size="16" />
+              </div>
+            </div>
+            <div class="m-form-field">
               <label class="m-field-label">商品描述</label>
               <textarea
                 v-model="formData.description"
@@ -397,12 +406,28 @@
         </div>
       </div>
     </div>
+
+    <MobileCategoryPicker
+      :visible="showCategoryPicker"
+      :initial-category-id="formData.categoryId"
+      @close="showCategoryPicker = false"
+      @select="handleCategorySelect"
+    />
+
+    <MobileLocationPicker
+      :visible="showLocationPicker"
+      :initial-address="formData.location"
+      @close="showLocationPicker = false"
+      @select="handleLocationSelect"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import MIcon from './MIcon.vue'
+import MobileCategoryPicker from './components/MobileCategoryPicker.vue'
+import MobileLocationPicker from './components/MobileLocationPicker.vue'
 import { getGoodsDetail, updateGoods } from '../api/goods.js'
 import { offShelfItem, republishItem } from '../api/items.js'
 import { uploadImage } from '../api/misc.js'
@@ -420,6 +445,7 @@ const saving = ref(false)
 const activeTab = ref('basic')
 const imageInputRef = ref(null)
 const showCategoryPicker = ref(false)
+const showLocationPicker = ref(false)
 const showStatusDialog = ref(false)
 const showBackDialog = ref(false)
 let initialData = null
@@ -459,7 +485,12 @@ const formData = reactive({
   soldCount: 0,
   accountId: null,
   xianyuAccountId: null,
-  remark: ''
+  remark: '',
+  province: '',
+  city: '',
+  district: '',
+  addressText: '',
+  location: null
 })
 
 const isOnShelf = computed(() => formData.status === 1 || formData.onShelf === true)
@@ -531,7 +562,21 @@ async function loadProduct() {
       soldCount: Number(data.soldCount || data.sales || 0),
       accountId: data.accountId || data.xianyuAccountId,
       xianyuAccountId: data.xianyuAccountId || data.accountId,
-      remark: data.remark || data.internalRemark || ''
+      remark: data.remark || data.internalRemark || '',
+      province: data.province || data.prov || (data.location && data.location.prov) || '',
+      city: data.city || (data.location && data.location.city) || '',
+      district: data.district || data.area || (data.location && data.location.area) || '',
+      addressText: data.addressText || data.locationText || (data.location ? [data.location.prov, data.location.city, data.location.area].filter(Boolean).join(' ') : ''),
+      location: data.location || (data.prov ? {
+        prov: data.prov,
+        city: data.city,
+        area: data.area,
+        divisionId: data.divisionId,
+        gps: data.gps,
+        poiId: data.poiId,
+        poiName: data.poiName,
+        source: data.source || 'legacy'
+      } : null)
     })
 
     if (!formData.mainImageUrl && formData.imageUrls.length > 0) {
@@ -638,7 +683,9 @@ async function handleSave() {
       showToast('保存成功')
       emit('updated', { ...formData, id })
     } else {
-      showToast('新建商品功能请在桌面端使用', 'error')
+      saving.value = false
+      emit('navigate', 'product-publish')
+      return
     }
   } catch (e) {
     showToast(e?.message || '保存失败', 'error')
@@ -658,6 +705,30 @@ function handleBack() {
 function confirmBack() {
   showBackDialog.value = false
   emit('back')
+}
+
+function handleCategorySelect(payload) {
+  formData.categoryId = payload.categoryId
+  formData.categoryPath = payload.path
+  showCategoryPicker.value = false
+}
+
+function handleLocationSelect(payload) {
+  formData.province = payload.province
+  formData.city = payload.city
+  formData.district = payload.district
+  formData.addressText = payload.fullText
+  formData.location = {
+    prov: payload.province,
+    city: payload.city,
+    area: payload.district,
+    divisionId: payload.divisionId || '',
+    gps: payload.gps || '',
+    poiId: payload.poiId || '',
+    poiName: payload.poiName || payload.district,
+    source: 'address-dict'
+  }
+  showLocationPicker.value = false
 }
 
 defineExpose({

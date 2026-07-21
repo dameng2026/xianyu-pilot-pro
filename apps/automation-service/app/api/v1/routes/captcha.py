@@ -121,7 +121,13 @@ async def auto_solve_captcha(
         open_reason = str(data.get("openReason") or "")
         solve_reason = str(data.get("solveReason") or "")
 
-        # 统一走综合处理：创建记录 + 求解 + 更新记录 + SSE
+        # 查询账号优先级（SVIP=2, VIP=1, 普通=0），写入记录用于展示
+        from ....services.captcha_precheck import lookup_account_priority
+        priority = await lookup_account_priority(account_id, tenant_id)
+
+        # 统一走综合处理：创建记录 + 预校验 + 求解 + 更新记录 + SSE
+        # 手动求解直接调用（不走队列），确保用户获得即时反馈
+        # 预校验（账号活跃度 + Cookie 状态 + 退避检查）在 handle_captcha_for_account 内执行
         handled = await handle_captcha_for_account(
             account_id=account_id,
             tenant_id=tenant_id,
@@ -130,6 +136,7 @@ async def auto_solve_captcha(
             trigger_scene=trigger_scene,
             open_reason=open_reason,
             solve_reason=solve_reason,
+            priority=priority,
         )
         result = handled.get("autoSolveResult") or {}
         if not result.get("success") and not result.get("solved"):
@@ -178,6 +185,10 @@ async def handle_captcha(
         if not account_id or not tenant_id:
             return ResultObject.validate_failed("accountId 和 tenantId 不能为空")
 
+        # 查询账号优先级（SVIP=2, VIP=1, 普通=0），写入记录用于展示
+        from ....services.captcha_precheck import lookup_account_priority
+        priority = await lookup_account_priority(account_id, tenant_id)
+
         result = await handle_captcha_for_account(
             account_id=account_id,
             tenant_id=tenant_id,
@@ -186,6 +197,7 @@ async def handle_captcha(
             trigger_scene=trigger_scene,
             open_reason=open_reason,
             solve_reason=solve_reason,
+            priority=priority,
         )
         return ResultObject.success(result)
     except Exception as e:

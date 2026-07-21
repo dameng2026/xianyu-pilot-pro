@@ -86,26 +86,9 @@ def _cleanup_recent_text_sends(now: float) -> None:
         _recent_text_sends.pop(k, None)
 
 
-# 自动滑块求解去重表：account_id -> 上次自动求解的时间戳（秒）
-# 同账号 30 分钟内只自动求解一次，避免断线重连 + 多账号并发把风控打满
-# （全自动策略：宁可不求，也不要连续失败给会话加 punish 分）
-_AUTO_SOLVE_LAST_TS: dict[int, float] = {}
-_AUTO_SOLVE_COOLDOWN_SEC = 1800
-_AUTO_SOLVE_GLOBAL_LOCK = None  # lazy asyncio.Lock
-_AUTO_SOLVE_LAST_TS_LOCK = None  # lazy asyncio.Lock for _AUTO_SOLVE_LAST_TS dict access
-
-
-def _get_auto_solve_last_ts_lock() -> asyncio.Lock:
-    """惰性初始化 _AUTO_SOLVE_LAST_TS 的访问锁，避免并发写入去重时间戳。
-
-    返回模块级单例 asyncio.Lock，供 _auto_solve_captcha_after_failure 中
-    async with _get_auto_solve_last_ts_lock() 使用。必须是同步函数，否则
-    `async with async_func():` 会拿到 coroutine 而非 Lock，导致 TypeError。
-    """
-    global _AUTO_SOLVE_LAST_TS_LOCK
-    if _AUTO_SOLVE_LAST_TS_LOCK is None:
-        _AUTO_SOLVE_LAST_TS_LOCK = asyncio.Lock()
-    return _AUTO_SOLVE_LAST_TS_LOCK
+# 注：自动滑块求解去重和串行化已迁移至 captcha_queue.py 的优先级队列管理器，
+# 由 CaptchaQueueManager 统一管理去重（30 分钟同账号冷却）和并发（2 worker）。
+# 原 _AUTO_SOLVE_LAST_TS / _AUTO_SOLVE_GLOBAL_LOCK 已移除。
 
 
 async def _lookup_account_name_safe(tenant_id: int, account_id: int) -> str:
@@ -1261,143 +1244,59 @@ class XianyuWebSocketClient:
         return False
 
     async def _auto_solve_captcha_after_failure(self, scene: str = "captcha") -> None:
-        """WS Token 获取失败后自动触发滑块求解。
+        """WS Token 获取失败后自动触发滑块求解（通过优先级队列）。
 
-        调用 handle_captcha_for_account(autoSolve=True)，内部会：
-        1. 启动 Playwright 检测/求解滑块
-        2. 通过 Token API 二次验证 Cookie 是否真实可用
-        3. 可用时恢复 cookie_status=1 并触发 _m_h5_tk 刷新
-        4. 不可用（Session 真过期）时保持 cookie_status=0，通知用户重新登录
-
-        失败不影响主流程，仅记录日志。同账号 10 分钟内只自动求解一次，
-        避免断线重连循环反复启动浏览器。
+        将求解任务入队到 CaptchaQueueManager 优先级队列，由 worker 按优先级
+        （SVIP > VIP > 普通）依次处理。队列内部处理：
+        1. 同账号 30 分钟去重
+        2. 三重预校验（账号活跃度 + Cookie 状态 + 退避检查）
+        3. Playwright 检测/求解滑块
+        4. Token API 二次验证 Cookie
+        5. 成功后恢复 cookie_status=1 + 刷新 _m_h5_tk + 自动重连 WS
+        6. Cookie 失效时更新状态 + 发送飞书通知
+        7. 滑块失败时自动重试（最多 3 次）
 
         Args:
             scene: 触发场景，"captcha" 表示滑块验证，"expired" 表示 Session 过期
         """
-        # === 去重：同账号冷却期内只自动求解一次 ===
-        now_ts = time.time()
-        async with _get_auto_solve_last_ts_lock():
-            last_solve_ts = _AUTO_SOLVE_LAST_TS.get(self.account_id, 0)
-            if now_ts - last_solve_ts < _AUTO_SOLVE_COOLDOWN_SEC:
-                logger.info(
-                    "账号 %d 自动滑块求解去重跳过（%d 秒前刚执行过，间隔需 >= %d 秒）scene=%s",
-                    self.account_id, int(now_ts - last_solve_ts), _AUTO_SOLVE_COOLDOWN_SEC, scene,
-                )
-                return
-            _AUTO_SOLVE_LAST_TS[self.account_id] = now_ts
-
-        logger.info(
-            "WS Token 失败后自动触发滑块求解 accountId=%d scene=%s",
-            self.account_id, scene,
-        )
         # 根据场景确定具体的求解原因（写入滑块求解记录）
         if scene == "expired":
             solve_reason = "WS Token 获取失败：Cookie Session 已过期，尝试通过滑块求解恢复"
         else:
             solve_reason = "WS Token 获取遇到滑块验证（FAIL_SYS_USER_VALIDATE）"
-        try:
-            global _AUTO_SOLVE_GLOBAL_LOCK
-            import asyncio as _asyncio
-            if _AUTO_SOLVE_GLOBAL_LOCK is None:
-                _AUTO_SOLVE_GLOBAL_LOCK = _asyncio.Lock()
-            # 全自动全局串行：同一时刻只跑一个账号的滑块，避免并发浏览器画像爆炸
-            async with _AUTO_SOLVE_GLOBAL_LOCK:
-                from .captcha_solver import handle_captcha_for_account
-                result = await handle_captcha_for_account(
-                    account_id=self.account_id,
-                    tenant_id=self.tenant_id,
-                    response=None,
-                    auto_solve=True,
-                    trigger_scene="token_refresh",
-                    open_reason="WS Token 获取失败自动触发",
-                    solve_reason=solve_reason,
-                )
-                recovered = bool(result.get("recovered"))
-                auto_solve_result = result.get("autoSolveResult") or {}
-                cookie_verified = auto_solve_result.get("cookieVerified", True)
 
-                if recovered:
-                    logger.info(
-                        "自动滑块求解成功，Cookie 已恢复 accountId=%d scene=%s",
-                        self.account_id, scene,
-                    )
-                    # 求解成功后立即尝试重新连接 WS（不等下一次重连周期）
-                    try:
-                        asyncio.create_task(ws_manager.restart_account(self.account_id))
-                        logger.info("自动滑块求解后已触发 WS 重连 accountId=%d", self.account_id)
-                    except Exception as e:
-                        log_service_failure(
-                            logger, e, operation="restart_ws_after_captcha",
-                            tenant_id=self.tenant_id, account_id=self.account_id, level=logging.WARNING,
-                        )
-                elif auto_solve_result.get("solved") and not cookie_verified:
-                    # 滑块通过但 Cookie Session 真过期
-                    logger.warning(
-                        "自动滑块求解通过但 Cookie Session 已过期，需要用户重新扫码登录 accountId=%d",
-                        self.account_id,
-                    )
-                    try:
-                        from .notify_dispatcher import (
-                            EVENT_COOKIE_EXPIRED,
-                            _check_account_status_notified,
-                            _mark_account_status_notified,
-                        )
-                        already_notified = await _check_account_status_notified(
-                            self.tenant_id, self.account_id, EVENT_COOKIE_EXPIRED
-                        )
-                    except Exception:
-                        already_notified = False
-                    if not already_notified:
-                        try:
-                            from .notify_dispatcher import dispatch_notification
-                            await dispatch_notification(
-                                tenant_id=self.tenant_id,
-                                event_display_name="Cookie 到期",
-                                title="账号 Cookie Session 已过期",
-                                content=(
-                                    f"账号名称：{await _lookup_account_name_safe(self.tenant_id, self.account_id)}\n"
-                                    f"状态：Cookie Session 已过期（自动滑块已通过但 Token API 仍拒绝）\n"
-                                    f"时间：{time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                                    f"请前往账号管理页或连接管理页重新扫码登录闲鱼账号获取新 Cookie。"
-                                ),
-                            )
-                            await _mark_account_status_notified(
-                                self.tenant_id, self.account_id, EVENT_COOKIE_EXPIRED
-                            )
-                        except Exception as exc:
-                            log_service_failure(
-                                logger, exc, operation="notify_ws_session_expired",
-                                tenant_id=self.tenant_id, account_id=self.account_id, level=logging.DEBUG,
-                            )
-                    try:
-                        from .feishu_chat import notify_session_expired_via_feishu_app
-                        account_name = await _lookup_account_name_safe(self.tenant_id, self.account_id)
-                        asyncio.create_task(
-                            notify_session_expired_via_feishu_app(
-                                tenant_id=self.tenant_id,
-                                account_id=self.account_id,
-                                account_name=account_name,
-                            )
-                        )
-                        logger.info("已触发飞书自建应用通知 Session 过期 accountId=%d", self.account_id)
-                    except Exception as e:
-                        log_service_failure(
-                            logger, e, operation="notify_ws_session_expired_feishu",
-                            tenant_id=self.tenant_id, account_id=self.account_id, level=logging.DEBUG,
-                        )
-                else:
-                    log_service_failure(
-                        logger, RuntimeError(), operation="auto_solve_ws_captcha",
-                        tenant_id=self.tenant_id, account_id=self.account_id, level=logging.WARNING,
-                    )
-        except Exception as e:
-            log_service_failure(
-                logger, e, operation="auto_solve_ws_captcha",
-                tenant_id=self.tenant_id, account_id=self.account_id,
+        try:
+            from .captcha_queue import enqueue_solve
+            from .captcha_precheck import lookup_account_priority
+
+            # 查询账号优先级（SVIP=2, VIP=1, 普通=0）
+            priority = await lookup_account_priority(self.account_id, self.tenant_id)
+
+            # 入队到优先级队列（队列内部处理去重、预校验、求解、重试、后处理）
+            record_id = await enqueue_solve(
+                account_id=self.account_id,
+                tenant_id=self.tenant_id,
+                trigger_scene="token_refresh",
+                open_reason="WS Token 获取失败自动触发",
+                solve_reason=solve_reason,
+                priority=priority,
             )
 
-        return False
+            if record_id is None:
+                logger.info(
+                    "WS Token 失败后自动滑块求解入队去重跳过 accountId=%d scene=%s（30 分钟内已入队）",
+                    self.account_id, scene,
+                )
+            else:
+                logger.info(
+                    "WS Token 失败后自动滑块求解已入队 accountId=%d scene=%s priority=%d recordId=%d",
+                    self.account_id, scene, priority, record_id,
+                )
+        except Exception as e:
+            log_service_failure(
+                logger, e, operation="enqueue_auto_solve_ws_captcha",
+                tenant_id=self.tenant_id, account_id=self.account_id,
+            )
 
     async def _do_reg(self, ws: _ThreadedWebSocketAdapter) -> bool:
         """发送 /reg 注册消息并等待响应。使用循环接收，捕获服务端所有回包。"""

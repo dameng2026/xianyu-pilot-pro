@@ -1584,6 +1584,7 @@ public class AutomationProxyController {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
                 "SELECT id, account_id, account_name, event_desc, open_reason, solve_reason, "
                         + "trigger_scene, result, status, engine, retry_count, error_message, "
+                        + "priority, failure_reason, queued_at, started_at, finished_at, "
                         + "created_at, updated_at "
                         + "FROM xianyu_captcha_solve_record" + where
                         + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
@@ -1605,6 +1606,11 @@ public class AutomationProxyController {
             item.put("engine", row.get("engine") != null ? row.get("engine") : "");
             item.put("retryCount", row.get("retry_count") != null ? row.get("retry_count") : 0);
             item.put("errorMessage", row.get("error_message") != null ? row.get("error_message") : "");
+            item.put("priority", row.get("priority") != null ? row.get("priority") : 0);
+            item.put("failureReason", row.get("failure_reason") != null ? row.get("failure_reason") : "");
+            item.put("queuedAt", row.get("queued_at") != null ? String.valueOf(row.get("queued_at")) : "");
+            item.put("startedAt", row.get("started_at") != null ? String.valueOf(row.get("started_at")) : "");
+            item.put("finishedAt", row.get("finished_at") != null ? String.valueOf(row.get("finished_at")) : "");
             Object createdAt = row.get("created_at");
             Object updatedAt = row.get("updated_at");
             item.put("createdAt", createdAt != null ? String.valueOf(createdAt) : "");

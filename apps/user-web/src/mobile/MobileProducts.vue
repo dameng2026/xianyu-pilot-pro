@@ -58,14 +58,20 @@
     </div>
 
     <div class="m-toolbar">
-      <button class="m-toolbar-btn" @click="showSortMenu = true">
-        <span>{{ currentSortLabel }}</span>
-        <MIcon name="chevronDown" :size="14" />
-      </button>
-      <button class="m-toolbar-btn m-toolbar-filter" @click="showFilterSheet = true">
-        <MIcon name="filter" :size="16" />
-        <span>筛选</span>
-        <span v-if="activeFilterCount > 0" class="m-filter-badge">{{ activeFilterCount }}</span>
+      <div class="m-toolbar-left">
+        <button class="m-toolbar-btn" :disabled="batchMode" @click="showSortMenu = true">
+          <span>{{ currentSortLabel }}</span>
+          <MIcon name="chevronDown" :size="14" />
+        </button>
+        <button class="m-toolbar-btn m-toolbar-filter" :disabled="batchMode" @click="showFilterSheet = true">
+          <MIcon name="filter" :size="16" />
+          <span>筛选</span>
+          <span v-if="activeFilterCount > 0" class="m-filter-badge">{{ activeFilterCount }}</span>
+        </button>
+      </div>
+      <button v-if="!batchMode" class="m-toolbar-btn m-toolbar-batch" :disabled="!filteredProducts.length" @click="enterBatchMode">
+        <MIcon name="check" :size="14" />
+        <span>批量操作</span>
       </button>
     </div>
 
@@ -100,8 +106,18 @@
         v-for="prod in filteredProducts"
         :key="prod.id || prod.itemId"
         class="m-product-item"
+        :class="{ 'm-batch-mode': batchMode, 'm-selected': isSelected(prod) }"
       >
-        <div class="m-product-main" @click="openDetail(prod)">
+        <button
+          v-if="batchMode"
+          class="m-batch-check"
+          :class="{ checked: isSelected(prod) }"
+          :aria-label="isSelected(prod) ? '取消选择' : '选择商品'"
+          @click.stop="toggleSelect(prod)"
+        >
+          <MIcon v-if="isSelected(prod)" name="check" :size="14" color="#fff" />
+        </button>
+        <div class="m-product-main" @click="batchMode ? toggleSelect(prod) : openDetail(prod)">
           <div class="m-product-cover">
             <img
               v-if="coverUrlOf(prod)"
@@ -136,7 +152,7 @@
             </div>
           </div>
         </div>
-        <div class="m-product-actions">
+        <div v-if="!batchMode" class="m-product-actions">
           <button
             class="m-toggle-switch"
             :class="{
@@ -280,6 +296,44 @@
     </div>
 
     <div class="m-safe-bottom"></div>
+
+    <div v-if="batchMode" class="m-batch-toolbar">
+      <div class="m-batch-toolbar-top">
+        <button class="m-batch-select-all" :disabled="batchProcessing" @click="toggleSelectAll">
+          <span class="m-batch-check-sm" :class="{ checked: isAllSelected }">
+            <MIcon v-if="isAllSelected" name="check" :size="12" color="#fff" />
+          </span>
+          <span>{{ isAllSelected ? '取消全选' : '全选' }}</span>
+        </button>
+        <span class="m-batch-count">
+          <template v-if="batchProcessing">
+            {{ batchProgress.action }} {{ batchProgress.done }}/{{ batchProgress.total }} 已处理
+          </template>
+          <template v-else>已选 {{ selectedCount }} 件</template>
+        </span>
+      </div>
+      <div v-if="batchProcessing" class="m-batch-progress-bar">
+        <div class="m-batch-progress-fill" :style="{ width: progressPercent + '%' }"></div>
+      </div>
+      <div v-if="batchProcessing && batchProgress.current" class="m-batch-current">
+        正在处理：{{ batchProgress.current }}
+      </div>
+      <div v-else class="m-batch-actions">
+        <button class="m-batch-btn m-batch-on" :disabled="!hasSelected" @click="batchOnShelf">
+          <MIcon name="arrowUp" :size="16" />
+          <span>上架</span>
+        </button>
+        <button class="m-batch-btn m-batch-off" :disabled="!hasSelected" @click="batchOffShelf">
+          <MIcon name="arrowDown" :size="16" />
+          <span>下架</span>
+        </button>
+        <button class="m-batch-btn m-batch-del" :disabled="!hasSelected" @click="batchDelete">
+          <MIcon name="trash" :size="16" />
+          <span>删除</span>
+        </button>
+        <button class="m-batch-btn m-batch-cancel" @click="exitBatchMode">取消</button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -317,6 +371,12 @@ const showProductMenu = ref(null)
 const showConfirmDialog = ref(null)
 const confirmAction = ref(() => {})
 const searchKeywordInternal = ref('')
+
+// 批量模式状态
+const batchMode = ref(false)
+const selectedIds = ref(new Set())
+const batchProcessing = ref(false)
+const batchProgress = ref({ action: '', done: 0, total: 0, current: '' })
 
 const sortOptions = [
   { key: 'default', label: '默认排序' },
@@ -365,6 +425,19 @@ const activeFilterCount = computed(() => {
   let count = 0
   if (filterStatus.value) count++
   return count
+})
+
+// 批量模式计算属性
+const selectedCount = computed(() => selectedIds.value.size)
+const hasSelected = computed(() => selectedIds.value.size > 0)
+const isAllSelected = computed(() => {
+  const list = filteredProducts.value
+  if (!list.length) return false
+  return list.every(p => selectedIds.value.has(p.id || p.itemId))
+})
+const progressPercent = computed(() => {
+  if (!batchProgress.value.total) return 0
+  return Math.round((batchProgress.value.done / batchProgress.value.total) * 100)
 })
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
@@ -421,11 +494,13 @@ const filteredProducts = computed(() => {
 
 watch(() => props.searchKeyword, (val) => {
   searchKeywordInternal.value = val || ''
+  clearBatchSelectionIfActive()
 })
 
 function onSearch(kw) {
   searchKeywordInternal.value = kw || ''
   currentPage.value = 1
+  clearBatchSelectionIfActive()
 }
 
 defineExpose({
@@ -495,13 +570,21 @@ function doEditProduct() {
 }
 
 function doCopyProduct() {
+  const p = showProductMenu.value
   showProductMenu.value = null
-  showToast('复制商品功能请在桌面端使用')
+  if (p) {
+    showToast('已为您打开商品详情')
+    openDetail(p)
+  }
 }
 
 function doUpdateStock() {
+  const p = showProductMenu.value
   showProductMenu.value = null
-  showToast('库存调整请在详情页或桌面端操作')
+  if (p) {
+    showToast('已为您打开商品详情，可在详情页调整库存')
+    openDetail(p)
+  }
 }
 
 function doQuickOffShelf() {
@@ -581,22 +664,172 @@ async function toggleOnShelf(prod) {
   }
 }
 
+// ===== 批量操作 =====
+function productId(prod) {
+  return prod.id || prod.itemId
+}
+
+function isSelected(prod) {
+  return selectedIds.value.has(productId(prod))
+}
+
+function toggleSelect(prod) {
+  if (batchProcessing.value) return
+  const id = productId(prod)
+  const next = new Set(selectedIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedIds.value = next
+}
+
+function toggleSelectAll() {
+  if (batchProcessing.value) return
+  const list = filteredProducts.value
+  if (isAllSelected.value) {
+    // 仅取消当前可见列表的选择，保留其它页面的选择（如果存在）
+    const next = new Set(selectedIds.value)
+    list.forEach(p => next.delete(productId(p)))
+    selectedIds.value = next
+  } else {
+    const next = new Set(selectedIds.value)
+    list.forEach(p => next.add(productId(p)))
+    selectedIds.value = next
+  }
+}
+
+function enterBatchMode() {
+  batchMode.value = true
+  selectedIds.value = new Set()
+  batchProcessing.value = false
+  batchProgress.value = { action: '', done: 0, total: 0, current: '' }
+}
+
+function exitBatchMode() {
+  if (batchProcessing.value) return
+  batchMode.value = false
+  selectedIds.value = new Set()
+  batchProgress.value = { action: '', done: 0, total: 0, current: '' }
+}
+
+async function runBatch(action, runnable) {
+  const selectedProducts = filteredProducts.value.filter(p => selectedIds.value.has(productId(p)))
+  if (!selectedProducts.length) {
+    showToast('请先选择商品', 'error')
+    return
+  }
+  batchProcessing.value = true
+  batchProgress.value = {
+    action,
+    done: 0,
+    total: selectedProducts.length,
+    current: ''
+  }
+  let success = 0
+  let failed = 0
+  for (const prod of selectedProducts) {
+    batchProgress.value = {
+      ...batchProgress.value,
+      current: (prod.name || prod.title || '未命名商品').slice(0, 20)
+    }
+    try {
+      await runnable(prod)
+      success++
+    } catch {
+      failed++
+      // 单个失败不中断后续
+    }
+    batchProgress.value = {
+      ...batchProgress.value,
+      done: batchProgress.value.done + 1
+    }
+  }
+  batchProcessing.value = false
+  batchProgress.value = { action: '', done: 0, total: 0, current: '' }
+  if (failed === 0) {
+    showToast(`${action}完成，共处理 ${success} 件`)
+  } else {
+    showToast(`${action}完成：成功 ${success} / 失败 ${failed}`, 'error')
+  }
+  // 刷新列表与统计
+  try {
+    await loadProducts()
+    await loadStats()
+  } catch {
+    // 刷新失败不阻塞退出批量模式
+  }
+  exitBatchMode()
+}
+
+async function batchOnShelf() {
+  if (batchProcessing.value) return
+  if (!hasSelected.value) {
+    showToast('请先选择商品', 'error')
+    return
+  }
+  await runBatch('批量上架', async (prod) => {
+    if (isOnShelf(prod)) return // 已上架跳过
+    if (prod.stock <= 0) throw new Error('库存为0，无法上架')
+    const id = prod.id || prod.itemId
+    const accountId = prod.accountId || prod.xianyuAccountId
+    if (!id) throw new Error('商品ID不存在')
+    await republishItem({ id, accountId })
+  })
+}
+
+async function batchOffShelf() {
+  if (batchProcessing.value) return
+  if (!hasSelected.value) {
+    showToast('请先选择商品', 'error')
+    return
+  }
+  await runBatch('批量下架', async (prod) => {
+    if (!isOnShelf(prod)) return // 已下架跳过
+    const id = prod.id || prod.itemId
+    const accountId = prod.accountId || prod.xianyuAccountId
+    if (!id) throw new Error('商品ID不存在')
+    await offShelfItem({ id, accountId })
+  })
+}
+
+function batchDelete() {
+  if (batchProcessing.value) return
+  if (!hasSelected.value) {
+    showToast('请先选择商品', 'error')
+    return
+  }
+  showConfirmDialog.value = {
+    title: '批量删除商品',
+    message: `确定要删除选中的 ${selectedCount.value} 件商品吗？此操作仅删除本地记录，不可恢复。`
+  }
+  confirmAction.value = async () => {
+    showConfirmDialog.value = null
+    await runBatch('批量删除', async (prod) => {
+      const id = prod.id || prod.itemId
+      if (!id) throw new Error('商品ID不存在')
+      await deleteGoodsLocal(id)
+    })
+  }
+}
+
 function selectFilter(key) {
   activeFilter.value = key
   activeStatus.value = key === 'all' ? 'all' : key
   currentPage.value = 1
+  clearBatchSelectionIfActive()
 }
 
 function selectStatus(key) {
   activeStatus.value = key
   activeFilter.value = key
   currentPage.value = 1
+  clearBatchSelectionIfActive()
 }
 
 function selectSort(key) {
   currentSort.value = key
   showSortMenu.value = false
   currentPage.value = 1
+  clearBatchSelectionIfActive()
 }
 
 function resetFilters() {
@@ -606,6 +839,7 @@ function resetFilters() {
 function applyFilters() {
   showFilterSheet.value = false
   currentPage.value = 1
+  clearBatchSelectionIfActive()
 }
 
 function clearAllFilters() {
@@ -615,16 +849,24 @@ function clearAllFilters() {
   searchKeywordInternal.value = ''
   currentPage.value = 1
   emit('close-search')
+  clearBatchSelectionIfActive()
 }
 
 function goToPage(p) {
   if (p < 1 || p > totalPages.value) return
   currentPage.value = p
   loadProducts()
+  clearBatchSelectionIfActive()
   nextTick(() => {
     const list = document.querySelector('.m-product-list')
     if (list) list.scrollIntoView({ behavior: 'smooth', block: 'start' })
   })
+}
+
+function clearBatchSelectionIfActive() {
+  if (batchMode.value && selectedIds.value.size > 0) {
+    selectedIds.value = new Set()
+  }
 }
 
 async function loadStats() {
@@ -921,6 +1163,12 @@ onMounted(() => {
   padding: 8px 0 12px;
 }
 
+.m-toolbar-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .m-toolbar-btn {
   display: inline-flex;
   align-items: center;
@@ -939,8 +1187,31 @@ onMounted(() => {
   background: #f5f7fb;
 }
 
+.m-toolbar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .m-toolbar-filter {
   gap: 6px;
+}
+
+.m-toolbar-batch {
+  background: linear-gradient(135deg, #0d6bff, #3b9bff);
+  border: none;
+  color: white;
+  font-weight: 600;
+  gap: 4px;
+}
+
+.m-toolbar-batch:active {
+  background: linear-gradient(135deg, #0a5fd8, #2f8be8);
+}
+
+.m-toolbar-batch:disabled {
+  background: #c5d4ee;
+  color: #fff;
+  opacity: 0.7;
 }
 
 .m-filter-badge {
@@ -972,6 +1243,55 @@ onMounted(() => {
   gap: 12px;
   border: 1px solid #f0f4fa;
   box-shadow: 0 2px 8px rgba(31,53,94,0.04);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.m-product-item.m-batch-mode {
+  padding: 10px 12px;
+}
+
+.m-product-item.m-selected {
+  background: linear-gradient(135deg, #f0f6ff, #e8f1ff);
+  border-color: #0d6bff;
+  box-shadow: 0 2px 12px rgba(13,107,255,0.12);
+}
+
+.m-batch-check {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 2px solid #d4dae5;
+  background: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  transition: all 0.15s;
+}
+
+.m-batch-check.checked {
+  background: #0d6bff;
+  border-color: #0d6bff;
+}
+
+.m-batch-check-sm {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 2px solid #d4dae5;
+  background: white;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.m-batch-check-sm.checked {
+  background: #0d6bff;
+  border-color: #0d6bff;
 }
 
 .m-product-main {
@@ -1545,6 +1865,135 @@ onMounted(() => {
 }
 
 .m-safe-bottom { height: calc(20px + env(safe-area-inset-bottom)); }
+
+/* ===== 批量操作工具栏 ===== */
+.m-batch-toolbar {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  bottom: calc(72px + env(safe-area-inset-bottom));
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 8px 28px rgba(31,53,94,0.18), 0 2px 8px rgba(31,53,94,0.08);
+  padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: m-batch-slide-up 0.25s ease;
+}
+
+@keyframes m-batch-slide-up {
+  from { transform: translateY(100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.m-batch-toolbar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.m-batch-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  font-size: 13px;
+  color: #1e293b;
+  cursor: pointer;
+  padding: 4px;
+  font-weight: 500;
+}
+
+.m-batch-select-all:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.m-batch-count {
+  font-size: 13px;
+  color: #5a6a85;
+  font-weight: 600;
+}
+
+.m-batch-progress-bar {
+  width: 100%;
+  height: 4px;
+  background: #eef2f8;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.m-batch-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #0d6bff, #3b9bff);
+  transition: width 0.25s ease;
+  border-radius: 2px;
+}
+
+.m-batch-current {
+  font-size: 12px;
+  color: #94a3b8;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.m-batch-actions {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.m-batch-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 10px 4px;
+  background: #f5f7fb;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1e293b;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.m-batch-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.m-batch-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.m-batch-on {
+  background: rgba(22,191,120,0.1);
+  color: #16bf78;
+}
+
+.m-batch-off {
+  background: rgba(255,159,34,0.12);
+  color: #ff9f22;
+}
+
+.m-batch-del {
+  background: rgba(255,71,87,0.1);
+  color: #ff4757;
+}
+
+.m-batch-cancel {
+  background: #f1f5f9;
+  color: #5a6a85;
+}
 
 @media (max-width: 360px) {
   .m-products-page { padding: 0 8px; }

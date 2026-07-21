@@ -163,6 +163,12 @@ public class AdminCaptchaSolveRecordService {
         vo.setErrorMessage(rawErrorMessage);
         parseErrorMessageMeta(rawErrorMessage, vo);
 
+        vo.setPriority(getInteger(row, "priority"));
+        vo.setFailureReason(getString(row, "failure_reason"));
+        vo.setQueuedAt(toLocalDateTime(row.get("queued_at")));
+        vo.setStartedAt(toLocalDateTime(row.get("started_at")));
+        vo.setFinishedAt(toLocalDateTime(row.get("finished_at")));
+
         Object createdAt = row.get("created_at");
         Object updatedAt = row.get("updated_at");
         vo.setCreatedAt(toLocalDateTime(createdAt));

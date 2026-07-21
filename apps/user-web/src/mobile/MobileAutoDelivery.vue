@@ -687,12 +687,12 @@ async function toggleDelivery(prod) {
 }
 
 function goToConfig(prod) {
-  emit('navigate', 'auto-delivery')
+  emit('navigate', 'auto-delivery-config', { productId: prod.id })
   window.dispatchEvent(new CustomEvent('xya-open-delivery-config', { detail: { goodsId: prod.id } }))
 }
 
 function goToProductDetail(prod) {
-  emit('navigate', 'product-detail')
+  emit('navigate', 'product-detail', { id: prod.id })
 }
 
 function goToProducts() {
@@ -704,7 +704,7 @@ function goToSourceLibrary() {
 }
 
 function goToStock(prod) {
-  emit('navigate', 'delivery-source-library')
+  emit('navigate', 'product-detail', { id: prod.id })
 }
 
 function handleStatClick(key) {

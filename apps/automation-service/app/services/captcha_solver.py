@@ -554,19 +554,24 @@ async def handle_captcha_for_account(
     trigger_scene: str = "manual",
     open_reason: str = "",
     solve_reason: str = "",
+    record_id: Optional[int] = None,
+    priority: int = 0,
 ) -> dict:
     """综合处理账号的滑块验证场景。
 
     1. 如果提供了 response，先检测是否真的需要滑块
     2. 如果检测到，写入 cookie_status=0 并通知用户
-    3. 如果 auto_solve=True，尝试自动求解
-    4. 自动求解成功后，刷新 token 并恢复 cookie_status
+    3. 如果 auto_solve=True，先进行三重预校验（Cookie/活跃度/账号状态）
+    4. 预校验通过后尝试自动求解
+    5. 自动求解成功后，刷新 token 并恢复 cookie_status
 
     Args:
         trigger_scene: 触发场景 (ws_connect/cookie_keepalive/token_refresh/manual)，
                        用于写入求解记录和 SSE 广播
         open_reason: 开启原因（为什么打开滑块求解流程）
         solve_reason: 求解原因（为什么进行滑块求解，具体业务原因）
+        record_id: 已有的求解记录 ID（由队列管理器创建时传入，复用记录避免重复创建）
+        priority: 优先级（2=SVIP, 1=VIP, 0=普通，写入记录）
 
     Returns:
         {
@@ -575,12 +580,16 @@ async def handle_captcha_for_account(
             "instructions": dict,
             "autoSolveResult": Optional[dict],
             "recovered": bool,  # 是否成功恢复
+            "failureReason": str,  # 失败原因分类（空字符串表示成功）
         }
     """
     from .notify_dispatcher import notify_captcha_required
     from .captcha_solve_record import (
         create_solve_record, update_solve_record, broadcast_captcha_solve,
         _lookup_account_name,
+    )
+    from .captcha_precheck import (
+        precheck_cookie_status, precheck_account_active,
     )
 
     detected = False
@@ -593,7 +602,8 @@ async def handle_captcha_for_account(
     instructions = build_captcha_instructions(account_id, captcha_url)
     auto_solve_result = None
     recovered = False
-    solve_record_id = None
+    solve_record_id = record_id
+    failure_reason = ""
 
     if detected or auto_solve:
         # 通知用户
@@ -610,17 +620,162 @@ async def handle_captcha_for_account(
 
     if auto_solve and (detected or response is None):
         logger.info("开始为账号 %d 自动求解滑块 (scene=%s)", account_id, trigger_scene)
+        account_name = await _lookup_account_name(tenant_id, account_id)
+
+        # === 三重预校验：账号活跃度 + 账号状态 + Cookie 状态 ===
+        # 预校验失败时不启动浏览器，避免浪费资源，直接落库失败记录
+
+        # 1. 账号活跃度与状态检查（先检查，避免对不活跃账号调用 hasLogin API）
+        active_pass, active_reason, active_msg = await precheck_account_active(account_id, tenant_id)
+        if not active_pass:
+            failure_reason = active_reason
+            logger.info("滑块求解预校验拒绝（活跃度）accountId=%d reason=%s", account_id, failure_reason)
+            # 创建或复用记录
+            if not solve_record_id:
+                solve_record_id = await create_solve_record(
+                    account_id, tenant_id, trigger_scene=trigger_scene,
+                    open_reason=open_reason or "预校验拒绝",
+                    solve_reason=solve_reason or active_msg,
+                )
+            if solve_record_id:
+                await update_solve_record(
+                    solve_record_id, status="fail", result="precheck_fail",
+                    error_message=active_msg,
+                    engine="Precheck",
+                )
+                # 更新 failure_reason 和 priority
+                try:
+                    async with async_session() as db:
+                        await db.execute(
+                            text(
+                                "UPDATE xianyu_captcha_solve_record "
+                                "SET failure_reason = :fr, priority = :pri, finished_at = NOW() "
+                                "WHERE id = :rid"
+                            ),
+                            {"fr": failure_reason, "pri": priority, "rid": solve_record_id},
+                        )
+                        await db.commit()
+                except Exception as e:
+                    log_service_failure(logger, e, operation="update_precheck_record", level=logging.WARNING)
+                await broadcast_captcha_solve(
+                    tenant_id, account_id, account_name,
+                    status="fail", result="precheck_fail",
+                    reason=active_msg,
+                    record_id=solve_record_id,
+                )
+            return {
+                "detected": detected,
+                "captchaUrl": captcha_url,
+                "instructions": {
+                    "title": instructions.title,
+                    "steps": instructions.steps,
+                    "message": instructions.message,
+                    "autoSolveAvailable": instructions.auto_solve_available,
+                    "manualFallbackUrl": instructions.manual_fallback_url,
+                },
+                "autoSolveResult": {
+                    "success": False,
+                    "solved": False,
+                    "captchaDetected": False,
+                    "attempts": 0,
+                    "errorCode": "PRECHECK_REJECTED",
+                    "error": active_msg,
+                    "durationMs": 0,
+                },
+                "recovered": False,
+                "failureReason": failure_reason,
+            }
+
+        # 2. Cookie 状态预校验（调用 hasLogin API）
+        cookie_pass, cookie_reason, cookie_msg = await precheck_cookie_status(account_id, tenant_id)
+        if not cookie_pass:
+            failure_reason = cookie_reason
+            logger.info("滑块求解预校验拒绝（Cookie）accountId=%d reason=%s", account_id, failure_reason)
+            # Cookie 失效时更新数据库状态
+            if failure_reason == "cookie_invalid":
+                await _update_cookie_status_for_captcha(
+                    account_id, tenant_id,
+                    cookie_status=0,
+                    status_code="SESSION_EXPIRED",
+                    status_message=cookie_msg,
+                )
+                # 主动断开 WS 连接
+                try:
+                    from .ws_client import ws_manager
+                    await ws_manager.stop_client(account_id)
+                except Exception as e:
+                    log_service_failure(
+                        logger, e, operation="stop_ws_after_precheck",
+                        tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
+                    )
+            # 创建或复用记录
+            if not solve_record_id:
+                solve_record_id = await create_solve_record(
+                    account_id, tenant_id, trigger_scene=trigger_scene,
+                    open_reason=open_reason or "预校验拒绝",
+                    solve_reason=solve_reason or cookie_msg,
+                )
+            if solve_record_id:
+                await update_solve_record(
+                    solve_record_id, status="fail", result="precheck_fail",
+                    error_message=cookie_msg,
+                    engine="Precheck",
+                )
+                try:
+                    async with async_session() as db:
+                        await db.execute(
+                            text(
+                                "UPDATE xianyu_captcha_solve_record "
+                                "SET failure_reason = :fr, priority = :pri, finished_at = NOW() "
+                                "WHERE id = :rid"
+                            ),
+                            {"fr": failure_reason, "pri": priority, "rid": solve_record_id},
+                        )
+                        await db.commit()
+                except Exception as e:
+                    log_service_failure(logger, e, operation="update_precheck_record", level=logging.WARNING)
+                await broadcast_captcha_solve(
+                    tenant_id, account_id, account_name,
+                    status="fail", result="precheck_fail",
+                    reason=cookie_msg,
+                    record_id=solve_record_id,
+                )
+            return {
+                "detected": detected,
+                "captchaUrl": captcha_url,
+                "instructions": {
+                    "title": instructions.title,
+                    "steps": instructions.steps,
+                    "message": instructions.message,
+                    "autoSolveAvailable": instructions.auto_solve_available,
+                    "manualFallbackUrl": instructions.manual_fallback_url,
+                },
+                "autoSolveResult": {
+                    "success": False,
+                    "solved": False,
+                    "captchaDetected": False,
+                    "attempts": 0,
+                    "errorCode": "PRECHECK_REJECTED",
+                    "error": cookie_msg,
+                    "durationMs": 0,
+                },
+                "recovered": False,
+                "failureReason": failure_reason,
+            }
+
+        # === 预校验通过，开始实际求解 ===
 
         # 先查指数退避：冷却中则直接落库失败记录，不启动浏览器
         from .captcha_backoff import assert_auto_solve_allowed
-        account_name = await _lookup_account_name(tenant_id, account_id)
         blocked = await assert_auto_solve_allowed(account_id, tenant_id, force=False)
         if blocked:
-            solve_record_id = await create_solve_record(
-                account_id, tenant_id, trigger_scene=trigger_scene,
-                open_reason=open_reason or "全自动冷却拦截",
-                solve_reason=solve_reason or blocked.get("error") or "指数退避冷却中",
-            )
+            failure_reason = "slider_fail"
+            if not solve_record_id:
+                solve_record_id = await create_solve_record(
+                    account_id, tenant_id, trigger_scene=trigger_scene,
+                    open_reason=open_reason or "全自动冷却拦截",
+                    solve_reason=solve_reason or blocked.get("error") or "指数退避冷却中",
+                )
             await update_solve_record(
                 solve_record_id, status="fail", result="slider_fail",
                 error_message=blocked.get("error") or "全自动滑块冷却中",
@@ -644,13 +799,29 @@ async def handle_captcha_for_account(
                 },
                 "autoSolveResult": blocked,
                 "recovered": False,
+                "failureReason": failure_reason,
             }
 
-        # 创建求解记录 + 广播"求解中"状态
-        solve_record_id = await create_solve_record(
-            account_id, tenant_id, trigger_scene=trigger_scene,
-            open_reason=open_reason, solve_reason=solve_reason,
-        )
+        # 创建求解记录（如果队列未预创建）+ 广播"求解中"状态
+        if not solve_record_id:
+            solve_record_id = await create_solve_record(
+                account_id, tenant_id, trigger_scene=trigger_scene,
+                open_reason=open_reason, solve_reason=solve_reason,
+            )
+        # 更新记录的优先级
+        if solve_record_id:
+            try:
+                async with async_session() as db:
+                    await db.execute(
+                        text(
+                            "UPDATE xianyu_captcha_solve_record SET priority = :pri WHERE id = :rid"
+                        ),
+                        {"pri": priority, "rid": solve_record_id},
+                    )
+                    await db.commit()
+            except Exception as e:
+                log_service_failure(logger, e, operation="update_solve_priority", level=logging.WARNING)
+
         await broadcast_captcha_solve(
             tenant_id, account_id, account_name,
             status="retrying", reason=f"正在求解滑块（{trigger_scene}）",
@@ -671,11 +842,9 @@ async def handle_captcha_for_account(
             logger.info("账号 %d 滑块自动求解成功", account_id)
 
             # === 关键二次验证：调用 Token API 确认 Cookie 真实可用 ===
-            # 滑块求解器在 Cookie Session 已过期时会误报成功（页面跳转到登录页，
-            # 没有滑块组件）。此处用 Token API 做最终验证，避免错误恢复 cookie_status=1
-            # 导致后续 ws_client 校验失败。
             cookie_valid = await _verify_cookie_via_token_api(account_id, tenant_id)
             if not cookie_valid:
+                failure_reason = "cookie_invalid"
                 logger.warning(
                     "账号 %d 滑块求解器报告成功，但 Token API 验证 Cookie 仍不可用，"
                     "Cookie Session 已真正过期，需要用户重新扫码登录",
@@ -689,7 +858,7 @@ async def handle_captcha_for_account(
                     status_message="Cookie Session 已过期，请重新扫码登录闲鱼账号",
                 )
 
-                # Cookie 已失效，主动断开 WS 连接，避免前端显示"WS 在线但 Cookie 失败"的矛盾状态
+                # Cookie 已失效，主动断开 WS 连接
                 try:
                     from .ws_client import ws_manager
                     await ws_manager.stop_client(account_id)
@@ -700,12 +869,12 @@ async def handle_captcha_for_account(
                         tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
                     )
 
-                # 在 auto_solve_result 中附加验证失败标记，让前端能展示真实原因
                 auto_solve_result["cookieVerified"] = False
                 auto_solve_result["error"] = (
                     "滑块已通过，但 Cookie Session 已真正过期（FAIL_SYS_SESSION_EXPIRED），"
                     "请前往账号管理页重新扫码登录闲鱼账号获取新 Cookie"
                 )
+                auto_solve_result["failureReason"] = failure_reason
                 # 更新求解记录为失败 + 广播失败事件
                 await update_solve_record(
                     solve_record_id, status="fail", result="slider_success",
@@ -715,27 +884,37 @@ async def handle_captcha_for_account(
                     screenshot_path=str(auto_solve_result.get("screenshotPath") or ""),
                     engine="Playwright",
                 )
+                # 更新 failure_reason
+                try:
+                    async with async_session() as db:
+                        await db.execute(
+                            text(
+                                "UPDATE xianyu_captcha_solve_record "
+                                "SET failure_reason = :fr, finished_at = NOW() WHERE id = :rid"
+                            ),
+                            {"fr": failure_reason, "rid": solve_record_id},
+                        )
+                        await db.commit()
+                except Exception as e:
+                    log_service_failure(logger, e, operation="update_failure_reason", level=logging.WARNING)
                 await broadcast_captcha_solve(
                     tenant_id, account_id, account_name,
                     status="fail", result="slider_success",
                     reason="滑块已通过但 Cookie Session 已过期，需重新扫码登录",
                     record_id=solve_record_id,
                 )
-                # 不标记 recovered=True，让前端引导用户重新登录
             else:
                 logger.info("账号 %d Cookie 二次验证通过，恢复 cookie_status=1", account_id)
                 recovered = True
 
-                # 滑块验证已通过，清除账号状态通知去重标记（内存 + DB），
-                # 以便下次再次失效时能重新发送通知。
+                # 清除账号状态通知去重标记
                 try:
                     from .notify_dispatcher import clear_all_account_status_notifications
                     await clear_all_account_status_notifications(tenant_id, account_id)
                 except Exception:
                     pass
 
-                # 恢复 cookie_status=1，last_login_status_code 必须为 'OK'
-                # （_load_ws_credentials 校验要求 login_status_code == "OK"）
+                # 恢复 cookie_status=1
                 await _update_cookie_status_for_captcha(
                     account_id, tenant_id,
                     cookie_status=1,
@@ -743,7 +922,7 @@ async def handle_captcha_for_account(
                     status_message="滑块验证已通过（自动求解+Token API 二次验证）",
                 )
 
-                # 触发 _m_h5_tk 刷新（不触发 ws_token 刷新，避免 Session 过期时 ws_client 覆盖 cookie_status=0）
+                # 触发 _m_h5_tk 刷新
                 try:
                     from .cookie_token_refresher import force_refresh_account
                     await force_refresh_account(account_id, tenant_id, "mh5tk")
@@ -754,7 +933,6 @@ async def handle_captcha_for_account(
                     )
 
                 # 更新求解记录为成功 + 广播成功事件
-                # 成功时不把 duration/screenshot 写入 error_message，避免前端误判为失败信息
                 await update_solve_record(
                     solve_record_id, status="success", result="slider_success",
                     retry_count=int(auto_solve_result.get("attempts") or 0),
@@ -763,6 +941,19 @@ async def handle_captcha_for_account(
                         f"[durationMs={int(auto_solve_result.get('durationMs') or 0)}] 滑块求解成功"
                     ),
                 )
+                # 更新 finished_at
+                try:
+                    async with async_session() as db:
+                        await db.execute(
+                            text(
+                                "UPDATE xianyu_captcha_solve_record "
+                                "SET finished_at = NOW() WHERE id = :rid"
+                            ),
+                            {"rid": solve_record_id},
+                        )
+                        await db.commit()
+                except Exception as e:
+                    log_service_failure(logger, e, operation="update_finished_at", level=logging.WARNING)
                 await broadcast_captcha_solve(
                     tenant_id, account_id, account_name,
                     status="success", result="slider_success",
@@ -771,9 +962,18 @@ async def handle_captcha_for_account(
                 )
         else:
             # 滑块求解失败
+            failure_reason = "slider_fail"
             logger.warning("账号 %d 滑块自动求解失败", account_id)
             error_msg = auto_solve_result.get("error") or "滑块验证未通过"
-            # 同步更新 Cookie 状态为"不可用"，让前端账号列表反映失败状态
+            error_code = auto_solve_result.get("errorCode") or ""
+
+            # 根据错误码细分失败原因
+            if error_code == "CAPTCHA_SOLVER_UNAVAILABLE":
+                failure_reason = "service_unavailable"
+            elif "Cookie" in error_msg or "cookie" in error_msg:
+                failure_reason = "cookie_invalid"
+
+            # 同步更新 Cookie 状态为"不可用"
             await _update_cookie_status_for_captcha(
                 account_id, tenant_id,
                 cookie_status=0,
@@ -788,6 +988,19 @@ async def handle_captcha_for_account(
                 screenshot_path=str(auto_solve_result.get("screenshotPath") or ""),
                 engine="Playwright",
             )
+            # 更新 failure_reason + finished_at
+            try:
+                async with async_session() as db:
+                    await db.execute(
+                        text(
+                            "UPDATE xianyu_captcha_solve_record "
+                            "SET failure_reason = :fr, finished_at = NOW() WHERE id = :rid"
+                        ),
+                        {"fr": failure_reason, "rid": solve_record_id},
+                    )
+                    await db.commit()
+            except Exception as e:
+                log_service_failure(logger, e, operation="update_failure_reason", level=logging.WARNING)
             await broadcast_captcha_solve(
                 tenant_id, account_id, account_name,
                 status="fail", result="slider_fail",
@@ -807,4 +1020,5 @@ async def handle_captcha_for_account(
         },
         "autoSolveResult": auto_solve_result,
         "recovered": recovered,
+        "failureReason": failure_reason,
     }

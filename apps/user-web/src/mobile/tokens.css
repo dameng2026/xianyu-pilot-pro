@@ -1,0 +1,125 @@
+/**
+ * 闲鱼助手移动端设计 Token 系统
+ *
+ * 作用域：.mobile-shell（不污染 PC 端 :root）
+ * 风格基线：飞书管理后台（克制中性 · 灰白底 · 大留白）
+ *
+ * 详见：docs/superpowers/specs/2026-07-22-mobile-redesign-design.md
+ */
+
+.mobile-shell {
+  /* === 品牌主色 === */
+  --m-color-primary: #3380ff;
+  --m-color-primary-hover: #2563eb;
+  --m-color-primary-active: #1d4ed8;
+  --m-color-primary-bg: #e8f3ff;
+  --m-color-primary-bg-hover: #d6e8ff;
+
+  /* === 中性色 === */
+  --m-color-bg-page: #f5f6f7;
+  --m-color-bg-card: #ffffff;
+  --m-color-bg-elevated: #ffffff;
+  --m-color-bg-subtle: #f0f1f2;
+  --m-color-bg-hover: #f5f6f7;
+
+  /* === 文字色 === */
+  --m-color-text-primary: #1f2329;
+  --m-color-text-secondary: #4e5969;
+  --m-color-text-tertiary: #86909c;
+  --m-color-text-disabled: #c9cdd4;
+  --m-color-text-placeholder: #86909c;
+  --m-color-text-inverse: #ffffff;
+
+  /* === 边框与分隔 === */
+  --m-color-border: #e5e6eb;
+  --m-color-border-light: #f2f3f5;
+  --m-color-divider: #e5e6eb;
+
+  /* === 状态色 === */
+  --m-color-success: #16bf78;
+  --m-color-success-bg: #e8f5e9;
+  --m-color-success-border: #c8e6c9;
+  --m-color-success-text: #2e7d32;
+
+  --m-color-warning: #ff9f22;
+  --m-color-warning-bg: #fff3e0;
+  --m-color-warning-border: #ffe0b2;
+  --m-color-warning-text: #d98012;
+
+  --m-color-danger: #ff5252;
+  --m-color-danger-bg: #ffebee;
+  --m-color-danger-border: #ffcdd2;
+  --m-color-danger-text: #c62828;
+
+  --m-color-info: #3380ff;
+  --m-color-info-bg: #e3f2fd;
+  --m-color-info-border: #bbdefb;
+  --m-color-info-text: #1565c0;
+
+  /* === 业务扩展色 === */
+  --m-color-purple: #8b5cf6;
+  --m-color-purple-bg: #f3e8ff;
+  --m-color-cyan: #11b5d8;
+  --m-color-cyan-bg: #e0f7fa;
+
+  /* === 阴影 === */
+  --m-shadow-card: 0 1px 2px rgba(31, 53, 94, 0.04), 0 4px 12px rgba(31, 53, 94, 0.04);
+  --m-shadow-elevated: 0 4px 16px rgba(31, 53, 94, 0.08);
+  --m-shadow-fab: 0 6px 18px rgba(51, 128, 255, 0.28), 0 2px 8px rgba(51, 128, 255, 0.2);
+  --m-shadow-tabbar: 0 -2px 12px rgba(31, 53, 94, 0.04);
+
+  /* === 遮罩 === */
+  --m-mask-drawer: rgba(15, 25, 50, 0.4);
+  --m-mask-modal: rgba(15, 25, 50, 0.5);
+
+  /* === 间距（4px 网格）=== */
+  --m-space-1: 4px;
+  --m-space-2: 8px;
+  --m-space-3: 12px;
+  --m-space-4: 16px;
+  --m-space-5: 20px;
+  --m-space-6: 24px;
+  --m-space-8: 32px;
+  --m-space-10: 40px;
+  --m-space-12: 48px;
+
+  /* === 字号 === */
+  --m-font-size-hero: 28px;
+  --m-font-size-h1: 22px;
+  --m-font-size-h2: 17px;
+  --m-font-size-h3: 15px;
+  --m-font-size-body: 14px;
+  --m-font-size-body-sm: 13px;
+  --m-font-size-caption: 12px;
+  --m-font-size-tiny: 10px;
+
+  /* === 字重 === */
+  --m-font-weight-regular: 400;
+  --m-font-weight-medium: 500;
+  --m-font-weight-semibold: 600;
+  --m-font-weight-bold: 700;
+  --m-font-weight-extrabold: 800;
+
+  /* === 行高 === */
+  --m-line-height-tight: 1.2;
+  --m-line-height-base: 1.5;
+  --m-line-height-relaxed: 1.6;
+
+  /* === 字体栈 === */
+  --m-font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
+                   "Microsoft YaHei", "Segoe UI", Roboto, Arial, sans-serif;
+  --m-font-family-mono: "SF Mono", "JetBrains Mono", Consolas, monospace;
+
+  /* === 圆角 === */
+  --m-radius-sm: 6px;
+  --m-radius-md: 8px;
+  --m-radius-lg: 12px;
+  --m-radius-xl: 16px;
+  --m-radius-2xl: 20px;
+  --m-radius-pill: 100px;
+  --m-radius-circle: 50%;
+
+  /* === 安全区 === */
+  --m-safe-area-top: env(safe-area-inset-top);
+  --m-safe-area-bottom: env(safe-area-inset-bottom);
+}

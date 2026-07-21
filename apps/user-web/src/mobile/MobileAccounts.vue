@@ -8,6 +8,27 @@
       </button>
     </div>
 
+    <div class="m-action-bar">
+      <button class="m-action-btn m-action-primary" @click="showAddSheet = true">
+        <MIcon name="userPlus" :size="16" />
+        <span>添加账号</span>
+      </button>
+      <button
+        class="m-action-btn m-action-secondary"
+        :class="{ 'm-action-active': batchMode }"
+        :disabled="accounts.length === 0 || batchBusy"
+        @click="toggleBatchMode"
+      >
+        <MIcon name="checkCircle" :size="16" />
+        <span>{{ batchMode ? '退出批量' : '批量操作' }}</span>
+      </button>
+    </div>
+
+    <div v-if="batchMode" class="m-batch-info">
+      <span v-if="batchBusy">{{ batchProgressText }}</span>
+      <span v-else>已选 {{ selectedIds.length }} / {{ accounts.length }} 个账号</span>
+    </div>
+
     <div class="m-stats-card">
       <div class="m-stat-item" @click="applyQuickFilter('normal')" :class="{ 'm-stat-active': activeQuickFilter === 'normal' }">
         <div class="m-stat-icon m-stat-icon-blue">
@@ -116,7 +137,16 @@
     </div>
 
     <div v-else class="m-acc-list">
-      <div v-for="acc in accounts" :key="acc.id" class="m-acc-card" @click="openDetail(acc)">
+      <div
+        v-for="acc in accounts"
+        :key="acc.id"
+        class="m-acc-card"
+        :class="{ 'm-acc-card-batch': batchMode, 'm-acc-card-selected': batchMode && selectedIds.includes(acc.id) }"
+        @click="onCardClick(acc)"
+      >
+        <div v-if="batchMode" class="m-acc-checkbox" :class="{ 'm-acc-checkbox-checked': selectedIds.includes(acc.id) }" @click.stop="toggleSelect(acc.id)">
+          <MIcon v-if="selectedIds.includes(acc.id)" name="check" :size="14" />
+        </div>
         <div class="m-acc-header">
           <div class="m-acc-avatar">
             <img
@@ -147,6 +177,11 @@
           </span>
         </div>
 
+        <div v-if="cookieExpireText(acc)" class="m-acc-cookie-warn" :class="cookieExpireClass(acc)">
+          <MIcon name="alertCircle" :size="14" />
+          <span>{{ cookieExpireText(acc) }}</span>
+        </div>
+
         <div class="m-acc-connection">
           <div class="m-acc-conn-item">
             <span class="m-acc-conn-label">WS状态</span>
@@ -170,7 +205,7 @@
           </div>
         </div>
 
-        <div class="m-acc-actions" @click.stop>
+        <div v-if="!batchMode" class="m-acc-actions" @click.stop>
           <button class="m-acc-action" @click="openDetail(acc)">
             <MIcon name="eye" :size="16" />
             <span>查看详情</span>
@@ -193,7 +228,32 @@
       <div v-else-if="accounts.length > 0" class="m-no-more">没有更多账号</div>
     </div>
 
-    <div class="m-safe-bottom"></div>
+    <div class="m-safe-bottom" :class="{ 'm-safe-bottom-batch': batchMode }"></div>
+
+    <div v-if="batchMode" class="m-batch-toolbar">
+      <button class="m-batch-btn m-batch-btn-select" :disabled="batchBusy" @click="toggleSelectAll">
+        <MIcon :name="allSelected ? 'checkCircle' : 'circle'" :size="18" />
+        <span>{{ allSelected ? '取消全选' : '全选' }}</span>
+      </button>
+      <div class="m-batch-actions">
+        <button class="m-batch-btn m-batch-btn-enable" :disabled="batchBusy || selectedIds.length === 0" @click="batchUpdate(false)">
+          <MIcon name="power" :size="16" />
+          <span>启用</span>
+        </button>
+        <button class="m-batch-btn m-batch-btn-disable" :disabled="batchBusy || selectedIds.length === 0" @click="batchUpdate(true)">
+          <MIcon name="stop" :size="16" />
+          <span>停用</span>
+        </button>
+        <button class="m-batch-btn m-batch-btn-delete" :disabled="batchBusy || selectedIds.length === 0" @click="batchDelete">
+          <MIcon name="trash" :size="16" />
+          <span>删除</span>
+        </button>
+      </div>
+      <button class="m-batch-btn m-batch-btn-cancel" :disabled="batchBusy" @click="exitBatchMode">
+        <MIcon name="x" :size="16" />
+        <span>取消</span>
+      </button>
+    </div>
 
     <div v-if="showFilterSheet" class="m-sheet-overlay" @click="showFilterSheet = false">
       <div class="m-filter-sheet" @click.stop>
@@ -275,6 +335,105 @@
       </div>
     </div>
 
+    <div v-if="showAddSheet" class="m-sheet-overlay" @click="closeAddSheet">
+      <div class="m-add-sheet" @click.stop>
+        <div class="m-sheet-header">
+          <h3>添加闲鱼账号</h3>
+          <button class="m-sheet-close" @click="closeAddSheet">
+            <MIcon name="x" :size="20" />
+          </button>
+        </div>
+        <div class="m-add-sheet-content">
+          <button class="m-add-option" @click="chooseQrLogin">
+            <div class="m-add-option-icon m-add-option-icon-qr">
+              <MIcon name="scanQr" :size="24" />
+            </div>
+            <div class="m-add-option-info">
+              <div class="m-add-option-name">扫码登录</div>
+              <div class="m-add-option-desc">使用闲鱼APP扫码，推荐方式</div>
+            </div>
+            <MIcon name="chevronRight" :size="18" class="m-add-option-arrow" />
+          </button>
+          <button class="m-add-option" @click="openManualModal">
+            <div class="m-add-option-icon m-add-option-icon-cookie">
+              <MIcon name="cookie" :size="24" />
+            </div>
+            <div class="m-add-option-info">
+              <div class="m-add-option-name">手动 Cookie 添加</div>
+              <div class="m-add-option-desc">从浏览器复制 Cookie 粘贴</div>
+            </div>
+            <MIcon name="chevronRight" :size="18" class="m-add-option-arrow" />
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showManualModal" class="m-modal-overlay" @click="closeManualModal">
+      <div class="m-manual-modal" @click.stop>
+        <div class="m-qr-header">
+          <h3>手动 Cookie 添加</h3>
+          <button class="m-qr-close" @click="closeManualModal">
+            <MIcon name="x" :size="20" />
+          </button>
+        </div>
+        <div class="m-manual-body">
+          <p class="m-cookie-tip">
+            <MIcon name="info" :size="14" />
+            <span>请粘贴从闲鱼页面复制的完整 Cookie，须包含 <code>unb</code> 字段</span>
+          </p>
+          <div class="m-form-row">
+            <label class="m-form-label">Cookie 内容</label>
+            <textarea
+              v-model="manual.cookie"
+              class="m-form-textarea"
+              placeholder="cookie_unb=xxx; _m_h5_tk=xxx; ..."
+              rows="5"
+              :disabled="submitting"
+            ></textarea>
+          </div>
+          <div v-if="manualError" class="m-form-error">
+            <MIcon name="alertCircle" :size="14" />
+            <span>{{ manualError }}</span>
+          </div>
+          <div v-else-if="manualWarning" class="m-form-warning">
+            <MIcon name="alertTriangle" :size="14" />
+            <span>{{ manualWarning }}</span>
+          </div>
+          <div v-if="manualParsed" class="m-form-parsed">
+            <div class="m-parsed-row">
+              <span class="m-parsed-label">解析身份（unb）</span>
+              <span class="m-parsed-val">{{ manualParsed.unb }}</span>
+            </div>
+            <div class="m-parsed-row">
+              <span class="m-parsed-label">签名 Token（_m_h5_tk）</span>
+              <span class="m-parsed-val">{{ manualParsed.mH5Tk }}</span>
+            </div>
+            <div class="m-parsed-row">
+              <span class="m-parsed-label">字段总数</span>
+              <span class="m-parsed-val">{{ manualParsed.parsedCount }}</span>
+            </div>
+          </div>
+          <div class="m-form-row">
+            <label class="m-form-label">账号备注（可选）</label>
+            <input
+              v-model="manual.accountNote"
+              type="text"
+              class="m-form-input"
+              placeholder="例如：备用账号A"
+              maxlength="50"
+              :disabled="submitting"
+            />
+          </div>
+        </div>
+        <div class="m-manual-footer">
+          <button class="m-sheet-btn m-sheet-btn-reset" :disabled="submitting" @click="closeManualModal">取消</button>
+          <button class="m-sheet-btn m-sheet-btn-confirm" :disabled="submitting || !manual.cookie" @click="submitManualCookie">
+            {{ submitting ? '提交中...' : '添加账号' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="toast.show" class="m-toast" :class="'m-toast-' + toast.type">
       {{ toast.message }}
     </div>
@@ -285,9 +444,10 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import MIcon from './MIcon.vue'
 import MobileUnavailableState from './MobileUnavailableState.vue'
-import { getAccounts, getAccountSummary, refreshAccountProfile as apiRefreshProfile } from '../api/accounts.js'
+import { getAccounts, getAccountSummary, refreshAccountProfile as apiRefreshProfile, createAccountByCookie, updateAccount, deleteAccount } from '../api/accounts.js'
 import { generateQrLogin, getQrLoginStatus, cleanupQrLogin } from '../api/qrlogin.js'
 import { accountCookieLabel, accountCookieStatus, accountWsConnectionState } from '../utils/accountAuth.js'
+import { validateCookie, extractKeyFields, maskKeyFields } from '../utils/cookie.js'
 import { resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
 import {
   getAccountListState,
@@ -317,6 +477,23 @@ const total = ref(0)
 const hasMore = ref(false)
 const noticeDismissed = ref(isAccountNoticeDismissed())
 const activeQuickFilter = ref('')
+
+// 批量操作相关
+const batchMode = ref(false)
+const selectedIds = ref([])
+const batchBusy = ref(false)
+const batchProgressText = ref('')
+
+// 添加账号相关
+const showAddSheet = ref(false)
+const showManualModal = ref(false)
+const manual = reactive({
+  cookie: '',
+  accountNote: ''
+})
+const manualError = ref('')
+const manualWarning = ref('')
+const submitting = ref(false)
 
 const summary = reactive({
   total: null,
@@ -383,6 +560,23 @@ const cookieOptions = [
 
 const hasActiveFilters = computed(() => {
   return searchKeyword.value || statusFilter.value || wsFilter.value || cookieFilter.value || sortBy.value !== 'latest'
+})
+
+const allSelected = computed(() => {
+  return accounts.value.length > 0 && selectedIds.value.length === accounts.value.length
+})
+
+const manualParsed = computed(() => {
+  if (!manual.cookie || manual.cookie.trim().length < 10) return null
+  const result = validateCookie(manual.cookie)
+  if (!result.valid) return null
+  const fields = extractKeyFields(manual.cookie)
+  const masked = maskKeyFields(fields)
+  return {
+    unb: masked.unb,
+    mH5Tk: masked.mH5Tk,
+    parsedCount: masked.parsedCount
+  }
 })
 
 function showToast(message, type = 'success') {
@@ -662,6 +856,199 @@ function openDetail(acc) {
   emit('open-detail', acc.id)
 }
 
+// ===== 批量操作 =====
+function toggleBatchMode() {
+  if (batchMode.value) {
+    exitBatchMode()
+  } else {
+    batchMode.value = true
+    selectedIds.value = []
+  }
+}
+
+function exitBatchMode() {
+  batchMode.value = false
+  selectedIds.value = []
+  batchBusy.value = false
+  batchProgressText.value = ''
+}
+
+function toggleSelect(id) {
+  const idx = selectedIds.value.indexOf(id)
+  if (idx >= 0) {
+    selectedIds.value.splice(idx, 1)
+  } else {
+    selectedIds.value.push(id)
+  }
+}
+
+function toggleSelectAll() {
+  if (allSelected.value) {
+    selectedIds.value = []
+  } else {
+    selectedIds.value = accounts.value.map(a => a.id)
+  }
+}
+
+function onCardClick(acc) {
+  if (batchMode.value) {
+    toggleSelect(acc.id)
+  } else {
+    openDetail(acc)
+  }
+}
+
+async function batchUpdate(disabled) {
+  if (batchBusy.value || selectedIds.value.length === 0) return
+  const action = disabled ? '停用' : '启用'
+  const ids = [...selectedIds.value]
+  batchBusy.value = true
+  let success = 0
+  let failed = 0
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i]
+    batchProgressText.value = `${action}中 ${i + 1}/${ids.length}`
+    try {
+      await updateAccount(id, { disabled })
+      success++
+    } catch (e) {
+      failed++
+      console.warn(`批量${action}账号 ${id} 失败:`, e)
+    }
+  }
+  batchBusy.value = false
+  batchProgressText.value = ''
+  if (failed === 0) {
+    showToast(`已${action} ${success} 个账号`, 'success')
+  } else {
+    showToast(`${action}完成：成功 ${success}、失败 ${failed}`, 'error')
+  }
+  await reload()
+  selectedIds.value = selectedIds.value.filter(id => accounts.value.some(a => a.id === id))
+}
+
+async function batchDelete() {
+  if (batchBusy.value || selectedIds.value.length === 0) return
+  if (!window.confirm(`确定要删除选中的 ${selectedIds.value.length} 个账号吗？删除后不可恢复。`)) return
+  const ids = [...selectedIds.value]
+  batchBusy.value = true
+  let success = 0
+  let failed = 0
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i]
+    batchProgressText.value = `删除中 ${i + 1}/${ids.length}`
+    try {
+      await deleteAccount(id)
+      success++
+    } catch (e) {
+      failed++
+      console.warn(`批量删除账号 ${id} 失败:`, e)
+    }
+  }
+  batchBusy.value = false
+  batchProgressText.value = ''
+  if (failed === 0) {
+    showToast(`已删除 ${success} 个账号`, 'success')
+  } else {
+    showToast(`删除完成：成功 ${success}、失败 ${failed}`, 'error')
+  }
+  await reload()
+  selectedIds.value = selectedIds.value.filter(id => accounts.value.some(a => a.id === id))
+  if (selectedIds.value.length === 0 && accounts.value.length === 0) {
+    exitBatchMode()
+  }
+}
+
+// ===== Cookie 过期倒计时 =====
+function resolveCookieExpireTime(acc) {
+  if (!acc) return null
+  // 兼容多种字段命名（后端 entity: tokenExpireTime / admin VO: cookieExpiredTime）
+  const raw = acc.tokenExpireTime || acc.cookieExpiredTime || acc.cookieExpireTime || acc.expireTime
+  if (!raw) return null
+  const date = new Date(raw)
+  return isNaN(date.getTime()) ? null : date
+}
+
+function cookieExpireText(acc) {
+  const expireDate = resolveCookieExpireTime(acc)
+  if (!expireDate) return ''
+  const diffMs = expireDate.getTime() - Date.now()
+  if (diffMs <= 0) return 'Cookie 已过期，请重新登录'
+  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000))
+  const diffHours = Math.floor(diffMs / (60 * 60 * 1000))
+  if (diffDays >= 1) return `Cookie 将在 ${diffDays} 天后过期`
+  if (diffHours >= 1) return `Cookie 将在 ${diffHours} 小时后过期`
+  return 'Cookie 即将过期，请尽快重新登录'
+}
+
+function cookieExpireClass(acc) {
+  const expireDate = resolveCookieExpireTime(acc)
+  if (!expireDate) return ''
+  const diffMs = expireDate.getTime() - Date.now()
+  if (diffMs <= 0) return 'm-acc-cookie-warn-danger'
+  const diffDays = diffMs / (24 * 60 * 60 * 1000)
+  if (diffDays <= 1) return 'm-acc-cookie-warn-danger'
+  if (diffDays <= 7) return 'm-acc-cookie-warn-warning'
+  return ''
+}
+
+// ===== 添加账号方式选择 =====
+function closeAddSheet() {
+  showAddSheet.value = false
+}
+
+function chooseQrLogin() {
+  showAddSheet.value = false
+  startAddAccount()
+}
+
+function openManualModal() {
+  showAddSheet.value = false
+  manual.cookie = ''
+  manual.accountNote = ''
+  manualError.value = ''
+  manualWarning.value = ''
+  submitting.value = false
+  showManualModal.value = true
+  document.body.style.overflow = 'hidden'
+}
+
+function closeManualModal() {
+  if (submitting.value) return
+  showManualModal.value = false
+  document.body.style.overflow = ''
+}
+
+async function submitManualCookie() {
+  if (submitting.value) return
+  const result = validateCookie(manual.cookie)
+  if (!result.valid) {
+    manualError.value = result.error
+    manualWarning.value = ''
+    return
+  }
+  manualError.value = ''
+  manualWarning.value = result.warning || ''
+  submitting.value = true
+  try {
+    const fields = extractKeyFields(manual.cookie)
+    await createAccountByCookie({
+      accountNote: manual.accountNote?.trim() || null,
+      cookie: manual.cookie.trim(),
+      extractedUnb: fields.unb || null,
+      extractedMH5Tk: fields.mH5Tk || null,
+    })
+    showToast('账号添加成功', 'success')
+    showManualModal.value = false
+    document.body.style.overflow = ''
+    await reload()
+  } catch (error) {
+    manualError.value = error?.message || '添加失败，请检查 Cookie 是否有效'
+  } finally {
+    submitting.value = false
+  }
+}
+
 async function refreshProfile(acc) {
   if (refreshingIds[acc.id]) return
   refreshingIds[acc.id] = true
@@ -858,7 +1245,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   stopQrPolling()
   window.removeEventListener('scroll', handleScroll)
-  if (showFilterSheet.value || showQrModal.value) {
+  if (showFilterSheet.value || showQrModal.value || showAddSheet.value || showManualModal.value) {
     document.body.style.overflow = ''
   }
 })
@@ -1621,5 +2008,406 @@ defineExpose({ startAddAccount })
   .m-acc-actions { font-size: 11px; }
   .m-filter-btn span { display: none; }
   .m-filter-btn { padding: 0 12px; }
+}
+
+/* ===== 顶部操作栏：添加账号 + 批量操作 ===== */
+.m-action-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.m-action-btn {
+  flex: 1;
+  height: 40px;
+  border-radius: 12px;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 12px;
+  transition: transform 0.15s, opacity 0.15s;
+}
+.m-action-btn:active {
+  transform: scale(0.97);
+}
+.m-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.m-action-primary {
+  background: linear-gradient(135deg, #0d6bff, #2580ff);
+  color: white;
+  box-shadow: 0 4px 12px rgba(13, 107, 255, 0.25);
+}
+.m-action-secondary {
+  background: white;
+  color: #475569;
+  border: 1px solid #e0e8f5;
+}
+.m-action-secondary:disabled {
+  background: #f4f7fc;
+  color: #b0bbd0;
+  border-color: #eef2f7;
+}
+.m-action-active {
+  background: #e8f1ff;
+  color: #0d6bff;
+  border-color: #bfdbfe;
+}
+
+/* ===== 批量信息条 ===== */
+.m-batch-info {
+  background: #e8f1ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: #0d6bff;
+  font-weight: 500;
+  text-align: center;
+}
+
+/* ===== 卡片批量模式样式 ===== */
+.m-acc-card-batch {
+  position: relative;
+  padding-left: 44px;
+}
+.m-acc-card-selected {
+  background: #f0f7ff;
+  border-color: #bfdbfe;
+  box-shadow: 0 2px 12px rgba(13, 107, 255, 0.12);
+}
+.m-acc-checkbox {
+  position: absolute;
+  top: 14px;
+  left: 12px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 2px solid #cbd5e1;
+  background: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: white;
+}
+.m-acc-checkbox:active {
+  transform: scale(0.9);
+}
+.m-acc-checkbox-checked {
+  background: #0d6bff;
+  border-color: #0d6bff;
+}
+
+/* ===== Cookie 过期警告 ===== */
+.m-acc-cookie-warn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(255, 159, 34, 0.1);
+  color: #ff9f22;
+}
+.m-acc-cookie-warn :deep(svg) {
+  flex-shrink: 0;
+}
+.m-acc-cookie-warn-warning {
+  background: rgba(255, 159, 34, 0.12);
+  color: #ff9f22;
+}
+.m-acc-cookie-warn-danger {
+  background: rgba(255, 82, 82, 0.12);
+  color: #ff5252;
+}
+
+/* ===== 底部批量工具栏 ===== */
+.m-safe-bottom-batch {
+  height: 88px;
+}
+.m-batch-toolbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 999;
+  background: white;
+  border-top: 1px solid #eef2f7;
+  box-shadow: 0 -4px 16px rgba(31, 53, 94, 0.08);
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+.m-batch-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 6px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  min-width: 48px;
+  color: #475569;
+  transition: background 0.15s, opacity 0.15s;
+}
+.m-batch-btn:active:not(:disabled) {
+  background: #f4f7fc;
+}
+.m-batch-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.m-batch-btn-select {
+  color: #0d6bff;
+}
+.m-batch-actions {
+  flex: 1;
+  display: flex;
+  justify-content: space-around;
+  gap: 4px;
+}
+.m-batch-btn-enable {
+  color: #16bf78;
+}
+.m-batch-btn-disable {
+  color: #ff9f22;
+}
+.m-batch-btn-delete {
+  color: #ff5252;
+}
+.m-batch-btn-cancel {
+  color: #64748b;
+}
+
+/* ===== 添加账号方式选择 sheet ===== */
+.m-add-sheet {
+  background: white;
+  border-radius: 20px 20px 0 0;
+  width: 100%;
+  max-width: 500px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  animation: slideUp 0.3s ease;
+}
+.m-add-sheet-content {
+  padding: 12px 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.m-add-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 12px;
+  border-radius: 14px;
+  border: 1px solid #f0f4fa;
+  background: white;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, transform 0.15s;
+}
+.m-add-option:active {
+  transform: scale(0.98);
+  background: #f8faff;
+}
+.m-add-option-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.m-add-option-icon-qr {
+  background: linear-gradient(135deg, #e0e7ff, #c7d2fe);
+  color: #4f46e5;
+}
+.m-add-option-icon-cookie {
+  background: linear-gradient(135deg, #fef3c7, #fde68a);
+  color: #d97706;
+}
+.m-add-option-info {
+  flex: 1;
+  min-width: 0;
+}
+.m-add-option-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: #15213d;
+  margin-bottom: 2px;
+}
+.m-add-option-desc {
+  font-size: 12px;
+  color: #8c98ae;
+}
+.m-add-option-arrow {
+  color: #b0bbd0;
+  flex-shrink: 0;
+}
+
+/* ===== 手动 Cookie 模态 ===== */
+.m-manual-modal {
+  background: white;
+  border-radius: 20px;
+  width: 100%;
+  max-width: 420px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: fadeIn 0.2s ease;
+}
+.m-manual-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+.m-cookie-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  background: #eaf4ff;
+  border: 1px solid #d9eaff;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: #2563eb;
+  line-height: 1.5;
+}
+.m-cookie-tip :deep(svg) {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.m-cookie-tip code {
+  background: rgba(37, 99, 235, 0.12);
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+.m-form-row {
+  margin-bottom: 12px;
+}
+.m-form-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 6px;
+}
+.m-form-textarea,
+.m-form-input {
+  width: 100%;
+  border: 1px solid #e0e8f5;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #15213d;
+  background: white;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+.m-form-textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  resize: vertical;
+  min-height: 100px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+.m-form-textarea:focus,
+.m-form-input:focus {
+  border-color: #0d6bff;
+  box-shadow: 0 0 0 3px rgba(13, 107, 255, 0.1);
+}
+.m-form-textarea:disabled,
+.m-form-input:disabled {
+  background: #f8faff;
+  color: #8c98ae;
+  cursor: not-allowed;
+}
+.m-form-error,
+.m-form-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  margin: -4px 0 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.m-form-error {
+  background: rgba(255, 82, 82, 0.08);
+  color: #ff5252;
+}
+.m-form-warning {
+  background: rgba(255, 159, 34, 0.1);
+  color: #ff9f22;
+}
+.m-form-error :deep(svg),
+.m-form-warning :deep(svg) {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.m-form-parsed {
+  background: #f8faff;
+  border: 1px solid #eef2f7;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: -4px 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.m-parsed-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  gap: 8px;
+}
+.m-parsed-label {
+  color: #8c98ae;
+  flex-shrink: 0;
+}
+.m-parsed-val {
+  color: #15213d;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  word-break: break-all;
+  text-align: right;
+}
+.m-manual-footer {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid #f0f4fa;
 }
 </style>

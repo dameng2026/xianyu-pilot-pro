@@ -39,7 +39,8 @@
             <Badge v-else type="orange">重试中</Badge>
           </template>
           <template #failReason="{row}">
-            <span v-if="row.status === 'fail' && row.errorMessage" :title="row.errorMessage" class="cell-truncate fail-text">{{ row.errorMessage }}</span>
+            <span v-if="row.failureReason" :title="failureReasonText(row.failureReason)" class="cell-truncate fail-text">{{ failureReasonText(row.failureReason) }}</span>
+            <span v-else-if="row.status === 'fail' && row.errorMessage" :title="row.errorMessage" class="cell-truncate fail-text">{{ row.errorMessage }}</span>
             <span v-else-if="row.status === 'fail'" class="cell-truncate fail-text">{{ row.result === 'slider_success' ? '滑块已通过但 Cookie Session 已过期' : '滑块验证未通过' }}</span>
             <span v-else>-</span>
           </template>
@@ -87,7 +88,7 @@
         </div>
         <div v-if="detail.status === 'fail'" class="error-message">
           <div class="error-message-head">失败原因</div>
-          <pre class="error-message-body">{{ stripMeta(detail.errorMessage) || (detail.result === 'slider_success' ? '滑块已通过但 Cookie Session 已过期，需重新扫码登录' : '滑块验证未通过') }}</pre>
+          <pre class="error-message-body">{{ detail.failureReason ? failureReasonText(detail.failureReason) : (stripMeta(detail.errorMessage) || (detail.result === 'slider_success' ? '滑块已通过但 Cookie Session 已过期，需重新扫码登录' : '滑块验证未通过')) }}</pre>
         </div>
         <div v-else-if="detail.status === 'success' && stripMeta(detail.errorMessage)" class="option-line option-line-block">
           <span>备注</span>
@@ -138,11 +139,19 @@ const retryingCount = computed(() => rows.value.filter(r => r.status === 'retryi
 function resultText(result) {
   if (result === 'slider_success') return '滑块成功'
   if (result === 'slider_fail') return '滑块失败'
+  if (result === 'precheck_fail') return '预校验失败'
+  if (result === 'stale_terminated') return '超时终止'
+  if (result === 'cookie_invalid') return 'Cookie 失效'
+  if (result === 'service_unavailable') return '服务不可用'
   return '未求解'
 }
 function resultBadge(result) {
   if (result === 'slider_success') return 'green'
   if (result === 'slider_fail') return 'red'
+  if (result === 'precheck_fail') return 'red'
+  if (result === 'stale_terminated') return 'orange'
+  if (result === 'cookie_invalid') return 'red'
+  if (result === 'service_unavailable') return 'gray'
   return 'gray'
 }
 function statusText(status) {
@@ -166,6 +175,22 @@ function triggerSceneText(scene) {
     token_refresh: 'Token 刷新',
   }
   return map[scene] || scene || '-'
+}
+
+/** 失败原因分类文案：将后端 failureReason 枚举值映射为中文展示 */
+function failureReasonText(reason) {
+  if (!reason) return ''
+  const map = {
+    slider_fail: '滑块验证未通过',
+    cookie_invalid: 'Cookie 已失效，需重新扫码登录',
+    service_unavailable: '求解服务暂时不可用',
+    timeout: '求解超时',
+    account_inactive: '账号连续 3 天无操作，已禁用求解',
+    account_disabled: '账号状态异常，已禁用求解',
+    precheck_rejected: '预校验拒绝（Cookie 或账号状态不满足求解条件）',
+    stale_terminated: '记录长时间无响应，已终止',
+  }
+  return map[reason] || reason
 }
 
 function formatDateTime(value) {

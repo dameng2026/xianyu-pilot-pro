@@ -231,6 +231,28 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log_service_failure(logger, e, operation="start_token_balance_warning_loop")
 
+    # 启动滑块求解优先级队列管理器
+    # 替换原有的全局 asyncio.Lock 串行化方案，支持 SVIP>VIP>普通 优先级调度 + 2 并发 worker
+    # 自动触发场景（WS Token 失败 / Cookie 保活失败）通过 enqueue_solve() 入队
+    captcha_queue_started = False
+    try:
+        from .services.captcha_queue import get_queue_manager, stop_queue_manager
+        await get_queue_manager()  # 惰性初始化 + 自动启动 worker
+        captcha_queue_started = True
+        logger.info("滑块求解优先级队列管理器已启动")
+    except Exception as e:
+        log_service_failure(logger, e, operation="start_captcha_queue_manager")
+
+    # 启动滑块求解记录僵尸状态清理循环
+    # 每 5 分钟扫描 status=retrying 且 started_at 超过 15 分钟的记录，标记为 stale_terminated
+    stale_cleanup_task = None
+    try:
+        from .services.captcha_solve_record import run_stale_cleanup_loop
+        stale_cleanup_task = asyncio.create_task(run_stale_cleanup_loop())
+        logger.info("滑块求解僵尸记录清理循环已启动")
+    except Exception as e:
+        log_service_failure(logger, e, operation="start_stale_cleanup_loop")
+
     yield
 
     storage_reconcile_task.cancel()
@@ -238,6 +260,21 @@ async def lifespan(app: FastAPI):
         await storage_reconcile_task
     except asyncio.CancelledError:
         pass
+
+    # 停止滑块求解僵尸记录清理循环
+    if stale_cleanup_task is not None:
+        stale_cleanup_task.cancel()
+        try:
+            await stale_cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+    # 停止滑块求解优先级队列管理器
+    if captcha_queue_started:
+        try:
+            await stop_queue_manager()
+        except Exception:
+            logger.warning("关闭滑块求解优先级队列管理器失败，继续关闭流程")
 
     # 停止 AI 计费待补扣循环
     if pending_billing_task is not None:

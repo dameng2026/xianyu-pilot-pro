@@ -161,98 +161,12 @@
       </div>
     </template>
 
-    <Teleport to="body">
-      <div v-if="detailOrder" class="m-modal-mask" @click.self="closeDetail">
-        <div class="m-detail-sheet">
-          <div class="m-sheet-handle"></div>
-          <div class="m-sheet-header">
-            <h3>订单详情</h3>
-            <button class="m-sheet-close" @click="closeDetail">
-              <MIcon name="x" :size="20" />
-            </button>
-          </div>
-
-          <div class="m-sheet-body">
-            <div class="m-detail-status-row">
-              <span :class="['m-status-badge', 'm-status-lg', statusBadgeClass(detailOrder)]">
-                {{ detailOrder.orderStatusText || '未知状态' }}
-              </span>
-              <span class="m-detail-id">{{ detailOrder.externalOrderId || '-' }}</span>
-            </div>
-
-            <div class="m-detail-section">
-              <div class="m-detail-title">商品信息</div>
-              <div class="m-detail-goods">
-                <div class="m-goods-image-wrap m-goods-lg">
-                  <img
-                    v-if="firstGoodsImage(detailOrder) && !failedImages.has(firstGoodsImage(detailOrder))"
-                    :src="firstGoodsImage(detailOrder)"
-                    class="m-goods-image"
-                    alt=""
-                    referrerpolicy="no-referrer"
-                    @error="onImageError($event, detailOrder)"
-                  />
-                  <div v-else class="m-goods-image m-goods-placeholder">
-                    <MIcon name="image" :size="32" />
-                  </div>
-                </div>
-                <div class="m-goods-info">
-                  <div class="m-goods-title m-goods-lg">{{ firstGoodsTitle(detailOrder) || '-' }}</div>
-                  <div class="m-goods-meta">
-                    <span>商品ID: {{ firstGoodsId(detailOrder) || '-' }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="m-detail-section">
-              <div class="m-detail-title">订单信息</div>
-              <div class="m-detail-grid">
-                <div class="m-detail-item">
-                  <span class="m-detail-label">买家昵称</span>
-                  <span class="m-detail-value">{{ detailOrder.buyerName || '-' }}</span>
-                </div>
-                <div class="m-detail-item">
-                  <span class="m-detail-label">买家ID</span>
-                  <span class="m-detail-value m-mono">{{ detailOrder.buyerId || '-' }}</span>
-                </div>
-                <div class="m-detail-item">
-                  <span class="m-detail-label">订单金额</span>
-                  <span class="m-detail-value m-price-text">¥{{ formatMoney(detailOrder.totalAmount) }}</span>
-                </div>
-                <div class="m-detail-item">
-                  <span class="m-detail-label">创建时间</span>
-                  <span class="m-detail-value">{{ detailOrder.createTimeText || '-' }}</span>
-                </div>
-                <div class="m-detail-item">
-                  <span class="m-detail-label">发货状态</span>
-                  <span class="m-detail-value">{{ detailOrder.deliveryStatusText || '-' }}</span>
-                </div>
-                <div class="m-detail-item">
-                  <span class="m-detail-label">发货进度</span>
-                  <span class="m-detail-value">{{ detailOrder.deliveryProgressText || '-' }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="m-sheet-footer">
-            <button v-if="canSync(detailOrder)" class="m-sheet-btn" @click="doSyncDetail">
-              <MIcon name="refreshCw" :size="18" />
-              同步
-            </button>
-            <button v-if="canDeliver(detailOrder)" class="m-sheet-btn m-sheet-btn-primary" @click="doDeliverDetail">
-              <MIcon name="truck" :size="18" />
-              手动发货
-            </button>
-            <button v-if="canRepurchase(detailOrder)" class="m-sheet-btn" @click="repurchase(detailOrder)">
-              <MIcon name="repeat" :size="18" />
-              再次购买
-            </button>
-          </div>
-        </div>
-      </div>
-    </Teleport>
+    <MobileOrderShipForm
+      :visible="shipFormVisible"
+      :order="shipOrder"
+      @close="closeShipForm"
+      @success="handleShipSuccess"
+    />
 
     <div class="m-safe-bottom"></div>
   </div>
@@ -262,6 +176,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import MIcon from './MIcon.vue'
 import MobileUnavailableState from './MobileUnavailableState.vue'
+import MobileOrderShipForm from './components/MobileOrderShipForm.vue'
 import { getOrders, syncOrder as apiSyncOrder, syncOrders as apiSyncOrders } from '../api/orders.js'
 
 const emit = defineEmits(['navigate', 'force-desktop', 'back'])
@@ -272,9 +187,10 @@ const loadError = ref('')
 const searchKeyword = ref('')
 const activeStatus = ref('')
 const orders = ref([])
-const detailOrder = ref(null)
 const failedImages = reactive(new Set())
 const syncing = ref(false)
+const shipFormVisible = ref(false)
+const shipOrder = ref(null)
 
 const query = reactive({
   current: 1,
@@ -284,17 +200,21 @@ const query = reactive({
   accountId: ''
 })
 
+// 注意：stats 中的 pending/completed/closed/shipped 仅基于当前页订单列表统计，
+// 不是服务端聚合值。当列表被状态筛选或关键字过滤时，这些数字仅反映当前页的样本。
+// 如需服务端聚合，需后端提供 /orders/stats 接口；当前接口仅返回 total。
 const stats = reactive({
   total: 0,
   pending: 0,
   completed: 0,
-  closed: 0
+  closed: 0,
+  shipped: 0
 })
 
 const statusTabs = computed(() => [
   { label: '全部', value: '', count: stats.total },
   { label: '待发货', value: '2', count: stats.pending },
-  { label: '已发货', value: '3', count: 0 },
+  { label: '已发货', value: '3', count: stats.shipped },
   { label: '已完成', value: '4', count: stats.completed },
   { label: '已关闭', value: '5', count: stats.closed }
 ])
@@ -449,15 +369,17 @@ async function loadOrders(append = false) {
 }
 
 function calculateStats(list, total) {
-  let pending = 0, completed = 0, closed = 0
+  let pending = 0, completed = 0, closed = 0, shipped = 0
   list.forEach(o => {
     const s = Number(o.orderStatus)
     if (s === 2) pending++
+    if (s === 3) shipped++
     if (s === 4) completed++
     if (s === 5) closed++
   })
   if (query.current === 1 && !query.status && !query.keyword) {
     stats.pending = pending
+    stats.shipped = shipped
     stats.completed = completed
     stats.closed = closed
   }
@@ -470,11 +392,8 @@ async function loadMore() {
 }
 
 function openDetail(order) {
-  detailOrder.value = order
-}
-
-function closeDetail() {
-  detailOrder.value = null
+  if (!order?.id) return
+  emit('navigate', 'order-detail', { id: order.id })
 }
 
 async function syncOrder(order) {
@@ -504,24 +423,23 @@ async function syncOrders() {
   }
 }
 
-function doSyncDetail() {
-  if (detailOrder.value) {
-    syncOrder(detailOrder.value)
-    closeDetail()
-  }
-}
-
-function doDeliverDetail() {
-  closeDetail()
-  emit('force-desktop', 'orders')
-}
-
 function openDelivery(order) {
-  emit('force-desktop', 'orders')
+  if (!order) return
+  shipOrder.value = order
+  shipFormVisible.value = true
+}
+
+function closeShipForm() {
+  shipFormVisible.value = false
+  shipOrder.value = null
+}
+
+async function handleShipSuccess() {
+  closeShipForm()
+  await loadOrders()
 }
 
 function repurchase(order) {
-  closeDetail()
   emit('force-desktop', 'products')
 }
 

@@ -1,7 +1,7 @@
 <template>
   <div class="mobile-shell">
     <header v-if="!subPage && !searchMode" class="m-topbar">
-      <button class="m-menu-btn" @click="drawerOpen = true" aria-label="菜单">
+      <button class="m-menu-btn" aria-label="菜单" @click="drawerOpen = true">
         <MIcon name="menu" :size="22" />
       </button>
       <div class="m-brand-center" @click="switchTab('home')">
@@ -12,17 +12,17 @@
         <span class="m-brand-name">闲鱼助手</span>
       </div>
       <div class="m-top-actions">
-        <button v-if="canSearch" class="m-top-action-btn" @click="toggleSearch" aria-label="搜索">
+        <button v-if="canSearch" class="m-top-action-btn" aria-label="搜索" @click="toggleSearch">
           <MIcon name="search" :size="20" />
         </button>
-        <button class="m-top-action-btn" @click="switchTab('profile')" aria-label="我的">
+        <button class="m-top-action-btn" aria-label="我的" @click="switchTab('profile')">
           <MIcon name="user" :size="20" />
         </button>
       </div>
     </header>
 
     <header v-else-if="searchMode" class="m-topbar m-topbar-search">
-      <button class="m-back-btn" @click="closeSearch" aria-label="关闭搜索">
+      <button class="m-back-btn" aria-label="关闭搜索" @click="closeSearch">
         <MIcon name="chevronLeft" :size="22" />
       </button>
       <div class="m-search-bar">
@@ -35,7 +35,7 @@
           :placeholder="searchPlaceholder"
           @input="onSearchInput"
         />
-        <button v-if="searchKeyword" class="m-search-clear" @click="clearSearch" aria-label="清空">
+        <button v-if="searchKeyword" class="m-search-clear" aria-label="清空" @click="clearSearch">
           <MIcon name="xCircle" :size="16" />
         </button>
       </div>
@@ -47,14 +47,14 @@
         <span>返回</span>
       </button>
       <div class="m-sub-title">{{ subPageTitle }}</div>
-      <button v-if="subPage === 'accounts'" class="m-add-account-topbtn" @click="triggerAddAccount" aria-label="添加账号">
+      <button v-if="subPage === 'accounts'" class="m-add-account-topbtn" aria-label="添加账号" @click="triggerAddAccount">
         <MIcon name="plus" :size="16" />
         <span>添加</span>
       </button>
-      <button v-else-if="subPage === 'account-detail'" class="m-icon-btn-top" @click="triggerAccountDetailMore" aria-label="更多操作">
+      <button v-else-if="subPage === 'account-detail'" class="m-icon-btn-top" aria-label="更多操作" @click="triggerAccountDetailMore">
         <MIcon name="moreVertical" :size="22" />
       </button>
-      <button v-else-if="subPage === 'product-detail'" class="m-icon-btn-top" @click="triggerProductSave" aria-label="保存">
+      <button v-else-if="subPage === 'product-detail'" class="m-icon-btn-top" aria-label="保存" @click="triggerProductSave">
         <MIcon name="save" :size="20" />
       </button>
       <button v-else class="m-desktop-btn" @click="goDesktop">
@@ -74,7 +74,7 @@
             <div class="m-drawer-sub">闲鱼智能助手</div>
           </div>
         </div>
-        <button class="m-drawer-close" @click="drawerOpen = false" aria-label="关闭菜单">
+        <button class="m-drawer-close" aria-label="关闭菜单" @click="drawerOpen = false">
           <MIcon name="close" :size="20" />
         </button>
       </div>
@@ -154,6 +154,12 @@
         @force-desktop="goDesktop"
         @back="backToProducts"
       />
+      <MobileOpportunity
+        v-else-if="subPage === 'opportunity'"
+        @navigate="onSubNavigate"
+        @force-desktop="goDesktop"
+        @back="backToMain"
+      />
       <MobileAccounts
         v-else-if="subPage === 'accounts'"
         ref="accountsListRef"
@@ -176,6 +182,11 @@
         @navigate="onSubNavigate"
         @force-desktop="goDesktop"
       />
+      <MobileNotifications
+        v-else-if="subPage === 'notifications'"
+        @navigate="onSubNavigate"
+        @force-desktop="goDesktop"
+      />
       <MobileChatDetail
         v-else-if="subPage === 'chat-detail'"
         @navigate="onSubNavigate"
@@ -188,11 +199,39 @@
         @force-desktop="goDesktop"
         @back="backToWorkflow"
       />
+      <MobileAutoDeliveryConfig
+        v-else-if="subPage === 'auto-delivery-config'"
+        :goods-id="selectedDeliveryGoodsId"
+        :product="selectedDeliveryGoods"
+        @navigate="onSubNavigate"
+        @force-desktop="goDesktop"
+        @back="backToAutoDelivery"
+        @saved="onDeliveryConfigSaved"
+      />
+      <MobileDeliverySourceLibrary
+        v-else-if="subPage === 'delivery-source-library'"
+        @navigate="onSubNavigate"
+        @force-desktop="goDesktop"
+        @back="backToWorkflow"
+      />
+      <MobileDeliveryRecords
+        v-else-if="subPage === 'delivery-records'"
+        @navigate="onSubNavigate"
+        @force-desktop="goDesktop"
+        @back="backToWorkflow"
+      />
       <MobileOrders
         v-else-if="!subPage && activeTab === 'orders'"
         @navigate="onNavigate"
         @force-desktop="goDesktop"
         @back="backToMain"
+      />
+      <MobileOrderDetail
+        v-else-if="subPage === 'order-detail'"
+        :order-id="selectedOrderId"
+        @navigate="onSubNavigate"
+        @force-desktop="goDesktop"
+        @back="backToOrders"
       />
       <MobileAutomation
         v-else-if="!subPage && activeTab === 'automation'"
@@ -207,13 +246,29 @@
         @force-desktop="goDesktop"
         @tab-change="switchTab"
       />
+      <MobileProfileSecurity
+        v-else-if="subPage === 'profile-security'"
+        @navigate="onSubNavigate"
+        @force-desktop="goDesktop"
+        @updated="onProfileSecurityUpdated"
+      />
+      <MobileProfileLedger
+        v-else-if="subPage === 'profile-ledger'"
+        @navigate="onSubNavigate"
+        @force-desktop="goDesktop"
+      />
+      <MobileProfileRecharge
+        v-else-if="subPage === 'profile-recharge'"
+        @navigate="onSubNavigate"
+        @force-desktop="goDesktop"
+      />
     </main>
 
     <button
       v-if="showFAB"
       class="m-fab-action"
-      @click="onFABClick"
       :aria-label="fabLabel"
+      @click="onFABClick"
     >
       <MIcon :name="fabIcon" :size="26" />
     </button>
@@ -235,6 +290,8 @@
         </template>
       </button>
     </nav>
+
+    <MToast />
   </div>
 </template>
 
@@ -243,8 +300,12 @@ import { ref, onBeforeUnmount, onMounted, computed, nextTick } from 'vue'
 import MIcon from '../mobile/MIcon.vue'
 import MobileHome from '../mobile/MobileHome.vue'
 import MobileMessages from '../mobile/MobileMessages.vue'
+import MobileNotifications from '../mobile/MobileNotifications.vue'
 import MobileAutomation from '../mobile/MobileAutomation.vue'
 import MobileProfile from '../mobile/MobileProfile.vue'
+import MobileProfileSecurity from '../mobile/MobileProfileSecurity.vue'
+import MobileProfileLedger from '../mobile/MobileProfileLedger.vue'
+import MobileProfileRecharge from '../mobile/MobileProfileRecharge.vue'
 import MobileProducts from '../mobile/MobileProducts.vue'
 import MobileProductDetail from '../mobile/MobileProductDetail.vue'
 import MobileProductPublish from '../mobile/MobileProductPublish.vue'
@@ -253,19 +314,25 @@ import MobileAccountDetail from '../mobile/MobileAccountDetail.vue'
 import MobileData from '../mobile/MobileData.vue'
 import MobileDataDetail from '../mobile/MobileDataDetail.vue'
 import MobileAutoDelivery from '../mobile/MobileAutoDelivery.vue'
+import MobileAutoDeliveryConfig from '../mobile/MobileAutoDeliveryConfig.vue'
+import MobileDeliveryRecords from '../mobile/MobileDeliveryRecords.vue'
+import MobileDeliverySourceLibrary from '../mobile/MobileDeliverySourceLibrary.vue'
 import MobileOrders from '../mobile/MobileOrders.vue'
+import MobileOrderDetail from '../mobile/MobileOrderDetail.vue'
+import MobileOpportunity from '../mobile/MobileOpportunity.vue'
 import MobileChatDetail from '../mobile/MobileChatDetail.vue'
+import MToast from '../mobile/components/MToast.vue'
 import { getCachedUsername } from '../utils/auth.js'
 import { currentUser } from '../api/system.js'
-import { pageForMobileTab, resolveMobileRoute, getMobileAccountDetailId, setMobileAccountDetailId, getMobileProductDetailId, setMobileProductDetailId } from '../mobile/mobileRouteState.js'
+import { pageForMobileTab, resolveMobileRoute, getMobileAccountDetailId, setMobileAccountDetailId, getMobileProductDetailId, setMobileProductDetailId, getMobileAutoDeliveryConfigId, setMobileAutoDeliveryConfigId, getMobileOrderDetailId, setMobileOrderDetailId } from '../mobile/mobileRouteState.js'
 
 const emit = defineEmits(['navigate', 'logout', 'force-desktop'])
 
 const bottomTabs = [
   { key: 'home', label: '首页', icon: 'home' },
-  { key: 'data', label: '数据面板', icon: 'pieChart' },
-  { key: 'automation', label: '快速开始', icon: 'plus', center: true },
-  { key: 'orders', label: '订单管理', icon: 'shoppingCart' },
+  { key: 'products', label: '商品', icon: 'bag' },
+  { key: 'product-publish', label: '发布', icon: 'plus', center: true },
+  { key: 'orders', label: '订单', icon: 'shoppingCart' },
   { key: 'profile', label: '我的', icon: 'user' }
 ]
 
@@ -273,24 +340,46 @@ const drawerGroups = [
   {
     title: '工作台',
     items: [
-      { key: 'dashboard', label: '首页概览', icon: 'home', iconBg: 'rgba(13,107,255,0.1)', iconColor: '#0d6bff' },
-      { key: 'data', label: '数据看板', icon: 'pieChart', iconBg: 'rgba(145,88,255,0.1)', iconColor: '#9158ff' },
+      { key: 'dashboard', label: '首页概览', icon: 'home', iconBg: 'rgba(51,128,255,0.1)', iconColor: '#3380ff' },
+      { key: 'data', label: '数据看板', icon: 'pieChart', iconBg: 'rgba(139,92,246,0.1)', iconColor: '#8b5cf6' },
+      { key: 'data-detail', label: '数据详情', icon: 'chart', iconBg: 'rgba(139,92,246,0.1)', iconColor: '#8b5cf6' }
+    ]
+  },
+  {
+    title: '商品与订单',
+    items: [
       { key: 'products', label: '商品管理', icon: 'bag', iconBg: 'rgba(22,191,120,0.1)', iconColor: '#16bf78' },
-      { key: 'orders', label: '订单管理', icon: 'shoppingCart', iconBg: 'rgba(255,124,67,0.1)', iconColor: '#ff7c43' }
+      { key: 'product-publish', label: '发布商品', icon: 'edit', iconBg: 'rgba(22,191,120,0.1)', iconColor: '#16bf78' },
+      { key: 'orders', label: '订单管理', icon: 'shoppingCart', iconBg: 'rgba(255,124,67,0.1)', iconColor: '#ff7c43' },
+      { key: 'order-detail', label: '订单详情', icon: 'fileText', iconBg: 'rgba(255,124,67,0.1)', iconColor: '#ff7c43' },
+      { key: 'opportunity', label: '商机发掘', icon: 'zap', iconBg: 'rgba(255,159,34,0.1)', iconColor: '#ff9f22' }
     ]
   },
   {
     title: '账号与消息',
     items: [
-      { key: 'accounts', label: '账号管理', icon: 'users', iconBg: 'rgba(13,107,255,0.1)', iconColor: '#0d6bff' },
-      { key: 'messages', label: '在线消息', icon: 'messageCircle', iconBg: 'rgba(22,191,120,0.1)', iconColor: '#16bf78' }
+      { key: 'accounts', label: '账号管理', icon: 'users', iconBg: 'rgba(51,128,255,0.1)', iconColor: '#3380ff' },
+      { key: 'account-detail', label: '账号详情', icon: 'user', iconBg: 'rgba(51,128,255,0.1)', iconColor: '#3380ff' },
+      { key: 'messages', label: '在线消息', icon: 'messageCircle', iconBg: 'rgba(22,191,120,0.1)', iconColor: '#16bf78' },
+      { key: 'notifications', label: '消息中心', icon: 'bell', iconBg: 'rgba(255,159,34,0.1)', iconColor: '#ff9f22' }
     ]
   },
   {
     title: '自动化',
     items: [
-      { key: 'workflow', label: '自动化工作流', icon: 'bot', iconBg: 'rgba(145,88,255,0.1)', iconColor: '#9158ff' },
-      { key: 'auto-delivery', label: '自动发货', icon: 'send', iconBg: 'rgba(255,159,34,0.1)', iconColor: '#ff9f22' }
+      { key: 'workflow', label: '工作流', icon: 'workflow', iconBg: 'rgba(139,92,246,0.1)', iconColor: '#8b5cf6' },
+      { key: 'auto-delivery', label: '自动发货', icon: 'send', iconBg: 'rgba(255,159,34,0.1)', iconColor: '#ff9f22' },
+      { key: 'auto-delivery-config', label: '自动发货配置', icon: 'settings', iconBg: 'rgba(255,159,34,0.1)', iconColor: '#ff9f22' },
+      { key: 'delivery-source-library', label: '货源库', icon: 'folder', iconBg: 'rgba(139,92,246,0.1)', iconColor: '#8b5cf6' },
+      { key: 'delivery-records', label: '发货记录', icon: 'truck', iconBg: 'rgba(255,159,34,0.1)', iconColor: '#ff9f22' }
+    ]
+  },
+  {
+    title: '个人',
+    items: [
+      { key: 'profile-security', label: '安全设置', icon: 'shield', iconBg: 'rgba(51,128,255,0.1)', iconColor: '#3380ff' },
+      { key: 'profile-ledger', label: 'Token 流水', icon: 'coins', iconBg: 'rgba(255,159,34,0.1)', iconColor: '#ff9f22' },
+      { key: 'profile-recharge', label: '充值记录', icon: 'dollar', iconBg: 'rgba(22,191,120,0.1)', iconColor: '#16bf78' }
     ]
   }
 ]
@@ -299,12 +388,21 @@ const mobileSubPages = {
   products: '商品管理',
   'product-detail': '商品详情',
   'product-publish': '发布宝贝',
+  opportunity: '商机发掘',
   accounts: '账号管理',
   'account-detail': '账号详情',
   'data-detail': '数据详情',
   messages: '在线消息',
   'chat-detail': '聊天详情',
-  'auto-delivery': '自动发货'
+  notifications: '消息中心',
+  'auto-delivery': '自动发货',
+  'auto-delivery-config': '配置自动发货',
+  'delivery-records': '发货记录',
+  'delivery-source-library': '货源库',
+  'order-detail': '订单详情',
+  'profile-security': '账号安全',
+  'profile-ledger': 'Token 流水',
+  'profile-recharge': '充值记录'
 }
 
 const activeTab = ref('home')
@@ -314,6 +412,8 @@ const username = ref(getCachedUsername() || '未登录用户')
 const userInfo = ref({ username: username.value })
 const selectedAccountId = ref(null)
 const selectedProduct = ref(null)
+const selectedDeliveryGoods = ref(null)
+const selectedOrderId = ref(null)
 const accountsListRef = ref(null)
 const accountDetailRef = ref(null)
 const productsListRef = ref(null)
@@ -327,6 +427,12 @@ let searchDebounceTimer = null
 
 const subPageTitle = computed(() => mobileSubPages[subPage.value] || '')
 
+const selectedDeliveryGoodsId = computed(() => {
+  return selectedDeliveryGoods.value?.id
+    || getMobileAutoDeliveryConfigId()
+    || null
+})
+
 const canSearch = computed(() => {
   return subPage.value === 'products'
 })
@@ -337,7 +443,7 @@ const searchPlaceholder = computed(() => {
 })
 
 const showFAB = computed(() => {
-  return subPage.value === 'products' || (!subPage && activeTab.value === 'home')
+  return subPage.value === 'products' || (!subPage.value && activeTab.value === 'home')
 })
 
 const fabIcon = computed(() => 'plus')
@@ -396,7 +502,28 @@ function onNavigate(pageKey) {
   emit('navigate', pageKey)
 }
 
-function onSubNavigate(pageKey) {
+function onSubNavigate(pageKey, payload) {
+  if (pageKey === 'auto-delivery-config') {
+    const id = payload?.productId
+    if (id) {
+      selectedDeliveryGoods.value = { id }
+      setMobileAutoDeliveryConfigId(id)
+    }
+    emit('navigate', 'auto-delivery-config')
+    return
+  }
+  if (pageKey === 'product-detail' && payload?.id) {
+    selectedProduct.value = selectedProduct.value || { id: payload.id, itemId: payload.id }
+    setMobileProductDetailId(payload.id)
+    emit('navigate', `product-detail/${payload.id}`)
+    return
+  }
+  if (pageKey === 'order-detail' && payload?.id) {
+    selectedOrderId.value = payload.id
+    setMobileOrderDetailId(payload.id)
+    emit('navigate', `order-detail/${payload.id}`)
+    return
+  }
   if (mobileSubPages[pageKey] || bottomTabs.some(t => pageForMobileTab(t.key) === pageKey)) {
     emit('navigate', pageKey)
     return
@@ -422,8 +549,26 @@ function backToMain() {
   emit('navigate', 'dashboard')
 }
 
+function backToProfile() {
+  emit('navigate', 'profile')
+}
+
+function onProfileSecurityUpdated() {
+  // 安全信息更新后，MobileProfile 在重新挂载时会自动重新加载 overview
+}
+
 function backToWorkflow() {
   emit('navigate', 'workflow')
+}
+
+function backToAutoDelivery() {
+  setMobileAutoDeliveryConfigId(null)
+  selectedDeliveryGoods.value = null
+  emit('navigate', 'auto-delivery')
+}
+
+function onDeliveryConfigSaved() {
+  // 保存成功后由 back 事件触发返回到 auto-delivery，MobileAutoDelivery 在 onMounted 中会重新加载
 }
 
 function backToProducts() {
@@ -439,6 +584,12 @@ function backToData() {
 function backToAccounts() {
   setMobileAccountDetailId(null)
   emit('navigate', 'accounts')
+}
+
+function backToOrders() {
+  setMobileOrderDetailId(null)
+  selectedOrderId.value = null
+  emit('navigate', 'orders')
 }
 
 function backToMessages() {
@@ -499,7 +650,15 @@ function handleSubBack() {
     backToProducts()
   } else if (subPage.value === 'account-detail') {
     backToAccounts()
+  } else if (subPage.value === 'order-detail') {
+    backToOrders()
   } else if (subPage.value === 'auto-delivery') {
+    backToWorkflow()
+  } else if (subPage.value === 'auto-delivery-config') {
+    backToAutoDelivery()
+  } else if (subPage.value === 'delivery-source-library') {
+    backToWorkflow()
+  } else if (subPage.value === 'delivery-records') {
     backToWorkflow()
   } else if (subPage.value === 'data-detail') {
     backToData()
@@ -507,7 +666,11 @@ function handleSubBack() {
     backToMessages()
   } else if (subPage.value === 'messages') {
     backToMain()
-  } else if (subPage.value === 'products' || subPage.value === 'accounts') {
+  } else if (subPage.value === 'notifications') {
+    backToMain()
+  } else if (subPage.value === 'profile-security' || subPage.value === 'profile-ledger' || subPage.value === 'profile-recharge') {
+    backToProfile()
+  } else if (subPage.value === 'products' || subPage.value === 'accounts' || subPage.value === 'opportunity') {
     backToMain()
   } else {
     backToMain()
@@ -591,6 +754,34 @@ function syncRouteState() {
     }
   }
 
+  if (currentPage.startsWith('auto-delivery-config/')) {
+    const id = currentPage.split('/')[1]
+    if (id) {
+      selectedDeliveryGoods.value = { id }
+      setMobileAutoDeliveryConfigId(id)
+    }
+  } else if (currentPage === 'auto-delivery-config') {
+    const savedGoodsId = getMobileAutoDeliveryConfigId()
+    if (savedGoodsId && !selectedDeliveryGoods.value) {
+      selectedDeliveryGoods.value = { id: savedGoodsId }
+    }
+  } else {
+    // 离开配置页时不清空 sessionStorage，仅在显式返回时清理（backToAutoDelivery）
+  }
+
+  if (currentPage.startsWith('order-detail/')) {
+    const id = currentPage.split('/')[1]
+    if (id) {
+      selectedOrderId.value = id
+      setMobileOrderDetailId(id)
+    }
+  } else {
+    const savedOrderId = getMobileOrderDetailId()
+    if (savedOrderId && !selectedOrderId.value) {
+      selectedOrderId.value = savedOrderId
+    }
+  }
+
   nextTick(() => {
     if (contentRef.value) contentRef.value.scrollTop = 0
   })
@@ -609,11 +800,16 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+@import '../mobile/tokens.css';
 .mobile-shell {
   width: 100%;
   max-width: 100vw;
   min-height: 100vh;
-  background: linear-gradient(180deg, #f5f8ff 0%, #f0f5ff 100%);
+  background: var(--m-color-bg-page);
+  font-family: var(--m-font-family);
+  color: var(--m-color-text-primary);
+  font-size: var(--m-font-size-body);
+  line-height: var(--m-line-height-base);
   display: flex;
   flex-direction: column;
   position: relative;
@@ -632,14 +828,14 @@ onBeforeUnmount(() => {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(245, 248, 255, 0.92);
+  background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  padding: calc(12px + env(safe-area-inset-top)) 16px 10px;
+  padding: calc(var(--m-space-3) + var(--m-safe-area-top)) var(--m-space-4) 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid rgba(231, 237, 247, 0.5);
+  border-bottom: 1px solid var(--m-color-border-light);
   gap: 10px;
 }
 
@@ -653,20 +849,20 @@ onBeforeUnmount(() => {
 }
 
 .m-menu-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
+  width: var(--m-space-10);
+  height: var(--m-space-10);
+  border-radius: var(--m-radius-lg);
   border: none;
-  background: white;
-  color: #15213d;
+  background: var(--m-color-bg-card);
+  color: var(--m-color-text-primary);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(31,53,94,0.06);
+  box-shadow: var(--m-shadow-card);
   flex-shrink: 0;
 }
-.m-menu-btn:active { background: #f0f4fa; }
+.m-menu-btn:active { background: var(--m-color-bg-subtle); }
 
 .m-brand-center {
   display: flex;
@@ -692,16 +888,16 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   background: linear-gradient(180deg, #0d7fff, #16b7ff);
   transform: rotate(42deg);
-  box-shadow: 0 4px 12px rgba(13,107,255,0.25);
+  box-shadow: 0 4px 12px rgba(51,128,255,0.25);
 }
 .m-brand-mark span + span {
   transform: rotate(-42deg);
   background: linear-gradient(180deg, #25a5ff, #0362f4);
 }
 .m-brand-name {
-  font-size: 17px;
-  font-weight: 800;
-  color: #15213d;
+  font-size: var(--m-font-size-h2);
+  font-weight: var(--m-font-weight-extrabold);
+  color: var(--m-color-text-primary);
   letter-spacing: -0.2px;
 }
 
@@ -712,19 +908,19 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 .m-top-action-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
+  width: var(--m-space-10);
+  height: var(--m-space-10);
+  border-radius: var(--m-radius-lg);
   border: none;
-  background: white;
-  color: #15213d;
+  background: var(--m-color-bg-card);
+  color: var(--m-color-text-primary);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(31,53,94,0.06);
+  box-shadow: var(--m-shadow-card);
 }
-.m-top-action-btn:active { background: #f0f4fa; }
+.m-top-action-btn:active { background: var(--m-color-bg-subtle); }
 
 .m-back-btn {
   display: inline-flex;
@@ -732,22 +928,22 @@ onBeforeUnmount(() => {
   gap: 2px;
   background: none;
   border: none;
-  color: #15213d;
-  font-size: 15px;
-  font-weight: 600;
+  color: var(--m-color-text-primary);
+  font-size: var(--m-font-size-h3);
+  font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
   padding: 6px 8px;
-  border-radius: 100px;
+  border-radius: var(--m-radius-pill);
   flex-shrink: 0;
 }
-.m-back-btn:active { background: rgba(13,107,255,0.08); }
+.m-back-btn:active { background: var(--m-color-primary-bg); }
 
 .m-sub-title {
   flex: 1;
   text-align: center;
-  font-size: 17px;
-  font-weight: 700;
-  color: #15213d;
+  font-size: var(--m-font-size-h2);
+  font-weight: var(--m-font-weight-bold);
+  color: var(--m-color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -755,36 +951,36 @@ onBeforeUnmount(() => {
 
 .m-desktop-btn,
 .m-icon-btn-top {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
+  width: var(--m-space-10);
+  height: var(--m-space-10);
+  border-radius: var(--m-radius-lg);
   border: none;
-  background: white;
-  color: #15213d;
+  background: var(--m-color-bg-card);
+  color: var(--m-color-text-primary);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(31,53,94,0.06);
+  box-shadow: var(--m-shadow-card);
   flex-shrink: 0;
 }
 .m-desktop-btn:active,
-.m-icon-btn-top:active { background: #f0f4fa; }
+.m-icon-btn-top:active { background: var(--m-color-bg-subtle); }
 
 .m-add-account-topbtn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  background: linear-gradient(135deg, #0d6bff, #2580ff);
+  gap: var(--m-space-1);
+  background: linear-gradient(135deg, #3380ff, #2580ff);
   border: none;
-  color: white;
-  font-size: 13px;
-  font-weight: 600;
+  color: var(--m-color-text-inverse);
+  font-size: var(--m-font-size-body-sm);
+  font-weight: var(--m-font-weight-semibold);
   padding: 8px 14px;
-  border-radius: 100px;
+  border-radius: var(--m-radius-pill);
   cursor: pointer;
   flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(13,107,255,0.3);
+  box-shadow: 0 2px 8px rgba(51,128,255,0.3);
 }
 .m-add-account-topbtn:active { transform: scale(0.96); }
 
@@ -792,30 +988,30 @@ onBeforeUnmount(() => {
   flex: 1;
   display: flex;
   align-items: center;
-  background: white;
-  border-radius: 100px;
+  background: var(--m-color-bg-card);
+  border-radius: var(--m-radius-pill);
   padding: 0 14px;
-  height: 40px;
-  gap: 8px;
-  box-shadow: 0 2px 8px rgba(31,53,94,0.06);
-  border: 1px solid #eef2fa;
+  height: var(--m-space-10);
+  gap: var(--m-space-2);
+  box-shadow: var(--m-shadow-card);
+  border: 1px solid var(--m-color-border-light);
 }
-.m-search-icon { color: #94a3b8; flex-shrink: 0; }
+.m-search-icon { color: var(--m-color-text-tertiary); flex-shrink: 0; }
 .m-search-input {
   flex: 1;
   border: none;
   outline: none;
   background: transparent;
-  font-size: 15px;
-  color: #15213d;
+  font-size: var(--m-font-size-h3);
+  color: var(--m-color-text-primary);
   min-width: 0;
 }
-.m-search-input::placeholder { color: #94a3b8; }
+.m-search-input::placeholder { color: var(--m-color-text-tertiary); }
 .m-search-clear {
   border: none;
   background: none;
-  color: #94a3b8;
-  padding: 4px;
+  color: var(--m-color-text-tertiary);
+  padding: var(--m-space-1);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -826,7 +1022,7 @@ onBeforeUnmount(() => {
 .m-drawer-mask {
   position: fixed;
   inset: 0;
-  background: rgba(15,25,50,0.4);
+  background: var(--m-mask-drawer);
   z-index: 200;
   animation: fadeIn 0.2s ease;
 }
@@ -837,20 +1033,20 @@ onBeforeUnmount(() => {
   top: 0;
   left: 0;
   bottom: 0;
-  width: 290px;
+  width: 300px;
   max-width: 82vw;
-  background: white;
+  background: var(--m-color-bg-card);
   z-index: 201;
   display: flex;
   flex-direction: column;
   animation: slideInLeft 0.25s ease;
-  box-shadow: 4px 0 24px rgba(15,25,50,0.12);
+  box-shadow: var(--m-shadow-elevated);
 }
 @keyframes slideInLeft { from { transform: translateX(-100%); } to { transform: translateX(0); } }
 
 .m-drawer-header {
   padding: calc(16px + env(safe-area-inset-top)) 20px 20px;
-  background: linear-gradient(135deg, #0d6bff 0%, #2580ff 100%);
+  background: linear-gradient(135deg, #3380ff 0%, #2580ff 100%);
   color: white;
   display: flex;
   align-items: center;
@@ -913,10 +1109,10 @@ onBeforeUnmount(() => {
   margin-bottom: 16px;
 }
 .m-drawer-group-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: #8c98ae;
-  padding: 8px 12px 6px;
+  font-size: var(--m-font-size-caption);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-tertiary);
+  padding: var(--m-space-2) var(--m-space-3) 6px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -933,13 +1129,13 @@ onBeforeUnmount(() => {
   text-align: left;
   transition: background 0.15s;
 }
-.m-drawer-item:active { background: #f5f7fb; }
+.m-drawer-item:active { background: var(--m-color-bg-hover); }
 .m-drawer-item.active {
-  background: #eef4ff;
+  background: var(--m-color-primary-bg);
 }
 .m-drawer-item.active .m-drawer-item-label {
-  color: #0d6bff;
-  font-weight: 600;
+  color: var(--m-color-primary);
+  font-weight: var(--m-font-weight-semibold);
 }
 .m-drawer-item-icon {
   width: 36px;
@@ -952,43 +1148,44 @@ onBeforeUnmount(() => {
 }
 .m-drawer-item-label {
   flex: 1;
-  font-size: 15px;
-  color: #1e293b;
+  font-size: var(--m-font-size-h3);
+  color: var(--m-color-text-primary);
 }
 .m-drawer-item-arrow {
-  color: #c0c8d6;
+  color: var(--m-color-text-disabled);
   flex-shrink: 0;
 }
 
 .m-drawer-footer {
-  padding: 12px;
-  border-top: 1px solid #f0f4fa;
+  padding: var(--m-space-3);
+  border-top: 1px solid var(--m-color-border-light);
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  gap: var(--m-space-2);
+  padding-bottom: calc(var(--m-space-3) + var(--m-safe-area-bottom));
 }
 .m-drawer-foot-btn {
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 12px;
-  border-radius: 12px;
-  border: none;
-  background: #f5f7fb;
-  color: #5a6a85;
-  font-size: 14px;
-  font-weight: 500;
+  gap: var(--m-space-2);
+  padding: var(--m-space-3);
+  border-radius: var(--m-radius-lg);
+  border: 1px solid var(--m-color-border);
+  background: var(--m-color-bg-card);
+  color: var(--m-color-text-secondary);
+  font-size: var(--m-font-size-body);
+  font-weight: var(--m-font-weight-medium);
   cursor: pointer;
 }
-.m-drawer-foot-btn:active { background: #e7edf7; }
+.m-drawer-foot-btn:active { background: var(--m-color-bg-subtle); }
 .m-drawer-foot-btn.m-drawer-foot-danger {
-  color: #ff4757;
-  background: rgba(255,71,87,0.08);
+  color: var(--m-color-danger);
+  background: var(--m-color-danger-bg);
+  border-color: var(--m-color-danger-border);
 }
-.m-drawer-foot-btn.m-drawer-foot-danger:active { background: rgba(255,71,87,0.12); }
+.m-drawer-foot-btn.m-drawer-foot-danger:active { background: var(--m-color-danger-bg); }
 
 .m-content {
   flex: 1;
@@ -1046,13 +1243,13 @@ onBeforeUnmount(() => {
   background: rgba(255,255,255,0.96);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-top: 1px solid rgba(231,237,247,0.7);
-  padding: 6px 0 max(8px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--m-color-border-light);
+  padding: 6px 0 max(8px, var(--m-safe-area-bottom));
   display: flex;
   align-items: flex-end;
   justify-content: space-around;
   z-index: 100;
-  box-shadow: 0 -4px 20px rgba(31,53,94,0.05);
+  box-shadow: var(--m-shadow-tabbar);
   height: 64px;
   box-sizing: content-box;
 }
@@ -1066,9 +1263,9 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 3px;
   padding: 6px 0 4px;
-  color: #9aa7bc;
-  font-size: 10px;
-  font-weight: 500;
+  color: var(--m-color-text-tertiary);
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-medium);
   cursor: pointer;
   transition: color 0.2s;
   position: relative;
@@ -1076,7 +1273,7 @@ onBeforeUnmount(() => {
 }
 .m-tab :deep(svg) { transition: transform 0.2s; }
 .m-tab.active {
-  color: #0d6bff;
+  color: var(--m-color-primary);
 }
 .m-tab.active :deep(svg) {
   transform: scale(1.08);
@@ -1087,14 +1284,14 @@ onBeforeUnmount(() => {
 .m-tab-center-btn {
   width: 50px;
   height: 50px;
-  border-radius: 50%;
+  border-radius: var(--m-radius-circle);
   background: linear-gradient(135deg, #0d7fff, #3b9bff);
-  color: white;
+  color: var(--m-color-text-inverse);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 6px 20px rgba(13,107,255,0.4);
-  margin-bottom: 12px;
+  box-shadow: var(--m-shadow-fab);
+  margin-bottom: var(--m-space-3);
   position: relative;
   top: -14px;
 }

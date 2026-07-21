@@ -182,7 +182,7 @@
             </button>
           </div>
           <div class="m-notice-list">
-            <div v-for="(notice, idx) in noticeList" :key="idx" class="m-notice-item">
+            <div v-for="(notice, idx) in noticeList" :key="notice.id || idx" class="m-notice-item">
               <div class="m-notice-icon" :style="{ background: notice.iconBg }">
                 <MIcon :name="notice.icon" :size="16" :style="{ color: notice.color }" />
               </div>
@@ -192,7 +192,17 @@
               </div>
               <div class="m-notice-time">{{ notice.time }}</div>
             </div>
+            <div v-if="!notificationsLoadError && noticeList.length === 0" class="m-notice-empty">
+              暂无最新通知
+            </div>
           </div>
+          <MobileUnavailableState
+            v-if="notificationsLoadError"
+            compact
+            title="最近通知暂时不可用"
+            :description="notificationsLoadError"
+            @retry="loadNotifications"
+          />
         </div>
 
         <div v-if="trendHasData" class="m-section">
@@ -230,20 +240,6 @@
             </table>
           </div>
         </div>
-
-        <div class="m-tip-card">
-          <div class="m-tip-icon">
-            <MIcon name="bulb" :size="20" />
-          </div>
-          <div class="m-tip-content">
-            <div class="m-tip-title">温馨提示</div>
-            <div class="m-tip-desc">更详细的数据分析、趋势对比与导出功能建议在桌面端查看，体验更佳。</div>
-          </div>
-          <button class="m-tip-btn" @click="$emit('force-desktop')">
-            桌面版
-            <MIcon name="chevronRight" :size="14" />
-          </button>
-        </div>
       </template>
     </template>
 
@@ -256,6 +252,10 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } 
 import MIcon from './MIcon.vue'
 import MobileUnavailableState from './MobileUnavailableState.vue'
 import { getDashboardSummary, getDashboardSalesTrend } from '../api/dashboard.js'
+import { getNavigationNotifications } from '../api/navigation.js'
+import { getLiteAccounts } from '../api/accounts.js'
+import { recordsOfOrThrow } from '../utils/apiData.js'
+import { isAccountCookieExpired } from '../utils/accountAuth.js'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent } from 'echarts/components'
@@ -267,8 +267,8 @@ defineEmits(['navigate', 'force-desktop', 'back'])
 
 const dateTabs = [
   { label: '今日', value: 'today' },
-  { label: '近7天', value: '7d', disabled: true },
-  { label: '近30天', value: '30d', disabled: true }
+  { label: '近7天', value: '7d' },
+  { label: '近30天', value: '30d' }
 ]
 
 const trendRangeOptions = [
@@ -290,7 +290,9 @@ const stats = reactive({
   pendingDeliveryCount: 0,
   deliveryFailCount: 0,
   aiReplyCount: 0,
-  itemCount: 0
+  itemCount: 0,
+  unreadMessage: null,
+  cookieExpiredCount: null
 })
 
 const trend = ref({
@@ -466,7 +468,7 @@ const alertItems = computed(() => [
   },
   {
     label: '待回复消息',
-    value: '0',
+    value: metricText(stats.unreadMessage),
     icon: 'message',
     color: '#f59e0b',
     bg: 'linear-gradient(135deg, #fffbeb, #fefce8)',
@@ -474,7 +476,7 @@ const alertItems = computed(() => [
   },
   {
     label: 'Cookie 过期',
-    value: '0',
+    value: metricText(stats.cookieExpiredCount),
     icon: 'wifiOff',
     color: '#8b5cf6',
     bg: 'linear-gradient(135deg, #faf5ff, #f5f3ff)',
@@ -493,35 +495,61 @@ const quickEntries = [
   { key: 'profile', label: '设置', icon: 'settings', color: '#64748b', iconBg: 'linear-gradient(135deg, #f8fafc, #f1f5f9)' }
 ]
 
-const noticeList = [
-  {
-    title: '自动发货成功',
-    desc: '订单 #20240115001 已完成自动发货',
-    time: '2分钟前',
-    icon: 'checkCircle',
-    color: '#16bf78',
-    iconBg: 'linear-gradient(135deg, #dcfce7, #bbf7d0)'
-  },
-  {
-    title: '新订单提醒',
-    desc: '您有1笔新订单待处理',
-    time: '15分钟前',
-    icon: 'bag',
-    color: '#0d6bff',
-    iconBg: 'linear-gradient(135deg, #dbeafe, #bfdbfe)'
-  },
-  {
-    title: 'AI客服回复',
-    desc: 'AI客服已自动回复买家咨询',
-    time: '1小时前',
-    icon: 'bot',
-    color: '#8b5cf6',
-    iconBg: 'linear-gradient(135deg, #ede9fe, #ddd6fe)'
-  }
-]
+const noticeList = ref([])
+const notificationsLoadError = ref('')
 
 function metricText(value) {
   return value === null || value === undefined ? '—' : value
+}
+
+function noticePalette(type) {
+  const t = String(type || '').toLowerCase()
+  if (t === 'success' || t === 'delivery' || t === 'shipping') {
+    return { icon: 'checkCircle', color: '#16bf78', iconBg: 'linear-gradient(135deg, #dcfce7, #bbf7d0)' }
+  }
+  if (t === 'warning' || t === 'warn' || t === 'pending') {
+    return { icon: 'alertTriangle', color: '#f59e0b', iconBg: 'linear-gradient(135deg, #fef3c7, #fde68a)' }
+  }
+  if (t === 'error' || t === 'fail' || t === 'failed') {
+    return { icon: 'alertTriangle', color: '#ef4444', iconBg: 'linear-gradient(135deg, #fee2e2, #fecaca)' }
+  }
+  if (t === 'order' || t === 'bag' || t === 'trade') {
+    return { icon: 'bag', color: '#0d6bff', iconBg: 'linear-gradient(135deg, #dbeafe, #bfdbfe)' }
+  }
+  if (t === 'ai' || t === 'bot' || t === 'chat' || t === 'reply') {
+    return { icon: 'bot', color: '#8b5cf6', iconBg: 'linear-gradient(135deg, #ede9fe, #ddd6fe)' }
+  }
+  return { icon: 'bell', color: '#0d6bff', iconBg: 'linear-gradient(135deg, #e8f1ff, #dbeafe)' }
+}
+
+function formatNoticeTime(value) {
+  if (!value) return ''
+  const d = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  const now = new Date()
+  const diff = (now - d) / 1000
+  if (diff < 60) return '刚刚'
+  if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${month}-${day}`
+}
+
+function normalizeNotice(n) {
+  if (!n || typeof n !== 'object') return null
+  const type = n.type || n.category
+  const palette = noticePalette(type)
+  const time = formatNoticeTime(n.createTime || n.createdAt || n.time || n.created_at)
+  return {
+    id: n.id ?? null,
+    title: n.title || '系统通知',
+    desc: n.content || n.message || n.desc || '',
+    time,
+    icon: n.icon || palette.icon,
+    color: palette.color,
+    iconBg: palette.iconBg
+  }
 }
 
 function initTrendChart() {
@@ -647,7 +675,9 @@ function handleResize() {
 }
 
 async function loadSummary() {
-  const res = await getDashboardSummary({ date: activeDate.value })
+  // 后端 /dashboard/summary 仅支持 accountId 过滤，不接受 date/range/days 参数，固定返回今日汇总
+  // 切换 tab 时仍重新调用以触发加载状态与数据刷新
+  const res = await getDashboardSummary()
   const d = res?.data
   if (!d || typeof d !== 'object' || Array.isArray(d)) throw new Error('数据概览响应格式异常')
   const values = {
@@ -660,10 +690,14 @@ async function loadSummary() {
   }
   const normalized = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, Number(value) || 0]))
   Object.assign(stats, normalized)
+  // 待回复消息：后端可能未返回该字段，保持 null 表示未提供，alertItems 显示为 "—"
+  const unread = d.unreadMessage ?? d.unreadMessageCount
+  stats.unreadMessage = unread === null || unread === undefined ? null : (Number(unread) || 0)
 }
 
 async function loadTrend() {
-  const res = await getDashboardSalesTrend()
+  // 后端 /dashboard/sales-trend 支持 days 参数（默认 7），按当前 trendDays 拉取对应天数趋势
+  const res = await getDashboardSalesTrend({ days: trendDays.value })
   const d = res?.data
   if (!d || typeof d !== 'object' || Array.isArray(d)) throw new Error('趋势数据响应格式异常')
   const dates = d.dates
@@ -679,6 +713,35 @@ async function loadTrend() {
   }
 }
 
+async function loadAccounts() {
+  // 统计 Cookie 过期账号数：调用 getLiteAccounts 获取账号列表，使用 isAccountCookieExpired 判断
+  // 失败时不抛错（cookieExpiredCount 仅是次要指标），保持 null 表示未能加载
+  try {
+    const res = await getLiteAccounts({ page: 1, pageSize: 100 })
+    const data = res?.data
+    let list = []
+    if (Array.isArray(data)) list = data
+    else if (Array.isArray(data?.records)) list = data.records
+    else if (Array.isArray(data?.list)) list = data.list
+    else if (Array.isArray(data?.accounts)) list = data.accounts
+    stats.cookieExpiredCount = list.filter(a => isAccountCookieExpired(a)).length
+  } catch (error) {
+    stats.cookieExpiredCount = null
+  }
+}
+
+async function loadNotifications() {
+  notificationsLoadError.value = ''
+  try {
+    const res = await getNavigationNotifications({ limit: 5 })
+    const records = recordsOfOrThrow(res?.data, '最近通知响应格式异常').slice(0, 5)
+    noticeList.value = records.map(normalizeNotice).filter(Boolean)
+  } catch (error) {
+    noticeList.value = []
+    notificationsLoadError.value = error?.message || '请检查网络连接后重试。'
+  }
+}
+
 function resetStats() {
   stats.orderCount = 0
   stats.deliverySuccessCount = 0
@@ -686,13 +749,19 @@ function resetStats() {
   stats.deliveryFailCount = 0
   stats.aiReplyCount = 0
   stats.itemCount = 0
+  stats.unreadMessage = null
+  stats.cookieExpiredCount = null
 }
 
 async function loadAll() {
   loading.value = true
   loadError.value = ''
   trendError.value = ''
-  const [summaryResult, trendResult] = await Promise.allSettled([loadSummary(), loadTrend()])
+  const [summaryResult, trendResult, accountsResult] = await Promise.allSettled([
+    loadSummary(),
+    loadTrend(),
+    loadAccounts()
+  ])
   if (summaryResult.status === 'rejected') {
     resetStats()
     loadError.value = summaryResult.reason?.message || '请检查网络连接后重试。'
@@ -701,15 +770,20 @@ async function loadAll() {
     trend.value = { dates: [], deliverySuccess: [], deliveryFail: [], aiReply: [] }
     trendError.value = trendResult.reason?.message || '请检查网络连接后重试。'
   }
+  // accountsResult 失败已在 loadAccounts 内部处理（保持 null），不影响整体加载状态
   loading.value = false
   await nextTick()
   initTrendChart()
 }
 
 async function switchDate(value) {
-  if (dateTabs.find(tab => tab.value === value)?.disabled) return
   if (activeDate.value === value) return
   activeDate.value = value
+  // 切换顶部时间范围 tab 时同步趋势天数，使趋势图/趋势表格随之更新
+  // 后端 summary 接口仅支持今日汇总（不接受 date/range/days 参数），故仅 trend 受 days 影响
+  if (value === '7d') trendDays.value = 7
+  else if (value === '30d') trendDays.value = 30
+  // today 保持当前 trendDays（默认 7），便于查看近期走势
   await loadAll()
 }
 
@@ -729,6 +803,7 @@ watch(trendDays, () => {
 
 onMounted(() => {
   loadAll()
+  loadNotifications()
   window.addEventListener('resize', handleResize)
 })
 
@@ -1450,6 +1525,14 @@ onBeforeUnmount(() => {
   font-weight: 500;
   flex-shrink: 0;
   margin-top: 2px;
+}
+
+.m-notice-empty {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: #b3bdcf;
+  font-weight: 500;
 }
 
 .m-table-wrap {

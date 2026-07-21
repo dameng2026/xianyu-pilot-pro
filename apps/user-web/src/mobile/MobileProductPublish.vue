@@ -452,11 +452,14 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import MIcon from './MIcon.vue'
 import { getLiteAccounts, checkAccountAuth } from '../api/accounts.js'
+import { createGoods } from '../api/goods.js'
+import { publishItem } from '../api/items.js'
 import { uploadImage, uploadImageFromUrl } from '../api/misc.js'
 import { accountName } from '../utils/format.js'
 import { fetchCategories } from '../api/categories.js'
 import { aiRewriteGoods } from '../api/workflow.js'
 import { ensureAiTokenBalance } from '../utils/aiTokenGuard.js'
+import { normalizePublishAddress } from '../utils/publishAddress.js'
 import { imageUploadValidationMessage } from '../utils/imageUploadPolicy.js'
 
 const emit = defineEmits(['navigate', 'force-desktop', 'back'])
@@ -767,13 +770,72 @@ async function submit() {
     return
   }
   submitting.value = true
+  let publishedItemId = ''
   try {
-    await new Promise(r => setTimeout(r, 1500))
-    alert('发布成功！（演示）')
-    clearDraftData()
-    emit('back')
+    const finalPrice = form.price
+    const finalStock = Number(form.stock) || 1
+    const shippingMap = { free: true, fixed: false, none: false }
+    const freeShipping = shippingMap[shippingMode.value] ?? true
+
+    // 构建位置数据（与 PC 端保持一致的格式）
+    const locationData = normalizePublishAddress(selectedAddress.value)
+
+    // 先发布到闲鱼，成功后再保存到本地数据库，避免发布失败时本地却显示商品
+    const publishRes = await publishItem({
+      xianyuAccountId: Number(form.accountId),
+      title: form.title.slice(0, 30),
+      description: form.description,
+      imageUrls: form.imageUrls,
+      price: finalPrice,
+      stock: finalStock,
+      category: selectedCategoryName.value,
+      freeShipping,
+      supportSelfPick: form.supportSelfPick,
+      location: locationData,
+    })
+
+    if (publishRes && typeof publishRes === 'object' && [0, 200].includes(Number(publishRes.code))) {
+      if (!publishRes.data || typeof publishRes.data !== 'object' || Array.isArray(publishRes.data)) {
+        throw new Error('发布请求已返回，但结果格式异常，无法确认是否成功，请先到闲鱼核对')
+      }
+      const itemId = String(publishRes.data.itemId ?? publishRes.data.xyGoodsId ?? publishRes.data.id ?? '').trim()
+      const itemUrl = publishRes.data?.itemUrl || ''
+      if (!itemId) throw new Error('发布接口未返回有效闲鱼商品ID，本地不会保存为在售商品')
+      publishedItemId = itemId
+
+      // 发布成功后将闲鱼返回的商品 ID 同步保存到本地数据库
+      await createGoods({
+        accountId: Number(form.accountId),
+        externalGoodsId: itemId,
+        title: form.title.slice(0, 30),
+        description: form.description,
+        imageUrls: form.imageUrls,
+        imageUrl: form.imageUrls[0] || '',
+        category: selectedCategoryName.value,
+        price: Number(finalPrice),
+        stock: finalStock,
+        detailUrl: itemUrl,
+        status: 0,
+      })
+
+      // 发布成功后清除草稿并标记商品待同步
+      clearDraftData()
+      localStorage.setItem('xianyu_pending_sync', 'true')
+
+      alert('发布成功！')
+      // 跳转回商品列表，MobileProducts 重新挂载会自动 loadProducts 刷新列表
+      emit('back')
+    } else {
+      // 发布失败，显示具体错误信息（包括 AI 封面图缺失等后端校验提示）
+      const errMsg = publishRes?.msg || '发布到闲鱼失败，请稍后重试'
+      alert(errMsg)
+    }
   } catch (e) {
-    alert('发布失败：' + (e.message || '未知错误'))
+    const errMsg = publishedItemId
+      ? `商品已发布到闲鱼（ID：${publishedItemId}），但本地商品记录保存失败：${e?.message || '服务异常'}。请勿重复发布，先到商品管理执行同步。`
+      : (e?.message || '发布失败，请稍后重试')
+    alert(errMsg)
+    if (publishedItemId) localStorage.setItem('xianyu_pending_sync', 'true')
   } finally {
     submitting.value = false
   }

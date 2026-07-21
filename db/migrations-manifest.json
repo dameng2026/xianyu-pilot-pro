@@ -337,6 +337,22 @@
           "sha256": "952eb04c7a2f1e661a34fcb5a3973a34df88ae41d30b8b82f40c958859f27706",
           "risk": "expand",
           "rollback": "restore"
+        },
+        {
+          "version": "1.14",
+          "description": "fix captcha_solve_record.deleted NULL default causing admin-web records invisible",
+          "path": "apps/automation-service/migrations/V1.14__fix_captcha_solve_record_deleted_default.sql",
+          "sha256": "5aa9c7c30cc0431b941ffbdc8541ca7930329ae30278623b5de308aff8dc03a7",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.15",
+          "description": "add priority, failure_reason, queued_at, started_at, finished_at to captcha_solve_record for priority queue scheduling",
+          "path": "apps/automation-service/migrations/V1.15__add_captcha_solve_record_priority_and_tracking.sql",
+          "sha256": "4f671e7d95b3d0314489a8dea49fcc53cbe555eb03d2b7ddeb6633ab1aec8007",
+          "risk": "expand",
+          "rollback": "restore"
         }
       ],
       "quarantined": []

@@ -66,7 +66,7 @@
             到期 {{ formatDateOnly(overview.activePlan.expireTime || overview.expireTime) }}
           </span>
         </div>
-        <button class="m-token-renew" @click="showUnavailableNotice">续费</button>
+        <button class="m-token-renew" @click="paymentVisible = true">续费</button>
       </div>
     </div>
 
@@ -75,7 +75,7 @@
     <div v-if="tokenLedger.length > 0" class="m-section">
       <div class="m-section-header">
         <h2>Token 流水</h2>
-        <button class="m-section-action" @click="openDesktopProfile('token')">
+        <button class="m-section-action" @click="$emit('navigate', 'profile-ledger')">
           全部<MIcon name="chevronRight" :size="12" />
         </button>
       </div>
@@ -105,7 +105,7 @@
     <div v-if="rechargeRecords.length > 0" class="m-section">
       <div class="m-section-header">
         <h2>充值记录</h2>
-        <button class="m-section-action" @click="openDesktopProfile('recharge')">
+        <button class="m-section-action" @click="$emit('navigate', 'profile-recharge')">
           全部<MIcon name="chevronRight" :size="12" />
         </button>
       </div>
@@ -129,7 +129,7 @@
     <div v-else-if="!rechargeError && !rechargeLoading" class="m-section">
       <div class="m-section-header">
         <h2>充值记录</h2>
-        <button class="m-section-action" @click="openDesktopProfile('recharge')">
+        <button class="m-section-action" @click="$emit('navigate', 'profile-recharge')">
           全部<MIcon name="chevronRight" :size="12" />
         </button>
       </div>
@@ -181,7 +181,7 @@
         <h2>安全设置</h2>
       </div>
       <div class="m-menu-list">
-        <div class="m-menu-item" @click="openDesktopProfile('security')">
+        <div class="m-menu-item" @click="$emit('navigate', 'profile-security')">
           <div class="m-menu-icon" style="background:linear-gradient(135deg,#f0ebff,#e2d8ff);color:#8b5cf6">
             <MIcon name="lock" :size="20" />
           </div>
@@ -191,7 +191,7 @@
           </div>
           <MIcon name="chevronRight" :size="16" class="m-menu-arrow" />
         </div>
-        <div class="m-menu-item" @click="openDesktopProfile('security')">
+        <div class="m-menu-item" @click="$emit('navigate', 'profile-security')">
           <div class="m-menu-icon" :style="phoneVerificationState === true ? 'background:linear-gradient(135deg,#e2f8ee,#cdf2df);color:#16bf78' : 'background:linear-gradient(135deg,#fff4e0,#ffe7c2);color:#ff9f22'">
             <MIcon name="phone" :size="20" />
           </div>
@@ -203,7 +203,7 @@
             {{ verificationStatusText(phoneVerificationState) }}
           </span>
         </div>
-        <div class="m-menu-item" @click="openDesktopProfile('security')">
+        <div class="m-menu-item" @click="$emit('navigate', 'profile-security')">
           <div class="m-menu-icon" :style="emailVerificationState === true ? 'background:linear-gradient(135deg,#e2f8ee,#cdf2df);color:#16bf78' : 'background:linear-gradient(135deg,#fff4e0,#ffe7c2);color:#ff9f22'">
             <MIcon name="mail" :size="20" />
           </div>
@@ -249,16 +249,13 @@
 
     <!-- 操作按钮 -->
     <div class="m-pro-actions">
-      <button class="m-btn m-btn-outline" @click="$emit('force-desktop')">
-        <MIcon name="desktop" :size="18" />继续进入桌面版
-      </button>
       <button class="m-btn m-btn-danger" @click="$emit('logout')">
         <MIcon name="logout" :size="18" />退出登录
       </button>
     </div>
 
     <div class="m-safe-bottom"></div>
-    <PaymentModal :visible="paymentVisible" order-type="token" @close="paymentVisible = false" @paid="handleTokenPaid" />
+    <MobilePaymentModal :visible="paymentVisible" order-type="token" @close="paymentVisible = false" @paid="handleTokenPaid" />
   </div>
 </template>
 
@@ -266,10 +263,9 @@
 import { ref, onMounted, computed } from 'vue'
 import MIcon from './MIcon.vue'
 import MobileUnavailableState from './MobileUnavailableState.vue'
-import PaymentModal from '../components/PaymentModal.vue'
+import MobilePaymentModal from './components/MobilePaymentModal.vue'
 import { getProfileOverview, getRechargeRecords, getTokenLedger } from '../api/profile.js'
 import { getCachedUsername } from '../utils/auth.js'
-import { globalConfirm } from '../composables/confirmState.js'
 
 const props = defineProps({
   user: { type: Object, default: () => ({}) }
@@ -308,10 +304,6 @@ const maskedEmail = computed(() => {
 
 function openDesktopProfile(profileTab) {
   emit('force-desktop', { page: 'profile', profileTab })
-}
-
-async function showUnavailableNotice() {
-  await globalConfirm.alert('暂未开放', '会员续费功能暂未开放，敬请期待。')
 }
 
 async function handleTokenPaid() {

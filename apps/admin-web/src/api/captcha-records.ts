@@ -32,6 +32,11 @@ export interface CaptchaRecordRow {
   durationMs?: number | null
   screenshotPath?: string | null
   errorMessageText?: string
+  priority?: number
+  failureReason?: string
+  queuedAt?: string
+  startedAt?: string
+  finishedAt?: string
   createdAt?: string
   updatedAt?: string
 }

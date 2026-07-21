@@ -791,4 +791,10 @@ class XianyuCaptchaSolveRecord(Base):
     created_at = Column(DateTime, nullable=False, default=func.now(), comment="创建时间")
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now(), comment="更新时间")
     deleted = Column(SmallInteger, default=0)
+    # V1.15 新增字段：优先级调度 + 失败原因分类 + 队列时间追踪
+    priority = Column(SmallInteger, nullable=False, default=0, comment="优先级: 0=普通 1=VIP 2=SVIP")
+    failure_reason = Column(String(64), nullable=False, default="", comment="失败原因分类")
+    queued_at = Column(DateTime, nullable=True, comment="入队时间")
+    started_at = Column(DateTime, nullable=True, comment="开始处理时间")
+    finished_at = Column(DateTime, nullable=True, comment="完成处理时间")
 

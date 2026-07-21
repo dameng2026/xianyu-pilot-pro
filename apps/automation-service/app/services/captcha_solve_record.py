@@ -100,9 +100,9 @@ async def create_solve_record(
                 text(
                     "INSERT INTO xianyu_captcha_solve_record "
                     "(tenant_id, account_id, account_name, event_desc, open_reason, solve_reason, trigger_scene, "
-                    " result, status, engine, retry_count, created_at, updated_at) "
+                    " result, status, engine, retry_count, created_at, updated_at, deleted) "
                     "VALUES (:tid, :aid, :aname, :edesc, :oreason, :sreason, :scene, "
-                    " '', 'retrying', 'Playwright', :rc, NOW(), NOW())"
+                    " '', 'retrying', 'Playwright', :rc, NOW(), NOW(), 0)"
                 ),
                 {
                     "tid": tenant_id,
@@ -224,7 +224,7 @@ async def list_solve_records(
     Returns:
         {"list": [...], "total": int, "page": int, "pageSize": int}
     """
-    where_clauses = ["tenant_id = :tid", "deleted = 0"]
+    where_clauses = ["tenant_id = :tid", "COALESCE(deleted, 0) = 0"]
     params: dict[str, Any] = {"tid": tenant_id}
 
     if account_id:
@@ -254,6 +254,7 @@ async def list_solve_records(
                 text(
                     f"SELECT id, account_id, account_name, event_desc, open_reason, solve_reason, "
                     f"trigger_scene, result, status, engine, retry_count, error_message, "
+                    f"priority, failure_reason, queued_at, started_at, finished_at, "
                     f"created_at, updated_at "
                     f"FROM xianyu_captcha_solve_record WHERE {where_sql} "
                     f"ORDER BY created_at DESC, id DESC LIMIT :limit OFFSET :offset"
@@ -276,6 +277,11 @@ async def list_solve_records(
                     "engine": row["engine"],
                     "retryCount": row["retry_count"],
                     "errorMessage": row["error_message"],
+                    "priority": int(row.get("priority") or 0),
+                    "failureReason": row.get("failure_reason") or "",
+                    "queuedAt": str(row["queued_at"]) if row.get("queued_at") else "",
+                    "startedAt": str(row["started_at"]) if row.get("started_at") else "",
+                    "finishedAt": str(row["finished_at"]) if row.get("finished_at") else "",
                     "createdAt": str(row["created_at"]) if row["created_at"] else "",
                     "updatedAt": str(row["updated_at"]) if row["updated_at"] else "",
                 })
@@ -333,3 +339,91 @@ async def broadcast_captcha_solve(
             logger, e, operation="broadcast_captcha_solve",
             tenant_id=tenant_id, account_id=account_id, level=logging.DEBUG,
         )
+
+
+# ============================================================
+# 僵尸记录清理（Phase 5：无响应进行中记录处理）
+# ============================================================
+
+# 僵尸记录判定阈值：started_at 超过此分钟数仍为 retrying 状态 → 标记为 stale_terminated
+STALE_RECORD_TIMEOUT_MINUTES = 15
+
+# 清理循环间隔（秒）
+STALE_CLEANUP_INTERVAL_SECONDS = 300  # 5 分钟
+
+
+async def cleanup_stale_records() -> int:
+    """清理僵尸求解记录：将超时仍为 retrying 的记录标记为 stale_terminated。
+
+    判定条件：
+    - status = 'retrying'
+    - started_at IS NOT NULL AND started_at < NOW() - INTERVAL 15 MINUTE
+    - 或 started_at IS NULL AND queued_at IS NOT NULL AND queued_at < NOW() - INTERVAL 15 MINUTE
+      （入队但从未被 worker 取出的记录）
+
+    Returns:
+        被清理的记录数
+    """
+    try:
+        async with async_session() as db:
+            result = await db.execute(
+                text(
+                    """
+                    UPDATE xianyu_captcha_solve_record
+                    SET status = 'fail',
+                        result = 'stale_terminated',
+                        failure_reason = 'stale_terminated',
+                        error_message = CONCAT(COALESCE(error_message, ''),
+                            '[系统清理] 求解任务超时无响应，已自动终止'),
+                        finished_at = NOW(),
+                        updated_at = NOW()
+                    WHERE status = 'retrying'
+                      AND COALESCE(deleted, 0) = 0
+                      AND (
+                        (started_at IS NOT NULL AND started_at < DATE_SUB(NOW(), INTERVAL :min1 MINUTE))
+                        OR
+                        (started_at IS NULL AND queued_at IS NOT NULL
+                         AND queued_at < DATE_SUB(NOW(), INTERVAL :min2 MINUTE))
+                      )
+                    """,
+                ),
+                {"min1": STALE_RECORD_TIMEOUT_MINUTES, "min2": STALE_RECORD_TIMEOUT_MINUTES},
+            )
+            await db.commit()
+            affected = int(getattr(result, "rowcount", 0) or 0)
+            if affected > 0:
+                logger.warning(
+                    "僵尸滑块求解记录清理：已将 %d 条超时 retrying 记录标记为 stale_terminated",
+                    affected,
+                )
+            return affected
+    except Exception as e:
+        log_service_failure(
+            logger, e, operation="cleanup_stale_records",
+            level=logging.WARNING,
+        )
+        return 0
+
+
+async def run_stale_cleanup_loop() -> None:
+    """僵尸记录清理循环（在 FastAPI lifespan 中启动）。
+
+    每 5 分钟扫描一次，将超过 15 分钟仍为 retrying 状态的记录标记为 stale_terminated。
+    """
+    import asyncio
+    logger.info("僵尸滑块求解记录清理循环已启动，间隔=%ds 超时=%dmin",
+                STALE_CLEANUP_INTERVAL_SECONDS, STALE_RECORD_TIMEOUT_MINUTES)
+    while True:
+        try:
+            await asyncio.sleep(STALE_CLEANUP_INTERVAL_SECONDS)
+            await cleanup_stale_records()
+        except asyncio.CancelledError:
+            logger.info("僵尸滑块求解记录清理循环已停止")
+            break
+        except Exception as e:
+            log_service_failure(
+                logger, e, operation="stale_cleanup_loop",
+                level=logging.WARNING,
+            )
+            # 出错后短暂等待，避免紧密循环
+            await asyncio.sleep(60)

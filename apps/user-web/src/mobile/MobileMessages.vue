@@ -102,12 +102,6 @@
         </div>
         <div class="m-msg-list-total">共 {{ filteredConversations.length }} 条会话</div>
       </div>
-
-      <div class="m-msg-tip">
-        <MIcon name="shield" :size="16" />
-        <span>复杂消息操作建议在桌面版进行</span>
-        <button class="m-tip-btn" @click="$emit('force-desktop')">桌面版</button>
-      </div>
     </template>
 
     <!-- 聊天详情视图 -->
@@ -181,8 +175,8 @@
       </div>
 
       <div class="m-chat-quick-actions">
-        <button type="button" @click="$emit('force-desktop')"><MIcon name="image" :size="18" /><span>发送图片</span></button>
-        <button type="button" @click="$emit('force-desktop')"><MIcon name="link" :size="18" /><span>发送商品链接</span></button>
+        <button type="button" @click="openImageUploader"><MIcon name="image" :size="18" /><span>发送图片</span></button>
+        <button type="button" @click="openProductLinkPicker"><MIcon name="link" :size="18" /><span>发送商品链接</span></button>
         <button
           type="button"
           :class="conversationAutoReplyStatusClass"
@@ -208,6 +202,22 @@
       </div>
     </template>
 
+    <!-- 移动端图片上传弹层 -->
+    <MobileImageUploader
+      :visible="imageUploaderVisible"
+      :account-id="currentAccountId"
+      @close="closeImageUploader"
+      @send="handleSendImages"
+    />
+
+    <!-- 移动端商品链接选择器弹层 -->
+    <MobileProductLinkPicker
+      :visible="productLinkPickerVisible"
+      :account-id="currentAccountId"
+      @close="closeProductLinkPicker"
+      @select="handleSelectProduct"
+    />
+
     <div class="m-safe-bottom"></div>
   </div>
 </template>
@@ -216,9 +226,11 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import MIcon from './MIcon.vue'
 import MobileUnavailableState from './MobileUnavailableState.vue'
+import MobileImageUploader from './components/MobileImageUploader.vue'
+import MobileProductLinkPicker from './components/MobileProductLinkPicker.vue'
 import { getLiteAccounts } from '../api/accounts.js'
 import { onlineConversations, messageContext, markConversationRead } from '../api/messages.js'
-import { sendMessage } from '../api/websocket.js'
+import { sendMessage, sendImageMessage } from '../api/websocket.js'
 import { getRetentionInfo } from '../api/system.js'
 import { openTrustedMediaUrl, resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
 import {
@@ -915,6 +927,140 @@ function closeChat() {
     effectiveEnabled: null,
     runningEnabled: null,
     pausedReason: '',
+  }
+  // 关闭弹层
+  imageUploaderVisible.value = false
+  productLinkPickerVisible.value = false
+}
+
+// ---- 图片发送 ----
+const imageUploaderVisible = ref(false)
+const productLinkPickerVisible = ref(false)
+
+const currentAccountId = computed(() => {
+  const conv = activeChat.value
+  return Number(conv?.xianyuAccountId || conv?.accountId || selectedAccountId.value || 0)
+})
+
+function openImageUploader() {
+  if (!activeChat.value) {
+    sendError.value = '请先选择会话'
+    return
+  }
+  if (!currentAccountId.value) {
+    sendError.value = '账号信息缺失，无法上传图片'
+    return
+  }
+  sendError.value = ''
+  imageUploaderVisible.value = true
+}
+
+function closeImageUploader() {
+  imageUploaderVisible.value = false
+}
+
+async function handleSendImages(imageUrls) {
+  imageUploaderVisible.value = false
+  if (!Array.isArray(imageUrls) || !imageUrls.length) return
+  const conv = activeChat.value
+  if (!conv) return
+  const accId = currentAccountId.value
+  if (!accId) {
+    sendError.value = '账号信息缺失，无法发送图片'
+    return
+  }
+  const receiverId = normalizePeerUserId(
+    conv.peerUserId || conv.peerExternalUid || conv.externalBuyerId || ''
+  ) || normalizeSid(conv.sid || conv.sId || '')
+  if (!receiverId) {
+    sendError.value = '当前会话缺少接收方标识'
+    return
+  }
+  sending.value = true
+  sendError.value = ''
+  // 逐张发送：每张图片一条消息（与 PC 端 sendImage 行为一致）
+  const optimisticIds = []
+  for (const imageUrl of imageUrls) {
+    const tempId = `temp_image_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const trustedUrl = resolveTrustedMediaUrl(imageUrl)
+    const optimistic = {
+      id: tempId,
+      content: '[图片]',
+      text: '[图片]',
+      imageUrl: trustedUrl,
+      direction: 'OUT',
+      createdAt: new Date().toISOString(),
+      sendStatus: 'sending',
+    }
+    chatMessages.value.push(optimistic)
+    optimisticIds.push({ tempId, imageUrl })
+  }
+  await nextTick()
+  scrollToBottom()
+  try {
+    for (const { tempId, imageUrl } of optimisticIds) {
+      try {
+        const res = await sendImageMessage({
+          xianyuAccountId: accId,
+          cid: conv.sid,
+          sid: conv.sid,
+          sId: conv.sid,
+          sessionId: conv.sid,
+          toId: receiverId,
+          peerUserId: receiverId,
+          imageUrl,
+          xyGoodsId: conv.xyGoodsId || conv.goodsId || '',
+        })
+        const ack = res?.data
+        if (!ack || typeof ack !== 'object' || Array.isArray(ack)) throw new Error('图片发送响应格式异常')
+        const acknowledged = String(ack.uuid || ack.id || '').trim() || ack.message === 'Sent' || ack.success === true
+        if (!acknowledged) throw new Error('图片发送响应未确认发送成功')
+        if (ack.sid != null && String(ack.sid) !== String(conv.sid)) throw new Error('图片发送响应会话不一致')
+        const realUuid = String(ack.uuid || ack.id || '').trim()
+        const target = chatMessages.value.find(m => m.id === tempId)
+        if (target) {
+          target.id = realUuid || tempId
+          target.sendStatus = 'sent'
+        }
+      } catch (e) {
+        const target = chatMessages.value.find(m => m.id === tempId)
+        if (target) target.sendStatus = 'failed'
+        sendError.value = e?.message || '图片发送失败'
+      }
+    }
+  } finally {
+    sending.value = false
+    await nextTick()
+    scrollToBottom()
+  }
+}
+
+// ---- 商品链接 ----
+function openProductLinkPicker() {
+  if (!activeChat.value) {
+    sendError.value = '请先选择会话'
+    return
+  }
+  if (!currentAccountId.value) {
+    sendError.value = '账号信息缺失，无法选择商品'
+    return
+  }
+  sendError.value = ''
+  productLinkPickerVisible.value = true
+}
+
+function closeProductLinkPicker() {
+  productLinkPickerVisible.value = false
+}
+
+function handleSelectProduct(product) {
+  productLinkPickerVisible.value = false
+  if (!product) return
+  // 优先使用商品链接；若无 itemId 则把商品标题作为文本插入
+  if (product.link) {
+    draft.value = draft.value ? `${draft.value}\n${product.link}` : product.link
+  } else if (product.title) {
+    draft.value = draft.value ? `${draft.value}\n${product.title}` : product.title
   }
 }
 
