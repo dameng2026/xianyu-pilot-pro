@@ -172,11 +172,11 @@ public class DataRetentionCleanupService {
     }
 
     /** 清理结果。 */
-    static class CleanupResult {
-        int totalDeleted;
-        final Map<String, Integer> byCategory;
+    public static class CleanupResult {
+        public int totalDeleted;
+        public final Map<String, Integer> byCategory;
 
-        CleanupResult(int totalDeleted, Map<String, Integer> byCategory) {
+        public CleanupResult(int totalDeleted, Map<String, Integer> byCategory) {
             this.totalDeleted = totalDeleted;
             this.byCategory = byCategory;
         }
