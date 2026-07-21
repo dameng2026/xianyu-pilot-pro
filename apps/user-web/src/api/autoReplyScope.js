@@ -48,3 +48,25 @@ export function getAutoReplyScopeStatus(accountId) {
   if (accountId != null) params.accountId = accountId
   return request.get('/auto-reply-scope/status', { params })
 }
+
+/**
+ * 会话级自动回复手动开关。
+ * 用户在网站点击按钮开启/关闭时调用。
+ * - enabled=true：手动开启（清除暂停 + 清除手动关闭标记）
+ * - enabled=false：手动关闭（设置暂停 + 设置手动关闭标记，禁止自动恢复）
+ * @param {Object} payload - { accountId, sid?, peerUserId?, enabled }
+ */
+export function toggleConversationAutoReply(payload) {
+  return request.post('/auto-reply-scope/conversation-toggle', payload)
+}
+
+/**
+ * 查询会话级自动回复状态。
+ * 返回字段：
+ *   autoReplyPaused / autoReplyManualDisabled / lastManualReplyAt /
+ *   lastAutoReplyAt / effectiveEnabled / runningEnabled / pausedReason
+ * @param {Object} params - { accountId, sid?, peerUserId? }
+ */
+export function getConversationAutoReplyStatus(params) {
+  return request.get('/auto-reply-scope/conversation-status', { params })
+}

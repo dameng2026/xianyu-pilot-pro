@@ -722,6 +722,11 @@ async def execute_workflow_definition(
         keywords = body.get("keywords") or []
         input_data = body.get("input") or {}
 
+        # ★ 发布模式：publish（默认，生图后直接发布） | draft_only（生图后只存入草稿箱不发布）
+        #   前端运行前弹窗让用户选择：直接发布 / 存入草稿箱
+        _publish_mode_raw = _text(body.get("publishMode") or "publish").lower()
+        publish_mode = "draft_only" if _publish_mode_raw == "draft_only" else "publish"
+
         # 创建执行记录
         execution_no = _generate_execution_no()
         execution = WorkflowExecution(
@@ -782,6 +787,8 @@ async def execute_workflow_definition(
                 "keywords": keywords,
                 **input_data,
             },
+            # ★ 发布模式透传给 runtime：publish（直接发布） | draft_only（仅存草稿）
+            "publishMode": publish_mode,
         }
 
         # ★ 异步化：立即返回 executionId（status=running），后台 fire-and-forget 执行，

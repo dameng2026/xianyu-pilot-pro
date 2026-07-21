@@ -233,6 +233,60 @@ public class UserProfileService {
     }
 
     /**
+     * 查询当前用户的 Token 充值记录（分页）。
+     * 仅查询 token_recharge_record 表中当前用户的记录，按时间倒序。
+     * 同时返回累计充值 Token 数、累计充值笔数统计。
+     */
+    public Map<String, Object> rechargeRecords(int current, int size) {
+        Long userId = UserContext.userId();
+        int safeSize = Math.max(1, Math.min(size, 100));
+        int safeCurrent = Math.max(1, current);
+        int offset = (safeCurrent - 1) * safeSize;
+
+        long total;
+        try {
+            Long n = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM token_recharge_record WHERE user_id=?", Long.class, userId);
+            total = n == null ? 0 : n;
+        } catch (DataAccessException e) {
+            throw unavailable("充值记录", e);
+        }
+
+        List<Map<String, Object>> records;
+        try {
+            records = jdbcTemplate.queryForList(
+                    "SELECT id, payment_order_id AS paymentOrderId, order_no AS orderNo, " +
+                            "token_amount AS tokenAmount, before_balance AS beforeBalance, after_balance AS afterBalance, " +
+                            "source, remark, created_time AS createdTime " +
+                            "FROM token_recharge_record WHERE user_id=? " +
+                            "ORDER BY id DESC LIMIT ? OFFSET ?",
+                    userId, safeSize, offset);
+        } catch (DataAccessException e) {
+            throw unavailable("充值记录", e);
+        }
+
+        long totalTokens = 0L;
+        try {
+            Long t = jdbcTemplate.queryForObject(
+                    "SELECT COALESCE(SUM(token_amount),0) FROM token_recharge_record WHERE user_id=?", Long.class, userId);
+            if (t != null) totalTokens = t;
+        } catch (DataAccessException e) {
+            throw unavailable("充值记录汇总", e);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("records", records);
+        result.put("total", total);
+        result.put("current", safeCurrent);
+        result.put("size", safeSize);
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("totalRecords", total);
+        stats.put("totalTokens", totalTokens);
+        result.put("stats", stats);
+        return result;
+    }
+
+    /**
      * 查询 Token 统计信息：今日消耗、七日消耗、Token 余额。
      * 消耗金额取 change_amount < 0 的绝对值之和（ai_charge / ai_image_charge 为负数）。
      * 今日消耗：今天 0 点至今；七日消耗：当前时刻往前滚动 7×24 小时。

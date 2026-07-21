@@ -8,6 +8,7 @@ export interface MonitorQuery {
   scene?: string
   keyword?: string
   status?: string
+  userId?: number | string
 }
 
 export interface MonitorRequestUiOptions {

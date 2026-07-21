@@ -159,15 +159,30 @@
           <span>调用日志明细</span>
           <div class="actions small">
             <ElInput v-model="logQuery.keyword" placeholder="模型/Provider/请求ID/用户" clearable style="width: 240px" @keyup.enter="loadLogs" />
+            <ElInput v-model="logQuery.userId" placeholder="用户 ID 精确过滤" clearable style="width: 160px" @keyup.enter="loadLogs" @clear="loadLogs" />
             <ElInput v-model="logQuery.scene" placeholder="场景" clearable style="width: 160px" @keyup.enter="loadLogs" />
             <ElSelect v-model="logQuery.status" clearable placeholder="状态" style="width: 120px">
               <ElOption label="成功" value="success" />
               <ElOption label="失败" value="failed" />
             </ElSelect>
-            <ElButton :loading="logLoading" @click="loadLogs">查询</ElButton>
+            <ElButton :loading="logLoading" @click="onLogSearch">查询</ElButton>
+            <ElButton v-if="activeUserIdFilter" @click="clearUserIdFilter">清除用户过滤</ElButton>
           </div>
         </div>
       </template>
+      <ElAlert v-if="activeUserIdFilter" type="success" :closable="false" class="user-filter-alert" show-icon>
+        <template #title>
+          <span>
+            已按用户过滤：用户 ID <b>{{ activeUserIdFilter }}</b>
+            ｜
+            <router-link :to="{ name: 'AdminRechargeRecords', query: { userId: activeUserIdFilter } }" class="inline-link">
+              查看该用户的充值记录
+            </router-link>
+            ｜
+            <ElLink type="primary" :underline="false" @click="clearUserIdFilter">查看全部用户消费记录</ElLink>
+          </span>
+        </template>
+      </ElAlert>
       <AdminDataState
         v-if="logState === 'loading'"
         state="loading"
@@ -215,9 +230,14 @@
 </template>
 
 <script setup lang="ts">
+  import { computed, onMounted, reactive, ref, watch } from 'vue'
+  import { useRoute, useRouter } from 'vue-router'
   import { getAiCostStats, getAiTokenStats, getAiUsagePage, getAiUserStats } from '@/api/monitor'
 
   defineOptions({ name: 'AdminAiUsage' })
+
+  const route = useRoute()
+  const router = useRouter()
 
   const days = ref(7)
   const loading = ref(false)
@@ -238,16 +258,38 @@
   })
 
   const logs = reactive({ records: [] as any[], total: 0 })
-  const logQuery = reactive({ current: 1, size: 20, keyword: '', scene: '', status: '' })
+  const logQuery = reactive({ current: 1, size: 20, keyword: '', scene: '', status: '', userId: '' })
 
   const userStats = reactive({ records: [] as any[], total: 0 })
   const userQuery = reactive({ current: 1, size: 10, keyword: '', sortBy: 'calls', sortOrder: 'desc' })
 
+  // 从路由 query.userId 读取用户过滤（账号管理处跳转过来时携带）
+  const activeUserIdFilter = computed<number | null>(() => {
+    const v = route.query.userId
+    if (!v) return null
+    const n = Number(v)
+    return Number.isFinite(n) && n > 0 ? n : null
+  })
+
   onMounted(() => {
+    // 初始化时同步路由中的 userId 到输入框
+    if (activeUserIdFilter.value) {
+      logQuery.userId = String(activeUserIdFilter.value)
+    }
     loadAll()
     loadLogs()
     loadUserStats()
   })
+
+  // 路由 userId 变化时自动加载该用户的消费记录
+  watch(
+    () => route.query.userId,
+    (val) => {
+      logQuery.userId = val ? String(val) : ''
+      logQuery.current = 1
+      loadLogs()
+    }
+  )
 
   async function loadAll() {
     loading.value = true
@@ -278,6 +320,11 @@
       if (logQuery.keyword) params.keyword = logQuery.keyword
       if (logQuery.scene) params.scene = logQuery.scene
       if (logQuery.status) params.status = logQuery.status
+      // 优先使用路由 userId 过滤，其次使用输入框的值
+      const filterUserId = activeUserIdFilter.value || (logQuery.userId ? Number(logQuery.userId) : null)
+      if (filterUserId && Number.isFinite(filterUserId) && filterUserId > 0) {
+        params.userId = filterUserId
+      }
       const page = await getAiUsagePage(params)
       logs.records = page?.records || []
       logs.total = page?.total || 0
@@ -288,6 +335,23 @@
       logState.value = 'error'
     } finally {
       logLoading.value = false
+    }
+  }
+
+  // 手动查询：重置页码后加载
+  function onLogSearch() {
+    logQuery.current = 1
+    loadLogs()
+  }
+
+  // 清除用户过滤：清空输入框与路由 query，重新加载全部
+  function clearUserIdFilter() {
+    logQuery.userId = ''
+    logQuery.current = 1
+    if (route.query.userId) {
+      router.replace({ name: 'AdminAiUsage', query: {} })
+    } else {
+      loadLogs()
     }
   }
 
@@ -373,6 +437,9 @@
 .pagination-row { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; }
 .muted { color: var(--el-text-color-secondary); font-size: 13px; }
 .cache-hit { color: #10b981; font-weight: 600; }
+.user-filter-alert { margin-bottom: 12px; }
+.user-filter-alert .inline-link { color: var(--el-color-primary); text-decoration: none; margin: 0 4px; }
+.user-filter-alert .inline-link:hover { text-decoration: underline; }
 @media (max-width: 1200px) { .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .summary-grid { grid-template-columns: 1fr; } .page-title-row, .table-header { flex-direction: column; align-items: stretch; } }
 </style>

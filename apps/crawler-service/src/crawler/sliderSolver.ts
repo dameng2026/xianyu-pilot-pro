@@ -1599,6 +1599,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
   const startTime = Date.now();
   const targetUrl = options.targetUrl || DEFAULT_TARGET_URL;
   const headless = resolveHeadlessMode(options.headless);
+  console.log(`[SliderSolver] solveGoofishSlider start platform=${process.platform} display=${process.env.DISPLAY || ''} headless=${headless} HEADLESS=${process.env.HEADLESS || ''}`);
   // 默认重试 5 次，覆盖场景2(点击框体重试)、场景3(加载转圈)、场景4(下载消息失败刷新)等多种重试场景
   const retries = Number(options.maxRetries ?? 5);
   const maxRetries = Number.isSafeInteger(retries) ? Math.max(1, Math.min(retries, 10)) : 5;
@@ -1640,12 +1641,17 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
     // === 方案A：真实 Chrome 持久化上下文（优先），避免 remote-debugging-port 二次挂载 ===
     let usingCDP = false;
     const chromePaths = [
+      // Windows 真实 Chrome 路径
       'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
       'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
       `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
+      // Linux 系统安装的 google-chrome-stable（Docker 内由 Dockerfile 安装）
+      '/opt/google/chrome/chrome',
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
     ];
     const chromePath = chromePaths.find(p => {
-      try { return fsSync.existsSync(p); } catch { return false; }
+      try { return p && fsSync.existsSync(p); } catch { return false; }
     });
 
     // 优先：真实 Chrome + 持久化配置，且不二次 remote-debugging-port 挂载
@@ -1665,6 +1671,8 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
           userAgent:
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
           ignoreDefaultArgs: ['--enable-automation'],
+          // Linux Docker 内以非 root 用户运行系统 Chrome 必须关闭 sandbox，否则启动失败
+          chromiumSandbox: process.platform === 'win32' || process.platform === 'darwin',
           ...(options.proxy?.server
             ? {
                 proxy: {
@@ -1681,6 +1689,20 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
             '--window-size=1366,768',
             '--disable-blink-features=AutomationControlled',
             '--lang=zh-CN',
+            // Linux/Docker 内必需 --no-sandbox，--disable-dev-shm-usage 避免 /dev/shm 太小崩溃
+            // 必须禁用 crashpad：Chrome 150 在 Docker 内启动 chrome_crashpad_handler 子进程时
+            // 因 HOME 不可写找不到 database 目录，导致 SIGTRAP 崩溃
+            ...(process.platform !== 'win32' && process.platform !== 'darwin'
+              ? [
+                  '--no-sandbox',
+                  '--disable-dev-shm-usage',
+                  '--disable-gpu',
+                  '--disable-crash-reporter',
+                  '--disable-crashpad',
+                  '--disable-breakpad',
+                  '--disable-features=Crashpad',
+                ]
+              : []),
           ],
         });
         // launchPersistentContext 返回 BrowserContext，其 browser() 可用于关闭
@@ -1730,9 +1752,13 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
 
     // === 方案B：回退到 Playwright 启动 Chromium ===
     if (!usingCDP || !browser || !context) {
+      // Linux 优先使用 channel:'chrome' 调用系统 google-chrome-stable，避免 Chrome for Testing 149 崩溃
+      // Windows 不指定 channel，沿用 Playwright 自带 Chromium（本地 Windows 跑自带 Chromium 已验证可用）
+      const isLinux = process.platform !== 'win32' && process.platform !== 'darwin';
       browser = await chromium.launch({
         headless,
-        chromiumSandbox: true,
+        ...(isLinux ? { channel: 'chrome' as const } : {}),
+        chromiumSandbox: !isLinux,
         // 去掉 Playwright 默认 --enable-automation，显著降低「自动化窗口」被标记概率
         ignoreDefaultArgs: ['--enable-automation'],
         ...(options.proxy?.server
@@ -1748,6 +1774,20 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
           '--disable-blink-features=AutomationControlled',
           '--no-first-run',
           '--no-default-browser-check',
+          // Linux/Docker 内必需 --no-sandbox（非 root 用户），--disable-dev-shm-usage 避免 /dev/shm 太小崩溃
+          // 必须禁用 crashpad：Chrome 150 在 Docker 内启动 chrome_crashpad_handler 子进程时
+          // 因 HOME 不可写找不到 database 目录，导致 SIGTRAP 崩溃
+          ...(isLinux
+            ? [
+                '--no-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--disable-crash-reporter',
+                '--disable-crashpad',
+                '--disable-breakpad',
+                '--disable-features=Crashpad',
+              ]
+            : []),
         ],
       });
       context = await browser.newContext({
@@ -2240,7 +2280,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       durationMs: Date.now() - startTime,
     };
   } catch (e: any) {
-    console.error(`[SliderSolver] operation=solve errorType=${safeErrorType(e)}`);
+    console.error(`[SliderSolver] operation=solve errorType=${safeErrorType(e)} message=${e?.message || ''} stack=${e?.stack || ''}`);
     return {
       ok: false,
       solved: false,

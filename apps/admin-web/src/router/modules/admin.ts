@@ -30,7 +30,9 @@ export const adminRoutes: AppRouteRecord[] = [
     meta: { title: '套餐与授权', icon: 'ri:vip-crown-line', roles: SUPER_ONLY },
     children: [
       { path: 'plans', name: 'AdminPlans', component: moduleComponent, meta: { title: '套餐管理', icon: 'ri:price-tag-3-line', moduleKey: 'plans', roles: SUPER_ONLY } as any },
+      { path: 'token-plans', name: 'AdminTokenPlans', component: '/admin/token-plans/index', meta: { title: 'Token 套餐', icon: 'ri:coin-line', roles: SUPER_ONLY } as any },
       { path: 'payment-config', name: 'AdminPaymentConfig', component: '/admin/payment-config/index', meta: { title: '支付配置', icon: 'ri:bank-card-line', roles: SUPER_ONLY } as any },
+      { path: 'recharge-records', name: 'AdminRechargeRecords', component: '/admin/recharge-records/index', meta: { title: '充值记录', icon: 'ri:bank-card-2-line', roles: SUPER_ONLY } as any },
       { path: 'licenses', name: 'AdminLicenses', component: moduleComponent, meta: { title: '授权码管理', icon: 'ri:key-2-line', moduleKey: 'licenses', roles: SUPER_ONLY } as any }
     ]
   },
@@ -46,7 +48,8 @@ export const adminRoutes: AppRouteRecord[] = [
       { path: 'messages', name: 'AdminMessages', component: moduleComponent, meta: { title: '消息监管', icon: 'ri:message-3-line', moduleKey: 'messages', roles: ADMIN_OPERATORS } as any },
       { path: 'delivery', name: 'AdminDelivery', component: moduleComponent, meta: { title: '自动发货监管', icon: 'ri:truck-line', moduleKey: 'delivery', roles: ADMIN_OPERATORS } as any },
       { path: 'auto-reply', name: 'AdminAutoReply', component: moduleComponent, meta: { title: '自动回复监管', icon: 'ri:robot-2-line', moduleKey: 'auto-reply', roles: ADMIN_OPERATORS } as any },
-      { path: 'kami', name: 'AdminKami', component: moduleComponent, meta: { title: '卡密监管', icon: 'ri:coupon-3-line', moduleKey: 'kami', roles: ADMIN_OPERATORS } as any }
+      { path: 'kami', name: 'AdminKami', component: moduleComponent, meta: { title: '卡密监管', icon: 'ri:coupon-3-line', moduleKey: 'kami', roles: ADMIN_OPERATORS } as any },
+      { path: 'captcha-records', name: 'AdminCaptchaRecords', component: '/admin/captcha-records/index', meta: { title: '滑块求解记录', icon: 'ri:shield-keyhole-line', roles: ADMIN_OPERATORS } as any }
     ]
   },
   {

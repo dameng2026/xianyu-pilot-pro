@@ -42,7 +42,7 @@
       <CardPanel>
         <EmptyState v-if="!accountsAvailable" icon="⚠" title="账号列表不可用" :description="accountsLoadError || '正在加载账号列表，请稍候。'" />
         <BaseTable v-else :columns="cols" :rows="rows" :row-class="rowClass">
-          <template #account="{ row }"><div class="product-cell" style="cursor:pointer" @click="selectAccount(row.raw)"><img v-if="row.avatar" :src="row.avatar" class="avatar small" alt=""><div v-else class="avatar small avatar-img"></div><div><strong>{{ row.name }}</strong><em>{{ row.tag }}</em></div></div></template>
+          <template #account="{ row }"><div class="product-cell" style="cursor:pointer" @click="selectAccount(row.raw)"><img v-if="row.avatar" :src="row.avatar" class="avatar small" alt="" @error="onListAvatarError"><div v-else class="avatar small avatar-img"></div><div><strong>{{ row.name }}</strong><em>{{ row.tag }}</em></div></div></template>
           <template #status="{ row }">
             <div class="status-cell">
               <Badge :type="row.statusType">{{ row.statusText }}</Badge>
@@ -82,10 +82,11 @@
     <!-- 账号基础信息 -->
     <section class="account-summary">
       <img
-        v-if="selected.avatarUrl || selected.avatar"
-        :src="selected.avatarUrl || selected.avatar"
+        v-if="selectedAvatarUrl"
+        :src="selectedAvatarUrl"
         class="detail-avatar"
         alt=""
+        @error="onDetailAvatarError"
       >
       <div v-else class="detail-avatar avatar-fallback"></div>
 
@@ -779,6 +780,7 @@ import { useDebouncedRef } from '../composables/useDebouncedRef.js'
 const emit = defineEmits(['navigate'])
 import { generateQrLogin, getQrLoginStatus, cleanupQrLogin } from '../api/qrlogin.js'
 import { accountName } from '../utils/format.js'
+import { resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
 import { recordsOfOrThrow } from '../utils/apiData.js'
 import { accountAuthUsable, accountCookieBadgeType, accountCookieLabel, accountLoginHint, accountWsConnectionState, resolveAccountAuthDisplayState } from '../utils/accountAuth.js'
 import { extractKeyFields, maskKeyFields, validateCookie, checkIdentity, maskValue } from '../utils/cookie.js'
@@ -1616,7 +1618,7 @@ const rows = computed(() => {
     return {
       raw: a,
       name: accountTitle(a),
-      avatar: a.avatarUrl || a.avatar,
+      avatar: resolveTrustedMediaUrl(a.avatarUrl || a.avatar || ''),
       tag: a.accountNote && (a.nickname || a.displayName) ? (a.nickname || a.displayName) : '',
       uid: a.externalUid || a.unb || a.id,
       area: a.province && a.city ? `${a.province} ${a.city}` : (a.ipLocation || a.province || '-'),
@@ -1632,6 +1634,23 @@ const rows = computed(() => {
     }
   })
 })
+
+// 账号详情头像：清洗 URL，过滤脏数据/历史格式 {avatar=http://...}，避免 <img> 加载失败
+const selectedAvatarUrl = computed(() => {
+  if (!selected.value) return ''
+  const raw = selected.value.avatarUrl || selected.value.avatar || ''
+  return resolveTrustedMediaUrl(raw)
+})
+
+// 详情头像加载失败时清空 src，触发 v-if 切换到占位 div
+function onDetailAvatarError(e) {
+  if (e?.target) e.target.style.display = 'none'
+}
+
+// 列表头像加载失败时隐藏 img，露出底层占位 div 背景
+function onListAvatarError(e) {
+  if (e?.target) e.target.style.display = 'none'
+}
 
 const stats = computed(() => {
   const accountStatusKnown = accounts.value.every(account => account.status !== null && account.status !== undefined)

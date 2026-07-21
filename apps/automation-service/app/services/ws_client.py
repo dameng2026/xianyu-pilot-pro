@@ -44,6 +44,12 @@ HEARTBEAT_INTERVAL = 15  # 心跳间隔（秒）
 RECONNECT_DELAY = 5  # 重连延迟（秒）
 MESSAGE_TIMEOUT = 10  # 发送消息超时（秒）
 
+# ackDiff 短轮询间隔（秒）：服务端无新消息时，客户端等待多长时间再发下一轮 ackDiff。
+# 闲鱼 IM 的 ackDiff 是短轮询模式——客户端发请求，服务端立即返回（有消息就带消息，没消息就返回空）。
+# 空响应后必须等待再发下一轮，否则会形成每秒几十次的疯狂循环，
+# 触发服务端限流并消耗大量 CPU。
+ACKDIFF_POLL_INTERVAL = 3.0
+
 
 IMAGE_MESSAGE_ACK_TIMEOUT = 2  # Image ACK can be missing; avoid false failure.
 
@@ -57,6 +63,20 @@ _TEXT_MESSAGE_ACK_TIMEOUT = 6  # 文本消息 ACK 超时（秒）；IMAGE_MESSAG
 _RECENT_SEND_DEDUP_TTL = 60  # 最近发送缓存保留时长（秒）
 _RECENT_SEND_DEDUP_MAX = 500  # 最近发送缓存最大条数（防止内存增长）
 _recent_text_sends: dict[str, dict[str, Any]] = {}  # key=f"{account_id}:{cid}:{to_id}:{text}"
+_RECENT_TEXT_SENDS_LOCK = None  # lazy asyncio.Lock for _recent_text_sends dict access
+
+
+def _get_recent_text_sends_lock() -> asyncio.Lock:
+    """惰性初始化 _recent_text_sends 的访问锁，避免并发写入去重缓存导致数据竞争。
+
+    返回模块级单例 asyncio.Lock，供 send_text_message 中
+    async with _get_recent_text_sends_lock() 使用。必须是同步函数，否则
+    `async with async_func():` 会拿到 coroutine 而非 Lock，导致 TypeError。
+    """
+    global _RECENT_TEXT_SENDS_LOCK
+    if _RECENT_TEXT_SENDS_LOCK is None:
+        _RECENT_TEXT_SENDS_LOCK = asyncio.Lock()
+    return _RECENT_TEXT_SENDS_LOCK
 
 
 def _cleanup_recent_text_sends(now: float) -> None:
@@ -72,6 +92,20 @@ def _cleanup_recent_text_sends(now: float) -> None:
 _AUTO_SOLVE_LAST_TS: dict[int, float] = {}
 _AUTO_SOLVE_COOLDOWN_SEC = 1800
 _AUTO_SOLVE_GLOBAL_LOCK = None  # lazy asyncio.Lock
+_AUTO_SOLVE_LAST_TS_LOCK = None  # lazy asyncio.Lock for _AUTO_SOLVE_LAST_TS dict access
+
+
+def _get_auto_solve_last_ts_lock() -> asyncio.Lock:
+    """惰性初始化 _AUTO_SOLVE_LAST_TS 的访问锁，避免并发写入去重时间戳。
+
+    返回模块级单例 asyncio.Lock，供 _auto_solve_captcha_after_failure 中
+    async with _get_auto_solve_last_ts_lock() 使用。必须是同步函数，否则
+    `async with async_func():` 会拿到 coroutine 而非 Lock，导致 TypeError。
+    """
+    global _AUTO_SOLVE_LAST_TS_LOCK
+    if _AUTO_SOLVE_LAST_TS_LOCK is None:
+        _AUTO_SOLVE_LAST_TS_LOCK = asyncio.Lock()
+    return _AUTO_SOLVE_LAST_TS_LOCK
 
 
 async def _lookup_account_name_safe(tenant_id: int, account_id: int) -> str:
@@ -303,6 +337,9 @@ class XianyuWebSocketClient:
         # 同步状态
         self._sync_pts = 0  # 当前同步基点时间戳
         self._sync_high_pts = 0  # 当前同步高点水印
+        # 当前等待响应的 ackDiff 请求 mid，用于识别服务端的空响应（无 lwp，仅 code+headers）。
+        # 服务端在 ackDiff 长轮询超时（无新消息）时返回这种格式，客户端必须识别并发起下一轮。
+        self._sync_pending_mid: Optional[str] = None
 
         # 外部回调（如消息存储）
         self.on_message_callback = on_message_callback
@@ -376,7 +413,8 @@ class XianyuWebSocketClient:
         logger.info("WS 客户端停止 accountId=%d", self.account_id)
 
     async def send_text_message(
-        self, cid: str, to_id: str, text: str, persist: bool = False
+        self, cid: str, to_id: str, text: str, persist: bool = False,
+        is_auto_reply: int = 0,
     ) -> dict[str, Any]:
         """发送文本消息。
 
@@ -387,6 +425,9 @@ class XianyuWebSocketClient:
             persist: 是否在发送成功后自动持久化 OUT 消息到数据库。
                      默认 False，由调用方自行决定是否入库（手动发送、自动回复
                      均在各自路径中调用 save_chat_message，避免重复入库）。
+            is_auto_reply: 是否 AI 自动回复 0否 1是。仅在 persist=True 时透传给
+                           _persist_outbound_message 用于消息标记。调用方自行入库时
+                           应在 save_chat_message 调用中显式传入。
 
         Returns:
             {"code": 200, "uuid": "..."} 或 {"code": 500, "error": "..."}
@@ -587,6 +628,7 @@ class XianyuWebSocketClient:
         width: int = 0,
         height: int = 0,
         content_type: int = 1,
+        is_auto_reply: int = 0,
     ) -> None:
         """发送消息成功后主动保存到数据库，避免依赖 IM 推送回环导致漏收。
 
@@ -623,6 +665,7 @@ class XianyuWebSocketClient:
             "pnmId": "",
             "xyGoodsId": "",
             "readStatus": 1,
+            "isAutoReply": int(is_auto_reply or 0),
         }
 
         # 图片消息需要携带完整图片结构，前端 extractImageMessageUrls 会从
@@ -1488,6 +1531,12 @@ class XianyuWebSocketClient:
         if self._sync_pts <= 0:
             self._sync_pts = int(time.time() * 1000000)  # 微秒
         msg = build_sync_message(self._sync_pts, self._sync_high_pts)
+        # 记录 mid 用于识别 ackDiff 空响应（无 lwp，仅 code+headers）。
+        # 服务端在长轮询超时（无新消息）时返回这种格式，必须识别并发起下一轮 sync。
+        try:
+            self._sync_pending_mid = str(msg.get("headers", {}).get("mid") or "")
+        except Exception:
+            self._sync_pending_mid = ""
         await ws.send(json.dumps(msg, ensure_ascii=False))
         logger.info(
             "WS 同步请求已发送 accountId=%d pts=%s highPts=%s",
@@ -1616,6 +1665,37 @@ class XianyuWebSocketClient:
                     fut.set_result(result)
                 return
 
+            # 修复：识别 ackDiff 长轮询的空响应（无 lwp，仅有 code 和 headers，且 mid 匹配 _sync_pending_mid）。
+            # 服务端在 ackDiff 短轮询无新消息时返回这种格式：
+            #   {"code": 200, "headers": {"mid": "..."}}
+            # 之前这种消息被当作"未处理"丢弃，导致 ackDiff 轮询链路断裂，
+            # 客户端不再 sync，服务端不推送新消息，自动回复无法触发。
+            # 注意：空响应后必须等待 ACKDIFF_POLL_INTERVAL 秒再发下一轮，
+            # 否则会形成疯狂循环触发服务端限流。
+            if (
+                not lwp
+                and code is not None
+                and mid
+                and self._sync_pending_mid
+                and mid == self._sync_pending_mid
+            ):
+                logger.info(
+                    "WS ackDiff 空响应 accountId=%d code=%s，%.1fs 后发起下一轮 sync",
+                    self.account_id,
+                    code,
+                    ACKDIFF_POLL_INTERVAL,
+                )
+                self._sync_pending_mid = None
+                try:
+                    await asyncio.sleep(ACKDIFF_POLL_INTERVAL)
+                    await self._do_sync(ws)
+                except Exception as e:
+                    log_service_failure(
+                        logger, e, operation="resync_after_empty_ackdiff",
+                        tenant_id=self.tenant_id, account_id=self.account_id,
+                    )
+                return
+
         if lwp in ("/s/para", "/s/sync", "/s/vulcan", "/r/SyncStatus/ackDiff"):
             # 同步包（聊天消息/增量推送）
             await self._handle_sync_package(data, ws)
@@ -1667,9 +1747,19 @@ class XianyuWebSocketClient:
 
         result = parse_sync_package(data)
         if not result:
-            # ackDiff 响应即使没有消息也要继续下一轮同步（长轮询）
-            if is_ack_diff:
+            # 任何 sync 响应（/s/vulcan、/s/para、/s/sync、/r/SyncStatus/ackDiff）
+            # 都必须发起下一轮 sync 维持轮询链路。之前仅在 is_ack_diff=True 时发起，
+            # 导致 /s/vulcan 响应后链路断裂，客户端不再 sync，服务端不推送新消息，
+            # 自动回复无法触发。
+            # 注意：无消息时延迟 ACKDIFF_POLL_INTERVAL 秒再发下一轮，避免疯狂循环。
+            try:
+                await asyncio.sleep(ACKDIFF_POLL_INTERVAL)
                 await self._do_sync(ws)
+            except Exception as e:
+                log_service_failure(
+                    logger, e, operation="resync_after_no_result",
+                    tenant_id=self.tenant_id, account_id=self.account_id,
+                )
             return
 
         messages = result.get("messages", [])
@@ -1683,9 +1773,15 @@ class XianyuWebSocketClient:
                 lwp,
                 body_keys,
             )
-            # ackDiff 响应即使没有消息也要继续下一轮同步（长轮询）
-            if is_ack_diff:
+            # 无消息时延迟 ACKDIFF_POLL_INTERVAL 秒再发下一轮，避免疯狂循环。
+            try:
+                await asyncio.sleep(ACKDIFF_POLL_INTERVAL)
                 await self._do_sync(ws)
+            except Exception as e:
+                log_service_failure(
+                    logger, e, operation="resync_after_no_messages",
+                    tenant_id=self.tenant_id, account_id=self.account_id,
+                )
             return
 
         logger.info("WS 收到 %d 条消息 accountId=%d lwp=%s", len(messages), self.account_id, lwp)
@@ -1702,8 +1798,8 @@ class XianyuWebSocketClient:
                 )
 
         # 2. 先发起下一轮 ackDiff，避免当前批次的消息处理阻塞后续同步。
-        if is_ack_diff:
-            await self._do_sync(ws)
+        # 有消息时立即发下一轮（可能还有积压），维持轮询链路确保服务端持续推送新消息。
+        await self._do_sync(ws)
 
         # 3. 处理当前批次消息（落库 + SSE 广播）。
         for msg in messages:

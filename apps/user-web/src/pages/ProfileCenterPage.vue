@@ -963,6 +963,89 @@
           </div>
         </div>
 
+        <div v-else-if="activeTab === 'recharge'" class="card-panel recharge-panel content-panel">
+          <div class="panel-head">
+            <div>
+              <h3>充值记录</h3>
+              <p>查看你的 Token 充值历史，含订单号、到账 Token、来源与时间。</p>
+            </div>
+            <button type="button" class="app-btn" :disabled="rechargeLoading" @click="loadRechargeRecords(rechargeRecords.current || 1)">刷新</button>
+          </div>
+
+          <div class="recharge-summary-grid">
+            <div class="recharge-summary-card">
+              <div class="recharge-summary-label">累计充值笔数</div>
+              <div class="recharge-summary-value">{{ formatNumber(rechargeStats.totalRecords) }}</div>
+              <div class="recharge-summary-sub">所有时间</div>
+            </div>
+            <div class="recharge-summary-card">
+              <div class="recharge-summary-label">累计充值 Token</div>
+              <div class="recharge-summary-value">{{ formatNumber(rechargeStats.totalTokens) }}</div>
+              <div class="recharge-summary-sub">所有时间</div>
+            </div>
+            <div class="recharge-summary-card">
+              <div class="recharge-summary-label">当前 Token 余额</div>
+              <div class="recharge-summary-value">{{ formatNumber(tokenStats.tokenBalance ?? 0) }}</div>
+              <div class="recharge-summary-sub">实时</div>
+            </div>
+          </div>
+
+          <p v-if="rechargeLoadError" class="recharge-error">{{ rechargeLoadError }}</p>
+
+          <div class="recharge-table-wrap">
+            <table class="recharge-table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>订单号</th>
+                  <th>充值 Token</th>
+                  <th>充值前余额</th>
+                  <th>充值后余额</th>
+                  <th>来源</th>
+                  <th>备注</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in rechargeRecords.records" :key="row.id">
+                  <td class="recharge-date">{{ row.createdTime ? formatTokenTime(row.createdTime) : '-' }}</td>
+                  <td class="recharge-order">{{ row.orderNo || '-' }}</td>
+                  <td class="recharge-amount-cell">+{{ formatNumber(row.tokenAmount) }}</td>
+                  <td>{{ formatNumber(row.beforeBalance) }}</td>
+                  <td>{{ formatNumber(row.afterBalance) }}</td>
+                  <td><span class="recharge-source-tag">{{ rechargeSourceLabel(row.source) }}</span></td>
+                  <td class="recharge-remark-cell">{{ row.remark || '-' }}</td>
+                </tr>
+                <tr v-if="!rechargeRecords.records.length && !rechargeLoading">
+                  <td colspan="7" class="recharge-empty-cell">暂无充值记录</td>
+                </tr>
+                <tr v-if="rechargeLoading">
+                  <td colspan="7" class="recharge-loading-cell">正在加载充值记录…</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="recharge-pager">
+            <div class="recharge-pager-left">
+              <button class="recharge-pager-btn" :disabled="(rechargeRecords.current || 1) <= 1" @click="loadRechargeRecords((rechargeRecords.current || 1) - 1)">
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><path d="M10 12L6 8l4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button v-for="p in rechargePageNumbers" :key="'rp-' + p" type="button" :class="['recharge-pager-num', { active: (rechargeRecords.current || 1) === p }]" @click="loadRechargeRecords(p)">{{ p }}</button>
+              <button class="recharge-pager-btn" :disabled="(rechargeRecords.current || 1) >= rechargeTotalPages" @click="loadRechargeRecords((rechargeRecords.current || 1) + 1)">
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><path d="M6 12l4-4-4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+            <div class="recharge-pager-right">
+              <span class="recharge-pager-total">共 <strong>{{ rechargeRecords.total || 0 }}</strong> 条</span>
+              <select class="recharge-pager-size" v-model.number="rechargeRecords.size" @change="loadRechargeRecords(1)">
+                <option :value="8">8条/页</option>
+                <option :value="20">20条/页</option>
+                <option :value="50">50条/页</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
         <div v-else-if="activeTab === 'password'" class="card-panel form-panel content-panel">
           <div class="panel-head">
             <div>
@@ -1078,6 +1161,7 @@ import {
   changeProfilePassword,
   changeProfilePhone,
   getProfileOverview,
+  getRechargeRecords,
   getTokenLedger,
   getTokenTrend,
   sendProfileCode
@@ -1091,7 +1175,8 @@ import { APP_VERSION } from '../utils/appMeta.js'
 const tabs = [
   { key: 'overview', label: '概览' },
   { key: 'security', label: '账号安全' },
-  { key: 'token', label: 'Token 消耗' }
+  { key: 'token', label: 'Token 消耗' },
+  { key: 'recharge', label: '充值记录' }
 ]
 
 const {
@@ -1113,7 +1198,7 @@ const profileVerificationUnavailableText = computed(() => {
 const profileVerificationActionText = computed(() => authCapabilityLoading.value ? '正在确认验证能力' : '验证服务不可用')
 
 const PROFILE_ENTRY_STORAGE_KEY = 'xya_profile_initial_tab'
-const PROFILE_MAIN_TABS = new Set(['overview', 'security', 'token'])
+const PROFILE_MAIN_TABS = new Set(['overview', 'security', 'token', 'recharge'])
 const activeTab = ref('overview')
 const saving = ref(false)
 const overview = reactive({})
@@ -1145,6 +1230,12 @@ const trendChartRef = ref(null)
 const tokenPieChartRef = ref(null)
 let trendChartInstance = null
 let tokenPieChartInstance = null
+
+// 充值记录状态（前台用户查看自己的 Token 充值历史）
+const rechargeRecords = reactive({ records: [], total: 0, current: 1, size: 8 })
+const rechargeLoading = ref(false)
+const rechargeLoadError = ref('')
+const rechargeStats = reactive({ totalRecords: 0, totalTokens: 0 })
 
 const packageList = computed(() => {
   if (!tokenPlans.value.length) return []
@@ -1209,6 +1300,8 @@ function handleHeaderRefresh() {
   if (activeTab.value === 'token') {
     loadTokenLedger(tokenLedger.current || 1)
     loadTokenTrend(30)
+  } else if (activeTab.value === 'recharge') {
+    loadRechargeRecords(rechargeRecords.current || 1)
   } else {
     loadOverview()
     loadTokenLedger(1, 1)
@@ -1885,6 +1978,75 @@ function goToJumpPage() {
   if (targetPage !== tokenLedger.current) loadTokenLedger(targetPage)
 }
 
+// 充值记录分页总页数
+const rechargeTotalPages = computed(() => {
+  const total = Number(rechargeRecords.total) || 0
+  const size = Number(rechargeRecords.size) || 8
+  return Math.max(1, Math.ceil(total / size))
+})
+
+// 充值记录分页页码（最多显示 5 个）
+const rechargePageNumbers = computed(() => {
+  const total = rechargeTotalPages.value
+  const current = Number(rechargeRecords.current) || 1
+  if (total <= 5) return Array.from({ length: total }, (_, i) => i + 1)
+  if (current <= 3) return [1, 2, 3, 4, 5]
+  if (current >= total - 2) return [total - 4, total - 3, total - 2, total - 1, total]
+  return [current - 2, current - 1, current, current + 1, current + 2]
+})
+
+// 来源标签文案
+function rechargeSourceLabel(source) {
+  if (!source) return '—'
+  const map = {
+    alipay: '支付宝',
+    wechat: '微信支付',
+    admin: '后台手动',
+    system: '系统赠送',
+    plan: '套餐购买',
+    manual: '手动充值'
+  }
+  return map[String(source).toLowerCase()] || source
+}
+
+async function loadRechargeRecords(page = 1) {
+  rechargeLoading.value = true
+  rechargeLoadError.value = ''
+  try {
+    const res = await getRechargeRecords({ current: page, size: rechargeRecords.size })
+    const data = res?.data
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      throw new Error('充值记录响应格式异常')
+    }
+    if (!Array.isArray(data.records)) throw new Error('充值记录响应格式异常')
+    rechargeRecords.records = data.records.map((record, index) => ({
+      ...record,
+      id: record.id ?? `r-${page}-${index}`,
+      createdTime: record.createdTime || record.createTime || record.time || '',
+      orderNo: record.orderNo || record.paymentOrderId || '',
+      tokenAmount: nullableNumber(record.tokenAmount ?? record.amount ?? record.tokens) ?? 0,
+      beforeBalance: nullableNumber(record.beforeBalance ?? record.balanceBefore) ?? 0,
+      afterBalance: nullableNumber(record.afterBalance ?? record.balanceAfter) ?? 0,
+      source: record.source || record.channel || '',
+      remark: record.remark || record.description || ''
+    }))
+    rechargeRecords.total = Number(data.total) || 0
+    rechargeRecords.current = Number(data.current) || 1
+    rechargeRecords.size = Number(data.size) || rechargeRecords.size
+    const stats = data.stats || {}
+    rechargeStats.totalRecords = Number(stats.totalRecords || data.total || 0)
+    rechargeStats.totalTokens = Number(stats.totalTokens || 0)
+  } catch (error) {
+    rechargeRecords.records = []
+    rechargeRecords.total = 0
+    rechargeStats.totalRecords = 0
+    rechargeStats.totalTokens = 0
+    rechargeLoadError.value = error?.message || '充值记录加载失败，请重试。'
+  } finally {
+    rechargeLoading.value = false
+  }
+}
+
 async function loadOverview() {
   overviewLoadError.value = ''
   overviewAvailable.value = false
@@ -2225,6 +2387,9 @@ watch(activeTab, async (tab) => {
     await loadTokenTrend(30)
     await nextTick()
     setTimeout(() => initTokenCharts(), 100)
+  }
+  if (tab === 'recharge') {
+    loadRechargeRecords(rechargeRecords.current || 1)
   }
   if (tab === 'overview') {
     // 概览页使用 7 天趋势数据；若已被 token 页切回，重新加载 7 天
@@ -7563,6 +7728,224 @@ watch(activeTab, async (tab) => {
   .td-card-actions {
     flex-direction: column;
     align-items: flex-end;
+  }
+}
+
+/* 充值记录面板 */
+.recharge-panel {
+  padding: 24px;
+}
+.recharge-panel .panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.recharge-panel .panel-head h3 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 700;
+  color: #1D2129;
+}
+.recharge-panel .panel-head p {
+  margin: 0;
+  font-size: 13px;
+  color: #86909C;
+}
+.recharge-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.recharge-summary-card {
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #f5f9ff 0%, #eaf2ff 100%);
+  border: 1px solid #dbeafe;
+}
+.recharge-summary-label {
+  font-size: 12px;
+  color: #4E5969;
+  margin-bottom: 6px;
+}
+.recharge-summary-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: #165DFF;
+  line-height: 1.2;
+}
+.recharge-summary-sub {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #86909C;
+}
+.recharge-error {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: #fff1f0;
+  border: 1px solid #ffccc7;
+  border-radius: 8px;
+  color: #cf1322;
+  font-size: 13px;
+}
+.recharge-table-wrap {
+  overflow-x: auto;
+  margin-bottom: 16px;
+}
+.recharge-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: #fff;
+}
+.recharge-table thead th {
+  padding: 12px 14px;
+  background: #f7f9fc;
+  color: #4E5969;
+  font-weight: 600;
+  text-align: left;
+  border-bottom: 1px solid #e5e6eb;
+  white-space: nowrap;
+}
+.recharge-table tbody td {
+  padding: 12px 14px;
+  border-bottom: 1px solid #f2f3f5;
+  color: #1D2129;
+  vertical-align: middle;
+}
+.recharge-table tbody tr:hover {
+  background: #fafbfc;
+}
+.recharge-date {
+  white-space: nowrap;
+  color: #4E5969;
+}
+.recharge-order {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+  color: #4E5969;
+}
+.recharge-amount-cell {
+  font-weight: 700;
+  color: #00b42a;
+}
+.recharge-source-tag {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  background: #e8f3ff;
+  color: #165DFF;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.recharge-remark-cell {
+  max-width: 220px;
+  color: #86909C;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recharge-empty-cell,
+.recharge-loading-cell {
+  text-align: center;
+  padding: 28px 0 !important;
+  color: #86909C;
+  font-size: 13px;
+}
+.recharge-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.recharge-pager-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.recharge-pager-btn {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e5e6eb;
+  background: #fff;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #4E5969;
+  transition: all 0.2s;
+}
+.recharge-pager-btn:hover:not(:disabled) {
+  border-color: #165DFF;
+  color: #165DFF;
+}
+.recharge-pager-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.recharge-pager-num {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e5e6eb;
+  background: #fff;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #4E5969;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+.recharge-pager-num:hover {
+  border-color: #165DFF;
+  color: #165DFF;
+}
+.recharge-pager-num.active {
+  background: #165DFF;
+  border-color: #165DFF;
+  color: #fff;
+}
+.recharge-pager-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #86909C;
+}
+.recharge-pager-total strong {
+  color: #1D2129;
+  margin: 0 2px;
+}
+.recharge-pager-size {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px;
+  color: #4E5969;
+  cursor: pointer;
+}
+@media (max-width: 768px) {
+  .recharge-summary-grid {
+    grid-template-columns: 1fr;
+  }
+  .recharge-panel {
+    padding: 16px;
+  }
+  .recharge-pager {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .recharge-pager-left {
+    justify-content: center;
+    flex-wrap: wrap;
   }
 }
 </style>

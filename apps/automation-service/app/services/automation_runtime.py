@@ -73,8 +73,19 @@ class PublicRuntimeError(RuntimeError):
 
 
 def _log_runtime_failure(operation: str, exc: BaseException) -> None:
-    """Log diagnostic metadata without serialising the exception value."""
+    """Log diagnostic metadata without serialising the exception value.
+
+    对 NameError/AttributeError/TypeError 等编程错误，额外记录完整 traceback，
+    便于定位 send_auto_reply 等操作中的代码级 bug（这些异常不应在生产环境出现，
+    默认 log_service_failure 仅记录 metadata 而不记录 traceback，无法定位根因）。
+    """
     log_service_failure(logger, exc, operation=operation)
+    # 编程错误（NameError 等）属于代码 bug，不应在生产环境出现，记录 traceback 便于定位
+    if isinstance(exc, (NameError, AttributeError, TypeError, ImportError, SyntaxError, KeyError)):
+        logger.error(
+            "traceback operation=%s exc_type=%s",
+            operation, type(exc).__name__, exc_info=exc,
+        )
 
 
 async def _post_provider_json_bounded(
@@ -200,6 +211,11 @@ _PUBLIC_RUNTIME_ERRORS: dict[str, str] = {
     "AI_USER_UNRESOLVED": "AI 生图无法确定计费用户，请检查工作流账号归属",
     "AI_FILTER_FAILED": "AI 商品筛选异常，筛选已停止，请稍后重试",
     "AUTO_REPLY_SEND_FAILED": "自动回复发送失败，请检查账号连接后重试",
+    "AUTO_REPLY_SEND_WS_DISCONNECTED": "WebSocket 未连接，自动回复未发送，请检查账号登录状态",
+    "AUTO_REPLY_SEND_REJECTED": "自动回复被闲鱼拒绝，请稍后重试",
+    "AUTO_REPLY_SEND_EXCEPTION": "自动回复发送异常，请稍后重试",
+    "AUTO_REPLY_SEND_NO_SID": "消息缺少会话 ID，自动回复未发送",
+    "AUTO_REPLY_SEND_SKIPPED": "自动回复发送被跳过，请稍后重试",
     "PUBLISH_AI_IMAGE_REQUIRED": "商品未生成 AI 封面图，已阻止发布",
     "PUBLISH_CONTENT_INVALID": "商品标题或描述不完整，已阻止发布",
     "PUBLISH_ACCOUNT_UNAVAILABLE": "发布账号登录状态不可用，请重新登录",
@@ -5373,6 +5389,112 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
         })
         conversation_db_id = int((await db.execute(text("SELECT LAST_INSERT_ID()"))).scalar() or 0)
 
+    # === 会话级自动回复状态检查（人工干预自动暂停/恢复） ===
+    # 业务规则：
+    #   1. 检测到人工发送消息（OUT 且 is_auto_reply=0）后，会话自动暂停 AI 回复
+    #   2. 买家发送"开启自动回复"指令 → 自动恢复（仅当未被用户手动关闭）
+    #   3. 距上次人工回复 > 1 分钟，买家发新消息时自动恢复
+    #   4. 用户在网站手动点击按钮关闭时，禁止自动恢复，仅允许用户手动开启
+    #   5. 此检查在 AI 规则匹配之前生效，会话暂停时直接跳过 AI 回复
+    conv_state_row = (await db.execute(text("""
+        SELECT auto_reply_paused, auto_reply_manual_disabled, last_manual_reply_at
+        FROM xianyu_conversation
+        WHERE id = :conversation_id
+    """), {"conversation_id": conversation_db_id})).mappings().first()
+    conv_paused = int((conv_state_row or {}).get("auto_reply_paused") or 0)
+    conv_manual_disabled = int((conv_state_row or {}).get("auto_reply_manual_disabled") or 0)
+    conv_last_manual_at = (conv_state_row or {}).get("last_manual_reply_at")
+
+    # 指令检测：买家发送"开启自动回复"（精确匹配，避免误触发）
+    RESUME_COMMAND = "开启自动回复"
+    is_resume_command = content.strip() == RESUME_COMMAND
+
+    if is_resume_command and conv_paused == 1:
+        if conv_manual_disabled == 0:
+            # 自动恢复（指令触发）
+            await db.execute(text("""
+                UPDATE xianyu_conversation
+                SET auto_reply_paused = 0, last_manual_reply_at = NULL, updated_time = NOW()
+                WHERE id = :conversation_id
+            """), {"conversation_id": conversation_db_id})
+            logger.info(
+                "[AUTO_REPLY] 买家发送'开启自动回复'指令，自动恢复 AI 回复 tenantId=%d accountId=%d convId=%d",
+                tenant_id, account_id, conversation_db_id
+            )
+            msg_text = "买家发送'开启自动回复'指令，已恢复 AI 自动回复"
+        else:
+            # 用户已手动关闭，指令无法自动恢复
+            logger.info(
+                "[AUTO_REPLY] 买家发送'开启自动回复'指令，但用户已手动关闭，保持暂停 tenantId=%d accountId=%d convId=%d",
+                tenant_id, account_id, conversation_db_id
+            )
+            msg_text = "用户已手动关闭自动回复，需用户手动开启"
+        # 此条指令消息本身不触发 AI 回复（避免回复"开启自动回复"这条指令）
+        await db.commit()
+        return {
+            "ok": True,
+            "matched": False,
+            "autoSent": False,
+            "conversationId": conversation_db_id,
+            "message": msg_text,
+        }
+
+    if conv_paused == 1:
+        if conv_manual_disabled == 1:
+            # 用户手动关闭，跳过 AI 回复
+            logger.info(
+                "[AUTO_REPLY] 用户已手动关闭自动回复，跳过 AI 回复 tenantId=%d accountId=%d convId=%d",
+                tenant_id, account_id, conversation_db_id
+            )
+            await db.commit()
+            return {
+                "ok": True,
+                "matched": False,
+                "autoSent": False,
+                "conversationId": conversation_db_id,
+                "message": "用户已手动关闭自动回复，AI 回复已暂停",
+            }
+        # 人工干预暂停中，检查是否超过 1 分钟自动恢复
+        now_ms = int(time.time() * 1000)
+        if conv_last_manual_at is None:
+            # 异常状态：暂停但无 last_manual_reply_at，直接恢复
+            await db.execute(text("""
+                UPDATE xianyu_conversation
+                SET auto_reply_paused = 0, last_manual_reply_at = NULL, updated_time = NOW()
+                WHERE id = :conversation_id
+            """), {"conversation_id": conversation_db_id})
+            logger.warning(
+                "[AUTO_REPLY] 暂停状态异常（无 last_manual_reply_at），自动恢复 tenantId=%d accountId=%d convId=%d",
+                tenant_id, account_id, conversation_db_id
+            )
+        else:
+            elapsed_ms = now_ms - int(conv_last_manual_at)
+            if elapsed_ms >= 60_000:
+                # 自动恢复（1分钟超时）
+                await db.execute(text("""
+                    UPDATE xianyu_conversation
+                    SET auto_reply_paused = 0, last_manual_reply_at = NULL, updated_time = NOW()
+                    WHERE id = :conversation_id
+                """), {"conversation_id": conversation_db_id})
+                logger.info(
+                    "[AUTO_REPLY] 距上次人工回复 %dms >= 60s，自动恢复 AI 回复 tenantId=%d accountId=%d convId=%d",
+                    elapsed_ms, tenant_id, account_id, conversation_db_id
+                )
+            else:
+                # 1分钟内，保持暂停
+                logger.info(
+                    "[AUTO_REPLY] 人工干预暂停中（%dms < 60s），跳过 AI 回复 tenantId=%d accountId=%d convId=%d",
+                    elapsed_ms, tenant_id, account_id, conversation_db_id
+                )
+                await db.commit()
+                return {
+                    "ok": True,
+                    "matched": False,
+                    "autoSent": False,
+                    "conversationId": conversation_db_id,
+                    "message": "人工干预暂停中，AI 回复已临时挂起",
+                }
+
     if platform_message_id:
         existing = (await db.execute(text("""
             SELECT id FROM xianyu_message
@@ -5479,6 +5601,7 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
         }
 
     billing_result = None
+    billing_pending: Optional[dict[str, Any]] = None
     if reply_mode in {"ai", "llm", "model"}:
         user_id = await _resolve_account_user_id(db, tenant_id, account_id, rule)
         if not user_id:
@@ -5600,23 +5723,105 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
             await db.commit()
             return {"ok": False, "errorCode": "AI_MODEL_UNAVAILABLE", "matched": True, "conversationId": conversation_db_id,
                     "messageId": trigger_message_id, "message": "AI 对话模型暂不可用，请稍后重试"}
+
+        # === 暂存计费上下文：发送成功后才扣费 ===
+        # 关键约束：但凡存在发送失败的行为，都禁止进行 token 扣费。
+        # 因此扣费不能在 AI 调用后立即执行，必须等到消息真正发送到闲鱼成功后再扣费。
+        # 若扣费时计费服务暂不可用，走 pending_billing 补扣（消息已发送无法撤回）。
+        billing_pending = {
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "scene": "auto_reply",
+            "provider_name": provider_name,
+            "model_name": model_name,
+            "model_type": "chat",
+            "prompt": prompt_text + "\n买家消息：" + content,
+            "completion": reply_content,
+            "request_id": billing_request_id,
+            "raw_usage": raw_usage,
+        }
+
+    # === 先通过 WebSocket 发送回复，发送成功后才扣费与入库 ===
+    # 旧实现先扣费再发送，发送失败时已扣 Token 但消息未发出，违反"发送失败禁止扣费"约束。
+    # 改为先发送、成功后扣费与入库，失败时仅记录失败日志，不扣费。
+    send_status = "skipped"
+    send_error_code = ""
+    send_error = ""
+    send_result_detail: dict[str, Any] = {}
+    if ws_sid:
         try:
-            billing_result = await charge_text_usage(
-                tenant_id=tenant_id,
-                user_id=user_id,
-                scene="auto_reply",
-                provider_name=provider_name,
-                model_name=model_name,
-                model_type="chat",
-                prompt=prompt_text + "\n买家消息：" + content,
-                completion=reply_content,
-                request_id=billing_request_id,
-                raw_usage=raw_usage,
-            )
-        except AiBillingPaymentRequired:
-            await _insert_auto_reply_failure(db, tenant_id, account_id, conversation_db_id, rule, content, "AI_BALANCE_INSUFFICIENT")
-            await db.commit()
+            from .ws_client import ws_manager
+            client = ws_manager.get_client(account_id)
+            if not client or not client.is_connected:
+                send_status = "ws_disconnected"
+                send_error_code = "AUTO_REPLY_SEND_WS_DISCONNECTED"
+                send_error = "WebSocket 未连接，自动回复未发送"
+                logger.warning("[AUTO_REPLY] WS 未连接，回复未发送 accountId=%d cid=%s", account_id, ws_sid)
+            else:
+                to_id = buyer_id if "@" in buyer_id else f"{buyer_id}@goofish"
+                send_result = await client.send_text_message(ws_sid, to_id, reply_content, persist=False)
+                send_result_detail = send_result if isinstance(send_result, dict) else {}
+                if send_result.get("code") == 200:
+                    send_status = "sent"
+                    logger.info("[AUTO_REPLY] 回复已发送 accountId=%d cid=%s toId=%s", account_id, ws_sid, to_id)
+                else:
+                    send_status = "send_failed"
+                    send_error_code = "AUTO_REPLY_SEND_REJECTED"
+                    # 优先使用 ws_client 返回的 errorCode/error，便于运维定位
+                    upstream_error = _text(send_result.get("error"))
+                    send_error = upstream_error or "自动回复发送失败，请检查账号连接后重试"
+                    logger.warning(
+                        "runtimeFailure operation=send_auto_reply errorType=ProviderRejected requestId=%s upstreamError=%s",
+                        get_request_id() or "-", upstream_error,
+                    )
+        except Exception as send_exc:
+            send_status = "exception"
+            send_error_code = "AUTO_REPLY_SEND_EXCEPTION"
+            send_error = "自动回复发送异常，请稍后重试"
+            _log_runtime_failure("send_auto_reply", send_exc)
+    else:
+        send_status = "no_sid"
+        send_error_code = "AUTO_REPLY_SEND_NO_SID"
+        send_error = "payload 未携带 sId，无法通过 WS 发送"
+        logger.warning("[AUTO_REPLY] 缺少 sId，回复未发送 accountId=%d", account_id)
+
+    # 发送失败（含未连接/超时/无 sId/被拒绝/异常）：仅记录失败日志，不扣费、不写入消息表。
+    # 关键约束：发送失败禁止 token 扣费，因此此处不走任何扣费/补扣逻辑。
+    if send_status != "sent":
+        if not send_error_code:
+            # 兜底：未匹配到细化错误码时使用通用错误码
+            send_error_code = "AUTO_REPLY_SEND_FAILED"
+        await _insert_auto_reply_failure(db, tenant_id, account_id, conversation_db_id, rule, content, send_error_code)
+        await db.commit()
+        return {
+            "ok": False,
+            "errorCode": send_error_code,
+            "matched": True,
+            "conversationId": conversation_db_id,
+            "messageId": trigger_message_id,
+            "platformMessageId": platform_message_id,
+            "ruleId": rule.get("id"),
+            "replyContent": reply_content,
+            "billing": _sanitize_runtime_value(billing_result),
+            "sendStatus": send_status,
+            "sendErrorCode": send_error_code,
+            "sendError": send_error,
+            "sendDetail": _sanitize_runtime_value(send_result_detail),
+            "message": send_error or "自动回复发送失败",
+        }
+
+    # === 发送成功后才扣费 ===
+    # 计费时若发生 503（计费服务暂不可用），消息已发送无法撤回，
+    # 走 pending_billing 暂存待 Java 恢复后补扣；其余扣费失败也走 pending_billing 兜底补扣，
+    # 最大限度避免"消息已发但未扣费"的情况。
+    if billing_pending:
+        try:
+            billing_result = await charge_text_usage(**billing_pending)
+        except AiBillingPaymentRequired as exc:
             # 兜底：precheck 通过但 charge 时余额被扣干（理论上不会发生，但兜底通知）
+            # 消息已发送无法撤回，走 pending_billing 暂存补扣，待用户充值后自动补扣
+            _log_runtime_failure("charge_auto_reply_payment_required", exc)
+            await _enqueue_pending_auto_reply_billing(db, account_id, billing_pending, exc)
             try:
                 from .notify_dispatcher import notify_auto_reply_paused
                 await notify_auto_reply_paused(
@@ -5627,96 +5832,17 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
                 )
             except Exception as notify_exc:
                 _log_runtime_failure("notify_auto_reply_paused_on_charge", notify_exc)
-            return {"ok": False, "errorCode": "AI_BALANCE_INSUFFICIENT", "matched": True, "conversationId": conversation_db_id, "messageId": trigger_message_id, "message": "AI Token 余额不足，请充值后重试"}
         except AiBillingUnavailable as exc:
-            # 计费服务暂不可用时降级：回复已生成，暂存计费请求待后续补扣，继续发送回复
+            # 计费服务暂不可用：消息已发送，暂存计费请求待后续补扣
             _log_runtime_failure("charge_auto_reply_usage_degraded", exc)
-            logger.warning("[AI_REPLY] 计费服务暂不可用，降级暂存计费请求待补扣，继续发送自动回复 tenantId=%d accountId=%d",
+            logger.warning("[AI_REPLY] 计费服务暂不可用，降级暂存计费请求待补扣（消息已发送）tenantId=%d accountId=%d",
                            tenant_id, account_id)
-            # 暂存计费请求，由 pending_billing 定时任务在 Java 恢复后补扣
-            try:
-                await ensure_pending_billing_table()
-                pending_payload = build_text_charge_payload(
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    scene="auto_reply",
-                    provider_name=provider_name,
-                    model_name=model_name,
-                    model_type="chat",
-                    prompt=prompt_text + "\n买家消息：" + content,
-                    completion=reply_content,
-                    request_id=billing_request_id,
-                    raw_usage=raw_usage,
-                )
-                await enqueue_pending_billing(
-                    db,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    account_id=account_id,
-                    scene="auto_reply",
-                    request_id=billing_request_id,
-                    payload=pending_payload,
-                    error=str(exc),
-                )
-            except Exception as enqueue_exc:
-                _log_runtime_failure("enqueue_pending_auto_reply_billing", enqueue_exc)
+            await _enqueue_pending_auto_reply_billing(db, account_id, billing_pending, exc)
         except AiBillingError as exc:
+            # 其他扣费失败：消息已发送，仍尝试暂存补扣，避免漏扣
             _log_runtime_failure("charge_auto_reply_usage", exc)
-            await _insert_auto_reply_failure(db, tenant_id, account_id, conversation_db_id, rule, content, "AI_BILLING_FAILED")
-            await db.commit()
-            return {"ok": False, "errorCode": "AI_BILLING_FAILED", "matched": True, "conversationId": conversation_db_id, "messageId": trigger_message_id, "message": "AI 计费服务暂不可用，本次回复已停止，请稍后重试"}
-
-    # === 先通过 WebSocket 发送回复，发送成功后才入库 ===
-    # 旧实现先入库再发送，发送失败时数据库已留下"成功"记录，导致前台显示
-    # 已发送但移动端实际未收到。改为先发送、成功后入库，失败时仅记录失败日志。
-    send_status = "skipped"
-    send_error = ""
-    if ws_sid:
-        try:
-            from .ws_client import ws_manager
-            client = ws_manager.get_client(account_id)
-            if not client or not client.is_connected:
-                send_status = "ws_disconnected"
-                send_error = "WebSocket 未连接，自动回复未发送"
-                logger.warning("[AUTO_REPLY] WS 未连接，回复未发送 accountId=%d cid=%s", account_id, ws_sid)
-            else:
-                to_id = buyer_id if "@" in buyer_id else f"{buyer_id}@goofish"
-                send_result = await client.send_text_message(ws_sid, to_id, reply_content, persist=False)
-                if send_result.get("code") == 200:
-                    send_status = "sent"
-                    logger.info("[AUTO_REPLY] 回复已发送 accountId=%d cid=%s toId=%s", account_id, ws_sid, to_id)
-                else:
-                    send_status = "send_failed"
-                    send_error = "自动回复发送失败，请检查账号连接后重试"
-                    logger.warning("runtimeFailure operation=send_auto_reply errorType=ProviderRejected requestId=%s", get_request_id() or "-")
-        except Exception as send_exc:
-            send_status = "exception"
-            send_error = "自动回复发送失败，请检查账号连接后重试"
-            _log_runtime_failure("send_auto_reply", send_exc)
-    else:
-        send_status = "no_sid"
-        send_error = "payload 未携带 sId，无法通过 WS 发送"
-        logger.warning("[AUTO_REPLY] 缺少 sId，回复未发送 accountId=%d", account_id)
-
-    # 发送失败（含未连接/超时/无 sId）：仅记录失败日志，不写入消息表，
-    # 避免前台显示"已发送"但移动端实际未收到的问题。
-    if send_status != "sent":
-        await _insert_auto_reply_failure(db, tenant_id, account_id, conversation_db_id, rule, content, "AUTO_REPLY_SEND_FAILED")
-        await db.commit()
-        return {
-            "ok": False,
-            "errorCode": "AUTO_REPLY_SEND_FAILED",
-            "matched": True,
-            "conversationId": conversation_db_id,
-            "messageId": trigger_message_id,
-            "platformMessageId": platform_message_id,
-            "ruleId": rule.get("id"),
-            "replyContent": reply_content,
-            "billing": _sanitize_runtime_value(billing_result),
-            "sendStatus": send_status,
-            "sendError": send_error,
-            "message": send_error or "自动回复发送失败",
-        }
+            logger.warning("[AI_REPLY] 扣费失败，暂存计费请求待补扣 tenantId=%d accountId=%d", tenant_id, account_id)
+            await _enqueue_pending_auto_reply_billing(db, account_id, billing_pending, exc)
 
     # === 发送成功后才将回复写入数据库 ===
     await db.execute(text("""
@@ -5754,6 +5880,7 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
             },
             seller_external_uid=seller_uid,
             sync_legacy_message=False,
+            is_auto_reply=1,
         )
 
     await db.execute(text("""
@@ -5771,11 +5898,19 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
         "reply_content": reply_content,
         "hit_type": rule.get("match_type") or "keyword",
     })
+    # 更新会话最后消息 + 记录 AI 自动回复时间戳（用于人工干预检测与前端展示）
     await db.execute(text("""
         UPDATE xianyu_conversation
-        SET last_message_time = NOW(), last_message_content = :reply_content, updated_time = NOW()
+        SET last_message_time = NOW(),
+            last_message_content = :reply_content,
+            last_auto_reply_at = :last_auto_reply_at,
+            updated_time = NOW()
         WHERE id = :conversation_id
-    """), {"conversation_id": conversation_db_id, "reply_content": reply_content})
+    """), {
+        "conversation_id": conversation_db_id,
+        "reply_content": reply_content,
+        "last_auto_reply_at": int(reply_message_time or (time.time() * 1000)),
+    })
     await db.commit()
 
     return {
@@ -6172,6 +6307,45 @@ async def _insert_auto_reply_failure(
         "hit_type": rule.get("match_type") or "keyword",
         "fail_reason": fail_reason,
     })
+
+
+async def _enqueue_pending_auto_reply_billing(
+    db: AsyncSession,
+    account_id: int,
+    billing_pending: dict[str, Any],
+    exc: BaseException,
+) -> None:
+    """将自动回复计费请求暂存到 pending_billing 表，待 Java core-api 恢复后由定时任务补扣。
+
+    使用场景：自动回复消息已通过 WebSocket 发送到闲鱼，但 Java 计费服务暂不可用
+    或扣费异常。此时消息已发出无法撤回，只能暂存计费请求等待补扣，避免漏扣 Token。
+    """
+    try:
+        await ensure_pending_billing_table()
+        pending_payload = build_text_charge_payload(
+            tenant_id=billing_pending["tenant_id"],
+            user_id=billing_pending["user_id"],
+            scene=billing_pending["scene"],
+            provider_name=billing_pending["provider_name"],
+            model_name=billing_pending["model_name"],
+            model_type=billing_pending["model_type"],
+            prompt=billing_pending["prompt"],
+            completion=billing_pending["completion"],
+            request_id=billing_pending["request_id"],
+            raw_usage=billing_pending["raw_usage"],
+        )
+        await enqueue_pending_billing(
+            db,
+            tenant_id=billing_pending["tenant_id"],
+            user_id=billing_pending["user_id"],
+            account_id=account_id,
+            scene=billing_pending["scene"],
+            request_id=billing_pending["request_id"],
+            payload=pending_payload,
+            error=str(exc),
+        )
+    except Exception as enqueue_exc:
+        _log_runtime_failure("enqueue_pending_auto_reply_billing", enqueue_exc)
 
 
 async def _build_ai_customer_service_rule(
@@ -6981,6 +7155,10 @@ async def execute_workflow(db: AsyncSession, payload: dict[str, Any]) -> dict[st
     context["__workflow_id__"] = workflow_id
     context["__execution_id__"] = execution_id
     context["__workflow_name__"] = workflow_name
+    # ★ 注入发布模式：publish（默认，生图后直接发布） | draft_only（生图后仅存草稿不发布）
+    #   _publish_single_item 检测 draft_only 时跳过实际发布，仅将草稿以 status=draft 写入 workflow_goods_draft 表
+    _publish_mode_raw = _text(payload.get("publishMode") or "publish").lower()
+    context["__publish_mode__"] = "draft_only" if _publish_mode_raw == "draft_only" else "publish"
     # ★ 注入前端预检传入的 addressPayload，供 IMAGE_GENERATE 节点直接使用
     # 注意：Java WorkflowService.execute 把前端整个 input 作为 payload.input 传递，
     # 因此 addressPayload 实际位于 payload.input.addressPayload；同时兼容历史路径
@@ -7642,6 +7820,42 @@ async def _publish_single_item(
     #   状态机：publishing（插入时） → published/failed（finalize 时）
     #   鱼小铺账号库存默认 999，普通账号库存固定 1（与实际发布逻辑一致）
     _draft_stock = 999 if account_pub.get("is_fish_shop") else 1
+
+    # ★ 草稿模式（draft_only）：生图后只将封面图、标题、文案、价格、地址、分类、账号等
+    #   存入 workflow_goods_draft 表（status=draft），不调用闲鱼发品 API。
+    #   用户可在「商品草稿箱」页面单条/多选/一键全部发布。
+    _publish_mode = _text(context.get("__publish_mode__") or "publish").lower()
+    if _publish_mode == "draft_only":
+        _draft_id = await _save_publish_draft(
+            db=db, tenant_id=tenant_id,
+            user_id=_safe_int(context.get("__user_id__"), 0) or None,
+            workflow_id=context.get("__workflow_id__"),
+            execution_id=context.get("__execution_id__"),
+            workflow_name=_text(context.get("__workflow_name__")),
+            node_key="IMAGE_GENERATE",
+            account_id=acct_id,
+            title=title, price=price, description=desc,
+            cover_pic=img_url, image_urls=[img_url] if img_url else [],
+            category=category, stock=_draft_stock,
+            location=address if isinstance(address, dict) else None,
+            raw_payload=p,
+            source_item_id=source_item_id, source_title_hash=source_title_hash,
+            initial_status="draft",
+        )
+        logger.info("[PUBLISH-DRAFT-ONLY] 已存入草稿箱 draft_id=%s account=%d title=%s",
+                    _draft_id, acct_id, title[:30])
+        return {
+            "status": "saved_as_draft",
+            "draft_id": _draft_id,
+            "accountId": acct_id,
+            "title": title,
+            "price": price,
+            "category": category,
+            "publish_ms": 0,
+            "error": "",
+            "errorCode": "",
+        }
+
     _draft_id = await _save_publish_draft(
         db=db, tenant_id=tenant_id,
         user_id=_safe_int(context.get("__user_id__"), 0) or None,
@@ -9042,22 +9256,34 @@ async def _execute_workflow_node(
                             state["publish_results"] = publish_results
                             _cur_img_done = _img_done_count
                             _cur_pub_done = _pub_done_count
-                            # ★ 熔断计数：仅统计真正发布失败（不含 skipped_*）
+                            # ★ 熔断计数：仅统计真正发布失败（不含 skipped_* / saved_as_draft）
+                            #   draft_only 模式下 saved_as_draft 视为成功（清零失败计数）
                             if _pub_status == "failed":
                                 _consecutive_fail_count += 1
                                 if not _circuit_broken and _consecutive_fail_count >= _MAX_CONSECUTIVE_FAIL:
                                     _circuit_broken = True
                                     _circuit_reason = f"连续{_consecutive_fail_count}次发布失败，已熔断。最后错误: {_pub_err_msg[:200]}"
                                     _circuit_just_broken = True
-                            elif _pub_status == "published":
+                            elif _pub_status in ("published", "saved_as_draft"):
                                 _consecutive_fail_count = 0
                             # skipped_* 不计入失败也不清零，保持中性
                         try:
                             async with async_session() as _ev_db:
                                 await save_state_variable(_ev_db, tenant_id, _exec_id, "IMAGE_GENERATE", "publish_results", publish_results, "json")
+                                # ★ 进度描述：区分 saved_as_draft（已存草稿）与其他状态
+                                if _pub_status == "saved_as_draft":
+                                    _pub_desc = "已存草稿"
+                                elif _pub_status == "published":
+                                    _pub_desc = "发布成功"
+                                elif _pub_status == "failed":
+                                    _pub_desc = "发布失败"
+                                elif _pub_status.startswith("skipped"):
+                                    _pub_desc = "跳过"
+                                else:
+                                    _pub_desc = _pub_status
                                 await insert_timeline(_ev_db, tenant_id, _exec_id, _wf_id, "IMAGE_GENERATE", "INFO", "image_and_publish_progress",
                                       f"生图+发布进度: 生图 {_cur_img_done}/{total_to_gen}，发布 {_cur_pub_done}/{total_to_gen}",
-                                      f"商品[{title[:20]}] 生图{'成功' if ai_ok else '失败'} 发布{'成功' if _pub_status == 'published' else '失败' if _pub_status == 'failed' else '跳过' if _pub_status.startswith('skipped') else _pub_status}",
+                                      f"商品[{title[:20]}] 生图{'成功' if ai_ok else '失败'} {_pub_desc}",
                                       {
                                           "imageProgress": _cur_img_done, "imageTotal": total_to_gen,
                                           "publishProgress": _cur_pub_done, "publishTotal": total_to_gen,
@@ -9123,14 +9349,21 @@ async def _execute_workflow_node(
         pub_failed_count = sum(1 for r in publish_results if r.get("status") == "failed")
         pub_skipped_ai = sum(1 for r in publish_results if r.get("status") == "skipped_no_ai_image")
         pub_skipped_dup = sum(1 for r in publish_results if r.get("status") == "skipped_duplicate")
-        logger.info("[IMAGE_GENERATE] 生图+发布完成 生图成功=%d/%d 发布成功=%d 失败=%d 无AI图跳过=%d 重复跳过=%d 熔断=%s",
+        # ★ 草稿模式统计：saved_as_draft 是 draft_only 模式下生图后存入草稿箱的商品
+        pub_saved_draft_count = sum(1 for r in publish_results if r.get("status") == "saved_as_draft")
+        logger.info("[IMAGE_GENERATE] 生图+发布完成 生图成功=%d/%d 发布成功=%d 失败=%d 无AI图跳过=%d 重复跳过=%d 存草稿=%d 熔断=%s",
                     ai_success_count, len(images), pub_success_count, pub_failed_count, pub_skipped_ai, pub_skipped_dup,
-                    _circuit_broken)
+                    pub_saved_draft_count, _circuit_broken)
 
-        # 节点状态：有发布成功=ok；有部分失败=partial；全部失败=failed
+        # 节点状态：有发布成功/已存草稿=ok；有部分失败=partial；全部失败=failed
         # ★ 熔断触发时强制判 failed（即使有部分成功也认为是异常终止）
+        # ★ draft_only 模式下若全部为 saved_as_draft，节点判成功
         if _circuit_broken:
             node_ok = False
+            partial = False
+        elif pub_saved_draft_count > 0 and pub_success_count == 0 and pub_failed_count == 0:
+            # 草稿模式：所有商品均已存入草稿箱
+            node_ok = True
             partial = False
         elif pub_success_count > 0 and (pub_failed_count > 0 or pub_skipped_ai > 0 or pub_skipped_dup > 0):
             node_ok = True
@@ -9183,7 +9416,11 @@ async def _execute_workflow_node(
             }
 
         # 构造汇总消息
-        msg_parts = [f"已生图 {ai_success_count} 张，发布成功 {pub_success_count} 个"]
+        msg_parts = []
+        if pub_saved_draft_count > 0:
+            msg_parts.append(f"已生图 {ai_success_count} 张，存入草稿箱 {pub_saved_draft_count} 个")
+        else:
+            msg_parts.append(f"已生图 {ai_success_count} 张，发布成功 {pub_success_count} 个")
         if pub_failed_count:
             msg_parts.append(f"{pub_failed_count}个发布失败")
         if pub_skipped_ai:
@@ -9202,11 +9439,14 @@ async def _execute_workflow_node(
             "publishFailedCount": pub_failed_count,
             "publishSkippedAiCount": pub_skipped_ai,
             "publishSkippedDuplicateCount": pub_skipped_dup,
+            "savedAsDraftCount": pub_saved_draft_count,
             "message": "，".join(msg_parts),
-            "artifactType": "image", "artifactTitle": "生图+发布结果",
+            "artifactType": "image",
+            "artifactTitle": "生图+存草稿结果" if pub_saved_draft_count > 0 and pub_success_count == 0 else "生图+发布结果",
             "artifact": {"prompt": first_prompt, "images": images, "steps": gen_steps, "publishResults": publish_results,
                          "publishSuccessCount": pub_success_count, "publishFailedCount": pub_failed_count,
-                         "publishSkippedAiCount": pub_skipped_ai, "publishSkippedDuplicateCount": pub_skipped_dup},
+                         "publishSkippedAiCount": pub_skipped_ai, "publishSkippedDuplicateCount": pub_skipped_dup,
+                         "savedAsDraftCount": pub_saved_draft_count},
             "steps": gen_steps,
         }
 
@@ -9794,9 +10034,15 @@ async def _execute_workflow_node(
             failed_count = sum(1 for r in existing_publish_results if r.get("status") == "failed")
             skipped_ai = sum(1 for r in existing_publish_results if r.get("status") == "skipped_no_ai_image")
             skipped_dup = sum(1 for r in existing_publish_results if r.get("status") == "skipped_duplicate")
+            # ★ 草稿模式统计：saved_as_draft 是 draft_only 模式下生图后存入草稿箱的商品
+            saved_draft_count = sum(1 for r in existing_publish_results if r.get("status") == "saved_as_draft")
             total_skipped = skipped_ai + skipped_dup
 
-            if success_count > 0 and (failed_count > 0 or total_skipped > 0):
+            # ★ 草稿模式下不计算发布成败：仅统计存入草稿箱的数量
+            if saved_draft_count > 0 and success_count == 0 and failed_count == 0:
+                node_ok = True
+                partial = False
+            elif success_count > 0 and (failed_count > 0 or total_skipped > 0):
                 node_ok = True
                 partial = True
             elif success_count > 0:
@@ -9806,7 +10052,11 @@ async def _execute_workflow_node(
                 node_ok = False
                 partial = False
 
-            msg_parts = [f"汇总：已发布 {success_count} 个商品"]
+            msg_parts = []
+            if saved_draft_count > 0:
+                msg_parts.append(f"汇总：已存入草稿箱 {saved_draft_count} 个商品")
+            else:
+                msg_parts.append(f"汇总：已发布 {success_count} 个商品")
             if failed_count:
                 msg_parts.append(f"{failed_count}个失败")
             if skipped_ai:
@@ -9819,10 +10069,11 @@ async def _execute_workflow_node(
                 _exec_id = context.get("__execution_id__")
                 _wf_id = context.get("__workflow_id__")
                 await insert_timeline(db, tenant_id, _exec_id, _wf_id, "PUBLISH", "INFO", "publish_summary",
-                                      f"发布汇总: 成功 {success_count}，失败 {failed_count}，跳过 {total_skipped}",
+                                      f"发布汇总: 成功 {success_count}，失败 {failed_count}，跳过 {total_skipped}，存草稿 {saved_draft_count}",
                                       "，".join(msg_parts),
                                       {"successCount": success_count, "failedCount": failed_count,
                                        "skippedNoAiCount": skipped_ai, "skippedDuplicateCount": skipped_dup,
+                                       "savedAsDraftCount": saved_draft_count,
                                        "totalCount": len(existing_publish_results), "summaryMode": True})
                 await db.commit()
             except Exception as exc:
@@ -9838,15 +10089,17 @@ async def _execute_workflow_node(
                 "failedCount": failed_count,
                 "skippedNoAiCount": skipped_ai,
                 "skippedDuplicateCount": skipped_dup,
+                "savedAsDraftCount": saved_draft_count,
                 "selectedAccountId": selected_account_id,
                 "category": _text(config.get("category", "")),
                 "addressText": _text(config.get("addressText", "")),
                 "message": "，".join(msg_parts),
                 "errorMessage": "" if node_ok else f"发布失败: {failed_count}个失败, {skipped_ai}个无AI封面图, {skipped_dup}个重复",
-                "artifactType": "publish_plan", "artifactTitle": "发布计划(汇总)",
+                "artifactType": "publish_plan", "artifactTitle": "发布计划(汇总)" if saved_draft_count == 0 else "草稿汇总",
                 "artifact": {"dryRun": dry_run, "platform": platform, "publishResults": existing_publish_results,
                              "successCount": success_count, "failedCount": failed_count,
                              "skippedNoAiCount": skipped_ai, "skippedDuplicateCount": skipped_dup,
+                             "savedAsDraftCount": saved_draft_count,
                              "summaryMode": True},
             }
         # ===== 兼容老工作流的批量发布逻辑（state 无 publish_results 时执行）=====

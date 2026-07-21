@@ -166,20 +166,66 @@ const profileEntryStorageKey = 'xya_profile_initial_tab'
 const pagesWithEmbeddedTitle = new Set(['messages', 'message-center', 'delivery-statement', 'delivery-mall', 'feature-unavailable', 'card-warehouse', 'auto-delivery'])
 // 功能开关检查跳过的页面：登录/注册/忘记密码/占位页/工作台（避免登录后卡死）
 const featureSwitchSkipPages = new Set(['login', 'register', 'forgot-password', 'feature-unavailable', 'dashboard'])
-const profileEntryTabs = new Set(['overview', 'security', 'token'])
+const profileEntryTabs = new Set(['overview', 'security', 'token', 'recharge'])
 const mobileLitePages = new Set([
   'dashboard',
   'data',
+  'data-detail',
   'accounts',
+  'account-detail',
   'products',
+  'product-detail',
   'messages',
   'message-center',
+  'chat-detail',
   'workflow',
+  'auto-delivery',
+  'product-publish',
+  'orders',
   'profile'
 ])
-const isKnownPage = key => Boolean(pageMap[key]) || settingsKeys.includes(key)
-const normalizePageKey = key => isKnownPage(key) ? key : defaultPage
-const getHash = () => normalizePageKey((location.hash || `#/${defaultPage}`).replace('#/', '') || defaultPage)
+
+const isKnownPage = key => {
+  if (pageMap[key]) return true
+  if (settingsKeys.includes(key)) return true
+  if (mobileLitePages.has(key)) return true
+  if (typeof key === 'string') {
+    if (key.startsWith('account-detail/')) return true
+    if (key.startsWith('product-detail/')) return true
+    if (key.startsWith('data-detail/')) return true
+    if (key.startsWith('chat-detail/')) return true
+  }
+  return false
+}
+
+const normalizePageKey = key => {
+  if (isKnownPage(key)) {
+    if (typeof key === 'string') {
+      if (key.startsWith('account-detail/')) return 'account-detail'
+      if (key.startsWith('product-detail/')) return 'product-detail'
+      if (key.startsWith('data-detail/')) return 'data-detail'
+      if (key.startsWith('chat-detail/')) return 'chat-detail'
+    }
+    return key
+  }
+  return defaultPage
+}
+const getHash = () => {
+  const raw = (location.hash || `#/${defaultPage}`).replace('#/', '') || defaultPage
+  return raw
+}
+const getNormalizedKey = (raw) => {
+  if (isKnownPage(raw)) {
+    if (typeof raw === 'string') {
+      if (raw.startsWith('account-detail/')) return 'account-detail'
+      if (raw.startsWith('product-detail/')) return 'product-detail'
+      if (raw.startsWith('data-detail/')) return 'data-detail'
+      if (raw.startsWith('chat-detail/')) return 'chat-detail'
+    }
+    return raw
+  }
+  return defaultPage
+}
 const normalizeProfileEntryTab = key => profileEntryTabs.has(key) ? key : 'overview'
 
 const booting = ref(true)
@@ -339,29 +385,29 @@ async function showFeatureBlockedNotice(switchResult) {
 
 async function navigate(key) {
   const requested = key || defaultPage
-  const next = normalizePageKey(requested)
-  if (requested !== next) {
+  const normalizedKey = getNormalizedKey(requested)
+  if (!isKnownPage(requested)) {
     showNotice('页面不存在，已返回默认页面', 'warn')
   }
-  if (!isAuthed() && !authPages.includes(next)) {
+  if (!isAuthed() && !authPages.includes(normalizedKey)) {
     location.hash = '#/login'
     active.value = 'login'
     return
   }
-  if (next === active.value) return
+  if (requested === active.value) return
   // 离开当前页前，交由导航守卫处理草稿询问等逻辑
   const allowed = await runNavigationGuard()
   if (!allowed) return
   // 功能开关检查：被拦截时弹出提示，不跳转占位页
-  const switchResult = await checkFeatureSwitch(next)
+  const switchResult = await checkFeatureSwitch(normalizedKey)
   if (!switchResult.allowed) {
     await showFeatureBlockedNotice(switchResult)
     return
   }
   suppressHashGuard = true
-  location.hash = `#/${next}`
-  active.value = next
-  if (authPages.includes(next)) authNotice.value = ''
+  location.hash = `#/${requested}`
+  active.value = requested
+  if (authPages.includes(normalizedKey)) authNotice.value = ''
 }
 
 function openProfileCenter(target = 'overview') {
@@ -401,9 +447,9 @@ async function onHeaderAction(action) {
 }
 
 function onHash() {
-  const raw = (location.hash || `#/${defaultPage}`).replace('#/', '') || defaultPage
-  const next = normalizePageKey(raw)
-  if (!isAuthed() && !authPages.includes(next)) {
+  const raw = getHash()
+  const normalizedKey = getNormalizedKey(raw)
+  if (!isAuthed() && !authPages.includes(normalizedKey)) {
     navigate('login')
     return
   }
@@ -411,16 +457,17 @@ function onHash() {
   if (suppressHashGuard) {
     suppressHashGuard = false
     const previous = active.value
-    active.value = next
-    if (authPages.includes(next) && next !== previous) authNotice.value = ''
+    active.value = raw
+    if (authPages.includes(normalizedKey) && normalizedKey !== getNormalizedKey(previous)) authNotice.value = ''
     return
   }
-  if (next === active.value) return
+  if (raw === active.value) return
   // 浏览器前进/后退或地址栏直接改 hash：走守卫后再切换
-  handleGuardedHashNavigation(next)
+  handleGuardedHashNavigation(raw)
 }
 
-async function handleGuardedHashNavigation(next) {
+async function handleGuardedHashNavigation(raw) {
+  const normalizedKey = getNormalizedKey(raw)
   const allowed = await runNavigationGuard()
   if (!allowed) {
     // 守卫拒绝：把 hash 还原回当前页，避免地址栏与内容不一致
@@ -429,7 +476,7 @@ async function handleGuardedHashNavigation(next) {
     return
   }
   // 功能开关检查：被拦截时弹出提示，不跳转占位页
-  const switchResult = await checkFeatureSwitch(next)
+  const switchResult = await checkFeatureSwitch(normalizedKey)
   if (!switchResult.allowed) {
     // 还原 hash 到当前页，避免地址栏与内容不一致
     suppressHashGuard = true
@@ -438,8 +485,8 @@ async function handleGuardedHashNavigation(next) {
     return
   }
   const previous = active.value
-  active.value = next
-  if (authPages.includes(next) && next !== previous) authNotice.value = ''
+  active.value = raw
+  if (authPages.includes(normalizedKey) && normalizedKey !== getNormalizedKey(previous)) authNotice.value = ''
 }
 
 async function loadCurrentUser(force = false) {
@@ -553,12 +600,12 @@ async function boot() {
 
     if (getToken()) {
       bootMessage.value = '正在恢复登录会话'
-      if (authPages.includes(active.value)) active.value = defaultPage
+      if (authPages.includes(getNormalizedKey(active.value))) active.value = defaultPage
       await initializeMediaSession()
       startSse()
       scheduleWarmups()
       await loadCurrentUser()
-      if (!location.hash || authPages.includes(getHash())) navigate(defaultPage)
+      if (!location.hash || authPages.includes(getNormalizedKey(getHash()))) navigate(defaultPage)
       return
     }
     if (!location.hash) {
@@ -678,17 +725,20 @@ onBeforeUnmount(() => {
   closeSse()
 })
 
-const pageComponent = computed(() => settingsKeys.includes(active.value) ? SettingsPage : (pageMap[active.value] || DashboardPage))
-const title = computed(() => (pageTitles[active.value] || pageTitles.dashboard)[0])
-const subtitle = computed(() => (pageTitles[active.value] || pageTitles.dashboard)[1])
-const pageHeaderTitle = computed(() => pagesWithEmbeddedTitle.has(active.value) ? '' : title.value)
-const pageHeaderSubtitle = computed(() => pagesWithEmbeddedTitle.has(active.value) ? '' : subtitle.value)
-const shouldUseMobileLite = computed(() =>
-  isMobile.value &&
-  !mobileDesktopOverride.value &&
-  !authPages.includes(active.value) &&
-  mobileLitePages.has(active.value)
-)
+const pageComponent = computed(() => {
+  const normalized = getNormalizedKey(active.value)
+  if (settingsKeys.includes(normalized)) return SettingsPage
+  return pageMap[normalized] || DashboardPage
+})
+const title = computed(() => (pageTitles[getNormalizedKey(active.value)] || pageTitles.dashboard)[0])
+const subtitle = computed(() => (pageTitles[getNormalizedKey(active.value)] || pageTitles.dashboard)[1])
+const pageHeaderTitle = computed(() => pagesWithEmbeddedTitle.has(getNormalizedKey(active.value)) ? '' : title.value)
+const pageHeaderSubtitle = computed(() => pagesWithEmbeddedTitle.has(getNormalizedKey(active.value)) ? '' : subtitle.value)
+const shouldUseMobileLite = computed(() => {
+  if (!isMobile.value || mobileDesktopOverride.value || authPages.includes(getNormalizedKey(active.value))) return false
+  const normalized = getNormalizedKey(active.value)
+  return mobileLitePages.has(normalized)
+})
 
 const headerActions = computed(() => {
   if (active.value === 'settings-notify') {

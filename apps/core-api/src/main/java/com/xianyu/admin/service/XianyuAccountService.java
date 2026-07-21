@@ -841,8 +841,10 @@ public class XianyuAccountService {
     /**
      * 清理 avatarUrl 中的错误格式。
      * 修复之前存入库中的 {avatar=http://...} 或 {avatar= "http://..."} 等格式，提取出纯 URL。
+     * 同步发送端（DataSyncService）与接收端（SyncReceiveService）写入数据库前必须调用此方法，
+     * 防止脏数据在本地→线上链路中传播。
      */
-    static String normalizeAvatarUrl(String url) {
+    public static String normalizeAvatarUrl(String url) {
         if (url == null || url.isBlank()) return url;
         String trimmed = url.trim();
         // 尝试直接从字符串中提取 http/https URL

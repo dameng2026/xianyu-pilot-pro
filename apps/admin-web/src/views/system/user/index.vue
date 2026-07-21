@@ -95,6 +95,9 @@
   import UserDialog from './modules/user-dialog.vue'
   import { ElTag, ElMessageBox, ElAvatar } from 'element-plus'
   import type { ButtonMoreItem } from '@/components/core/forms/art-button-more/index.vue'
+  import { useRouter } from 'vue-router'
+
+  const router = useRouter()
 
   defineOptions({ name: 'User' })
 
@@ -231,6 +234,9 @@
                   icon: row.status === '正常' ? 'ri:forbid-2-line' : 'ri:checkbox-circle-line'
                 },
                 { key: 'resetPassword', label: '重置密码', icon: 'ri:lock-password-line' },
+                { key: 'rechargeRecords', label: '充值记录', icon: 'ri:bank-card-2-line' },
+                { key: 'consumptionRecords', label: '消费记录', icon: 'ri:bar-chart-2-line' },
+                { key: 'viewCaptchaRecords', label: '滑块求解记录', icon: 'ri:shield-keyhole-line' },
                 { key: 'delete', label: '删除', icon: 'ri:delete-bin-4-line', color: '#f56c6c' }
               ],
               onClick: (item: ButtonMoreItem) => handleMoreAction(item, row)
@@ -268,8 +274,26 @@
       case 'enable': handleToggleStatus(row, 1); break
       case 'disable': handleToggleStatus(row, 0); break
       case 'resetPassword': handleResetPassword(row); break
+      case 'rechargeRecords': handleViewRechargeRecords(row); break
+      case 'consumptionRecords': handleViewConsumptionRecords(row); break
+      case 'viewCaptchaRecords': handleViewCaptchaRecords(row); break
       case 'delete': handleDelete(row); break
     }
+  }
+
+  // 跳转到该用户的充值记录页（带 userId 过滤）
+  const handleViewRechargeRecords = (row: UserListItem) => {
+    router.push({ name: 'AdminRechargeRecords', query: { userId: row.id } })
+  }
+
+  // 跳转到该用户的 Token 消费记录页（AI 调用日志，带 userId 过滤）
+  const handleViewConsumptionRecords = (row: UserListItem) => {
+    router.push({ name: 'AdminAiUsage', query: { userId: row.id } })
+  }
+
+  // 跳转到该用户的滑块求解记录页（带 userId 过滤，展示该用户所有闲鱼账号的求解数据）
+  const handleViewCaptchaRecords = (row: UserListItem) => {
+    router.push({ name: 'AdminCaptchaRecords', query: { userId: row.id } })
   }
 
   function showBatchOutcome(action: string, affected: number, requested: number) {

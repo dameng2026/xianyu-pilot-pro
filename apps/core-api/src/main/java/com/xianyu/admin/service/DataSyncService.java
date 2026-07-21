@@ -171,7 +171,9 @@ public class DataSyncService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("externalUid", acct.get("external_uid"));
         result.put("nickname", acct.get("nickname"));
-        result.put("avatarUrl", acct.get("avatar_url"));
+        // 推送前清理 avatar_url 脏数据：本地库可能存有 {avatar=http://...} 等历史脏格式，
+        // 不清理会导致线上 <img> 标签无法加载头像。同时补 https 协议缺失。
+        result.put("avatarUrl", XianyuAccountService.normalizeAvatarUrl(str(acct, "avatar_url")));
         result.put("province", acct.get("province"));
         result.put("city", acct.get("city"));
         result.put("accountLevel", acct.get("account_level"));

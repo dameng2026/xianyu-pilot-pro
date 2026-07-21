@@ -353,6 +353,274 @@ public class AdminModuleController {
     }
 
     /**
+     * 收入与 AI 成本财务统计：
+     * - 收入来自 payment_order 表（status=1 已支付）的真实二维码收款流水
+     * - AI 成本来自 ai_usage_log 表（status=1 成功）的 cost_cent 累计
+     * - 利润 = 收入 - AI 成本（已换算为元，未扣商品成本/佣金/支付手续费）
+     * - 按 range 7/30/90 天统计，前端 4 张卡片随时间范围联动
+     */
+    @GetMapping("/dashboard/finance")
+    public Result<Map<String, Object>> finance(@RequestParam(defaultValue = "7") int range) {
+        if (range != 7 && range != 30 && range != 90) {
+            throw new BizException(400, "range 仅支持 7、30 或 90");
+        }
+        try {
+            java.time.LocalDate today = java.time.LocalDate.now();
+            java.time.LocalDate start = today.minusDays(range - 1L);
+            java.sql.Date sqlStart = java.sql.Date.valueOf(start);
+            java.sql.Date sqlEndExclusive = java.sql.Date.valueOf(today.plusDays(1));
+            // 范围内总收入（payment_order.status=1 表示已支付）
+            Long totalIncomeCent = queryLongOrNull(
+                    "SELECT COALESCE(SUM(amount_cent),0) FROM payment_order " +
+                            "WHERE deleted=0 AND status=1 " +
+                            "AND COALESCE(paid_time, created_time) >= ? " +
+                            "AND COALESCE(paid_time, created_time) < ?",
+                    sqlStart, sqlEndExclusive);
+            // 范围内 AI 成本（ai_usage_log.status=1 表示成功计费）
+            Long totalAiCostCent = queryLongOrNull(
+                    "SELECT COALESCE(SUM(cost_cent),0) FROM ai_usage_log " +
+                            "WHERE deleted=0 AND status=1 " +
+                            "AND created_time >= ? AND created_time < ?",
+                    sqlStart, sqlEndExclusive);
+            // 范围内 Token 消耗
+            Long totalChargeTokens = queryLongOrNull(
+                    "SELECT COALESCE(SUM(charge_tokens),0) FROM ai_usage_log " +
+                            "WHERE deleted=0 AND status=1 " +
+                            "AND created_time >= ? AND created_time < ?",
+                    sqlStart, sqlEndExclusive);
+            // 今日收入（供 KPI 卡片使用，与范围无关）
+            Long todayIncomeCent = queryLongOrNull(
+                    "SELECT COALESCE(SUM(amount_cent),0) FROM payment_order " +
+                            "WHERE deleted=0 AND status=1 " +
+                            "AND COALESCE(paid_time, created_time) >= CURDATE() " +
+                            "AND COALESCE(paid_time, created_time) < CURDATE() + INTERVAL 1 DAY");
+            // 今日 AI 成本（供 KPI 卡片使用，与范围无关）
+            Long todayAiCostCent = queryLongOrNull(
+                    "SELECT COALESCE(SUM(cost_cent),0) FROM ai_usage_log " +
+                            "WHERE deleted=0 AND status=1 " +
+                            "AND created_time >= CURDATE() " +
+                            "AND created_time < CURDATE() + INTERVAL 1 DAY");
+            // 范围内每日收入趋势
+            List<String> dates = new ArrayList<>();
+            for (int i = range - 1; i >= 0; i--) dates.add(start.plusDays(range - 1 - i).toString());
+            Map<String, Long> incomeMap = new LinkedHashMap<>();
+            try {
+                jdbcTemplate.query(
+                        "SELECT DATE(COALESCE(paid_time, created_time)) d, COALESCE(SUM(amount_cent),0) c " +
+                                "FROM payment_order WHERE deleted=0 AND status=1 " +
+                                "AND COALESCE(paid_time, created_time) >= ? " +
+                                "AND COALESCE(paid_time, created_time) < ? " +
+                                "GROUP BY DATE(COALESCE(paid_time, created_time))",
+                        rs -> {
+                            String d = String.valueOf(rs.getDate(1).toLocalDate());
+                            incomeMap.put(d, rs.getLong(2));
+                        },
+                        sqlStart, sqlEndExclusive);
+            } catch (Exception ignore) {
+                // 收入趋势查询失败不影响整体返回
+            }
+            List<Long> dailyIncome = new ArrayList<>(dates.size());
+            for (String d : dates) dailyIncome.add(incomeMap.getOrDefault(d, 0L));
+
+            long incomeCent = totalIncomeCent == null ? 0 : totalIncomeCent;
+            long costCent = totalAiCostCent == null ? 0 : totalAiCostCent;
+            long profitCent = incomeCent - costCent;
+            Integer marginPercent = incomeCent > 0
+                    ? (int) Math.round(((double) profitCent / incomeCent) * 100)
+                    : null;
+            long todayIncome = todayIncomeCent == null ? 0 : todayIncomeCent;
+            long todayCost = todayAiCostCent == null ? 0 : todayAiCostCent;
+            long todayProfit = todayIncome - todayCost;
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("range", range);
+            result.put("dates", dates);
+            result.put("totalIncomeCent", incomeCent);
+            result.put("totalAiCostCent", costCent);
+            result.put("totalProfitCent", profitCent);
+            result.put("totalChargeTokens", totalChargeTokens == null ? 0 : totalChargeTokens);
+            result.put("marginPercent", marginPercent);
+            result.put("dailyIncome", dailyIncome);
+            result.put("todayIncomeCent", todayIncome);
+            result.put("todayAiCostCent", todayCost);
+            result.put("todayProfitCent", todayProfit);
+            return Result.ok(result);
+        } catch (Exception e) {
+            throw unavailable("仪表盘财务统计", e);
+        }
+    }
+
+    /**
+     * 通知投递统计：替换原"数据暂不可用"占位面板，从 notification_delivery_log 真实聚合
+     */
+    @GetMapping("/dashboard/notify-stats")
+    public Result<Map<String, Object>> notifyStats(@RequestParam(defaultValue = "7") int range) {
+        if (range != 7 && range != 30 && range != 90) {
+            throw new BizException(400, "range 仅支持 7、30 或 90");
+        }
+        try {
+            java.time.LocalDate today = java.time.LocalDate.now();
+            java.time.LocalDate start = today.minusDays(range - 1L);
+            java.sql.Date sqlStart = java.sql.Date.valueOf(start);
+            java.sql.Date sqlEndExclusive = java.sql.Date.valueOf(today.plusDays(1));
+            Long totalCount = queryLongOrNull(
+                    "SELECT COUNT(*) FROM notification_delivery_log WHERE created_time >= ? AND created_time < ?",
+                    sqlStart, sqlEndExclusive);
+            Long successCount = queryLongOrNull(
+                    "SELECT COUNT(*) FROM notification_delivery_log WHERE success=1 AND created_time >= ? AND created_time < ?",
+                    sqlStart, sqlEndExclusive);
+            Long failedCount = queryLongOrNull(
+                    "SELECT COUNT(*) FROM notification_delivery_log WHERE success=0 AND created_time >= ? AND created_time < ?",
+                    sqlStart, sqlEndExclusive);
+            Long todayCount = queryLongOrNull(
+                    "SELECT COUNT(*) FROM notification_delivery_log WHERE created_time >= CURDATE() AND created_time < CURDATE() + INTERVAL 1 DAY");
+            Long avgCostMs = queryLongOrNull(
+                    "SELECT COALESCE(AVG(cost_ms),0) FROM notification_delivery_log WHERE created_time >= ? AND created_time < ?",
+                    sqlStart, sqlEndExclusive);
+            List<Map<String, Object>> byChannel = jdbcTemplate.queryForList(
+                    "SELECT COALESCE(channel_name, channel_key, '未知渠道') AS channel, COUNT(*) AS total, " +
+                            "SUM(CASE WHEN success=1 THEN 1 ELSE 0 END) AS success " +
+                            "FROM notification_delivery_log WHERE created_time >= ? AND created_time < ? " +
+                            "GROUP BY COALESCE(channel_name, channel_key, '未知渠道') ORDER BY total DESC LIMIT 10",
+                    sqlStart, sqlEndExclusive);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("range", range);
+            result.put("totalCount", totalCount == null ? 0 : totalCount);
+            result.put("successCount", successCount == null ? 0 : successCount);
+            result.put("failedCount", failedCount == null ? 0 : failedCount);
+            result.put("todayCount", todayCount == null ? 0 : todayCount);
+            result.put("avgCostMs", avgCostMs == null ? 0 : avgCostMs);
+            result.put("byChannel", byChannel);
+            return Result.ok(result);
+        } catch (Exception e) {
+            throw unavailable("通知投递统计", e);
+        }
+    }
+
+    /**
+     * 客户端错误监控：替换原"数据暂不可用"占位面板，从 client_error_log 真实聚合
+     */
+    @GetMapping("/dashboard/client-error-stats")
+    public Result<Map<String, Object>> clientErrorStats(@RequestParam(defaultValue = "7") int range) {
+        if (range != 7 && range != 30 && range != 90) {
+            throw new BizException(400, "range 仅支持 7、30 或 90");
+        }
+        try {
+            java.time.LocalDate today = java.time.LocalDate.now();
+            java.time.LocalDate start = today.minusDays(range - 1L);
+            java.sql.Date sqlStart = java.sql.Date.valueOf(start);
+            java.sql.Date sqlEndExclusive = java.sql.Date.valueOf(today.plusDays(1));
+            Long totalCount = queryLongOrNull(
+                    "SELECT COUNT(*) FROM client_error_log WHERE created_time >= ? AND created_time < ?",
+                    sqlStart, sqlEndExclusive);
+            Long todayCount = queryLongOrNull(
+                    "SELECT COUNT(*) FROM client_error_log WHERE created_time >= CURDATE() AND created_time < CURDATE() + INTERVAL 1 DAY");
+            List<Map<String, Object>> topErrorTypes = jdbcTemplate.queryForList(
+                    "SELECT COALESCE(error_type, 'unknown') AS errorType, COUNT(*) AS count " +
+                            "FROM client_error_log WHERE created_time >= ? AND created_time < ? " +
+                            "GROUP BY COALESCE(error_type, 'unknown') ORDER BY count DESC LIMIT 10",
+                    sqlStart, sqlEndExclusive);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("range", range);
+            result.put("totalCount", totalCount == null ? 0 : totalCount);
+            result.put("todayCount", todayCount == null ? 0 : todayCount);
+            result.put("topErrorTypes", topErrorTypes);
+            return Result.ok(result);
+        } catch (Exception e) {
+            throw unavailable("客户端错误统计", e);
+        }
+    }
+
+    /**
+     * 卡密库存统计：替换原"数据暂不可用"占位面板，从 card_group/card_item 真实聚合
+     */
+    @GetMapping("/dashboard/stock-stats")
+    public Result<Map<String, Object>> stockStats() {
+        try {
+            Long totalGroups = queryLongOrNull(
+                    "SELECT COUNT(*) FROM card_group WHERE deleted=0");
+            Long totalStock = queryLongOrNull(
+                    "SELECT COALESCE(SUM(total_count),0) FROM card_group WHERE deleted=0");
+            Long usedStock = queryLongOrNull(
+                    "SELECT COALESCE(SUM(used_count),0) FROM card_group WHERE deleted=0");
+            Long remainStock = queryLongOrNull(
+                    "SELECT COALESCE(SUM(remain_count),0) FROM card_group WHERE deleted=0");
+            Long lowStockGroups = queryLongOrNull(
+                    "SELECT COUNT(*) FROM card_group WHERE deleted=0 AND status=1 AND remain_count <= alert_threshold");
+            Long todayConsumed = queryLongOrNull(
+                    "SELECT COUNT(*) FROM card_item WHERE deleted=0 AND is_used=1 " +
+                            "AND used_time >= CURDATE() AND used_time < CURDATE() + INTERVAL 1 DAY");
+            List<Map<String, Object>> lowStockList = jdbcTemplate.queryForList(
+                    "SELECT id, group_name, remain_count, alert_threshold " +
+                            "FROM card_group WHERE deleted=0 AND status=1 AND remain_count <= alert_threshold " +
+                            "ORDER BY remain_count ASC LIMIT 10");
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("totalGroups", totalGroups == null ? 0 : totalGroups);
+            result.put("totalStock", totalStock == null ? 0 : totalStock);
+            result.put("usedStock", usedStock == null ? 0 : usedStock);
+            result.put("remainStock", remainStock == null ? 0 : remainStock);
+            result.put("lowStockGroups", lowStockGroups == null ? 0 : lowStockGroups);
+            result.put("todayConsumed", todayConsumed == null ? 0 : todayConsumed);
+            result.put("lowStockList", lowStockList);
+            return Result.ok(result);
+        } catch (Exception e) {
+            throw unavailable("卡密库存统计", e);
+        }
+    }
+
+    /**
+     * 商机与商品同步统计：替换原"数据暂不可用"占位面板
+     * - 商品同步来自 xianyu_goods_sync_task
+     * - 商机生图来自 opportunity_image_history
+     */
+    @GetMapping("/dashboard/sync-stats")
+    public Result<Map<String, Object>> syncStats(@RequestParam(defaultValue = "7") int range) {
+        if (range != 7 && range != 30 && range != 90) {
+            throw new BizException(400, "range 仅支持 7、30 或 90");
+        }
+        try {
+            java.time.LocalDate today = java.time.LocalDate.now();
+            java.time.LocalDate start = today.minusDays(range - 1L);
+            java.sql.Date sqlStart = java.sql.Date.valueOf(start);
+            java.sql.Date sqlEndExclusive = java.sql.Date.valueOf(today.plusDays(1));
+            Long syncTotal = queryLongOrNull(
+                    "SELECT COUNT(*) FROM xianyu_goods_sync_task WHERE deleted=0 AND created_time >= ? AND created_time < ?",
+                    sqlStart, sqlEndExclusive);
+            Long syncSuccess = queryLongOrNull(
+                    "SELECT COUNT(*) FROM xianyu_goods_sync_task WHERE deleted=0 AND status='completed' AND created_time >= ? AND created_time < ?",
+                    sqlStart, sqlEndExclusive);
+            Long syncFailed = queryLongOrNull(
+                    "SELECT COUNT(*) FROM xianyu_goods_sync_task WHERE deleted=0 AND status IN ('failed','terminated') AND created_time >= ? AND created_time < ?",
+                    sqlStart, sqlEndExclusive);
+            Long todaySyncCount = queryLongOrNull(
+                    "SELECT COUNT(*) FROM xianyu_goods_sync_task WHERE deleted=0 AND created_time >= CURDATE() AND created_time < CURDATE() + INTERVAL 1 DAY");
+            Long imageGenerated = queryLongOrNull(
+                    "SELECT COUNT(*) FROM opportunity_image_history WHERE created_time >= ? AND created_time < ?",
+                    sqlStart, sqlEndExclusive);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("range", range);
+            result.put("syncTotal", syncTotal == null ? 0 : syncTotal);
+            result.put("syncSuccess", syncSuccess == null ? 0 : syncSuccess);
+            result.put("syncFailed", syncFailed == null ? 0 : syncFailed);
+            result.put("todaySyncCount", todaySyncCount == null ? 0 : todaySyncCount);
+            result.put("imageGenerated", imageGenerated == null ? 0 : imageGenerated);
+            return Result.ok(result);
+        } catch (Exception e) {
+            throw unavailable("商机与商品同步统计", e);
+        }
+    }
+
+    private Long queryLongOrNull(String sql, Object... args) {
+        try {
+            Long v = jdbcTemplate.queryForObject(sql, Long.class, args);
+            return v == null ? 0L : v;
+        } catch (Exception e) {
+            log.warn("dashboard 聚合查询失败, sql={}, errorType={}", sql.substring(0, Math.min(60, sql.length())), e.getClass().getSimpleName());
+            return 0L;
+        }
+    }
+
+    /**
      * 按天聚合统计：执行一次 GROUP BY DATE(created_time) 查询，按 dates 顺序对齐填充，
      * 缺失的日期补 0。替代 N 次循环 COUNT。
      */

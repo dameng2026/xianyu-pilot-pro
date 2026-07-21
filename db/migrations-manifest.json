@@ -329,6 +329,14 @@
           "sha256": "37d37420395a3251eee8e811b45aeb3998da055bedf193f7d5e554b1dcfa3a03",
           "risk": "expand",
           "rollback": "restore"
+        },
+        {
+          "version": "1.13",
+          "description": "conversation auto-reply runtime state (manual intervention pause/resume) and chat message AI flag",
+          "path": "apps/automation-service/migrations/V1.13__add_conversation_auto_reply_state.sql",
+          "sha256": "952eb04c7a2f1e661a34fcb5a3973a34df88ae41d30b8b82f40c958859f27706",
+          "risk": "expand",
+          "rollback": "restore"
         }
       ],
       "quarantined": []

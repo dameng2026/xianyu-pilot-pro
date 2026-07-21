@@ -7,3 +7,5 @@ export const changeProfilePhone = data => request.post('/profile/change-phone', 
 export const changeProfileEmail = data => request.post('/profile/change-email', data)
 export const getTokenLedger = params => request.get('/profile/token-ledger', { params })
 export const getTokenTrend = params => request.get('/profile/token-trend', { params })
+// 当前登录用户的 Token 充值记录
+export const getRechargeRecords = params => request.get('/profile/recharge-records', { params })

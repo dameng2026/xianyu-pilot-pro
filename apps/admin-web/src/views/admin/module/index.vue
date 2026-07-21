@@ -651,9 +651,10 @@
               <span v-else>{{ formatFieldValue(col, scope.row[col.prop]) }}</span>
             </template>
           </ElTableColumn>
-          <ElTableColumn fixed="right" label="操作" :width="readonlyModule ? 100 : 250">
+          <ElTableColumn fixed="right" label="操作" :width="readonlyModule ? 100 : moduleKey === 'xianyu-accounts' ? 320 : 250">
             <template #default="scope">
               <ElButton link type="primary" @click="openDetail(scope.row)">详情</ElButton>
+              <ElButton v-if="moduleKey === 'xianyu-accounts'" link type="primary" @click="viewCaptchaRecords(scope.row)">求解记录</ElButton>
               <template v-if="canEdit || canDelete">
                 <ElButton v-if="canEdit" link type="primary" @click="openEdit(scope.row)">编辑</ElButton>
                 <ElButton v-if="canEdit" link type="warning" @click="changeStatus(scope.row)">状态</ElButton>
@@ -717,6 +718,16 @@
     getAdminSummary,
     getAdminTrend,
     getDashboardInit,
+    getDashboardFinance,
+    getNotifyStats,
+    getClientErrorStats,
+    getStockStats,
+    getSyncStats,
+    type DashboardFinanceData,
+    type DashboardNotifyStats,
+    type DashboardClientErrorStats,
+    type DashboardStockStats,
+    type DashboardSyncStats,
     getModuleDetail,
     getModuleExportUrl,
     getModuleMeta,
@@ -778,6 +789,14 @@
     token: {} as Record<string, any>,
     cost: {} as Record<string, any>
   })
+  // 经营总览财务统计与原"暂不可用"板块的真实数据
+  const dashboardInsights = reactive({
+    finance: null as DashboardFinanceData | null,
+    notify: null as DashboardNotifyStats | null,
+    clientError: null as DashboardClientErrorStats | null,
+    stock: null as DashboardStockStats | null,
+    sync: null as DashboardSyncStats | null
+  })
   const dashboardState = reactive<DashboardDataState>({
     status: 'loading',
     message: '正在加载仪表盘数据',
@@ -806,6 +825,12 @@
       workflowMonitor: overviewMonitor.workflow,
       tokenStats: overviewMonitor.token,
       costStats: overviewMonitor.cost,
+      financeStats: dashboardInsights.finance,
+      notifyStats: dashboardInsights.notify,
+      clientErrorStats: dashboardInsights.clientError,
+      stockStats: dashboardInsights.stock,
+      syncStats: dashboardInsights.sync,
+      rangeDays: trendRange.value,
       dataState: {
         status: dashboardState.status,
         message: dashboardState.message,
@@ -1101,18 +1126,23 @@ function formatFieldValue(col: any, value: any) {
       { key: 'autoReply', label: '自动回复监控', request: getAutoReplyMonitor({ days }, DASHBOARD_REQUEST_OPTIONS) },
       { key: 'workflow', label: '工作流监控', request: getWorkflowMonitor({ days }, DASHBOARD_REQUEST_OPTIONS) },
       { key: 'token', label: 'Token 统计', request: getAiTokenStats({ days }, DASHBOARD_REQUEST_OPTIONS) },
-      { key: 'cost', label: 'AI 成本趋势', request: getAiCostStats({ days }, DASHBOARD_REQUEST_OPTIONS) }
+      { key: 'cost', label: 'AI 成本趋势', request: getAiCostStats({ days }, DASHBOARD_REQUEST_OPTIONS) },
+      { key: 'finance', label: '财务统计', request: getDashboardFinance(days, DASHBOARD_REQUEST_OPTIONS) },
+      { key: 'notify', label: '通知投递统计', request: getNotifyStats(days, DASHBOARD_REQUEST_OPTIONS) },
+      { key: 'clientError', label: '客户端错误统计', request: getClientErrorStats(days, DASHBOARD_REQUEST_OPTIONS) },
+      { key: 'stock', label: '卡密库存统计', request: getStockStats(DASHBOARD_REQUEST_OPTIONS) },
+      { key: 'sync', label: '商机与商品同步', request: getSyncStats(days, DASHBOARD_REQUEST_OPTIONS) }
     ] as const
     const settled = await Promise.allSettled(sources.map(source => source.request))
-    const result: Record<string, Record<string, any>> = {}
+    const result: Record<string, any> = {}
     const failedSources: string[] = []
 
     settled.forEach((item, index) => {
       const source = sources[index]
       if (item.status === 'fulfilled') {
-        result[source.key] = item.value || {}
+        result[source.key] = item.value || null
       } else {
-        result[source.key] = {}
+        result[source.key] = null
         failedSources.push(source.label)
       }
     })
@@ -1123,6 +1153,11 @@ function formatFieldValue(col: any, value: any) {
       workflow: result.workflow || {},
       token: result.token || {},
       cost: result.cost || {},
+      finance: result.finance as DashboardFinanceData | null,
+      notify: result.notify as DashboardNotifyStats | null,
+      clientError: result.clientError as DashboardClientErrorStats | null,
+      stock: result.stock as DashboardStockStats | null,
+      sync: result.sync as DashboardSyncStats | null,
       failedSources
     }
   }
@@ -1133,6 +1168,11 @@ function formatFieldValue(col: any, value: any) {
     workflow: Record<string, any>
     token: Record<string, any>
     cost: Record<string, any>
+    finance: DashboardFinanceData | null
+    notify: DashboardNotifyStats | null
+    clientError: DashboardClientErrorStats | null
+    stock: DashboardStockStats | null
+    sync: DashboardSyncStats | null
     failedSources: string[]
   }) {
     overviewMonitor.ai = insights.ai || {}
@@ -1140,6 +1180,11 @@ function formatFieldValue(col: any, value: any) {
     overviewMonitor.workflow = insights.workflow || {}
     overviewMonitor.token = insights.token || {}
     overviewMonitor.cost = insights.cost || {}
+    dashboardInsights.finance = insights.finance || null
+    dashboardInsights.notify = insights.notify || null
+    dashboardInsights.clientError = insights.clientError || null
+    dashboardInsights.stock = insights.stock || null
+    dashboardInsights.sync = insights.sync || null
   }
 
   function resetDashboardInsights() {
@@ -1148,6 +1193,11 @@ function formatFieldValue(col: any, value: any) {
     overviewMonitor.workflow = {}
     overviewMonitor.token = {}
     overviewMonitor.cost = {}
+    dashboardInsights.finance = null
+    dashboardInsights.notify = null
+    dashboardInsights.clientError = null
+    dashboardInsights.stock = null
+    dashboardInsights.sync = null
   }
 
   function resetDashboardData() {
@@ -1183,9 +1233,20 @@ function formatFieldValue(col: any, value: any) {
     workflow: Record<string, any>
     token: Record<string, any>
     cost: Record<string, any>
+    finance?: DashboardFinanceData | null
+    notify?: DashboardNotifyStats | null
+    clientError?: DashboardClientErrorStats | null
+    stock?: DashboardStockStats | null
+    sync?: DashboardSyncStats | null
   }) {
-    return [insights.ai, insights.autoReply, insights.workflow, insights.token, insights.cost]
+    const baseLoaded = [insights.ai, insights.autoReply, insights.workflow, insights.token, insights.cost]
       .some(item => item && Object.keys(item).length > 0)
+    return baseLoaded
+      || Boolean(insights.finance)
+      || Boolean(insights.notify)
+      || Boolean(insights.clientError)
+      || Boolean(insights.stock)
+      || Boolean(insights.sync)
   }
 
   function setDashboardState(status: DashboardDataState['status'], message: string, failedSources: string[]) {
@@ -1279,6 +1340,11 @@ function openEdit(row: any) {
     await deleteModuleRecord(moduleKey.value, row.id)
     ElMessage.success('删除成功')
     reload()
+  }
+
+  // 跳转到该账号的滑块求解记录页（仅 xianyu-accounts 模块显示，带 accountId 过滤）
+  function viewCaptchaRecords(row: any) {
+    router.push({ name: 'AdminCaptchaRecords', query: { accountId: String(row.id) } })
   }
 
   function onSelectionChange(rows: any[]) {

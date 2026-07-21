@@ -1,246 +1,75 @@
 <template>
   <div class="m-home">
-    <div class="m-hero">
-      <div class="m-hero-content">
-        <h1>闲鱼助手<span class="m-hero-highlight">移动端</span></h1>
-        <p class="m-hero-sub">随时随地掌控店铺，快速查看与低风险操作</p>
-        <div class="m-hero-tags">
-          <span class="m-tag"><MIcon name="check" :size="16" />轻量高效</span>
-          <span class="m-tag"><MIcon name="check" :size="16" />安全低风险</span>
-          <span class="m-tag"><MIcon name="check" :size="16" />状态可见</span>
+    <section class="m-announcement">
+      <div class="m-announcement-copy">
+        <span class="m-announcement-kicker">闲鱼助手</span>
+        <h1>让店铺运营更轻松</h1>
+        <p>账号、商品、订单和自动化状态，一处查看。</p>
+        <div class="m-announcement-points">
+          <span><MIcon name="check" :size="14" />实时状态</span>
+          <span><MIcon name="check" :size="14" />低风险操作</span>
         </div>
       </div>
-      <div class="m-hero-illus">
-        <div class="m-phone">
-          <div class="m-phone-screen">
-            <div class="m-phone-msg"></div>
-            <div class="m-phone-msg m-phone-msg-2"></div>
-          </div>
-        </div>
-        <div class="m-fish-badge">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h-1v-1h1v1zm0-2h-1V7h1v8z" /></svg>
-        </div>
+      <div class="m-announcement-art" aria-hidden="true">
+        <div class="m-art-card m-art-card-main"><MIcon name="chart" :size="28" /></div>
+        <div class="m-art-card m-art-card-small"><MIcon name="check" :size="18" /></div>
+        <div class="m-art-ring"></div>
       </div>
-    </div>
+      <div class="m-announcement-dots"><span class="active"></span><span></span><span></span></div>
+    </section>
 
     <MobileUnavailableState v-if="statsLoadError" compact title="部分运营数据暂时不可用" :description="statsLoadError" @retry="loadStats" />
 
-    <div class="m-stats-scroll">
-      <div class="m-stats">
-        <div class="m-stat-card" @click="navigate('accounts')">
-          <div class="m-stat-icon m-stat-blue">
-            <MIcon name="account" :size="24" />
-          </div>
-          <div class="m-stat-info">
-            <div class="m-stat-label">闲鱼账号</div>
-            <div class="m-stat-value">{{ metricText(stats.accounts) }}</div>
-            <div class="m-stat-desc m-text-green">{{ onlineAccountText }}</div>
-          </div>
-        </div>
-        <div class="m-stat-card" @click="navigate('products')">
-          <div class="m-stat-icon m-stat-blue2">
-            <MIcon name="bag" :size="24" />
-          </div>
-          <div class="m-stat-info">
-            <div class="m-stat-label">商品总数</div>
-            <div class="m-stat-value">{{ metricText(stats.products) }}</div>
-            <div class="m-stat-desc m-text-green">{{ onSaleText }}</div>
-          </div>
-        </div>
-        <div class="m-stat-card" @click="navigate('data')">
-          <div class="m-stat-icon m-stat-orange">
-            <MIcon name="package" :size="24" />
-          </div>
-          <div class="m-stat-info">
-            <div class="m-stat-label">待发货</div>
-            <div class="m-stat-value">{{ metricText(stats.pendingDelivery) }}</div>
-            <div class="m-stat-desc m-text-orange">待处理</div>
-          </div>
-        </div>
-        <div class="m-stat-card" @click="navigate('delivery-records')">
-          <div class="m-stat-icon m-stat-green">
-            <MIcon name="truck" :size="24" />
-          </div>
-          <div class="m-stat-info">
-            <div class="m-stat-label">发货成功</div>
-            <div class="m-stat-value">{{ metricText(stats.deliverySuccess) }}</div>
-            <div class="m-stat-desc m-text-green">今日</div>
-          </div>
-        </div>
-        <div class="m-stat-card" @click="navigate('data')">
-          <div class="m-stat-icon m-stat-red">
-            <MIcon name="trendDown" :size="24" />
-          </div>
-          <div class="m-stat-info">
-            <div class="m-stat-label">今日订单</div>
-            <div class="m-stat-value">{{ metricText(stats.todayOrders) }}</div>
-            <div class="m-stat-desc">订单数</div>
-          </div>
-        </div>
-        <div class="m-stat-card" @click="tabChange('message')">
-          <div class="m-stat-icon m-stat-purple">
-            <MIcon name="chat" :size="24" />
-          </div>
-          <div class="m-stat-info">
-            <div class="m-stat-label">在线消息</div>
-            <div class="m-stat-value">{{ metricText(stats.unreadMessages) }}</div>
-            <div class="m-stat-desc m-text-green">未读消息</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="m-section">
+    <section class="m-section m-quick-start">
       <div class="m-section-header">
-        <h2>快捷功能</h2>
-        <button class="m-section-more" @click="emit('force-desktop')">全部功能 <MIcon name="chevronRight" :size="14" /></button>
+        <div><span class="m-section-eyebrow">开始使用</span><h2>快捷开始</h2></div>
       </div>
-      <div class="m-quick-grid">
-        <div class="m-quick-item" @click="navigate('data')">
-          <div class="m-quick-icon m-quick-blue"><MIcon name="chart" :size="26" /></div>
-          <div class="m-quick-info">
-            <div class="m-quick-title">数据看板</div>
-            <div class="m-quick-desc">查看订单、发货和自动化概况</div>
-          </div>
-          <MIcon name="chevronRight" :size="18" class="m-quick-arrow" />
-        </div>
-        <div class="m-quick-item" @click="tabChange('message')">
-          <div class="m-quick-icon m-quick-green"><MIcon name="chat" :size="26" /></div>
-          <div class="m-quick-info">
-            <div class="m-quick-title">在线消息</div>
-            <div class="m-quick-desc">快速进入买家会话处理入口</div>
-          </div>
-          <MIcon name="chevronRight" :size="18" class="m-quick-arrow" />
-        </div>
-        <div class="m-quick-item" @click="navigate('accounts')">
-          <div class="m-quick-icon m-quick-purple"><MIcon name="shield" :size="26" /></div>
-          <div class="m-quick-info">
-            <div class="m-quick-title">账号状态</div>
-            <div class="m-quick-desc">检查 Cookie、连接和验证状态</div>
-          </div>
-          <MIcon name="chevronRight" :size="18" class="m-quick-arrow" />
-        </div>
-        <div class="m-quick-item" @click="navigate('products')">
-          <div class="m-quick-icon m-quick-blue2"><MIcon name="bag" :size="26" /></div>
-          <div class="m-quick-info">
-            <div class="m-quick-title">商品管理</div>
-            <div class="m-quick-desc">商品上下架、编辑与库存管理</div>
-          </div>
-          <MIcon name="chevronRight" :size="18" class="m-quick-arrow" />
-        </div>
-        <div class="m-quick-item" @click="navigate('settings-notify')">
-          <div class="m-quick-icon m-quick-orange"><MIcon name="bell" :size="26" /></div>
-          <div class="m-quick-info">
-            <div class="m-quick-title">通知设置</div>
-            <div class="m-quick-desc">配置异常提醒和应用内通知</div>
-          </div>
-          <MIcon name="chevronRight" :size="18" class="m-quick-arrow" />
-        </div>
-        <div class="m-quick-item" @click="navigate('auto-delivery')">
-          <div class="m-quick-icon m-quick-purple2"><MIcon name="package" :size="26" /></div>
-          <div class="m-quick-info">
-            <div class="m-quick-title">自动发货</div>
-            <div class="m-quick-desc">设置发货规则自动处理订单</div>
-          </div>
-          <MIcon name="chevronRight" :size="18" class="m-quick-arrow" />
-        </div>
+      <div class="m-start-grid">
+        <button class="m-start-item" @click="navigate('accounts')"><span class="m-start-icon m-blue"><MIcon name="userPlus" :size="21" /></span><span>添加账号</span></button>
+        <button class="m-start-item" @click="navigate('messages')"><span class="m-start-icon m-green"><MIcon name="chat" :size="21" /></span><span>连接消息</span></button>
+        <button class="m-start-item" @click="navigate('products')"><span class="m-start-icon m-orange"><MIcon name="bag" :size="21" /></span><span>商品配置</span></button>
+        <button class="m-start-item" @click="navigate('auto-delivery')"><span class="m-start-icon m-purple"><MIcon name="package" :size="21" /></span><span>自动发货</span></button>
       </div>
-    </div>
+      <div class="m-progress-line"><span :style="{ width: onboardingProgress + '%' }"></span></div>
+      <p class="m-progress-text">{{ onboardingProgressText }}</p>
+    </section>
 
-    <div class="m-section">
-      <div class="m-section-header">
-        <h2>新手快速开始</h2>
-        <button class="m-section-more" @click="emit('force-desktop')">查看全部 <MIcon name="chevronRight" :size="14" /></button>
+    <section class="m-section">
+      <div class="m-section-header"><div><span class="m-section-eyebrow">运营工具</span><h2>功能特性</h2></div><button class="m-section-more" @click="emit('force-desktop')">全部功能<MIcon name="chevronRight" :size="14" /></button></div>
+      <div class="m-feature-list">
+        <button class="m-feature-item" @click="navigate('accounts')"><span class="m-feature-icon m-blue"><MIcon name="account" :size="20" /></span><span class="m-feature-copy"><b>多账号管理</b><small>{{ onlineAccountText }}</small></span><MIcon name="chevronRight" :size="18" /></button>
+        <button class="m-feature-item" @click="navigate('orders')"><span class="m-feature-icon m-green"><MIcon name="fileText" :size="20" /></span><span class="m-feature-copy"><b>订单管理</b><small>集中处理订单与售后</small></span><MIcon name="chevronRight" :size="18" /></button>
+        <button class="m-feature-item" @click="navigate('data')"><span class="m-feature-icon m-orange"><MIcon name="chart" :size="20" /></span><span class="m-feature-copy"><b>商机数据</b><small>查看商品、订单和发货趋势</small></span><MIcon name="chevronRight" :size="18" /></button>
+        <button class="m-feature-item" @click="navigate('auto-delivery')"><span class="m-feature-icon m-purple"><MIcon name="package" :size="20" /></span><span class="m-feature-copy"><b>自动化发货</b><small>{{ onboardingText(onboarding.configuredDelivery, '创建自动发货规则') }}</small></span><MIcon name="chevronRight" :size="18" /></button>
+        <button class="m-feature-item" @click="navigate('products')"><span class="m-feature-icon m-sky"><MIcon name="bag" :size="20" /></span><span class="m-feature-copy"><b>商品管理</b><small>{{ onSaleText }}</small></span><MIcon name="chevronRight" :size="18" /></button>
       </div>
-      <div class="m-starter-row">
-        <div class="m-starter-item" :class="{ done: onboarding.addedAccount === true }" @click="navigate('accounts')">
-          <div class="m-starter-icon" :class="onboarding.addedAccount === true ? 'm-starter-done' : 'm-starter-blue'">
-            <MIcon :name="onboarding.addedAccount === true ? 'check' : 'userPlus'" :size="24" />
-          </div>
-          <div class="m-starter-title">添加闲鱼账号</div>
-          <div class="m-starter-desc">{{ onboardingText(onboarding.addedAccount, '扫码或手动添加') }}</div>
-          <MIcon name="arrowRight" :size="16" class="m-starter-arrow" />
-        </div>
-        <div class="m-starter-item" :class="{ done: onboarding.syncedProducts === true }" @click="navigate('products')">
-          <div class="m-starter-icon" :class="onboarding.syncedProducts === true ? 'm-starter-done' : 'm-starter-orange'">
-            <MIcon :name="onboarding.syncedProducts === true ? 'check' : 'box'" :size="24" />
-          </div>
-          <div class="m-starter-title">同步线上商品</div>
-          <div class="m-starter-desc">{{ onboardingText(onboarding.syncedProducts, '进入商品管理') }}</div>
-          <MIcon name="arrowRight" :size="16" class="m-starter-arrow" />
-        </div>
-        <div class="m-starter-item" :class="{ done: onboarding.configuredDelivery === true }" @click="navigate('auto-delivery')">
-          <div class="m-starter-icon" :class="onboarding.configuredDelivery === true ? 'm-starter-done' : 'm-starter-green'">
-            <MIcon :name="onboarding.configuredDelivery === true ? 'check' : 'rocket'" :size="24" />
-          </div>
-          <div class="m-starter-title">开启自动化</div>
-          <div class="m-starter-desc">{{ onboardingText(onboarding.configuredDelivery, '创建发货规则') }}</div>
-          <MIcon name="arrowRight" :size="16" class="m-starter-arrow" />
-        </div>
-      </div>
-      <div class="m-onboard-progress">
-        <div class="m-onboard-bar" :style="{ width: onboardingProgress + '%' }"></div>
-        <span class="m-onboard-text">{{ onboardingProgressText }}</span>
-      </div>
-    </div>
+    </section>
 
-    <div v-if="recentEvents.length > 0" class="m-section">
-      <div class="m-section-header">
-        <h2>实时动态</h2>
-        <span class="m-live-badge"><span class="m-live-dot"></span>{{ sseStatus === 'connected' ? '实时' : '最近事件（连接中断）' }}</span>
+    <section class="m-section">
+      <div class="m-section-header"><div><span class="m-section-eyebrow">店铺情况</span><h2>数据概览</h2></div><button class="m-section-more" @click="navigate('data')">数据面板<MIcon name="chevronRight" :size="14" /></button></div>
+      <div class="m-overview-grid">
+        <button class="m-overview-item" @click="navigate('orders')"><span class="m-overview-label">今日订单</span><strong>{{ metricText(stats.todayOrders) }}</strong><small>订单总数</small></button>
+        <button class="m-overview-item" @click="navigate('delivery-records')"><span class="m-overview-label">发货成功</span><strong class="m-value-green">{{ metricText(stats.deliverySuccess) }}</strong><small>今日完成</small></button>
+        <button class="m-overview-item" @click="navigate('data')"><span class="m-overview-label">待处理</span><strong class="m-value-orange">{{ metricText(stats.pendingDelivery) }}</strong><small>待发货订单</small></button>
+        <button class="m-overview-item" @click="navigate('products')"><span class="m-overview-label">商品总数</span><strong class="m-value-blue">{{ metricText(stats.products) }}</strong><small>{{ onSaleText }}</small></button>
       </div>
-      <div class="m-event-list">
-        <div v-for="(evt, i) in recentEvents" :key="i" class="m-event-item">
-          <div class="m-event-dot" :class="eventColorClass(evt)"></div>
-          <div class="m-event-body">
-            <div class="m-event-text">{{ formatEventText(evt) }}</div>
-            <div class="m-event-time">{{ formatEventTime(evt) }}</div>
-          </div>
-        </div>
-      </div>
-    </div>
+    </section>
 
-    <div v-if="notifications.length > 0" class="m-section">
-      <div class="m-section-header">
-        <h2>最近通知</h2>
-      </div>
-      <div class="m-notice-list">
-        <div v-for="n in notifications" :key="n.id || n.title" class="m-notice-item">
-          <div class="m-notice-icon" :class="'m-notice-' + (n.type || 'info')">
-            <MIcon :name="n.icon || 'bell'" :size="16" />
-          </div>
-          <div class="m-notice-body">
-            <div class="m-notice-title">{{ n.title }}</div>
-            <div class="m-notice-desc">{{ n.content || n.message || n.desc }}</div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <section v-if="recentEvents.length > 0" class="m-section">
+      <div class="m-section-header"><div><span class="m-section-eyebrow">消息流</span><h2>最近实时事件</h2></div><span class="m-live-badge"><span class="m-live-dot"></span>{{ sseStatus === 'connected' ? '实时' : '连接中断' }}</span></div>
+      <div class="m-event-list"><div v-for="(evt, i) in recentEvents" :key="i" class="m-event-item"><span class="m-event-dot" :class="eventColorClass(evt)"></span><div class="m-event-body"><b>{{ formatEventText(evt) }}</b><small>{{ formatEventTime(evt) }}</small></div></div></div>
+    </section>
+
+    <section v-if="notifications.length > 0" class="m-section">
+      <div class="m-section-header"><div><span class="m-section-eyebrow">服务通知</span><h2>最近通知</h2></div><button class="m-section-more" @click="navigate('messages')">全部通知<MIcon name="chevronRight" :size="14" /></button></div>
+      <div class="m-notice-list"><div v-for="n in notifications" :key="n.id || n.title" class="m-notice-item"><span class="m-notice-icon" :class="'m-notice-' + (n.type || 'info')"><MIcon :name="n.icon || 'bell'" :size="16" /></span><div class="m-notice-body"><b>{{ n.title }}</b><small>{{ n.content || n.message || n.desc }}</small></div></div></div>
+    </section>
 
     <MobileUnavailableState v-if="notificationsLoadError" compact title="最近通知暂时不可用" :description="notificationsLoadError" @retry="loadNotifications" />
 
-    <div class="m-pc-notice">
-      <div class="m-pc-notice-icon">
-        <MIcon name="warning" :size="28" />
-      </div>
-      <div class="m-pc-notice-content">
-        <div class="m-pc-notice-title">推荐在 PC 端完成复杂操作</div>
-        <div class="m-pc-notice-desc">商品发布、批量删除、自动发货规则编辑等操作涉及较高风险，建议回到桌面端执行，保障账号安全。</div>
-      </div>
-      <div class="m-pc-notice-illus">
-        <MIcon name="monitor" :size="48" />
-      </div>
-    </div>
+    <section class="m-desktop-tip"><span class="m-desktop-tip-icon"><MIcon name="monitor" :size="21" /></span><div><b>复杂操作建议使用桌面版</b><p>商品发布、批量管理和规则编辑在桌面端更适合完成。</p></div><button @click="emit('force-desktop')"><MIcon name="desktop" :size="18" /></button></section>
 
-    <div class="m-bottom-actions">
-      <button class="m-btn m-btn-outline" @click="emit('logout')">
-        <MIcon name="logout" :size="18" />退出登录
-      </button>
-      <button class="m-btn m-btn-primary" @click="emit('force-desktop')">
-        <MIcon name="desktop" :size="18" />继续进入桌面版
-      </button>
-    </div>
-
+    <div class="m-bottom-actions"><button class="m-btn m-btn-outline" @click="emit('logout')"><MIcon name="logout" :size="18" />退出登录</button><button class="m-btn m-btn-primary" @click="emit('force-desktop')">进入桌面版<MIcon name="chevronRight" :size="18" /></button></div>
     <div class="m-safe-bottom"></div>
   </div>
 </template>
@@ -260,7 +89,6 @@ import { getSseStatus } from '../utils/sse.js'
 const emit = defineEmits(['navigate', 'logout', 'force-desktop', 'tab-change'])
 
 function navigate(page) { emit('navigate', page) }
-function tabChange(tab) { emit('tab-change', tab) }
 
 const stats = ref({
   accounts: null, onlineAccounts: null, products: null, onSale: null,
@@ -513,6 +341,7 @@ onBeforeUnmount(() => {
 }
 .m-stat-blue { background: linear-gradient(135deg,#e8f1ff,#d4e4ff); color: #0d6bff; }
 .m-stat-blue2 { background: linear-gradient(135deg,#e8f1ff,#d4e4ff); color: #1678ff; }
+.m-stat-blue3 { background: linear-gradient(135deg,#e0f2ff,#cce4ff); color: #0566e9; }
 .m-stat-orange { background: linear-gradient(135deg,#fff4e0,#ffe7c2); color: #ff9f22; }
 .m-stat-green { background: linear-gradient(135deg,#e2f8ee,#cdf2df); color: #16bf78; }
 .m-stat-red { background: linear-gradient(135deg,#ffeaea,#ffd0d0); color: #ff5252; }
@@ -562,6 +391,7 @@ onBeforeUnmount(() => {
 .m-quick-purple { background: linear-gradient(135deg,#f0ebff,#e2d8ff); color: #8b5cf6; }
 .m-quick-orange { background: linear-gradient(135deg,#fff4e0,#ffe7c2); color: #ff9f22; }
 .m-quick-blue2 { background: linear-gradient(135deg,#e6f2ff,#d0e6ff); color: #2578ff; }
+.m-quick-blue3 { background: linear-gradient(135deg,#e0f2ff,#c4e0ff); color: #0566e9; }
 .m-quick-purple2 { background: linear-gradient(135deg,#ede8ff,#ddd3ff); color: #7c5cff; }
 .m-quick-info { flex: 1; min-width: 0; }
 .m-quick-title { font-size: 14px; font-weight: 600; color: #15213d; margin-bottom: 2px; }
@@ -671,4 +501,32 @@ onBeforeUnmount(() => {
   .m-phone { right: 12px; top: 10px; width: 78px; height: 122px; }
   .m-quick-item { padding: 12px 14px; }
 }
+.m-home { padding: 14px 16px 0; background: #f5f8fc; }
+.m-announcement { position: relative; min-height: 192px; margin-bottom: 14px; padding: 22px 20px 28px; overflow: hidden; border: 1px solid #cfe0f8; border-radius: 8px; background: linear-gradient(135deg, #e8f3ff, #f8fbff); }
+.m-announcement-copy { position: relative; z-index: 2; max-width: 67%; }
+.m-announcement-kicker, .m-section-eyebrow { display: block; margin-bottom: 4px; color: #2878c8; font-size: 11px; font-weight: 700; }
+.m-announcement h1 { margin: 0 0 8px; color: #172b4d; font-size: 24px; line-height: 1.25; }
+.m-announcement p { margin: 0; color: #58708f; font-size: 13px; line-height: 1.55; }
+.m-announcement-points { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.m-announcement-points span { display: inline-flex; align-items: center; gap: 3px; color: #176bb6; font-size: 11px; }
+.m-announcement-art { position: absolute; right: 8px; top: 29px; width: 108px; height: 118px; }
+.m-art-card { position: absolute; display: grid; place-items: center; border: 1px solid rgba(255, 255, 255, .85); box-shadow: 0 10px 24px rgba(42, 109, 177, .16); }
+.m-art-card-main { top: 18px; right: 10px; width: 68px; height: 78px; color: #1674d1; border-radius: 8px; background: #fff; transform: rotate(8deg); }
+.m-art-card-small { right: 56px; bottom: 5px; width: 36px; height: 36px; color: #168657; border-radius: 50%; background: #e8faef; }
+.m-art-ring { position: absolute; right: -27px; top: -31px; width: 126px; height: 126px; border: 20px solid rgba(85, 157, 231, .15); border-radius: 50%; }
+.m-announcement-dots { position: absolute; bottom: 12px; left: 20px; display: flex; gap: 5px; }
+.m-announcement-dots span { width: 5px; height: 5px; border-radius: 50%; background: #b7c8dd; }.m-announcement-dots .active { width: 15px; border-radius: 4px; background: #2878c8; }
+.m-section { margin-bottom: 14px; padding: 16px; border: 1px solid #e3eaf3; border-radius: 8px; box-shadow: 0 2px 7px rgba(33, 60, 97, .04); }
+.m-section-header { margin-bottom: 13px; }.m-section-header h2 { font-size: 17px; }.m-section-more { color: #6d7e94; }
+.m-start-grid, .m-overview-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.m-start-item, .m-overview-item { min-width: 0; padding: 0; border: 0; background: transparent; cursor: pointer; font: inherit; }
+.m-start-item { display: flex; flex-direction: column; align-items: center; gap: 7px; color: #334963; font-size: 12px; }
+.m-start-icon { display: grid; width: 43px; height: 43px; place-items: center; border-radius: 8px; }.m-blue { background: #e6f1ff; color: #1774d0; }.m-green { background: #e4f8ee; color: #168b59; }.m-orange { background: #fff2df; color: #d98012; }.m-purple { background: #f0eaff; color: #7655ca; }.m-sky { background: #e2f4fb; color: #2381af; }
+.m-progress-line { height: 5px; margin-top: 18px; overflow: hidden; border-radius: 4px; background: #edf1f5; }.m-progress-line span { display: block; height: 100%; border-radius: inherit; background: #2681d4; }.m-progress-text { margin: 7px 0 0; color: #7d8b9d; font-size: 11px; }
+.m-feature-list { display: flex; flex-direction: column; }.m-feature-item { display: flex; align-items: center; width: 100%; gap: 11px; padding: 11px 0; border: 0; border-bottom: 1px solid #edf1f5; background: transparent; color: #b2bdca; text-align: left; cursor: pointer; }.m-feature-item:last-child { border-bottom: 0; padding-bottom: 0; }.m-feature-icon { display: grid; width: 39px; height: 39px; place-items: center; flex: 0 0 auto; border-radius: 8px; }.m-feature-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }.m-feature-copy b, .m-notice-body b, .m-event-body b { overflow: hidden; color: #20344e; font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }.m-feature-copy small, .m-notice-body small, .m-event-body small { overflow: hidden; color: #8290a2; font-size: 11px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.m-overview-item { padding: 11px 7px; border: 1px solid #eaf0f6; border-radius: 8px; text-align: left; }.m-overview-label, .m-overview-item small { display: block; overflow: hidden; color: #8190a3; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.m-overview-item strong { display: block; margin: 7px 0 3px; color: #20344e; font-size: 21px; line-height: 1; }.m-value-green { color: #169460 !important; }.m-value-orange { color: #d98412 !important; }.m-value-blue { color: #277bc5 !important; }
+.m-live-badge { color: #dd5a5a; }.m-live-dot { width: 6px; height: 6px; background: #dd5a5a; }.m-event-list, .m-notice-list { gap: 0; }.m-event-item { gap: 10px; padding: 10px 0; border-bottom: 1px solid #edf1f5; }.m-event-item:last-child { border-bottom: 0; padding-bottom: 0; }.m-event-dot { width: 7px; height: 7px; margin-top: 5px; }.m-event-body, .m-notice-body { display: flex; flex-direction: column; gap: 3px; }.m-notice-item { padding: 10px 0; border-radius: 0; border-bottom: 1px solid #edf1f5; background: transparent; }.m-notice-item:last-child { border-bottom: 0; padding-bottom: 0; }.m-notice-icon { width: 32px; height: 32px; border-radius: 8px; }
+.m-desktop-tip { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 14px; padding: 13px; border: 1px solid #f1dfb2; border-radius: 8px; background: #fffaf0; }.m-desktop-tip-icon { display: grid; width: 34px; height: 34px; place-items: center; flex: 0 0 auto; border-radius: 8px; background: #fff0cc; color: #b47613; }.m-desktop-tip div { min-width: 0; flex: 1; }.m-desktop-tip b { color: #825f25; font-size: 13px; }.m-desktop-tip p { margin: 3px 0 0; color: #997b47; font-size: 11px; line-height: 1.45; }.m-desktop-tip button { display: grid; width: 32px; height: 32px; place-items: center; flex: 0 0 auto; padding: 0; border: 0; border-radius: 8px; background: transparent; color: #a77a30; cursor: pointer; }
+.m-bottom-actions { padding-top: 0; }.m-btn { height: 44px; border-radius: 8px; font-size: 14px; }.m-btn-primary { box-shadow: none; }.m-safe-bottom { height: 80px; }
+@media (max-width: 360px) { .m-home { padding-left: 12px; padding-right: 12px; }.m-announcement { padding-left: 16px; }.m-announcement-copy { max-width: 65%; }.m-announcement h1 { font-size: 21px; }.m-start-grid, .m-overview-grid { gap: 5px; }.m-overview-item { padding-left: 5px; padding-right: 5px; }.m-overview-item strong { font-size: 18px; }.m-art-card-main { right: 0; }.m-art-card-small { right: 46px; } }
 </style>

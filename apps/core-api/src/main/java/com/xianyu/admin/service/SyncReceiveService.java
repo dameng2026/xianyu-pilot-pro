@@ -196,6 +196,8 @@ public class SyncReceiveService {
 
     private Long createXianyuAccount(Long tenantId, Long userId, Map<String, Object> acct) {
         org.springframework.jdbc.support.GeneratedKeyHolder keyHolder = new org.springframework.jdbc.support.GeneratedKeyHolder();
+        // 写入前清理 avatar_url 脏数据（历史可能存有 {avatar=http://...} 等格式）
+        String normalizedAvatar = XianyuAccountService.normalizeAvatarUrl(str(acct, "avatarUrl"));
         jdbcTemplate.update(con -> {
             java.sql.PreparedStatement ps = con.prepareStatement(
                     "INSERT INTO xianyu_account (tenant_id, user_id, external_uid, nickname, avatar_url, " +
@@ -207,7 +209,7 @@ public class SyncReceiveService {
             ps.setLong(2, userId);
             ps.setString(3, str(acct, "externalUid"));
             setNullableString(ps, 4, str(acct, "nickname"));
-            setNullableString(ps, 5, str(acct, "avatarUrl"));
+            setNullableString(ps, 5, normalizedAvatar);
             setNullableString(ps, 6, str(acct, "province"));
             setNullableString(ps, 7, str(acct, "city"));
             setNullableInt(ps, 8, inte(acct, "accountLevel"));
@@ -223,12 +225,14 @@ public class SyncReceiveService {
     }
 
     private void updateXianyuAccount(Long accountId, Map<String, Object> acct) {
+        // 写入前清理 avatar_url 脏数据（历史可能存有 {avatar=http://...} 等格式）
+        String normalizedAvatar = XianyuAccountService.normalizeAvatarUrl(str(acct, "avatarUrl"));
         jdbcTemplate.update(
                 "UPDATE xianyu_account SET nickname = ?, avatar_url = ?, province = ?, city = ?, " +
                         "account_level = ?, remark = ?, display_name = ?, message_expire_time = ?, " +
                         "scheduled_redelivery = ?, auto_polish = ?, updated_time = NOW() " +
                         "WHERE id = ?",
-                str(acct, "nickname"), str(acct, "avatarUrl"), str(acct, "province"), str(acct, "city"),
+                str(acct, "nickname"), normalizedAvatar, str(acct, "province"), str(acct, "city"),
                 inte(acct, "accountLevel"), str(acct, "remark"), str(acct, "displayName"),
                 inte(acct, "messageExpireTime") != null ? inte(acct, "messageExpireTime") : 3600,
                 inte(acct, "scheduledRedelivery"), inte(acct, "autoPolish"),

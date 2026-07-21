@@ -307,12 +307,16 @@ async def on_message_callback(tenant_id: int, account_id: int, msg: dict) -> Non
                     {"aid": account_id, "tid": tenant_id},
                 )
                 seller_external_uid = seller_uid_row.scalar_one_or_none() or ""
+                # 从 msg 字典读取 isAutoReply 标记，区分 AI 自动回复与人工发送
+                # 来源：_persist_outbound_message 主动入库时透传 / 自动回复路径 save_chat_message 入库时设置
+                _msg_is_auto_reply = int(msg.get("isAutoReply") or 0)
                 saved_message_id = await save_chat_message(
                     db,
                     tenant_id,
                     account_id,
                     msg,
                     seller_external_uid=seller_external_uid,
+                    is_auto_reply=_msg_is_auto_reply,
                 )
                 await db.commit()
                 logger.debug(

@@ -125,3 +125,14 @@ scripts/slider_test_report.json
 scripts/test_slider_success_rate.py
 
 .tmp-stash/
+
+# AI 临时调试与本地脚本（不应进入版本控制）
+.tmp-*
+.tmp_*
+.tmp_debug_*
+.superpowers/
+apps/crawler-service/leaveMsgTest*
+apps/user-web/mobile-390.png
+apps/user-web/tmp-mobile-verify/
+docs/superpowers/
+.trae/rules/mobile-pc-isolation.md

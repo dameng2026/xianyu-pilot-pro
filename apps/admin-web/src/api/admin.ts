@@ -79,6 +79,112 @@ export function getDashboardInit(options: RequestUiOptions = {}) {
 }
 
 /**
+ * 仪表盘财务统计：从 payment_order 真实聚合收入，从 ai_usage_log 真实聚合 AI 成本与 Token 消耗
+ * - 按 range 7/30/90 天统计范围内总数 + 每日收入趋势
+ * - 同时返回今日收入/今日 AI 成本/今日利润，供 KPI 卡片使用
+ */
+export interface DashboardFinanceData {
+  range: number
+  dates: string[]
+  totalIncomeCent: number
+  totalAiCostCent: number
+  totalProfitCent: number
+  totalChargeTokens: number
+  marginPercent: number | null
+  dailyIncome: number[]
+  todayIncomeCent: number
+  todayAiCostCent: number
+  todayProfitCent: number
+}
+
+export function getDashboardFinance(range: 7 | 30 | 90 = 7, options: RequestUiOptions = {}) {
+  return request.get<DashboardFinanceData>({
+    url: '/admin/dashboard/finance',
+    params: { range },
+    showErrorMessage: options.showErrorMessage
+  }).then(value => requireRecordPayload<Record<string, any>>(value, '财务统计') as DashboardFinanceData)
+}
+
+/**
+ * 通知投递统计：从 notification_delivery_log 真实聚合
+ */
+export interface DashboardNotifyStats {
+  range: number
+  totalCount: number
+  successCount: number
+  failedCount: number
+  todayCount: number
+  avgCostMs: number
+  byChannel: Array<{ channel: string; total: number; success: number }>
+}
+
+export function getNotifyStats(range: 7 | 30 | 90 = 7, options: RequestUiOptions = {}) {
+  return request.get<DashboardNotifyStats>({
+    url: '/admin/dashboard/notify-stats',
+    params: { range },
+    showErrorMessage: options.showErrorMessage
+  }).then(value => requireRecordPayload<Record<string, any>>(value, '通知投递统计') as DashboardNotifyStats)
+}
+
+/**
+ * 客户端错误监控：从 client_error_log 真实聚合
+ */
+export interface DashboardClientErrorStats {
+  range: number
+  totalCount: number
+  todayCount: number
+  topErrorTypes: Array<{ errorType: string; count: number }>
+}
+
+export function getClientErrorStats(range: 7 | 30 | 90 = 7, options: RequestUiOptions = {}) {
+  return request.get<DashboardClientErrorStats>({
+    url: '/admin/dashboard/client-error-stats',
+    params: { range },
+    showErrorMessage: options.showErrorMessage
+  }).then(value => requireRecordPayload<Record<string, any>>(value, '客户端错误统计') as DashboardClientErrorStats)
+}
+
+/**
+ * 卡密库存统计：从 card_group/card_item 真实聚合
+ */
+export interface DashboardStockStats {
+  totalGroups: number
+  totalStock: number
+  usedStock: number
+  remainStock: number
+  lowStockGroups: number
+  todayConsumed: number
+  lowStockList: Array<{ id: number; group_name: string; remain_count: number; alert_threshold: number }>
+}
+
+export function getStockStats(options: RequestUiOptions = {}) {
+  return request.get<DashboardStockStats>({
+    url: '/admin/dashboard/stock-stats',
+    showErrorMessage: options.showErrorMessage
+  }).then(value => requireRecordPayload<Record<string, any>>(value, '卡密库存统计') as DashboardStockStats)
+}
+
+/**
+ * 商机与商品同步统计：从 xianyu_goods_sync_task 和 opportunity_image_history 真实聚合
+ */
+export interface DashboardSyncStats {
+  range: number
+  syncTotal: number
+  syncSuccess: number
+  syncFailed: number
+  todaySyncCount: number
+  imageGenerated: number
+}
+
+export function getSyncStats(range: 7 | 30 | 90 = 7, options: RequestUiOptions = {}) {
+  return request.get<DashboardSyncStats>({
+    url: '/admin/dashboard/sync-stats',
+    params: { range },
+    showErrorMessage: options.showErrorMessage
+  }).then(value => requireRecordPayload<Record<string, any>>(value, '商机与商品同步统计') as DashboardSyncStats)
+}
+
+/**
  * 实时监控卡片：在线账号数 / 今日发布数 / 今日成交额 / 今日 AI 调用次数 / 工作流执行中
  */
 export function getRealtimeStats(options: RequestUiOptions = {}) {

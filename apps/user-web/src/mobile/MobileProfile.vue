@@ -100,6 +100,42 @@
       <div class="m-ledger-empty">暂无 Token 流水</div>
     </div>
 
+    <!-- 最近充值记录 -->
+    <MobileUnavailableState v-if="rechargeError" compact title="充值记录暂时不可用" :description="rechargeError" @retry="loadRechargeRecords" />
+    <div v-if="rechargeRecords.length > 0" class="m-section">
+      <div class="m-section-header">
+        <h2>充值记录</h2>
+        <button class="m-section-action" @click="openDesktopProfile('recharge')">
+          全部<MIcon name="chevronRight" :size="12" />
+        </button>
+      </div>
+      <div class="m-recharge-list">
+        <div
+          v-for="row in rechargeRecords"
+          :key="row.id"
+          class="m-recharge-item"
+        >
+          <div class="m-recharge-icon">
+            <MIcon name="coins" :size="18" />
+          </div>
+          <div class="m-recharge-info">
+            <div class="m-recharge-title">{{ rechargeSourceLabel(row.source) }}</div>
+            <div class="m-recharge-time">{{ formatTime(row.createdTime) }}</div>
+          </div>
+          <div class="m-recharge-amount">+{{ formatNumber(row.tokenAmount) }}</div>
+        </div>
+      </div>
+    </div>
+    <div v-else-if="!rechargeError && !rechargeLoading" class="m-section">
+      <div class="m-section-header">
+        <h2>充值记录</h2>
+        <button class="m-section-action" @click="openDesktopProfile('recharge')">
+          全部<MIcon name="chevronRight" :size="12" />
+        </button>
+      </div>
+      <div class="m-ledger-empty">暂无充值记录</div>
+    </div>
+
     <!-- 账号设置 -->
     <div class="m-section">
       <div class="m-section-header">
@@ -231,7 +267,7 @@ import { ref, onMounted, computed } from 'vue'
 import MIcon from './MIcon.vue'
 import MobileUnavailableState from './MobileUnavailableState.vue'
 import PaymentModal from '../components/PaymentModal.vue'
-import { getProfileOverview, getTokenLedger } from '../api/profile.js'
+import { getProfileOverview, getRechargeRecords, getTokenLedger } from '../api/profile.js'
 import { getCachedUsername } from '../utils/auth.js'
 import { globalConfirm } from '../composables/confirmState.js'
 
@@ -245,6 +281,10 @@ const tokenLedger = ref([])
 const overviewError = ref('')
 const ledgerError = ref('')
 const paymentVisible = ref(false)
+// 充值记录（最近 5 条，移动端只显示简要列表，完整记录跳转桌面版）
+const rechargeRecords = ref([])
+const rechargeError = ref('')
+const rechargeLoading = ref(false)
 
 const displayName = computed(() => overview.value.nickname || overview.value.username || props.user?.username || getCachedUsername() || '当前用户')
 
@@ -277,6 +317,8 @@ async function showUnavailableNotice() {
 async function handleTokenPaid() {
   paymentVisible.value = false
   await loadOverview()
+  // 支付成功后同步刷新充值记录
+  loadRechargeRecords()
 }
 
 function formatNumber(n) {
@@ -390,9 +432,50 @@ async function loadTokenLedger() {
   }
 }
 
+// 来源标签文案
+function rechargeSourceLabel(source) {
+  if (!source) return '—'
+  const map = {
+    alipay: '支付宝',
+    wechat: '微信支付',
+    admin: '后台手动',
+    system: '系统赠送',
+    plan: '套餐购买',
+    manual: '手动充值'
+  }
+  return map[String(source).toLowerCase()] || source
+}
+
+async function loadRechargeRecords() {
+  rechargeLoading.value = true
+  rechargeError.value = ''
+  try {
+    const res = await getRechargeRecords({ current: 1, size: 5 })
+    const data = res?.data
+    if (!data || typeof data !== 'object' || Array.isArray(data) || !Array.isArray(data.records)) {
+      throw new Error('充值记录响应格式异常')
+    }
+    rechargeRecords.value = data.records.map((record, index) => ({
+      ...record,
+      id: record.id ?? `r-${index}`,
+      createdTime: record.createdTime || record.createTime || record.time || '',
+      orderNo: record.orderNo || record.paymentOrderId || '',
+      tokenAmount: Number(record.tokenAmount ?? record.amount ?? (record.tokens || 0)),
+      source: record.source || record.channel || '',
+      remark: record.remark || record.description || ''
+    }))
+  } catch (error) {
+    rechargeRecords.value = []
+    rechargeError.value = error?.message || '请检查网络连接后重试。'
+  } finally {
+    rechargeLoading.value = false
+  }
+}
+
 onMounted(() => {
   loadOverview()
   loadTokenLedger()
+  loadRechargeRecords()
 })
 </script>
 
@@ -643,6 +726,47 @@ onMounted(() => {
 }
 .m-ledger-amount.plus { color: #16bf78; }
 .m-ledger-amount.minus { color: #ef4444; }
+
+/* 充值记录列表 */
+.m-recharge-list {
+  display: flex;
+  flex-direction: column;
+}
+.m-recharge-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid #f0f3f7;
+}
+.m-recharge-item:last-child { border-bottom: none; }
+.m-recharge-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #e8f7ef, #d4f0e0);
+  color: #16bf78;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.m-recharge-info { flex: 1; min-width: 0; }
+.m-recharge-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-recharge-time { font-size: 11px; color: #b0bacb; margin-top: 2px; }
+.m-recharge-amount {
+  font-size: 15px;
+  font-weight: 700;
+  color: #16bf78;
+  flex-shrink: 0;
+}
 
 /* 菜单 */
 .m-menu-list { display: flex; flex-direction: column; gap: 2px; }

@@ -334,7 +334,12 @@ public class WebSocketController {
             };
         }
         if (responseCode == 503) {
-            throw automationUnavailable("自动化服务暂时不可用，请稍后重试");
+            // Python 端业务错误若使用默认 code=500，原始业务消息可能在 rawMessage 中。
+            // 透传业务可读消息（经 safeBusinessMessage 过滤敏感技术信息），避免一律显示
+            // "自动化服务暂时不可用" 掩盖真实业务原因（如消息发送失败、会话已删除等）。
+            log.warn("自动化服务返回 5xx，upstreamCode={}, rawMessage={}", upstreamCode, rawMessage);
+            String safeMsg = safeBusinessMessage(rawMessage, "自动化服务暂时不可用，请稍后重试");
+            throw automationUnavailable(safeMsg);
         }
         String message = rawMessage == null ? fallback : rawMessage;
         throw new BizException(responseCode, safeBusinessMessage(message, fallback));
@@ -415,7 +420,13 @@ public class WebSocketController {
                 || normalized.contains("不能为空")
                 || normalized.contains("不支持")
                 || normalized.contains("库存")
-                || normalized.contains("配置");
+                || normalized.contains("配置")
+                // 消息发送类业务错误：Python 端 IM 调用失败时返回的 user_error 文案
+                || normalized.contains("消息发送失败")
+                || normalized.contains("图片消息发送失败")
+                || normalized.contains("发送失败")
+                || normalized.contains("会话已被删除")
+                || normalized.contains("会话已过期");
     }
 
     private boolean looksTechnicalOrSensitive(String message) {

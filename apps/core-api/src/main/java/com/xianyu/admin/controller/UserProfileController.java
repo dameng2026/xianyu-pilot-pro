@@ -37,6 +37,13 @@ public class UserProfileController {
         return Result.ok(userProfileService.tokenLedger(current, size));
     }
 
+    @GetMapping("/recharge-records")
+    public Result<Map<String, Object>> rechargeRecords(
+            @RequestParam(defaultValue = "1") int current,
+            @RequestParam(defaultValue = "20") int size) {
+        return Result.ok(userProfileService.rechargeRecords(current, size));
+    }
+
     @GetMapping("/token-trend")
     public Result<Map<String, Object>> tokenTrend(@RequestParam(defaultValue = "7") int days) {
         return Result.ok(userProfileService.tokenTrend(days));

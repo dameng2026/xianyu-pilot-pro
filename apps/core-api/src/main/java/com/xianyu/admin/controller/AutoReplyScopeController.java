@@ -106,4 +106,53 @@ public class AutoReplyScopeController {
             throw new BizException(503, "自动回复范围状态暂时无法查询，请稍后重试");
         }
     }
+
+    /**
+     * 会话级自动回复手动开关。
+     * <p>
+     * 用户在网站点击按钮开启/关闭时调用，与人工干预触发的自动暂停区分：
+     * <ul>
+     *   <li>enabled=true：手动开启（清除暂停 + 清除手动关闭标记）</li>
+     *   <li>enabled=false：手动关闭（设置暂停 + 设置手动关闭标记，禁止自动恢复）</li>
+     * </ul>
+     * 业务规则参见 .trae/rules 数据库迁移 V1.13 与 automation_runtime.py。
+     */
+    @PostMapping("/conversation-toggle")
+    public Result<Object> toggleConversationAutoReply(@RequestBody Map<String, Object> body) {
+        try {
+            Map<String, Object> data = automationClient.postInternalForData(
+                    "/api/auto-reply-scope/conversation-toggle", body);
+            return Result.ok(data);
+        } catch (Exception e) {
+            if (e instanceof BizException bizException) throw bizException;
+            log.error("切换会话自动回复状态失败, errorType={}", e.getClass().getSimpleName());
+            throw new BizException(503, "会话自动回复状态暂时无法切换，请稍后重试");
+        }
+    }
+
+    /**
+     * 查询会话级自动回复状态。
+     * <p>
+     * 返回字段：autoReplyPaused / autoReplyManualDisabled / lastManualReplyAt /
+     * lastAutoReplyAt / effectiveEnabled / runningEnabled / pausedReason
+     */
+    @GetMapping("/conversation-status")
+    public Result<Object> getConversationStatus(
+            @RequestParam Long accountId,
+            @RequestParam(required = false) String sid,
+            @RequestParam(required = false) String peerUserId) {
+        try {
+            Map<String, Object> query = new LinkedHashMap<>();
+            query.put("accountId", accountId);
+            if (sid != null) query.put("sid", sid);
+            if (peerUserId != null) query.put("peerUserId", peerUserId);
+            Object data = automationClient.getInternalForData(
+                    "/api/auto-reply-scope/conversation-status", query);
+            return Result.ok(data);
+        } catch (Exception e) {
+            if (e instanceof BizException bizException) throw bizException;
+            log.error("查询会话自动回复状态失败, errorType={}", e.getClass().getSimpleName());
+            throw new BizException(503, "会话自动回复状态暂时无法查询，请稍后重试");
+        }
+    }
 }

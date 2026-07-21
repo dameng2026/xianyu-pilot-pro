@@ -97,7 +97,7 @@
             class="products-table"
             @row-click="selectProduct"
           >
-            <template #info="{row}"><div class="product-cell"><img v-if="row.coverPic" :src="row.coverPic" class="product-thumb" alt=""><div v-else class="product-thumb product-thumb-placeholder"></div><div class="product-info-text"><strong :title="row.raw?.title || row.name">{{ row.name }}</strong><em>ID：{{ row.xyGoodId }}</em></div></div></template>
+            <template #info="{row}"><div class="product-cell"><img v-if="row.coverPic" :src="row.coverPic" class="product-thumb" alt="" @error="onCoverError"><div v-else class="product-thumb product-thumb-placeholder"></div><div class="product-info-text"><strong :title="row.raw?.title || row.name">{{ row.name }}</strong><em>ID：{{ row.xyGoodId }}</em></div></div></template>
             <template #price="{row}"><div class="cell-price">{{ row.price }}</div></template>
             <template #stock="{row}"><div class="cell-center cell-muted">{{ row.stock }}</div></template>
             <template #status="{row}"><div class="cell-center"><Badge :type="row.statusType">{{ row.status }}</Badge></div></template>
@@ -175,7 +175,7 @@
         <button class="drawer-close" @click="selected = null">×</button>
       </div>
       <template v-if="selected">
-        <div class="preview-card" style="height:210px;padding:0;overflow:hidden;border-radius:12px"><img v-if="selected.coverPic" :src="selected.coverPic" style="width:100%;height:100%;object-fit:cover" alt=""><div v-else class="product-thumb" style="width:100%;height:100%;border-radius:0;background:linear-gradient(135deg,#f5f7fb,#dfe9f8)"></div></div>
+        <div class="preview-card" style="height:210px;padding:0;overflow:hidden;border-radius:12px"><img v-if="selected.coverPic" :src="selected.coverPic" style="width:100%;height:100%;object-fit:cover" alt="" @error="onCoverError"><div v-else class="product-thumb" style="width:100%;height:100%;border-radius:0;background:linear-gradient(135deg,#f5f7fb,#dfe9f8)"></div></div>
         <h3 class="drawer-title">{{ selected.name }}</h3>
         <p class="drawer-price"><b style="color:#ef4444;font-size:22px">{{ selected.price }}</b> <Badge :type="selected.statusType">{{ selected.status }}</Badge></p>
         <CardPanel title="商品数据" class="drawer-card">
@@ -212,6 +212,7 @@ import { updateProductAutoReplyScope } from '../api/autoReplyScope.js'
 import { deleteGoodsLocal, getGoodsDetail, getGoods, getGoodsStats, updateGoods } from '../api/goods.js'
 import { refreshItems, getSyncProgress, getSyncTasks, publishItem, offShelfItem, updateItemPrice, remoteDeleteItem } from '../api/items.js'
 import { accountName, formatMoney, formatNumber, shortText } from '../utils/format.js'
+import { resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
 import { recordsOfOrThrow } from '../utils/apiData.js'
 
 const emit = defineEmits(['navigate'])
@@ -286,7 +287,7 @@ const products = computed(() => items.value.map(w => {
     category,
     isLocalDraft,
     xianyuAccountId: item.accountId || item.xianyuAccountId,
-    coverPic: item.imageUrl || item.mainImageUrl || item.coverPic,
+    coverPic: resolveTrustedMediaUrl(item.imageUrl || item.mainImageUrl || item.coverPic || ''),
     price: formatMoney(item.soldPrice ?? item.price),
     stock: item.stock ?? item.quantity ?? '-',
     sku: item.skuCount ?? '-',
@@ -481,6 +482,11 @@ function showAllProducts() {
   loadItems()
 }
 function selectProduct(row){ selected.value = row }
+
+// 封面图加载失败时隐藏 img，露出底层 .product-thumb 的渐变背景占位
+function onCoverError(e) {
+  if (e?.target) e.target.style.visibility = 'hidden'
+}
 const rowClass = (row) => selected.value && selected.value.xyGoodId === row.xyGoodId ? 'row-selected' : ''
 function itemBusyKey(row){ return row?.raw?.id || row?.id || row?.xyGoodId }
 function isItemBusy(row){ return busyItemId.value && busyItemId.value === itemBusyKey(row) }

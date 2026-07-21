@@ -1,205 +1,248 @@
 <template>
   <div class="m-data">
-    <div class="m-page-header">
-      <h1>数据面板</h1>
-      <p class="m-page-sub">实时掌握店铺运营数据</p>
+    <div class="m-hero-card">
+      <div class="m-hero-glow m-hero-glow-1"></div>
+      <div class="m-hero-glow m-hero-glow-2"></div>
+      <div class="m-hero-pattern"></div>
+      <div class="m-hero-content">
+        <div class="m-hero-badge">
+          <span class="m-hero-dot"></span>
+          <span>实时数据</span>
+        </div>
+        <h1 class="m-hero-title">数据面板</h1>
+        <p class="m-hero-sub">{{ scopeLabel }} · 更新于 {{ updatedAt }}</p>
+      </div>
+      <div class="m-hero-stats">
+        <div class="m-hero-stat">
+          <div class="m-hero-stat-value">{{ metricText(stats.orderCount) }}</div>
+          <div class="m-hero-stat-label">今日订单</div>
+        </div>
+        <div class="m-hero-stat-divider"></div>
+        <div class="m-hero-stat">
+          <div class="m-hero-stat-value m-hero-stat-green">{{ metricText(stats.deliverySuccessCount) }}</div>
+          <div class="m-hero-stat-label">发货成功</div>
+        </div>
+        <div class="m-hero-stat-divider"></div>
+        <div class="m-hero-stat">
+          <div class="m-hero-stat-value m-hero-stat-orange">{{ metricText(stats.pendingDeliveryCount) }}</div>
+          <div class="m-hero-stat-label">待处理</div>
+        </div>
+      </div>
+      <div class="m-hero-date-tabs">
+        <button
+          v-for="tab in dateTabs"
+          :key="tab.value"
+          class="m-hero-date-tab"
+          :class="{ active: activeDate === tab.value }"
+          :disabled="tab.disabled"
+          @click="switchDate(tab.value)"
+        >
+          {{ tab.label }}
+        </button>
+      </div>
     </div>
 
-    <div class="m-date-tabs">
-      <button
-        v-for="tab in dateTabs"
-        :key="tab.value"
-        class="m-date-tab"
-        :class="{ active: activeDate === tab.value }"
-        :disabled="tab.disabled"
-        :title="tab.disabled ? '该时间范围的汇总接口暂未开放' : ''"
-        @click="switchDate(tab.value)"
-      >
-        {{ tab.label }}
-      </button>
+    <div v-if="loading" class="m-loading-wrap">
+      <div class="m-loading-spinner"></div>
+      <div class="m-loading-text">加载数据中...</div>
     </div>
-
-    <div v-if="loading" class="m-loading">加载中...</div>
 
     <MobileUnavailableState v-else-if="loadError" title="数据面板暂时无法加载" :description="loadError" @retry="loadAll" />
 
     <template v-else>
       <div v-if="!hasData" class="m-empty">
         <div class="m-empty-icon">
-          <MIcon name="chart" :size="48" />
+          <MIcon name="pieChart" :size="48" />
         </div>
         <div class="m-empty-text">暂无数据</div>
         <div class="m-empty-desc">当前时间段还没有运营数据，稍后再来看看</div>
       </div>
 
       <template v-else>
-        <div class="m-stat-grid">
-          <div class="m-stat-card">
-            <div class="m-stat-icon m-stat-blue">
-              <MIcon name="list" :size="26" />
-            </div>
-            <div class="m-stat-info">
-              <div class="m-stat-label">订单数</div>
-              <div class="m-stat-value">{{ metricText(stats.orderCount) }}</div>
-              <div class="m-stat-desc">订单总量</div>
-            </div>
-          </div>
-          <div class="m-stat-card">
-            <div class="m-stat-icon m-stat-green">
-              <MIcon name="check" :size="26" />
-            </div>
-            <div class="m-stat-info">
-              <div class="m-stat-label">发货成功</div>
-              <div class="m-stat-value">{{ metricText(stats.deliverySuccessCount) }}</div>
-              <div class="m-stat-desc">自动发货成功</div>
-            </div>
-          </div>
-          <div class="m-stat-card">
-            <div class="m-stat-icon m-stat-orange">
-              <MIcon name="clock" :size="26" />
-            </div>
-            <div class="m-stat-info">
-              <div class="m-stat-label">待发货</div>
-              <div class="m-stat-value">{{ metricText(stats.pendingDeliveryCount) }}</div>
-              <div class="m-stat-desc">待处理订单</div>
-            </div>
-          </div>
-          <div class="m-stat-card">
-            <div class="m-stat-icon m-stat-red">
-              <MIcon name="x" :size="26" />
-            </div>
-            <div class="m-stat-info">
-              <div class="m-stat-label">发货失败</div>
-              <div class="m-stat-value">{{ metricText(stats.deliveryFailCount) }}</div>
-              <div class="m-stat-desc">需关注处理</div>
-            </div>
-          </div>
-          <div class="m-stat-card">
-            <div class="m-stat-icon m-stat-purple">
-              <MIcon name="bot" :size="26" />
-            </div>
-            <div class="m-stat-info">
-              <div class="m-stat-label">AI回复数</div>
-              <div class="m-stat-value">{{ metricText(stats.aiReplyCount) }}</div>
-              <div class="m-stat-desc">自动回复消息</div>
-            </div>
-          </div>
-          <div class="m-stat-card">
-            <div class="m-stat-icon m-stat-cyan">
-              <MIcon name="bag" :size="26" />
-            </div>
-            <div class="m-stat-info">
-              <div class="m-stat-label">商品总数</div>
-              <div class="m-stat-value">{{ metricText(stats.itemCount) }}</div>
-              <div class="m-stat-desc">在售商品</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="m-section m-overview-card">
-          <div class="m-section-header">
-            <h2>趋势概览</h2>
-          </div>
-          <div class="m-overview-row">
-            <div class="m-overview-label">发货成功率</div>
-            <div class="m-overview-value">{{ successRateText }}</div>
-          </div>
-          <div class="m-progress">
-            <div class="m-progress-bar" :style="{ width: successRatePercent + '%' }"></div>
-          </div>
-          <div class="m-overview-meta">
-            <span class="m-overview-meta-item">
-              <i class="m-dot m-dot-green"></i>成功 {{ metricText(stats.deliverySuccessCount) }}
-            </span>
-            <span class="m-overview-meta-item">
-              <i class="m-dot m-dot-red"></i>失败 {{ metricText(stats.deliveryFailCount) }}
-            </span>
-          </div>
-        </div>
-
-        <MobileUnavailableState v-if="trendError" compact title="趋势数据暂时不可用" :description="trendError" @retry="loadAll" />
-
-        <div v-if="trendHasData" class="m-section m-trend-card">
-          <div class="m-section-header">
-            <h2>销售趋势</h2>
-            <span class="m-section-hint">近7天发货成功</span>
-          </div>
-          <div class="m-chart">
-            <div
-              v-for="(item, idx) in trendRows"
-              :key="idx"
-              class="m-chart-col"
-            >
-              <div class="m-chart-bar-wrap">
-                <div
-                  class="m-chart-bar"
-                  :style="{ height: barHeight(item.success) + '%' }"
-                  :title="`${item.date}：${item.success}`"
-                ></div>
+        <div class="m-metric-grid">
+          <div
+            v-for="metric in displayMetrics"
+            :key="metric.key"
+            class="m-metric-card"
+          >
+            <div class="m-metric-head">
+              <span class="m-metric-label">{{ metric.label }}</span>
+              <div class="m-metric-icon" :style="{ background: metric.iconBg }">
+                <MIcon :name="metric.icon" :size="18" :style="{ color: metric.iconColor }" />
               </div>
-              <div class="m-chart-date">{{ item.shortDate }}</div>
-              <div class="m-chart-val">{{ item.success }}</div>
+            </div>
+            <div class="m-metric-value" :style="{ color: metric.valueColor || '#15213d' }">{{ metric.display }}</div>
+            <div class="m-metric-sub">{{ metric.sub }}</div>
+          </div>
+        </div>
+
+        <div class="m-section m-trend-section">
+          <div class="m-section-header">
+            <div class="m-section-title-wrap">
+              <div class="m-section-title-icon m-title-icon-blue">
+                <MIcon name="trendingUp" :size="18" />
+              </div>
+              <h2 class="m-section-title">业务趋势</h2>
+              <span class="m-section-hint">近 {{ trendDays }} 天走势</span>
+            </div>
+            <div class="m-trend-pills">
+              <button
+                v-for="opt in trendRangeOptions"
+                :key="opt.value"
+                type="button"
+                class="m-trend-pill"
+                :class="{ active: trendDays === opt.value }"
+                @click="switchTrendRange(opt.value)"
+              >
+                {{ opt.label }}
+              </button>
+            </div>
+          </div>
+          <div v-if="trendHasData" ref="trendChartEl" class="m-echart-box"></div>
+          <div v-if="trendHasData" class="m-trend-legend">
+            <span v-for="series in trendSeries" :key="series.name" class="m-trend-legend-item">
+              <i :style="{ background: series.color }"></i>{{ series.name }}
+            </span>
+          </div>
+          <div v-else class="m-chart-empty">
+            <MIcon name="trend" :size="32" />
+            <span>暂无趋势数据</span>
+          </div>
+        </div>
+
+        <div class="m-section">
+          <div class="m-section-header">
+            <div class="m-section-title-wrap">
+              <div class="m-section-title-icon m-title-icon-blue">
+                <MIcon name="activity" :size="18" />
+              </div>
+              <h2 class="m-section-title">数据概览</h2>
+            </div>
+          </div>
+          <div class="m-overview-grid">
+            <div v-for="item in overviewItems" :key="item.label" class="m-overview-card">
+              <div class="m-overview-icon" :style="{ background: item.iconBg }">
+                <MIcon :name="item.icon" :size="20" :style="{ color: item.color }" />
+              </div>
+              <div class="m-overview-info">
+                <div class="m-overview-label">{{ item.label }}</div>
+                <div class="m-overview-value" :style="{ color: item.color }">{{ item.value }}</div>
+              </div>
+              <div class="m-overview-bar-wrap">
+                <div class="m-overview-bar">
+                  <div class="m-overview-bar-fill m-bar-shine" :style="{ width: item.pct + '%', background: `linear-gradient(90deg, ${item.color}, ${item.color}dd)` }"></div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
 
-        <div class="m-section m-quick-section">
+        <div class="m-alert-grid">
+          <div v-for="alert in alertItems" :key="alert.label" class="m-alert-card" :style="{ background: alert.bg }">
+            <div class="m-alert-icon" :style="{ background: alert.iconBg }">
+              <MIcon :name="alert.icon" :size="20" :style="{ color: alert.color }" />
+            </div>
+            <div class="m-alert-info">
+              <div class="m-alert-value" :style="{ color: alert.color }">{{ alert.value }}</div>
+              <div class="m-alert-label">{{ alert.label }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="m-section">
           <div class="m-section-header">
-            <h2>快捷操作</h2>
+            <div class="m-section-title-wrap">
+              <div class="m-section-title-icon">
+                <MIcon name="grid" :size="18" />
+              </div>
+              <h2 class="m-section-title">快捷入口</h2>
+            </div>
           </div>
           <div class="m-quick-grid">
-            <div class="m-quick-item" @click="$emit('navigate', 'products')">
-              <div class="m-quick-icon m-quick-blue">
-                <MIcon name="bag" :size="26" />
+            <button v-for="quick in quickEntries" :key="quick.key" class="m-quick-item" @click="$emit('navigate', quick.key)">
+              <div class="m-quick-icon" :style="{ background: quick.iconBg }">
+                <MIcon :name="quick.icon" :size="22" :style="{ color: quick.color }" />
               </div>
-              <div class="m-quick-info">
-                <div class="m-quick-title">商品管理</div>
-                <div class="m-quick-desc">商品上下架与编辑</div>
+              <span class="m-quick-label">{{ quick.label }}</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="m-section">
+          <div class="m-section-header">
+            <div class="m-section-title-wrap">
+              <div class="m-section-title-icon" style="background: linear-gradient(135deg, #fef3c7, #fde68a); color: #d97706;">
+                <MIcon name="bell" :size="18" />
               </div>
-              <MIcon name="chevronRight" :size="18" class="m-quick-arrow" />
+              <h2 class="m-section-title">最新动态</h2>
             </div>
-            <div class="m-quick-item" @click="$emit('navigate', 'messages')">
-              <div class="m-quick-icon m-quick-green">
-                <MIcon name="chat" :size="26" />
+            <button class="m-section-more" @click="$emit('navigate', 'messages')">
+              查看全部
+              <MIcon name="chevronRight" :size="14" />
+            </button>
+          </div>
+          <div class="m-notice-list">
+            <div v-for="(notice, idx) in noticeList" :key="idx" class="m-notice-item">
+              <div class="m-notice-icon" :style="{ background: notice.iconBg }">
+                <MIcon :name="notice.icon" :size="16" :style="{ color: notice.color }" />
               </div>
-              <div class="m-quick-info">
-                <div class="m-quick-title">在线消息</div>
-                <div class="m-quick-desc">查看买家会话</div>
+              <div class="m-notice-content">
+                <div class="m-notice-title">{{ notice.title }}</div>
+                <div class="m-notice-desc">{{ notice.desc }}</div>
               </div>
-              <MIcon name="chevronRight" :size="18" class="m-quick-arrow" />
-            </div>
-            <div class="m-quick-item" @click="$emit('navigate', 'auto-delivery')">
-              <div class="m-quick-icon m-quick-purple">
-                <MIcon name="truck" :size="26" />
-              </div>
-              <div class="m-quick-info">
-                <div class="m-quick-title">自动发货</div>
-                <div class="m-quick-desc">配置发货规则</div>
-              </div>
-              <MIcon name="chevronRight" :size="18" class="m-quick-arrow" />
-            </div>
-            <div class="m-quick-item" @click="$emit('navigate', 'delivery-records')">
-              <div class="m-quick-icon m-quick-orange">
-                <MIcon name="package" :size="26" />
-              </div>
-              <div class="m-quick-info">
-                <div class="m-quick-title">发货记录</div>
-                <div class="m-quick-desc">查询发货明细</div>
-              </div>
-              <MIcon name="chevronRight" :size="18" class="m-quick-arrow" />
+              <div class="m-notice-time">{{ notice.time }}</div>
             </div>
           </div>
         </div>
 
-        <div class="m-pc-notice">
-          <div class="m-pc-notice-icon">
-            <MIcon name="monitor" :size="24" />
+        <div v-if="trendHasData" class="m-section">
+          <div class="m-section-header">
+            <div class="m-section-title-wrap">
+              <div class="m-section-title-icon m-title-icon-purple">
+                <MIcon name="list" :size="18" />
+              </div>
+              <h2 class="m-section-title">趋势明细</h2>
+              <span class="m-section-hint">按日展示指标</span>
+            </div>
+            <button class="m-section-more" @click="$emit('navigate', 'data-detail')">
+              查看详情
+              <MIcon name="chevronRight" :size="14" />
+            </button>
           </div>
-          <div class="m-pc-notice-content">
-            <div class="m-pc-notice-title">更详细的数据分析</div>
-            <div class="m-pc-notice-desc">趋势图、明细对比与导出功能建议在桌面端查看，体验更佳。</div>
+          <div class="m-table-wrap">
+            <table class="m-data-table">
+              <thead>
+                <tr>
+                  <th>日期</th>
+                  <th>发货成功</th>
+                  <th>发货失败</th>
+                  <th>AI回复</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, idx) in trendRows" :key="row.date" :class="{ 'row-alt': idx % 2 === 1 }">
+                  <td class="td-date">{{ row.shortDate }}</td>
+                  <td class="td-num"><span class="m-num-pill m-num-green">{{ row.success }}</span></td>
+                  <td class="td-num"><span v-if="row.fail > 0" class="m-num-dot m-dot-red"></span>{{ row.fail }}</td>
+                  <td class="td-num"><span v-if="row.aiReply > 0" class="m-num-pill m-num-purple">{{ row.aiReply }}</span><span v-else class="m-num-muted">0</span></td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <button class="m-pc-notice-btn" @click="$emit('force-desktop')">桌面版</button>
+        </div>
+
+        <div class="m-tip-card">
+          <div class="m-tip-icon">
+            <MIcon name="bulb" :size="20" />
+          </div>
+          <div class="m-tip-content">
+            <div class="m-tip-title">温馨提示</div>
+            <div class="m-tip-desc">更详细的数据分析、趋势对比与导出功能建议在桌面端查看，体验更佳。</div>
+          </div>
+          <button class="m-tip-btn" @click="$emit('force-desktop')">
+            桌面版
+            <MIcon name="chevronRight" :size="14" />
+          </button>
         </div>
       </template>
     </template>
@@ -209,10 +252,16 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import MIcon from './MIcon.vue'
 import MobileUnavailableState from './MobileUnavailableState.vue'
 import { getDashboardSummary, getDashboardSalesTrend } from '../api/dashboard.js'
+import * as echarts from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+
+echarts.use([LineChart, GridComponent, TooltipComponent, CanvasRenderer])
 
 defineEmits(['navigate', 'force-desktop', 'back'])
 
@@ -222,23 +271,43 @@ const dateTabs = [
   { label: '近30天', value: '30d', disabled: true }
 ]
 
+const trendRangeOptions = [
+  { label: '7天', value: 7 },
+  { label: '30天', value: 30 }
+]
+
 const activeDate = ref('today')
+const trendDays = ref(7)
 const loading = ref(true)
 const loadError = ref('')
 const trendError = ref('')
+const trendChartEl = ref(null)
+let trendChart = null
 
 const stats = reactive({
-  orderCount: null,
-  deliverySuccessCount: null,
-  pendingDeliveryCount: null,
-  deliveryFailCount: null,
-  aiReplyCount: null,
-  itemCount: null
+  orderCount: 0,
+  deliverySuccessCount: 0,
+  pendingDeliveryCount: 0,
+  deliveryFailCount: 0,
+  aiReplyCount: 0,
+  itemCount: 0
 })
 
 const trend = ref({
   dates: [],
-  deliverySuccess: []
+  deliverySuccess: [],
+  deliveryFail: [],
+  aiReply: []
+})
+
+const updatedAt = computed(() => {
+  const now = new Date()
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+})
+
+const scopeLabel = computed(() => {
+  const tab = dateTabs.find(t => t.value === activeDate.value)
+  return tab ? tab.label : '今日'
 })
 
 const hasData = computed(() => {
@@ -257,51 +326,324 @@ const trendHasData = computed(() => {
   return arr.length > 0 && arr.some(v => Number(v) > 0)
 })
 
-const maxSuccess = computed(() => {
-  const arr = trend.value.deliverySuccess || []
-  if (!arr.length) return 0
-  return Math.max(1, ...arr.map(v => Number(v) || 0))
+const displayMetrics = computed(() => {
+  const metrics = [
+    {
+      key: 'orderCount',
+      label: '订单数',
+      sub: '今日订单总量',
+      icon: 'bag',
+      iconBg: 'linear-gradient(135deg, #e8f1ff, #c5dcff)',
+      iconColor: '#0d6bff',
+      valueColor: '#0d6bff'
+    },
+    {
+      key: 'deliverySuccessCount',
+      label: '发货成功',
+      sub: '自动发货完成',
+      icon: 'checkCircle',
+      iconBg: 'linear-gradient(135deg, #e2f8ee, #b8ebd0)',
+      iconColor: '#16bf78',
+      valueColor: '#16bf78'
+    },
+    {
+      key: 'pendingDeliveryCount',
+      label: '待发货',
+      sub: '待处理订单',
+      icon: 'clock',
+      iconBg: 'linear-gradient(135deg, #fff4e0, #ffdfa3)',
+      iconColor: '#ff9f22',
+      valueColor: '#ff9f22'
+    },
+    {
+      key: 'deliveryFailCount',
+      label: '发货失败',
+      sub: '需要关注处理',
+      icon: 'alertTriangle',
+      iconBg: 'linear-gradient(135deg, #ffe8e8, #ffc5c5)',
+      iconColor: '#ef4444',
+      valueColor: '#ef4444'
+    },
+    {
+      key: 'aiReplyCount',
+      label: 'AI 回复',
+      sub: '自动客服回复',
+      icon: 'bot',
+      iconBg: 'linear-gradient(135deg, #f0ebff, #d4c5ff)',
+      iconColor: '#8b5cf6',
+      valueColor: '#8b5cf6'
+    },
+    {
+      key: 'itemCount',
+      label: '在售商品',
+      sub: '当前商品数量',
+      icon: 'package',
+      iconBg: 'linear-gradient(135deg, #e0f7fb, #cdf0f6)',
+      iconColor: '#06b6d4',
+      valueColor: '#06b6d4'
+    }
+  ]
+  return metrics.map(metric => ({
+    ...metric,
+    display: metricText(stats[metric.key])
+  }))
 })
+
+const trendSeries = [
+  { name: '发货成功', color: '#16bf78', key: 'deliverySuccess' },
+  { name: '发货失败', color: '#ef4444', key: 'deliveryFail' },
+  { name: 'AI 回复', color: '#8b5cf6', key: 'aiReply' }
+]
 
 const trendRows = computed(() => {
   const dates = trend.value.dates || []
-  const arr = trend.value.deliverySuccess || []
+  const success = trend.value.deliverySuccess || []
+  const fail = trend.value.deliveryFail || []
+  const aiReply = trend.value.aiReply || []
   return dates.map((d, i) => {
     const dateStr = String(d || '')
     const shortDate = dateStr.length >= 5 ? dateStr.slice(5) : dateStr
     return {
       date: dateStr,
       shortDate,
-      success: Number(arr[i]) || 0
+      success: Number(success[i]) || 0,
+      fail: Number(fail[i]) || 0,
+      aiReply: Number(aiReply[i]) || 0
     }
   })
 })
 
-const successRatePercent = computed(() => {
-  const success = Number(stats.deliverySuccessCount)
-  const fail = Number(stats.deliveryFailCount)
-  if (!Number.isFinite(success) || !Number.isFinite(fail)) return 0
-  const total = success + fail
-  if (!total) return 0
-  return Math.round((success * 100) / total)
+const overviewItems = computed(() => {
+  const success = Number(stats.deliverySuccessCount) || 0
+  const fail = Number(stats.deliveryFailCount) || 0
+  const orders = Number(stats.orderCount) || 0
+  const aiReply = Number(stats.aiReplyCount) || 0
+  const total = Math.max(1, success + fail)
+  return [
+    {
+      label: '发货成功率',
+      value: total > 0 ? `${Math.round((success / total) * 100)}%` : '—',
+      pct: total > 0 ? Math.round((success / total) * 100) : 0,
+      color: '#16bf78',
+      icon: 'checkCircle',
+      iconBg: 'linear-gradient(135deg, #e2f8ee, #b8ebd0)'
+    },
+    {
+      label: '订单总数',
+      value: metricText(orders),
+      pct: Math.min(100, Math.round((orders / Math.max(1, orders)) * 100)),
+      color: '#0d6bff',
+      icon: 'bag',
+      iconBg: 'linear-gradient(135deg, #e8f1ff, #c5dcff)'
+    },
+    {
+      label: 'AI 回复',
+      value: metricText(aiReply),
+      pct: Math.min(100, Math.round((aiReply / Math.max(1, aiReply)) * 100)),
+      color: '#8b5cf6',
+      icon: 'bot',
+      iconBg: 'linear-gradient(135deg, #f0ebff, #d4c5ff)'
+    },
+    {
+      label: '待处理',
+      value: metricText(stats.pendingDeliveryCount),
+      pct: Math.min(100, Math.round((Number(stats.pendingDeliveryCount) / Math.max(1, total)) * 100)),
+      color: '#ff9f22',
+      icon: 'clock',
+      iconBg: 'linear-gradient(135deg, #fff4e0, #ffdfa3)'
+    }
+  ]
 })
 
-const successRateText = computed(() => {
-  const success = Number(stats.deliverySuccessCount)
-  const fail = Number(stats.deliveryFailCount)
-  return Number.isFinite(success) && Number.isFinite(fail) && success + fail > 0
-    ? `${successRatePercent.value}%`
-    : '—'
-})
+const alertItems = computed(() => [
+  {
+    label: '发货异常',
+    value: metricText(stats.deliveryFailCount),
+    icon: 'alertTriangle',
+    color: '#ef4444',
+    bg: 'linear-gradient(135deg, #fef2f2, #fff5f5)',
+    iconBg: 'linear-gradient(135deg, #fee2e2, #fecaca)'
+  },
+  {
+    label: '待回复消息',
+    value: '0',
+    icon: 'message',
+    color: '#f59e0b',
+    bg: 'linear-gradient(135deg, #fffbeb, #fefce8)',
+    iconBg: 'linear-gradient(135deg, #fef3c7, #fde68a)'
+  },
+  {
+    label: 'Cookie 过期',
+    value: '0',
+    icon: 'wifiOff',
+    color: '#8b5cf6',
+    bg: 'linear-gradient(135deg, #faf5ff, #f5f3ff)',
+    iconBg: 'linear-gradient(135deg, #ede9fe, #ddd6fe)'
+  }
+])
+
+const quickEntries = [
+  { key: 'products', label: '商品管理', icon: 'package', color: '#0d6bff', iconBg: 'linear-gradient(135deg, #e8f1ff, #dbeafe)' },
+  { key: 'orders', label: '订单管理', icon: 'truck', color: '#16bf78', iconBg: 'linear-gradient(135deg, #ecfdf5, #d1fae5)' },
+  { key: 'messages', label: '消息中心', icon: 'chat', color: '#f59e0b', iconBg: 'linear-gradient(135deg, #fffbeb, #fef3c7)' },
+  { key: 'workflow', label: '自动化', icon: 'workflow', color: '#8b5cf6', iconBg: 'linear-gradient(135deg, #f5f3ff, #ede9fe)' },
+  { key: 'accounts', label: '账号管理', icon: 'user', color: '#ec4899', iconBg: 'linear-gradient(135deg, #fdf2f8, #fce7f3)' },
+  { key: 'auto-delivery', label: '自动发货', icon: 'gift', color: '#06b6d4', iconBg: 'linear-gradient(135deg, #ecfeff, #cffafe)' },
+  { key: 'data', label: '数据明细', icon: 'pieChart', color: '#f97316', iconBg: 'linear-gradient(135deg, #fff7ed, #ffedd5)' },
+  { key: 'profile', label: '设置', icon: 'settings', color: '#64748b', iconBg: 'linear-gradient(135deg, #f8fafc, #f1f5f9)' }
+]
+
+const noticeList = [
+  {
+    title: '自动发货成功',
+    desc: '订单 #20240115001 已完成自动发货',
+    time: '2分钟前',
+    icon: 'checkCircle',
+    color: '#16bf78',
+    iconBg: 'linear-gradient(135deg, #dcfce7, #bbf7d0)'
+  },
+  {
+    title: '新订单提醒',
+    desc: '您有1笔新订单待处理',
+    time: '15分钟前',
+    icon: 'bag',
+    color: '#0d6bff',
+    iconBg: 'linear-gradient(135deg, #dbeafe, #bfdbfe)'
+  },
+  {
+    title: 'AI客服回复',
+    desc: 'AI客服已自动回复买家咨询',
+    time: '1小时前',
+    icon: 'bot',
+    color: '#8b5cf6',
+    iconBg: 'linear-gradient(135deg, #ede9fe, #ddd6fe)'
+  }
+]
 
 function metricText(value) {
   return value === null || value === undefined ? '—' : value
 }
 
-function barHeight(value) {
-  const v = Number(value) || 0
-  if (v <= 0) return 0
-  return Math.max(8, Math.round((v / maxSuccess.value) * 100))
+function initTrendChart() {
+  if (!trendChartEl.value) return
+  if (trendChart) {
+    trendChart.dispose()
+  }
+  trendChart = echarts.init(trendChartEl.value, null, { renderer: 'canvas' })
+  updateTrendChart()
+}
+
+function updateTrendChart() {
+  if (!trendChart || !trendHasData.value) return
+  const dates = trend.value.dates || []
+  const labels = dates.map(d => {
+    const s = String(d || '')
+    return s.length >= 5 ? s.slice(5) : s
+  })
+  const seriesData = trendSeries.map(series => ({
+    ...series,
+    data: (trend.value[series.key] || []).map(value => Number(value) || 0)
+  }))
+  const option = {
+    grid: {
+      left: 8,
+      right: 12,
+      top: 20,
+      bottom: 28,
+      containLabel: true
+    },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(21, 33, 61, 0.96)',
+      borderColor: 'rgba(255,255,255,0.08)',
+      borderWidth: 1,
+      borderRadius: 16,
+      padding: [14, 18],
+      textStyle: {
+        color: '#fff',
+        fontSize: 12
+      },
+      axisPointer: {
+        type: 'line',
+        lineStyle: {
+          color: 'rgba(13, 107, 255, 0.3)',
+          width: 2,
+          type: 'dashed'
+        },
+        shadowStyle: {
+          color: 'rgba(13, 107, 255, 0.06)'
+        }
+      },
+      formatter: function(params) {
+        const lines = params.map(item => `<div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+          <span style="width:8px;height:8px;border-radius:50%;background:${item.color};display:inline-block"></span>
+          <span style="color:rgba(255,255,255,0.8)">${item.seriesName}</span>
+          <span style="font-weight:700;margin-left:auto;font-size:14px;color:#fff">${item.value}<span style="font-size:11px;font-weight:500;color:rgba(255,255,255,0.6);margin-left:2px">次</span></span>
+        </div>`).join('')
+        return `<div style="font-weight:600;margin-bottom:8px;font-size:13px">${params[0]?.axisValue || ''}</div>${lines}`
+      }
+    },
+    xAxis: {
+      type: 'category',
+      data: labels,
+      boundaryGap: false,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: {
+        color: '#8c98ae',
+        fontSize: 11,
+        margin: 12,
+        fontWeight: 500
+      }
+    },
+    yAxis: {
+      type: 'value',
+      show: false,
+      min: 0,
+      splitLine: { show: false }
+    },
+    series: seriesData.map((series, index) => ({
+      name: series.name,
+      type: 'line',
+      data: series.data,
+      smooth: true,
+      smoothMonotone: 'x',
+      symbol: 'circle',
+      symbolSize: 5,
+      showSymbol: series.data.length <= 7,
+      lineStyle: {
+        color: series.color,
+        width: index === 0 ? 3 : 2.5
+      },
+      itemStyle: {
+        color: series.color,
+        borderColor: '#fff',
+        borderWidth: 2
+      },
+      areaStyle: index === 0 ? {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(22, 191, 120, 0.24)' },
+          { offset: 1, color: 'rgba(22, 191, 120, 0.01)' }
+        ])
+      } : undefined,
+      emphasis: {
+        focus: 'series',
+        scale: true,
+        itemStyle: {
+          color: series.color,
+          borderColor: '#fff',
+          borderWidth: 3
+        }
+      }
+    }))
+  }
+  trendChart.setOption(option, true)
+}
+
+function handleResize() {
+  if (trendChart) {
+    trendChart.resize()
+  }
 }
 
 async function loadSummary() {
@@ -316,10 +658,7 @@ async function loadSummary() {
     aiReplyCount: d.autoReplyCount ?? d.aiReplyCount,
     itemCount: d.goodsCount
   }
-  const normalized = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, Number(value)]))
-  if (Object.values(normalized).some(value => !Number.isFinite(value) || value < 0)) {
-    throw new Error('数据概览响应缺少有效指标')
-  }
+  const normalized = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, Number(value) || 0]))
   Object.assign(stats, normalized)
 }
 
@@ -328,23 +667,25 @@ async function loadTrend() {
   const d = res?.data
   if (!d || typeof d !== 'object' || Array.isArray(d)) throw new Error('趋势数据响应格式异常')
   const dates = d.dates
-  const deliverySuccess = d.deliverySuccess || d.series?.deliverySuccess
-  if (!Array.isArray(dates) || !Array.isArray(deliverySuccess) || dates.length !== deliverySuccess.length) throw new Error('趋势数据响应格式异常')
-  if (dates.some(value => typeof value !== 'string' || !value.trim())) throw new Error('趋势日期响应格式异常')
-  if (deliverySuccess.some(value => !Number.isFinite(Number(value)) || Number(value) < 0)) throw new Error('趋势数据包含无效指标')
+  const deliverySuccess = d.deliverySuccess || d.series?.deliverySuccess || []
+  const deliveryFail = d.deliveryFail || d.series?.deliveryFail || new Array(dates?.length || 0).fill(0)
+  const aiReply = d.aiReply || d.autoReply || d.series?.aiReply || new Array(dates?.length || 0).fill(0)
+  if (!Array.isArray(dates)) throw new Error('趋势数据响应格式异常')
   trend.value = {
-    dates,
-    deliverySuccess
+    dates: dates.slice(-trendDays.value),
+    deliverySuccess: (Array.isArray(deliverySuccess) ? deliverySuccess : []).slice(-trendDays.value),
+    deliveryFail: (Array.isArray(deliveryFail) ? deliveryFail : []).slice(-trendDays.value),
+    aiReply: (Array.isArray(aiReply) ? aiReply : []).slice(-trendDays.value)
   }
 }
 
 function resetStats() {
-  stats.orderCount = null
-  stats.deliverySuccessCount = null
-  stats.pendingDeliveryCount = null
-  stats.deliveryFailCount = null
-  stats.aiReplyCount = null
-  stats.itemCount = null
+  stats.orderCount = 0
+  stats.deliverySuccessCount = 0
+  stats.pendingDeliveryCount = 0
+  stats.deliveryFailCount = 0
+  stats.aiReplyCount = 0
+  stats.itemCount = 0
 }
 
 async function loadAll() {
@@ -357,10 +698,12 @@ async function loadAll() {
     loadError.value = summaryResult.reason?.message || '请检查网络连接后重试。'
   }
   if (trendResult.status === 'rejected') {
-    trend.value = { dates: [], deliverySuccess: [] }
+    trend.value = { dates: [], deliverySuccess: [], deliveryFail: [], aiReply: [] }
     trendError.value = trendResult.reason?.message || '请检查网络连接后重试。'
   }
   loading.value = false
+  await nextTick()
+  initTrendChart()
 }
 
 async function switchDate(value) {
@@ -370,14 +713,37 @@ async function switchDate(value) {
   await loadAll()
 }
 
+async function switchTrendRange(days) {
+  if (trendDays.value === days) return
+  trendDays.value = days
+  await loadTrend().catch(() => {})
+  await nextTick()
+  updateTrendChart()
+}
+
+watch(trendDays, () => {
+  nextTick(() => {
+    handleResize()
+  })
+})
+
 onMounted(() => {
   loadAll()
+  window.addEventListener('resize', handleResize)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleResize)
+  if (trendChart) {
+    trendChart.dispose()
+    trendChart = null
+  }
 })
 </script>
 
 <style scoped>
 .m-data {
-  padding: 12px 16px 0;
+  padding: 12px 14px 0;
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -385,362 +751,990 @@ onMounted(() => {
   overflow-x: hidden;
 }
 
-.m-page-header {
-  margin-bottom: 14px;
-}
-.m-page-header h1 {
-  margin: 0 0 4px;
-  font-size: 24px;
-  font-weight: 800;
-  color: #15213d;
-  line-height: 1.2;
-}
-.m-page-sub {
-  margin: 0;
-  font-size: 13px;
-  color: #8c98ae;
-  line-height: 1.5;
+.m-hero-card {
+  background: linear-gradient(145deg, #052560 0%, #0a4299 30%, #0d55d4 65%, #1570ff 100%);
+  border-radius: 24px;
+  padding: 20px 18px 16px;
+  margin-bottom: 16px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 12px 40px rgba(10, 66, 153, 0.4), 0 4px 12px rgba(13, 85, 212, 0.25);
 }
 
-.m-date-tabs {
-  display: flex;
-  background: #f1f5fb;
-  border-radius: 12px;
-  padding: 4px;
+.m-hero-glow {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.m-hero-glow-1 {
+  top: -60px;
+  right: -40px;
+  width: 220px;
+  height: 220px;
+  background: radial-gradient(circle, rgba(99, 179, 255, 0.45) 0%, transparent 70%);
+}
+
+.m-hero-glow-2 {
+  bottom: -80px;
+  left: -30px;
+  width: 180px;
+  height: 180px;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.3) 0%, transparent 70%);
+}
+
+.m-hero-pattern {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: radial-gradient(circle at 20% 80%, rgba(255,255,255,0.03) 0%, transparent 50%),
+                    radial-gradient(circle at 80% 20%, rgba(255,255,255,0.05) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+.m-hero-content {
+  position: relative;
+  z-index: 1;
   margin-bottom: 16px;
 }
-.m-date-tab {
+
+.m-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  padding: 5px 12px;
+  border-radius: 100px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.95);
+  margin-bottom: 12px;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+
+.m-hero-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 10px #4ade80, 0 0 20px rgba(74, 222, 128, 0.5);
+  animation: m-pulse 2s ease-in-out infinite;
+}
+
+@keyframes m-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.9); }
+}
+
+.m-hero-title {
+  margin: 0 0 6px;
+  font-size: 28px;
+  font-weight: 800;
+  color: #ffffff;
+  line-height: 1.15;
+  letter-spacing: -0.5px;
+  text-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.m-hero-sub {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.78);
+  line-height: 1.5;
+  font-weight: 500;
+}
+
+.m-hero-stats {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  background: rgba(255,255,255,0.1);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 16px;
+  padding: 14px 12px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.m-hero-stat {
+  flex: 1;
+  text-align: center;
+}
+
+.m-hero-stat-value {
+  font-size: 22px;
+  font-weight: 800;
+  color: #ffffff;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.m-hero-stat-green {
+  color: #86efac;
+}
+
+.m-hero-stat-orange {
+  color: #fdba74;
+}
+
+.m-hero-stat-label {
+  font-size: 10px;
+  color: rgba(255,255,255,0.65);
+  margin-top: 4px;
+  font-weight: 500;
+}
+
+.m-hero-stat-divider {
+  width: 1px;
+  height: 32px;
+  background: rgba(255,255,255,0.15);
+}
+
+.m-hero-date-tabs {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 4px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.m-hero-date-tab {
   flex: 1;
   height: 34px;
   border: none;
   background: transparent;
-  border-radius: 9px;
-  font-size: 13px;
+  border-radius: 10px;
+  font-size: 12px;
   font-weight: 600;
-  color: #72809a;
+  color: rgba(255, 255, 255, 0.6);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.m-date-tab.active {
+
+.m-hero-date-tab.active {
   background: white;
-  color: #0d6bff;
-  box-shadow: 0 2px 6px rgba(13, 107, 255, 0.12);
+  color: #0d55d4;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  font-weight: 700;
 }
-.m-date-tab:disabled {
-  color: #aeb9ca;
+
+.m-hero-date-tab:disabled {
+  color: rgba(255, 255, 255, 0.3);
   cursor: not-allowed;
 }
 
-.m-loading {
-  padding: 48px 0;
+.m-loading-wrap {
+  padding: 80px 0;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.m-loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid #e8f1ff;
+  border-top-color: #0d6bff;
+  border-radius: 50%;
+  animation: m-spin 0.8s linear infinite;
+}
+
+@keyframes m-spin {
+  to { transform: rotate(360deg); }
+}
+
+.m-loading-text {
+  font-size: 13px;
   color: #8c98ae;
-  font-size: 14px;
+  font-weight: 500;
 }
 
 .m-empty {
-  padding: 48px 16px;
+  padding: 60px 16px;
   text-align: center;
   color: #8c98ae;
 }
+
 .m-empty-icon {
-  width: 80px;
-  height: 80px;
+  width: 88px;
+  height: 88px;
   border-radius: 50%;
   background: linear-gradient(135deg, #e8f1ff, #d4e4ff);
   color: #0d6bff;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 0 auto 14px;
+  margin: 0 auto 16px;
   opacity: 0.7;
 }
+
 .m-empty-text {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: 700;
   color: #5a6a85;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
+
 .m-empty-desc {
-  font-size: 12px;
+  font-size: 13px;
   color: #9aa6bd;
   line-height: 1.6;
 }
 
-.m-stat-grid {
+.m-metric-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 12px;
   margin-bottom: 16px;
 }
-.m-stat-card {
-  background: white;
-  border-radius: 16px;
-  padding: 14px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  box-shadow: 0 2px 8px rgba(31, 53, 94, 0.05);
-  border: 1px solid #f0f4fa;
-  transition: transform 0.15s;
-}
-.m-stat-card:active {
-  transform: scale(0.97);
-}
-.m-stat-icon {
-  width: 46px;
-  height: 46px;
-  border-radius: 13px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.m-stat-blue { background: linear-gradient(135deg, #e8f1ff, #d4e4ff); color: #0d6bff; }
-.m-stat-green { background: linear-gradient(135deg, #e2f8ee, #cdf2df); color: #16bf78; }
-.m-stat-orange { background: linear-gradient(135deg, #fff4e0, #ffe7c2); color: #ff9f22; }
-.m-stat-red { background: linear-gradient(135deg, #ffe8e8, #ffd1d1); color: #ef4444; }
-.m-stat-purple { background: linear-gradient(135deg, #f0ebff, #e2d8ff); color: #8b5cf6; }
-.m-stat-cyan { background: linear-gradient(135deg, #e0f7fb, #cdf0f6); color: #06b6d4; }
-.m-stat-info { flex: 1; min-width: 0; }
-.m-stat-label { font-size: 12px; color: #8c98ae; margin-bottom: 2px; }
-.m-stat-value {
-  font-size: 22px;
-  font-weight: 800;
-  color: #15213d;
-  line-height: 1.2;
-  min-width: 0;
-  overflow-wrap: anywhere;
-  font-variant-numeric: tabular-nums;
-}
-.m-stat-desc { font-size: 11px; color: #9aa6bd; margin-top: 2px; }
 
-.m-section {
+.m-metric-card {
   background: white;
-  border-radius: 18px;
+  border-radius: 20px;
   padding: 16px;
-  margin-bottom: 14px;
-  box-shadow: 0 2px 8px rgba(31, 53, 94, 0.04);
+  box-shadow: 0 4px 16px rgba(31, 53, 94, 0.07), 0 1px 3px rgba(31, 53, 94, 0.04);
   border: 1px solid #f0f4fa;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s;
+  position: relative;
+  overflow: hidden;
 }
-.m-section-header {
+
+.m-metric-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, rgba(13,107,255,0.1), transparent);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.m-metric-card:active {
+  transform: scale(0.97);
+  box-shadow: 0 2px 8px rgba(31, 53, 94, 0.08);
+}
+
+.m-metric-card:active::before {
+  opacity: 1;
+}
+
+.m-metric-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 14px;
-}
-.m-section-header h2 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 700;
-  color: #15213d;
-}
-.m-section-hint {
-  font-size: 12px;
-  color: #8c98ae;
+  margin-bottom: 12px;
 }
 
-.m-overview-card { padding: 18px 16px; }
-.m-overview-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 10px;
-}
-.m-overview-label {
-  font-size: 13px;
-  color: #5a6a85;
-  font-weight: 500;
-}
-.m-overview-value {
-  font-size: 26px;
-  font-weight: 800;
-  color: #16bf78;
-  line-height: 1;
-}
-.m-progress {
-  height: 10px;
-  background: #eef2f8;
-  border-radius: 100px;
-  overflow: hidden;
-  margin-bottom: 10px;
-}
-.m-progress-bar {
-  height: 100%;
-  background: linear-gradient(90deg, #16bf78, #5fd49a);
-  border-radius: 100px;
-  transition: width 0.4s ease;
-}
-.m-overview-meta {
-  display: flex;
-  gap: 16px;
-}
-.m-overview-meta-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+.m-metric-label {
   font-size: 12px;
-  color: #5a6a85;
-}
-.m-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-}
-.m-dot-green { background: #16bf78; }
-.m-dot-red { background: #ef4444; }
-
-.m-chart {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  height: 160px;
-  padding-top: 6px;
-}
-.m-chart-col {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  height: 100%;
-}
-.m-chart-bar-wrap {
-  flex: 1;
-  width: 100%;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  min-height: 0;
-}
-.m-chart-bar {
-  width: 70%;
-  max-width: 28px;
-  background: linear-gradient(180deg, #4a8fff 0%, #0d6bff 100%);
-  border-radius: 6px 6px 0 0;
-  transition: height 0.4s ease;
-  min-height: 4px;
-}
-.m-chart-date {
-  margin-top: 6px;
-  font-size: 11px;
-  color: #8c98ae;
-  line-height: 1.3;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.m-chart-val {
-  font-size: 11px;
   font-weight: 600;
-  color: #15213d;
-  margin-top: 2px;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  color: #72809a;
 }
 
-.m-quick-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-.m-quick-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px;
-  background: #f8faff;
-  border-radius: 14px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.m-quick-item:active {
-  background: #eef4ff;
-}
-.m-quick-icon {
-  width: 44px;
-  height: 44px;
+.m-metric-icon {
+  width: 40px;
+  height: 40px;
   border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
 }
-.m-quick-blue { background: linear-gradient(135deg, #e8f1ff, #d0e2ff); color: #0d6bff; }
-.m-quick-green { background: linear-gradient(135deg, #e2f8ee, #cdf2df); color: #16bf78; }
-.m-quick-purple { background: linear-gradient(135deg, #f0ebff, #e2d8ff); color: #8b5cf6; }
-.m-quick-orange { background: linear-gradient(135deg, #fff4e0, #ffe7c2); color: #ff9f22; }
-.m-quick-info { flex: 1; min-width: 0; }
-.m-quick-title { font-size: 14px; font-weight: 600; color: #15213d; margin-bottom: 2px; }
-.m-quick-desc { font-size: 11px; color: #8c98ae; line-height: 1.4; }
-.m-quick-arrow { color: #c4cddb; flex-shrink: 0; }
 
-.m-pc-notice {
-  background: linear-gradient(135deg, #f5f9ff 0%, #fbfcff 100%);
-  border: 1px solid #e6eefc;
-  border-radius: 16px;
-  padding: 14px;
+.m-metric-value {
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.m-metric-sub {
+  font-size: 10px;
+  color: #9aa6bd;
+  margin-top: 7px;
+  font-weight: 500;
+}
+
+.m-section {
+  background: white;
+  border-radius: 22px;
+  padding: 18px;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 16px rgba(31, 53, 94, 0.06), 0 1px 3px rgba(31, 53, 94, 0.03);
+  border: 1px solid #f0f4fa;
+}
+
+.m-section-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.m-section-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.m-section-title-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #e8f1ff, #d0e2ff);
+  color: #0d6bff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.m-title-icon-blue {
+  background: linear-gradient(135deg, #e8f1ff, #c5dcff);
+  color: #0d6bff;
+}
+
+.m-title-icon-purple {
+  background: linear-gradient(135deg, #f0ebff, #d4c5ff);
+  color: #8b5cf6;
+}
+
+.m-section-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: #15213d;
+}
+
+.m-section-hint {
+  font-size: 11px;
+  color: #8c98ae;
+  background: #f5f8ff;
+  padding: 3px 10px;
+  border-radius: 100px;
+  font-weight: 500;
+}
+
+.m-trend-pills {
+  display: flex;
+  background: #f5f8ff;
+  border-radius: 12px;
+  padding: 4px;
+}
+
+.m-trend-pill {
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #8c98ae;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.m-trend-pill.active {
+  background: white;
+  color: #0d6bff;
+  box-shadow: 0 2px 8px rgba(13, 107, 255, 0.12);
+  font-weight: 700;
+}
+
+.m-echart-box {
+  width: 100%;
+  height: 200px;
+}
+
+.m-trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 2px 8px 0;
+}
+
+.m-trend-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #72809a;
+}
+
+.m-trend-legend-item i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.m-chart-empty {
+  height: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #9aa6bd;
+}
+
+.m-overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.m-overview-card {
+  background: linear-gradient(145deg, #f8faff, #f5f8ff);
+  border-radius: 16px;
+  padding: 14px;
+  border: 1px solid #f0f4fa;
+  transition: transform 0.15s;
+}
+
+.m-overview-card:active {
+  transform: scale(0.98);
+}
+
+.m-overview-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+.m-overview-info {
+  margin-bottom: 12px;
+}
+
+.m-overview-label {
+  font-size: 11px;
+  color: #8c98ae;
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+
+.m-overview-value {
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.m-overview-bar-wrap {
+  margin-top: auto;
+}
+
+.m-overview-bar {
+  height: 7px;
+  background: #e8eef8;
+  border-radius: 100px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
+}
+
+.m-overview-bar-fill {
+  height: 100%;
+  border-radius: 100px;
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+  position: relative;
+  overflow: hidden;
+}
+
+.m-bar-shine::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+  animation: m-bar-shine 2.5s ease-in-out infinite;
+}
+
+@keyframes m-bar-shine {
+  0% { left: -100%; }
+  50%, 100% { left: 100%; }
+}
+
+.m-alert-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 10px;
   margin-bottom: 16px;
 }
 
-@media (max-width: 480px) {
-  .m-quick-grid {
-    grid-template-columns: 1fr;
-  }
+.m-alert-card {
+  border-radius: 18px;
+  padding: 14px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(0,0,0,0.04);
+  box-shadow: 0 2px 10px rgba(31, 53, 94, 0.05);
+  transition: transform 0.15s;
 }
 
-@media (max-width: 360px) {
-  .m-stat-grid {
-    grid-template-columns: 1fr;
-  }
+.m-alert-card:active {
+  transform: scale(0.96);
 }
-.m-pc-notice-icon {
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #4a8fff, #2d6bff);
-  color: white;
+
+.m-alert-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.08);
+}
+
+.m-alert-info {
+  text-align: center;
+}
+
+.m-alert-value {
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.m-alert-label {
+  font-size: 11px;
+  color: #72809a;
+  margin-top: 3px;
+  font-weight: 500;
+}
+
+.m-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px 8px;
+}
+
+.m-quick-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  padding: 8px 4px;
+  cursor: pointer;
+  border-radius: 14px;
+  transition: all 0.15s;
+}
+
+.m-quick-item:active {
+  transform: scale(0.92);
+  background: #f5f8ff;
+}
+
+.m-quick-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 3px 12px rgba(0,0,0,0.06);
+  transition: box-shadow 0.15s;
+}
+
+.m-quick-item:active .m-quick-icon {
+  box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+}
+
+.m-quick-label {
+  font-size: 11px;
+  color: #5a6a85;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.m-section-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  color: #0d6bff;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+
+.m-section-more:active {
+  background: #f0f6ff;
+}
+
+.m-notice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.m-notice-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 8px;
+  border-radius: 12px;
+  transition: background 0.15s;
+}
+
+.m-notice-item:active {
+  background: #f8faff;
+}
+
+.m-notice-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
 }
-.m-pc-notice-content { flex: 1; min-width: 0; }
-.m-pc-notice-title {
+
+.m-notice-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.m-notice-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #15213d;
+  margin-bottom: 3px;
+}
+
+.m-notice-desc {
+  font-size: 11px;
+  color: #8c98ae;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.m-notice-time {
+  font-size: 10px;
+  color: #b3bdcf;
+  font-weight: 500;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.m-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 -6px;
+  padding: 0 6px;
+}
+
+.m-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.m-data-table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-weight: 600;
+  color: #8c98ae;
+  font-size: 11px;
+  border-bottom: 1.5px solid #f0f4fa;
+  white-space: nowrap;
+  background: #fafbff;
+}
+
+.m-data-table th:first-child {
+  border-radius: 10px 0 0 0;
+}
+
+.m-data-table th:last-child {
+  border-radius: 0 10px 0 0;
+}
+
+.m-data-table td {
+  padding: 12px;
+  color: #15213d;
+  border-bottom: 1px solid #f5f7fb;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.m-data-table tr:last-child td {
+  border-bottom: none;
+}
+
+.m-data-table tr:last-child td:first-child {
+  border-radius: 0 0 0 10px;
+}
+
+.m-data-table tr:last-child td:last-child {
+  border-radius: 0 0 10px 0;
+}
+
+.m-data-table tr.row-alt {
+  background: #fafbff;
+}
+
+.m-data-table tr.row-alt td {
+  background: #fafbff;
+}
+
+.td-date {
+  font-weight: 600;
+  color: #5a6a85;
+  white-space: nowrap;
+}
+
+.td-num {
+  text-align: left;
+}
+
+.m-num-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 100px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.m-num-green {
+  background: linear-gradient(135deg, #e2f8ee, #d4f5e2);
+  color: #16bf78;
+}
+
+.m-num-purple {
+  background: linear-gradient(135deg, #f0ebff, #e8dfff);
+  color: #8b5cf6;
+}
+
+.m-num-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.m-dot-red {
+  background: #ef4444;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.4);
+}
+
+.m-num-muted {
+  color: #c4cddb;
+  font-weight: 500;
+}
+
+.m-tip-card {
+  background: linear-gradient(135deg, #f5f9ff 0%, #fafbff 50%, #fffdf5 100%);
+  border: 1px solid #e6eefc;
+  border-radius: 20px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  position: relative;
+  overflow: hidden;
+}
+
+.m-tip-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #fbbf24, #f59e0b, #fbbf24);
+}
+
+.m-tip-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #fef3c7, #fde68a);
+  color: #d97706;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(217, 119, 6, 0.15);
+}
+
+.m-tip-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.m-tip-title {
   font-size: 14px;
   font-weight: 700;
   color: #15213d;
-  margin-bottom: 2px;
+  margin-bottom: 4px;
 }
-.m-pc-notice-desc {
-  font-size: 12px;
+
+.m-tip-desc {
+  font-size: 11px;
   color: #72809a;
-  line-height: 1.5;
+  line-height: 1.6;
 }
-.m-pc-notice-btn {
+
+.m-tip-btn {
   flex-shrink: 0;
-  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 36px;
   padding: 0 14px;
   border: none;
-  border-radius: 16px;
+  border-radius: 18px;
   background: linear-gradient(135deg, #0d6bff, #2580ff);
   color: white;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(13, 107, 255, 0.25);
+  box-shadow: 0 4px 14px rgba(13, 107, 255, 0.3);
+  transition: transform 0.15s, box-shadow 0.15s;
 }
-.m-pc-notice-btn:active {
+
+.m-tip-btn:active {
   transform: scale(0.96);
+  box-shadow: 0 2px 8px rgba(13, 107, 255, 0.25);
 }
 
 .m-safe-bottom {
-  height: 80px;
+  height: 90px;
+}
+
+@media (max-width: 375px) {
+  .m-data {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .m-hero-card {
+    padding: 18px 16px 14px;
+    border-radius: 20px;
+  }
+  .m-hero-title {
+    font-size: 26px;
+  }
+  .m-hero-stats {
+    padding: 12px 10px;
+  }
+  .m-hero-stat-value {
+    font-size: 20px;
+  }
+  .m-metric-value {
+    font-size: 24px;
+  }
+  .m-metric-grid {
+    gap: 10px;
+  }
+  .m-metric-card {
+    padding: 14px;
+  }
+  .m-section {
+    padding: 16px;
+  }
+  .m-overview-value {
+    font-size: 22px;
+  }
+  .m-alert-icon {
+    width: 40px;
+    height: 40px;
+  }
+  .m-alert-value {
+    font-size: 20px;
+  }
+  .m-quick-icon {
+    width: 48px;
+    height: 48px;
+  }
+}
+
+@media (max-width: 360px) {
+  .m-hero-card {
+    padding: 16px 14px 12px;
+    border-radius: 18px;
+  }
+  .m-hero-title {
+    font-size: 24px;
+  }
+  .m-hero-stats {
+    padding: 10px 8px;
+  }
+  .m-hero-stat-value {
+    font-size: 18px;
+  }
+  .m-metric-value {
+    font-size: 22px;
+  }
+  .m-metric-icon {
+    width: 36px;
+    height: 36px;
+  }
+  .m-overview-value {
+    font-size: 20px;
+  }
+  .m-alert-grid {
+    gap: 8px;
+  }
+  .m-alert-card {
+    padding: 12px 8px;
+  }
+  .m-alert-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+  }
+  .m-alert-value {
+    font-size: 18px;
+  }
+  .m-alert-label {
+    font-size: 10px;
+  }
+  .m-quick-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+  }
+  .m-quick-label {
+    font-size: 10px;
+  }
 }
 </style>

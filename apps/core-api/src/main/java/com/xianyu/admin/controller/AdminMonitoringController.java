@@ -171,12 +171,17 @@ public class AdminMonitoringController {
                                                            @RequestParam(defaultValue = "20") int size,
                                                            @RequestParam(required = false) String scene,
                                                            @RequestParam(required = false) String keyword,
-                                                           @RequestParam(required = false) String status) {
+                                                           @RequestParam(required = false) String status,
+                                                           @RequestParam(required = false) Long userId) {
         int safeCurrent = Math.max(1, current);
         int safeSize = clamp(size, 1, 200);
         int offset = (safeCurrent - 1) * safeSize;
         List<Object> args = new ArrayList<>();
         StringBuilder where = new StringBuilder(" WHERE l.deleted=0 ");
+        if (userId != null) {
+            where.append(" AND l.user_id=? ");
+            args.add(userId);
+        }
         if (scene != null && !scene.isBlank()) {
             where.append(" AND l.scene=? ");
             args.add(scene.trim());

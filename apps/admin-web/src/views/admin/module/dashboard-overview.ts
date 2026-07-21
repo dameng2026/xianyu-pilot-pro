@@ -92,6 +92,56 @@ export interface DashboardPanel {
   footer?: string
 }
 
+export interface DashboardFinanceStats {
+  range: number
+  dates: string[]
+  totalIncomeCent: number
+  totalAiCostCent: number
+  totalProfitCent: number
+  totalChargeTokens: number
+  marginPercent: number | null
+  dailyIncome: number[]
+  todayIncomeCent: number
+  todayAiCostCent: number
+  todayProfitCent: number
+}
+
+export interface DashboardNotifyStats {
+  range: number
+  totalCount: number
+  successCount: number
+  failedCount: number
+  todayCount: number
+  avgCostMs: number
+  byChannel: Array<{ channel: string; total: number; success: number }>
+}
+
+export interface DashboardClientErrorStats {
+  range: number
+  totalCount: number
+  todayCount: number
+  topErrorTypes: Array<{ errorType: string; count: number }>
+}
+
+export interface DashboardStockStats {
+  totalGroups: number
+  totalStock: number
+  usedStock: number
+  remainStock: number
+  lowStockGroups: number
+  todayConsumed: number
+  lowStockList: Array<{ id: number; group_name: string; remain_count: number; alert_threshold: number }>
+}
+
+export interface DashboardSyncStats {
+  range: number
+  syncTotal: number
+  syncSuccess: number
+  syncFailed: number
+  todaySyncCount: number
+  imageGenerated: number
+}
+
 export interface DashboardOverviewFixture {
   summary: Record<string, any>
   trend: Record<string, any>
@@ -106,6 +156,18 @@ export interface DashboardOverviewFixture {
   workflowMonitor: Record<string, any>
   tokenStats: Record<string, any>
   costStats: Record<string, any>
+  /** 经营总览财务统计：从 payment_order / ai_usage_log 真实聚合，按 range 7/30/90 天统计 */
+  financeStats?: DashboardFinanceStats | null
+  /** 通知投递统计：从 notification_delivery_log 真实聚合 */
+  notifyStats?: DashboardNotifyStats | null
+  /** 客户端错误监控：从 client_error_log 真实聚合 */
+  clientErrorStats?: DashboardClientErrorStats | null
+  /** 卡密库存统计：从 card_group/card_item 真实聚合 */
+  stockStats?: DashboardStockStats | null
+  /** 商机与商品同步统计：从 xianyu_goods_sync_task / opportunity_image_history 真实聚合 */
+  syncStats?: DashboardSyncStats | null
+  /** 当前经营总览时间范围（7/30/90），用于动态生成卡片标签 */
+  rangeDays?: 7 | 30 | 90
   dataState?: DashboardDataState
 }
 
@@ -209,6 +271,61 @@ export function createOverviewTestFixture(): DashboardOverviewFixture {
       ],
       byScene: [],
       byModel: []
+    },
+    // 经营总览财务统计：模拟昨日微信二维码收款 4 元（400 分），AI 成本 0
+    rangeDays: 7,
+    financeStats: {
+      range: 7,
+      dates: ['2026-06-26', '2026-06-27', '2026-06-28', '2026-06-29', '2026-06-30', '2026-07-01', '2026-07-02'],
+      totalIncomeCent: 400,
+      totalAiCostCent: 0,
+      totalProfitCent: 400,
+      totalChargeTokens: 0,
+      marginPercent: 100,
+      dailyIncome: [0, 0, 0, 0, 0, 400, 0],
+      todayIncomeCent: 0,
+      todayAiCostCent: 0,
+      todayProfitCent: 0
+    },
+    notifyStats: {
+      range: 7,
+      totalCount: 18,
+      successCount: 16,
+      failedCount: 2,
+      todayCount: 3,
+      avgCostMs: 240,
+      byChannel: [
+        { channel: '飞书机器人', total: 10, success: 9 },
+        { channel: '企业微信', total: 8, success: 7 }
+      ]
+    },
+    clientErrorStats: {
+      range: 7,
+      totalCount: 5,
+      todayCount: 1,
+      topErrorTypes: [
+        { errorType: 'TypeError', count: 3 },
+        { errorType: 'NetworkError', count: 2 }
+      ]
+    },
+    stockStats: {
+      totalGroups: 4,
+      totalStock: 200,
+      usedStock: 60,
+      remainStock: 140,
+      lowStockGroups: 1,
+      todayConsumed: 5,
+      lowStockList: [
+        { id: 2, group_name: '测试卡密组B', remain_count: 3, alert_threshold: 10 }
+      ]
+    },
+    syncStats: {
+      range: 7,
+      syncTotal: 24,
+      syncSuccess: 22,
+      syncFailed: 2,
+      todaySyncCount: 4,
+      imageGenerated: 18
     }
   }
 }
@@ -229,7 +346,7 @@ export function buildDashboardOverviewModel(input: DashboardOverviewFixture): Da
       cards: buildMonitoringCards(input)
     },
     servicePanels: buildServicePanels(input),
-    qualityPanels: buildQualityPanels(),
+    qualityPanels: buildQualityPanels(input),
     bottom: {
       cards: buildBottomPanels(input)
     },
@@ -321,29 +438,107 @@ function buildKpiGroups(input: DashboardOverviewFixture): DashboardMetricGroup[]
     {
       key: 'revenue',
       title: '收入与利润',
-      items: [
-        metric('sales-today', '今日收入', todaySalesAmount, noComparison(), 'brand', '订单成交额'),
-        metric('ai-cost', '今日AI成本', hasOwn(input.aiMonitor, 'todayCostCent') ? centToCurrency(input.aiMonitor?.todayCostCent) : '--', noComparison(), hasOwn(input.aiMonitor, 'todayCostCent') ? 'warning' : 'muted', '模型成本'),
-        metric(
-          'profit',
-          '今日毛估利润',
-          hasSalesAmount && hasAiCost ? currencyValue(estimatedProfit) : '--',
-          hasSalesAmount && hasAiCost ? marginDelta(todaySalesAmount, input.aiMonitor?.todayCostCent) : '收入或成本数据不可用',
-          !hasSalesAmount || !hasAiCost
-            ? 'muted'
-            : estimatedProfit > 0
-            ? 'success'
-            : estimatedProfit < 0
-              ? 'danger'
-              : 'muted',
-          '收入减AI成本（未扣商品成本/佣金/支付手续费）'
-        )
-      ]
+      items: buildRevenueKpiItems(input, todaySalesAmount, hasSalesAmount, hasAiCost, estimatedProfit)
     }
   ]
 }
 
+function buildRevenueKpiItems(
+  input: DashboardOverviewFixture,
+  todaySalesAmountText: string,
+  hasSalesAmount: boolean,
+  hasAiCost: boolean,
+  estimatedProfit: number
+): DashboardMetricItem[] {
+  // 优先使用 financeStats（payment_order 真实收入 + ai_usage_log 真实成本）
+  const finance = input.financeStats
+  if (finance) {
+    const todayIncomeYuan = centToYuan(finance.todayIncomeCent)
+    const todayCostYuan = centToYuan(finance.todayAiCostCent)
+    const todayProfitYuan = centToYuan(finance.todayProfitCent)
+    const profitTone: DashboardTone = todayProfitYuan > 0 ? 'success' : todayProfitYuan < 0 ? 'danger' : 'muted'
+    const marginText = finance.todayIncomeCent > 0
+      ? `今日估算利润率 ${Math.round((finance.todayProfitCent / finance.todayIncomeCent) * 100)}%`
+      : '今日无收入，利润率不可计算'
+    return [
+      metric('sales-today', '今日收入', currencyValue(todayIncomeYuan), noComparison(), 'brand', '二维码收款流水（payment_order）'),
+      metric('ai-cost', '今日AI成本', currencyValue(todayCostYuan), noComparison(), 'warning', '模型成本'),
+      metric('profit', '今日毛估利润', currencyValue(todayProfitYuan), marginText, profitTone, '收入减AI成本（未扣商品成本/佣金/支付手续费）')
+    ]
+  }
+  // 回退：原订单成交额逻辑
+  return [
+    metric('sales-today', '今日收入', todaySalesAmountText, noComparison(), 'brand', '订单成交额'),
+    metric('ai-cost', '今日AI成本', hasAiCost ? centToCurrency(input.aiMonitor?.todayCostCent) : '--', noComparison(), hasAiCost ? 'warning' : 'muted', '模型成本'),
+    metric(
+      'profit',
+      '今日毛估利润',
+      hasSalesAmount && hasAiCost ? currencyValue(estimatedProfit) : '--',
+      hasSalesAmount && hasAiCost ? marginDelta(todaySalesAmountText, input.aiMonitor?.todayCostCent) : '收入或成本数据不可用',
+      !hasSalesAmount || !hasAiCost
+        ? 'muted'
+        : estimatedProfit > 0
+        ? 'success'
+        : estimatedProfit < 0
+          ? 'danger'
+          : 'muted',
+      '收入减AI成本（未扣商品成本/佣金/支付手续费）'
+    )
+  ]
+}
+
 function buildFinanceSection(input: DashboardOverviewFixture): DashboardOverviewModel['finance'] {
+  const finance = input.financeStats
+  // 优先使用 financeStats（按 range 7/30/90 天统计的真实数据，卡片标签动态化）
+  if (finance) {
+    const rangeDays = input.rangeDays || (finance.range as 7 | 30 | 90) || 7
+    const rangeLabel = `近${rangeDays}天`
+    const totalIncomeYuan = centToYuan(finance.totalIncomeCent)
+    const totalCostYuan = centToYuan(finance.totalAiCostCent)
+    const totalProfitYuan = centToYuan(finance.totalProfitCent)
+    const profitTone: DashboardTone = totalProfitYuan > 0 ? 'success' : totalProfitYuan < 0 ? 'danger' : 'muted'
+    const margin = finance.marginPercent
+    const chargeTokens = toNumber(finance.totalChargeTokens)
+    // 图表：日期标签取 financeStats.dates，对齐每日收入与每日成本
+    const financeDates = Array.isArray(finance.dates) ? finance.dates : []
+    const labels = financeDates.map(d => String(d).slice(5))
+    // 每日成本：从 costStats.dailyTrend 取出与 financeStats.dates 对齐的成本（分 → 元）
+    const costTrend = Array.isArray(input.costStats?.dailyTrend) ? input.costStats.dailyTrend : []
+    const costMap = new Map<string, number>()
+    costTrend.forEach((row: any) => {
+      const key = String(row?.statDate || row?.date || '').slice(0, 10)
+      if (key) costMap.set(key, toNumber(row?.costCent))
+    })
+    const dailyIncomeSeries = (finance.dailyIncome || []).map(c => centToYuan(c))
+    const dailyCostSeries = financeDates.map(d => centToYuan(costMap.get(String(d).slice(0, 10)) || 0))
+    const series: DashboardSeries[] = []
+    if (labels.length) {
+      series.push({ key: 'income', label: '收入(元)', color: '#3b82f6', values: dailyIncomeSeries })
+      series.push({ key: 'cost', label: 'AI成本(元)', color: '#22c55e', values: dailyCostSeries })
+    }
+    return {
+      cards: [
+        metric('income', `${rangeLabel}收入(元)`, currencyValue(totalIncomeYuan), noComparison(), 'brand', '二维码收款流水（payment_order）'),
+        metric('cost', `${rangeLabel}AI成本(元)`, currencyValue(totalCostYuan), noComparison(), 'warning', '模型成本'),
+        metric('profit', `${rangeLabel}毛估利润(元)`, currencyValue(totalProfitYuan), margin === null ? '无有效收入，利润率不可计算' : `${rangeLabel}利润率 ${margin}%`, profitTone, '收入减AI成本（未扣商品成本/佣金/支付手续费）'),
+        metric('token', `${rangeLabel}Token消耗(万)`, compactWan(chargeTokens), '累计计费口径', 'muted', '计费口径')
+      ],
+      chart: {
+        labels,
+        series
+      },
+      gauge: {
+        value: margin,
+        detail: margin === null ? '无有效收入或成本，无法计算利润率' : `${rangeLabel}利润率`
+      },
+      breakdown: [
+        { label: `${rangeLabel}收入`, value: currencyValue(totalIncomeYuan), tone: 'success' },
+        { label: `${rangeLabel}AI 成本`, value: currencyValue(totalCostYuan), tone: 'warning' },
+        { label: `${rangeLabel}净利润`, value: currencyValue(totalProfitYuan), tone: profitTone }
+      ]
+    }
+  }
+  // 回退：原今日口径逻辑
   const costTrend = Array.isArray(input.costStats?.dailyTrend) ? input.costStats.dailyTrend.slice(-FINANCE_RANGE_DAYS) : []
   const labels = buildRangeLabels(costTrend, [], FINANCE_RANGE_DAYS)
   const expenseSeries = labels.map((label, index) => {
@@ -598,17 +793,174 @@ function buildServicePanels(input: DashboardOverviewFixture): DashboardPanel[] {
       }
   return [
     serviceEfficiencyPanel,
-    unavailablePanel('stock', '卡密库存统计', '卡密库存汇总接口尚未接入，当前无法判断库存数量或预警等级。'),
+    buildStockPanel(input),
     alertsPanel
   ]
 }
 
-function buildQualityPanels(): DashboardPanel[] {
+function buildStockPanel(input: DashboardOverviewFixture): DashboardPanel {
+  const stock = input.stockStats
+  if (!stock) {
+    return unavailablePanel('stock', '卡密库存统计', '卡密库存汇总接口尚未接入，当前无法判断库存数量或预警等级。')
+  }
+  const totalStock = toNumber(stock.totalStock)
+  const usedStock = toNumber(stock.usedStock)
+  const remainStock = toNumber(stock.remainStock)
+  const lowStockGroups = toNumber(stock.lowStockGroups)
+  const usedPercent = totalStock > 0 ? Math.round((usedStock / totalStock) * 100) : 0
+  const lowStockRows: DashboardTableRow[] = (stock.lowStockList || []).slice(0, 5).map((item) => ({
+    label: item?.group_name || '-',
+    value: compactNumber(item?.remain_count),
+    extra: `阈值 ${compactNumber(item?.alert_threshold)}`,
+    tone: 'danger'
+  }))
+  return {
+    key: 'stock',
+    title: '卡密库存统计',
+    subtitle: '当前快照',
+    metrics: [
+      metric('stock-groups', '卡密组数', compactNumber(stock.totalGroups), '当前快照', 'brand'),
+      metric('stock-total', '总库存', compactNumber(totalStock), '累计生成', 'brand'),
+      metric('stock-used', '已使用', compactNumber(usedStock), `${usedPercent}%`, 'warning'),
+      metric('stock-remain', '剩余库存', compactNumber(remainStock), totalStock > 0 ? `${100 - usedPercent}%` : '-', 'success'),
+      metric('stock-low', '低库存组数', compactNumber(lowStockGroups), lowStockGroups > 0 ? '需补货' : '正常', lowStockGroups > 0 ? 'danger' : 'success'),
+      metric('stock-today-consumed', '今日消耗', compactNumber(stock.todayConsumed), '今日实时口径', 'muted')
+    ],
+    table: lowStockRows,
+    emptyState: lowStockRows.length
+      ? undefined
+      : {
+          title: '暂无低库存预警',
+          description: '当前所有启用卡密组库存均高于阈值。'
+        },
+    footer: '低库存列表按剩余数量升序展示前 5 条'
+  }
+}
+
+function buildQualityPanels(input: DashboardOverviewFixture): DashboardPanel[] {
   return [
-    unavailablePanel('notify', '通知投递统计', '通知投递汇总接口尚未接入，不能据消息量推算通知成功、失败或重试数量。'),
-    unavailablePanel('client-error', '客户端错误监控', '客户端错误聚合接口尚未接入，当前无法判断是否存在致命错误或受影响会话。'),
-    unavailablePanel('sync', '商机与商品同步', '商品同步结果接口尚未接入，当前无法计算同步成功率或失败数量。')
+    buildNotifyPanel(input),
+    buildClientErrorPanel(input),
+    buildSyncPanel(input)
   ]
+}
+
+function buildNotifyPanel(input: DashboardOverviewFixture): DashboardPanel {
+  const notify = input.notifyStats
+  if (!notify) {
+    return unavailablePanel('notify', '通知投递统计', '通知投递汇总接口尚未接入，不能据消息量推算通知成功、失败或重试数量。')
+  }
+  const rangeDays = input.rangeDays || (notify.range as 7 | 30 | 90) || 7
+  const rangeLabel = `近${rangeDays}天`
+  const total = toNumber(notify.totalCount)
+  const success = toNumber(notify.successCount)
+  const failed = toNumber(notify.failedCount)
+  const successRate = total > 0 ? Math.round((success / total) * 100) : null
+  const channelRows: DashboardTableRow[] = (notify.byChannel || []).slice(0, 5).map((item) => {
+    const channelTotal = toNumber(item?.total)
+    const channelSuccess = toNumber(item?.success)
+    const channelRate = channelTotal > 0 ? Math.round((channelSuccess / channelTotal) * 100) : 0
+    return {
+      label: item?.channel || '-',
+      value: compactNumber(channelTotal),
+      extra: `${channelRate}%`,
+      tone: channelRate >= 95 ? 'success' : channelRate >= 80 ? 'warning' : 'danger'
+    }
+  })
+  return {
+    key: 'notify',
+    title: '通知投递统计',
+    subtitle: rangeLabel,
+    metrics: [
+      metric('notify-total', `${rangeLabel}投递总数`, compactNumber(total), '全部渠道', 'brand'),
+      metric('notify-success', '成功数', compactNumber(success), successRate === null ? '暂无投递' : `成功率 ${successRate}%`, 'success'),
+      metric('notify-failed', '失败数', compactNumber(failed), failed > 0 ? '需关注' : '无失败', failed > 0 ? 'danger' : 'muted'),
+      metric('notify-today', '今日投递', compactNumber(notify.todayCount), '今日实时口径', 'brand'),
+      metric('notify-avg-cost', '平均耗时', `${compactNumber(notify.avgCostMs)}ms`, '全部渠道平均', 'muted')
+    ],
+    table: channelRows,
+    emptyState: channelRows.length
+      ? undefined
+      : {
+          title: total > 0 ? '暂无渠道明细' : `${rangeLabel}暂无通知投递`,
+          description: total > 0 ? '接口已成功响应，但渠道聚合无结果。' : '当前时间范围内没有通知投递记录。'
+        },
+    footer: '按渠道投递数降序展示前 5 条'
+  }
+}
+
+function buildClientErrorPanel(input: DashboardOverviewFixture): DashboardPanel {
+  const errors = input.clientErrorStats
+  if (!errors) {
+    return unavailablePanel('client-error', '客户端错误监控', '客户端错误聚合接口尚未接入，当前无法判断是否存在致命错误或受影响会话。')
+  }
+  const rangeDays = input.rangeDays || (errors.range as 7 | 30 | 90) || 7
+  const rangeLabel = `近${rangeDays}天`
+  const total = toNumber(errors.totalCount)
+  const today = toNumber(errors.todayCount)
+  const errorRows: DashboardTableRow[] = (errors.topErrorTypes || []).slice(0, 5).map((item) => ({
+    label: item?.errorType || '-',
+    value: compactNumber(item?.count),
+    extra: total > 0 ? `${Math.round((toNumber(item?.count) / total) * 100)}%` : '-',
+    tone: 'warning'
+  }))
+  return {
+    key: 'client-error',
+    title: '客户端错误监控',
+    subtitle: rangeLabel,
+    metrics: [
+      metric('error-total', `${rangeLabel}错误总数`, compactNumber(total), '全部类型', total > 0 ? 'warning' : 'success'),
+      metric('error-today', '今日新增', compactNumber(today), '今日实时口径', today > 0 ? 'danger' : 'success'),
+      metric('error-types', '错误类型数', compactNumber((errors.topErrorTypes || []).length), 'Top 类型', 'muted')
+    ],
+    table: errorRows,
+    emptyState: errorRows.length
+      ? undefined
+      : {
+          title: total > 0 ? '暂无错误类型明细' : `${rangeLabel}暂无客户端错误`,
+          description: total > 0 ? '接口已成功响应，但错误类型聚合无结果。' : '当前时间范围内没有客户端错误记录。'
+        },
+    footer: '按错误数降序展示前 5 条'
+  }
+}
+
+function buildSyncPanel(input: DashboardOverviewFixture): DashboardPanel {
+  const sync = input.syncStats
+  if (!sync) {
+    return unavailablePanel('sync', '商机与商品同步', '商品同步结果接口尚未接入，当前无法计算同步成功率或失败数量。')
+  }
+  const rangeDays = input.rangeDays || (sync.range as 7 | 30 | 90) || 7
+  const rangeLabel = `近${rangeDays}天`
+  const total = toNumber(sync.syncTotal)
+  const success = toNumber(sync.syncSuccess)
+  const failed = toNumber(sync.syncFailed)
+  const successRate = total > 0 ? Math.round((success / total) * 100) : null
+  return {
+    key: 'sync',
+    title: '商机与商品同步',
+    subtitle: rangeLabel,
+    metrics: [
+      metric('sync-total', `${rangeLabel}同步总数`, compactNumber(total), '商品同步任务', 'brand'),
+      metric('sync-success', '成功数', compactNumber(success), successRate === null ? '暂无同步' : `成功率 ${successRate}%`, 'success'),
+      metric('sync-failed', '失败数', compactNumber(failed), failed > 0 ? '需关注' : '无失败', failed > 0 ? 'danger' : 'muted'),
+      metric('sync-today', '今日同步', compactNumber(sync.todaySyncCount), '今日实时口径', 'brand'),
+      metric('sync-image', '生图数量', compactNumber(sync.imageGenerated), `${rangeLabel}商机生图`, 'muted')
+    ],
+    table: successRate === null
+      ? []
+      : [
+          { label: '成功', value: compactNumber(success), extra: `${successRate}%`, tone: 'success' },
+          { label: '失败', value: compactNumber(failed), extra: `${100 - successRate}%`, tone: failed > 0 ? 'danger' : 'muted' },
+          { label: '今日同步', value: compactNumber(sync.todaySyncCount), extra: '-', tone: 'brand' }
+        ],
+    emptyState: total > 0
+      ? undefined
+      : {
+          title: `${rangeLabel}暂无同步任务`,
+          description: '当前时间范围内没有商品同步任务记录。'
+        },
+    footer: '商品同步来自 xianyu_goods_sync_task，商机生图来自 opportunity_image_history'
+  }
 }
 
 function unavailablePanel(key: string, title: string, description: string, subtitle = '数据源未接入'): DashboardPanel {

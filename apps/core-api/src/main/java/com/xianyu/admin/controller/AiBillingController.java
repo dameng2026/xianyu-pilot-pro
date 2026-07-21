@@ -53,8 +53,9 @@ public class AiBillingController {
                                                              @RequestParam(defaultValue = "20") int size,
                                                              @RequestParam(required = false) String keyword,
                                                              @RequestParam(required = false) String scene,
-                                                             @RequestParam(required = false) String status) {
-        return Result.ok(aiBillingService.pageUsageLogs(current, size, keyword, scene, status));
+                                                             @RequestParam(required = false) String status,
+                                                             @RequestParam(required = false) Long userId) {
+        return Result.ok(aiBillingService.pageUsageLogs(current, size, keyword, scene, status, userId));
     }
 
     @GetMapping("/admin-api/ai-billing/ledger/page")
@@ -63,6 +64,20 @@ public class AiBillingController {
                                                               @RequestParam(required = false) String keyword,
                                                               @RequestParam(required = false) String changeType) {
         return Result.ok(aiBillingService.pageLedger(current, size, keyword, changeType));
+    }
+
+    @GetMapping("/admin-api/ai-billing/recharge-records/page")
+    public Result<PageResult<Map<String, Object>>> rechargeRecordsPage(@RequestParam(defaultValue = "1") int current,
+                                                                       @RequestParam(defaultValue = "20") int size,
+                                                                       @RequestParam(required = false) Long userId,
+                                                                       @RequestParam(required = false) String keyword,
+                                                                       @RequestParam(required = false) String source) {
+        return Result.ok(aiBillingService.pageRechargeRecords(current, size, userId, keyword, source));
+    }
+
+    @GetMapping("/admin-api/ai-billing/recharge-records/summary")
+    public Result<Map<String, Object>> rechargeRecordsSummary(@RequestParam(required = false) Long userId) {
+        return Result.ok(aiBillingService.rechargeRecordsSummary(userId));
     }
 
     @GetMapping("/api/ai-billing/balance")

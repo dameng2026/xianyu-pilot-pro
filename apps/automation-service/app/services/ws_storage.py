@@ -1533,16 +1533,18 @@ async def save_chat_message(
     msg: dict,
     seller_external_uid: str = "",
     sync_legacy_message: bool = True,
+    is_auto_reply: int = 0,
 ) -> Optional[int]:
     """保存聊天消息到 xianyu_chat_message 表（去重）。
-    
+
     Args:
         db: 数据库会话
         tenant_id: 租户ID
         account_id: 闲鱼账号ID
         msg: 解析后的消息字典
         seller_external_uid: 卖家外部UID（externalUid/unb），用于稳定身份
-        
+        is_auto_reply: 是否 AI 自动回复 0否 1是（仅 OUT 消息有意义，用于人工干预检测）
+
     Returns:
         消息 ID 或 None（已存在时）
     """
@@ -1729,14 +1731,14 @@ async def save_chat_message(
                 s_id, content_type, msg_content,
                 sender_user_id, receiver_user_id, sender_user_name,
                 peer_external_uid, xy_goods_id, message_time,
-                direction, parse_status, reminder_content, reminder_url,
+                direction, is_auto_reply, parse_status, reminder_content, reminder_url,
                 complete_msg, raw_payload, read_status, deleted, created_time, updated_time
             ) VALUES (
                 :tenant_id, :account_id, :seller_external_uid, :pnm_id, :message_uid,
                 :s_id, :content_type, :msg_content,
                 :sender_user_id, :receiver_user_id, :sender_user_name,
                 :peer_external_uid, :xy_goods_id, :message_time,
-                :direction, :parse_status, :reminder_content, :reminder_url,
+                :direction, :is_auto_reply, :parse_status, :reminder_content, :reminder_url,
                 :complete_msg, :raw_payload, :read_status, 0, NOW(), NOW()
             )
         """),
@@ -1756,6 +1758,7 @@ async def save_chat_message(
             "xy_goods_id": msg.get("xyGoodsId", ""),
             "message_time": message_time,
             "direction": direction,
+            "is_auto_reply": int(is_auto_reply or 0),
             "parse_status": parse_status,
             "reminder_content": msg.get("reminderContent", ""),
             "reminder_url": msg.get("reminderUrl", ""),

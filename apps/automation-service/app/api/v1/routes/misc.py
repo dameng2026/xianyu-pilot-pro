@@ -942,26 +942,26 @@ async def websocket_send_message(
             # 发送前主动用数据库中的最新 Cookie/Token 重建连接，解决“接收正常但发送端卡在旧 token_failed 客户端”的问题。
             client, restart_error = await _restart_ws_client_from_db(db, tenant_id, account_id)
             if restart_error:
-                return ResultObject.failed(restart_error)
+                return ResultObject.failed(restart_error, code=409)
             outcome, status = await _wait_ws_connect_result(account_id, timeout_seconds=8.0)
             if outcome == "auth_failed":
-                return ResultObject.failed(_ws_auth_failure_message(status))
+                return ResultObject.failed(_ws_auth_failure_message(status), code=409)
             if outcome != "connected":
-                return ResultObject.failed("WebSocket 连接尚未就绪，请稍后重试", code=503)
+                return ResultObject.failed("WebSocket 连接尚未就绪，请稍后重试", code=409)
             client = ws_manager.get_client(account_id)
         if not client:
-            return ResultObject.failed("账号未连接 WebSocket")
+            return ResultObject.failed("账号未连接 WebSocket", code=409)
 
         ws_sid = await _resolve_ws_sid(db, tenant_id, account_id, cid)
         if not ws_sid:
-            return ResultObject.failed("无法识别会话ID，发送失败")
+            return ResultObject.failed("无法识别会话ID，发送失败", code=409)
         ws_cid = _to_goofish_id(ws_sid)
 
         own_id = _normalize_safe_goofish_id(client.unb or "")
         resolved_to_id = await _resolve_ws_peer_id(db, tenant_id, account_id, ws_sid, to_id, own_id)
         resolved_goods_id = await _resolve_ws_goods_id(db, tenant_id, account_id, ws_sid, data.get("xyGoodsId"))
         if not resolved_to_id:
-            return ResultObject.failed("无法识别会话对端，发送失败")
+            return ResultObject.failed("无法识别会话对端，发送失败", code=409)
         ws_to_id = _to_goofish_id(resolved_to_id)
 
         logger.info(
@@ -981,7 +981,12 @@ async def websocket_send_message(
                 user_error = "会话已被删除或已过期，无法发送消息"
             else:
                 user_error = "消息发送失败，请稍后重试"
-            return ResultObject.failed(user_error)
+            # 显式 code=409（业务冲突），避免 Java 网关把业务错误误判为系统故障抛 503
+            logger.warning(
+                "send_text_message 失败 accountId=%s code=%s error=%s",
+                account_id, result.get("code"), error,
+            )
+            return ResultObject.failed(user_error, code=409)
 
         sender_id = _to_goofish_id(client.unb or "")
         out_message_time = int(datetime.datetime.now().timestamp() * 1000)
@@ -997,10 +1002,96 @@ async def websocket_send_message(
             "messageTime": out_message_time,
             "direction": "OUT",
             "readStatus": 1,
-        }, seller_external_uid=client.unb or "")
+        }, seller_external_uid=client.unb or "", is_auto_reply=0)
+
+        # 人工发送消息后触发会话级自动回复暂停（人工干预）：
+        # - auto_reply_paused=1：暂停 AI 自动回复
+        # - last_manual_reply_at：记录人工回复时间戳，用于1分钟自动恢复判断
+        # - auto_reply_manual_disabled：保持原值（用户已手动关闭则依然只能手动开启）
+        # 通过 sId 反查消息表找到对端身份，再匹配 xianyu_conversation
+        # （external_buyer_id 可能存裸ID或带@goofish后缀，需多候选匹配）
+        peer_id_candidates = []
+        for candidate in (resolved_to_id, ws_to_id, resolved_goods_id or ""):
+            if candidate and candidate not in peer_id_candidates:
+                peer_id_candidates.append(candidate)
+        # 同时考虑 sId 关联：从最近消息中取 peer_external_uid 作为补充候选
+        sid_peer_row = (await db.execute(text("""
+            SELECT peer_external_uid, sender_user_id, receiver_user_id
+            FROM xianyu_chat_message
+            WHERE tenant_id = :tenant_id AND account_id = :account_id
+              AND deleted = 0
+              AND s_id COLLATE utf8mb4_unicode_ci IN (:sid, :sid_goofish)
+            ORDER BY id DESC LIMIT 1
+        """), {
+            "tenant_id": tenant_id,
+            "account_id": account_id,
+            "sid": ws_sid,
+            "sid_goofish": f"{ws_sid}@goofish" if ws_sid and not ws_sid.endswith("@goofish") else ws_sid,
+        })).mappings().first()
+        seller_uid_norm = (client.unb or "").strip()
+        if sid_peer_row:
+            for key in ("peer_external_uid", "sender_user_id", "receiver_user_id"):
+                v = str(sid_peer_row.get(key) or "").strip()
+                # 排除卖家自己
+                if v and v not in peer_id_candidates and v != seller_uid_norm and v != f"{seller_uid_norm}@goofish":
+                    peer_id_candidates.append(v)
+
+        conv_pause_row = None
+        if peer_id_candidates:
+            conv_pause_row = (await db.execute(text("""
+                SELECT id, auto_reply_manual_disabled
+                FROM xianyu_conversation
+                WHERE tenant_id = :tenant_id AND account_id = :account_id
+                  AND deleted = 0
+                  AND (
+                      external_buyer_id IN (:peer_ids)
+                      OR peer_external_uid IN (:peer_ids)
+                      OR peer_key IN (:peer_ids)
+                  )
+                ORDER BY id DESC LIMIT 1
+            """), {
+                "tenant_id": tenant_id,
+                "account_id": account_id,
+                "peer_ids": peer_id_candidates,
+            })).mappings().first()
+        paused_conv_id = None
+        if conv_pause_row:
+            paused_conv_id = int(conv_pause_row["id"])
+            await db.execute(text("""
+                UPDATE xianyu_conversation
+                SET auto_reply_paused = 1,
+                    last_manual_reply_at = :last_manual_at,
+                    last_message_time = NOW(),
+                    last_message_content = :content,
+                    updated_time = NOW()
+                WHERE id = :conversation_id
+            """), {
+                "conversation_id": paused_conv_id,
+                "last_manual_at": out_message_time,
+                "content": str(message_text),
+            })
+
         await db.commit()
-        # 不在此处广播 SSE：IM 推送回环会触发 ws_client._handle_message 广播，
+        # 不在此处广播消息 SSE：IM 推送回环会触发 ws_client._handle_message 广播，
         # 此处再广播会导致前端收到两条 SSE，造成消息重复显示。
+        # 但需要广播"会话自动回复状态变更"事件，让前端实时更新开关按钮文案
+        if paused_conv_id is not None:
+            try:
+                await broadcaster.broadcast(tenant_id, "conversation_auto_reply_state", {
+                    "conversationId": paused_conv_id,
+                    "accountId": account_id,
+                    "peerId": resolved_to_id,
+                    "sid": ws_sid,
+                    "autoReplyPaused": 1,
+                    "autoReplyManualDisabled": int(conv_pause_row["auto_reply_manual_disabled"] or 0),
+                    "lastManualReplyAt": out_message_time,
+                    "reason": "manual_intervention",
+                })
+            except Exception as sse_exc:
+                logger.warning(
+                    "广播会话暂停状态失败（不影响主流程）accountId=%d convId=%s: %s",
+                    account_id, paused_conv_id, sse_exc,
+                )
         return ResultObject.success({"message": "Sent", "uuid": result.get("uuid"), "sid": ws_sid, "toId": ws_to_id})
     except Exception as e:
         await db.rollback()
@@ -1040,26 +1131,26 @@ async def websocket_send_image_message(
         if not client or not getattr(client, "is_connected", False):
             client, restart_error = await _restart_ws_client_from_db(db, tenant_id, account_id)
             if restart_error:
-                return ResultObject.failed(restart_error)
+                return ResultObject.failed(restart_error, code=409)
             outcome, status = await _wait_ws_connect_result(account_id, timeout_seconds=8.0)
             if outcome == "auth_failed":
-                return ResultObject.failed(_ws_auth_failure_message(status))
+                return ResultObject.failed(_ws_auth_failure_message(status), code=409)
             if outcome != "connected":
-                return ResultObject.failed("WebSocket 连接尚未就绪，请稍后重试", code=503)
+                return ResultObject.failed("WebSocket 连接尚未就绪，请稍后重试", code=409)
             client = ws_manager.get_client(account_id)
         if not client:
-            return ResultObject.failed("账号未连接 WebSocket")
+            return ResultObject.failed("账号未连接 WebSocket", code=409)
 
         ws_sid = await _resolve_ws_sid(db, tenant_id, account_id, cid)
         if not ws_sid:
-            return ResultObject.failed("无法识别会话ID，发送失败")
+            return ResultObject.failed("无法识别会话ID，发送失败", code=409)
         ws_cid = _to_goofish_id(ws_sid)
 
         own_id = _normalize_safe_goofish_id(client.unb or "")
         resolved_to_id = await _resolve_ws_peer_id(db, tenant_id, account_id, ws_sid, to_id, own_id)
         resolved_goods_id = await _resolve_ws_goods_id(db, tenant_id, account_id, ws_sid, data.get("xyGoodsId"))
         if not resolved_to_id:
-            return ResultObject.failed("无法识别会话对端，发送失败")
+            return ResultObject.failed("无法识别会话对端，发送失败", code=409)
         ws_to_id = _to_goofish_id(resolved_to_id)
 
         result = await client.send_image_message(
@@ -1070,7 +1161,12 @@ async def websocket_send_image_message(
             height=image_height,
         )
         if result.get("code") != 200:
-            return ResultObject.failed("图片消息发送失败，请稍后重试")
+            # 显式 code=409（业务冲突），避免 Java 网关把业务错误误判为系统故障抛 503
+            logger.warning(
+                "send_image_message 失败 accountId=%s code=%s error=%s",
+                account_id, result.get("code"), result.get("error", ""),
+            )
+            return ResultObject.failed("图片消息发送失败，请稍后重试", code=409)
 
         sender_id = _to_goofish_id(client.unb or "")
         out_image_time = int(datetime.datetime.now().timestamp() * 1000)
@@ -1110,153 +1206,158 @@ async def websocket_start(
     若检测到滑块/Token/Cookie 失败，立即返回失败；未检测到验证失败但连接仍在建立时，
     按产品要求返回“连接成功/已提交”，后台继续完成连接。
     """
-    account_id = _parse_account_id(data.get("xianyuAccountId") or data.get("accountId"))
-    if not account_id:
-        return ResultObject.validate_failed("accountId 不能为空")
-    tenant_id = current_user.get("tenant_id")
-    if not await _account_belongs_to_tenant(
-        db, tenant_id, account_id, current_user.get("user_id")
-    ):
-        return ResultObject.failed("账号不存在", code=404)
-    raw_force_reconnect = data.get("forceReconnect")
-    if raw_force_reconnect is None:
-        raw_force_reconnect = data.get("force_reconnect")
-    force_reconnect = str(raw_force_reconnect).strip().lower() in {"1", "true", "yes", "on"}
+    try:
+        account_id = _parse_account_id(data.get("xianyuAccountId") or data.get("accountId"))
+        if not account_id:
+            return ResultObject.validate_failed("accountId 不能为空")
+        tenant_id = current_user.get("tenant_id")
+        if not await _account_belongs_to_tenant(
+            db, tenant_id, account_id, current_user.get("user_id")
+        ):
+            return ResultObject.failed("账号不存在", code=404)
+        raw_force_reconnect = data.get("forceReconnect")
+        if raw_force_reconnect is None:
+            raw_force_reconnect = data.get("force_reconnect")
+        force_reconnect = str(raw_force_reconnect).strip().lower() in {"1", "true", "yes", "on"}
 
-    current = ws_manager.get_client(account_id)
-    if current and getattr(current, "is_connected", False):
-        status = ws_manager.get_status(account_id)
-        return ResultObject.success({
-            "connected": True,
-            "status": "already_connected",
-            "hasSid": bool(status.get("hasSid")),
-            "lastError": "",
-        })
+        current = ws_manager.get_client(account_id)
+        if current and getattr(current, "is_connected", False):
+            status = ws_manager.get_status(account_id)
+            return ResultObject.success({
+                "connected": True,
+                "status": "already_connected",
+                "hasSid": bool(status.get("hasSid")),
+                "lastError": "",
+            })
 
-    # === 连接前同步预检 WS Token ===
-    # 在启动后台 WS 客户端之前，先同步调用 Token API 探测 Cookie 是否可用。
-    # 如果 Cookie 已触发滑块/已过期，立即返回失败，避免用户空等 12 秒后还看到"连接仍在建立中"。
-    precheck_ok, precheck_fail = await _precheck_ws_token(
-        db, tenant_id, account_id, allow_unverified=force_reconnect
-    )
-    if not precheck_ok:
-        fail_type, fail_message = precheck_fail
-        logger.warning("websocket_start 预检失败 accountId=%d failType=%s", account_id, fail_type)
-        return ResultObject.success({
-            "connected": False,
-            "optimistic": False,
-            "status": fail_type,
-            "hasSid": False,
-            "lastError": fail_message,
-            "message": fail_message,
-        })
+        # === 连接前同步预检 WS Token ===
+        # 在启动后台 WS 客户端之前，先同步调用 Token API 探测 Cookie 是否可用。
+        # 如果 Cookie 已触发滑块/已过期，立即返回失败，避免用户空等 12 秒后还看到"连接仍在建立中"。
+        precheck_ok, precheck_fail = await _precheck_ws_token(
+            db, tenant_id, account_id, allow_unverified=force_reconnect
+        )
+        if not precheck_ok:
+            fail_type, fail_message = precheck_fail
+            logger.warning("websocket_start 预检失败 accountId=%d failType=%s", account_id, fail_type)
+            return ResultObject.success({
+                "connected": False,
+                "optimistic": False,
+                "status": fail_type,
+                "hasSid": False,
+                "lastError": fail_message,
+                "message": fail_message,
+            })
 
-    client, error = await _restart_ws_client_from_db(
-        db,
-        tenant_id,
-        account_id,
-        allow_unverified=force_reconnect,
-    )
-    if error:
-        return ResultObject.failed(error)
+        client, error = await _restart_ws_client_from_db(
+            db,
+            tenant_id,
+            account_id,
+            allow_unverified=force_reconnect,
+        )
+        if error:
+            return ResultObject.failed(error, code=409)
 
-    outcome, status = await _wait_ws_connect_result(account_id, timeout_seconds=12.0)
-    if outcome == "connected":
-        return ResultObject.success({
-            "connected": True,
-            "status": "connected",
-            "hasSid": bool(status.get("hasSid")),
-            "lastError": "",
-        })
-    if outcome == "auth_failed":
-        # === 用户手动点击连接失败时自动过一次滑块 ===
-        # 检测到滑块/Token/Cookie 失败，自动触发滑块求解 + Token API 二次验证：
-        # - 求解通过 + Cookie 可用：恢复 cookie_status=1，自动重连 WS，返回"已恢复连接"
-        # - 求解通过但 Cookie Session 真过期：返回明确提示"Session 已过期，请重新扫码登录"
-        # - 求解失败：返回原始失败提示
-        try:
-            from app.services.captcha_solver import handle_captcha_for_account
-            captcha_result = await handle_captcha_for_account(
-                account_id=account_id,
-                tenant_id=tenant_id,
-                response=None,
-                auto_solve=True,
-                trigger_scene="ws_connect",
-                open_reason="WS 连接鉴权失败自动触发",
-                solve_reason="用户手动点击连接失败（auth_failed），自动尝试滑块求解恢复",
-            )
-            recovered = bool(captcha_result.get("recovered"))
-            auto_solve_result = captcha_result.get("autoSolveResult") or {}
-            cookie_verified = auto_solve_result.get("cookieVerified", True)
-
-            if recovered:
-                # 滑块通过 + Cookie 二次验证通过 → 自动重连 WS
-                try:
-                    asyncio.create_task(ws_manager.restart_account(account_id))
-                except Exception:
-                    pass
-                return ResultObject.success({
-                    "connected": False,
-                    "status": "recovering",
-                    "hasSid": False,
-                    "lastError": "",
-                    "captchaSolved": True,
-                    "cookieVerified": True,
-                    "message": "检测到登录失效，已自动完成滑块验证并恢复 Cookie，正在重新连接…",
-                })
-            elif auto_solve_result.get("solved") and not cookie_verified:
-                # 滑块通过但 Cookie Session 真过期
-                return ResultObject.failed(
-                    "Cookie Session 已真正过期（滑块已通过但 Token API 仍拒绝），"
-                    "请前往账号管理页或连接管理页重新扫码登录闲鱼账号获取新 Cookie。"
+        outcome, status = await _wait_ws_connect_result(account_id, timeout_seconds=12.0)
+        if outcome == "connected":
+            return ResultObject.success({
+                "connected": True,
+                "status": "connected",
+                "hasSid": bool(status.get("hasSid")),
+                "lastError": "",
+            })
+        if outcome == "auth_failed":
+            # === 用户手动点击连接失败时自动过一次滑块 ===
+            # 检测到滑块/Token/Cookie 失败，自动触发滑块求解 + Token API 二次验证：
+            # - 求解通过 + Cookie 可用：恢复 cookie_status=1，自动重连 WS，返回"已恢复连接"
+            # - 求解通过但 Cookie Session 真过期：返回明确提示"Session 已过期，请重新扫码登录"
+            # - 求解失败：返回原始失败提示
+            try:
+                from app.services.captcha_solver import handle_captcha_for_account
+                captcha_result = await handle_captcha_for_account(
+                    account_id=account_id,
+                    tenant_id=tenant_id,
+                    response=None,
+                    auto_solve=True,
+                    trigger_scene="ws_connect",
+                    open_reason="WS 连接鉴权失败自动触发",
+                    solve_reason="用户手动点击连接失败（auth_failed），自动尝试滑块求解恢复",
                 )
-            else:
-                # 滑块求解失败
-                return ResultObject.failed(
-                    "自动安全验证未通过，请稍后重试，或前往账号管理页手动更新 Cookie。"
-                )
-        except Exception as e:
-            return safe_route_failure(
-                logger,
-                e,
-                operation="solve websocket captcha",
-                user_message="自动安全验证服务暂时不可用，请更新 Cookie 或扫码重新登录",
-                code=503,
-            )
+                recovered = bool(captcha_result.get("recovered"))
+                auto_solve_result = captcha_result.get("autoSolveResult") or {}
+                cookie_verified = auto_solve_result.get("cookieVerified", True)
 
-    if outcome == "failed":
-        # WS 客户端已进入明确失败状态（closed/error/stopped 等），
-        # 不再乐观假设连接成功，直接返回失败并附上真实原因。
+                if recovered:
+                    # 滑块通过 + Cookie 二次验证通过 → 自动重连 WS
+                    try:
+                        asyncio.create_task(ws_manager.restart_account(account_id))
+                    except Exception:
+                        pass
+                    return ResultObject.success({
+                        "connected": False,
+                        "status": "recovering",
+                        "hasSid": False,
+                        "lastError": "",
+                        "captchaSolved": True,
+                        "cookieVerified": True,
+                        "message": "检测到登录失效，已自动完成滑块验证并恢复 Cookie，正在重新连接…",
+                    })
+                elif auto_solve_result.get("solved") and not cookie_verified:
+                    # 滑块通过但 Cookie Session 真过期
+                    return ResultObject.failed(
+                        "Cookie Session 已真正过期（滑块已通过但 Token API 仍拒绝），"
+                        "请前往账号管理页或连接管理页重新扫码登录闲鱼账号获取新 Cookie。"
+                    )
+                else:
+                    # 滑块求解失败
+                    return ResultObject.failed(
+                        "自动安全验证未通过，请稍后重试，或前往账号管理页手动更新 Cookie。"
+                    )
+            except Exception as e:
+                return safe_route_failure(
+                    logger,
+                    e,
+                    operation="solve websocket captcha",
+                    user_message="自动安全验证服务暂时不可用，请更新 Cookie 或扫码重新登录",
+                    code=503,
+                )
+
+        if outcome == "failed":
+            # WS 客户端已进入明确失败状态（closed/error/stopped 等），
+            # 不再乐观假设连接成功，直接返回失败并附上真实原因。
+            last_error = str(status.get("lastError") or status.get("last_error") or "").strip()
+            message = last_error or "WebSocket 连接失败，请检查网络或账号 Cookie 后重试"
+            return ResultObject.success({
+                "connected": False,
+                "optimistic": False,
+                "status": _safe_ws_phase(status),
+                "hasSid": bool(status.get("hasSid")),
+                "lastError": message,
+                "message": message,
+            })
+
+        # pending：12 秒内既未连上、也未进入明确失败状态。
+        # 预检已通过说明 Cookie 有效，但 WS 连接超时，通常是网络问题或闲鱼服务端延迟。
+        # 返回 connected=False + 根据当前 phase 给出诊断提示，让用户知道该如何处理。
+        phase = _safe_ws_phase(status)
         last_error = str(status.get("lastError") or status.get("last_error") or "").strip()
-        message = last_error or "WebSocket 连接失败，请检查网络或账号 Cookie 后重试"
+        if phase in {"refresh_token", "connecting", "connected_socket", "registering", "syncing"}:
+            message = "WebSocket 连接超时（12秒内未完成握手），请检查网络后重试，或稍后再查看连接状态"
+        elif last_error:
+            message = last_error
+        else:
+            message = "WebSocket 连接未完成，请稍后查看连接状态，或检查网络后重试"
         return ResultObject.success({
             "connected": False,
             "optimistic": False,
-            "status": _safe_ws_phase(status),
+            "status": phase,
             "hasSid": bool(status.get("hasSid")),
             "lastError": message,
             "message": message,
         })
-
-    # pending：12 秒内既未连上、也未进入明确失败状态。
-    # 预检已通过说明 Cookie 有效，但 WS 连接超时，通常是网络问题或闲鱼服务端延迟。
-    # 返回 connected=False + 根据当前 phase 给出诊断提示，让用户知道该如何处理。
-    phase = _safe_ws_phase(status)
-    last_error = str(status.get("lastError") or status.get("last_error") or "").strip()
-    if phase in {"refresh_token", "connecting", "connected_socket", "registering", "syncing"}:
-        message = "WebSocket 连接超时（12秒内未完成握手），请检查网络后重试，或稍后再查看连接状态"
-    elif last_error:
-        message = last_error
-    else:
-        message = "WebSocket 连接未完成，请稍后查看连接状态，或检查网络后重试"
-    return ResultObject.success({
-        "connected": False,
-        "optimistic": False,
-        "status": phase,
-        "hasSid": bool(status.get("hasSid")),
-        "lastError": message,
-        "message": message,
-    })
+    except Exception as e:
+        return safe_route_failure(
+            logger, e, operation="start websocket", user_message="WebSocket 连接启动失败，请稍后重试"
+        )
 
 
 @websocket_router.post("/stop")
@@ -1266,30 +1367,35 @@ async def websocket_stop(
     current_user: dict = Depends(get_current_user)
 ):
     """停止 WebSocket 连接。"""
-    account_id = _parse_account_id(data.get("xianyuAccountId") or data.get("accountId"))
-    if not account_id:
-        return ResultObject.validate_failed("accountId 不能为空")
-    tenant_id = current_user.get("tenant_id")
-    if not await _account_belongs_to_tenant(
-        db, tenant_id, account_id, current_user.get("user_id")
-    ):
-        return ResultObject.failed("账号不存在", code=404)
-    client = ws_manager.get_client(account_id)
-    if not client:
-        return ResultObject.success({"connected": False, "status": "not_found"})
-    await client.stop()
-    # 用户主动断开，持久化离线状态到 DB
     try:
-        await update_ws_heartbeat(db, {
-            "tenantId": tenant_id,
-            "accountId": account_id,
-            "onlineStatus": 0,
-            "wsStatus": 0,
-            "latency": 0,
-        })
+        account_id = _parse_account_id(data.get("xianyuAccountId") or data.get("accountId"))
+        if not account_id:
+            return ResultObject.validate_failed("accountId 不能为空")
+        tenant_id = current_user.get("tenant_id")
+        if not await _account_belongs_to_tenant(
+            db, tenant_id, account_id, current_user.get("user_id")
+        ):
+            return ResultObject.failed("账号不存在", code=404)
+        client = ws_manager.get_client(account_id)
+        if not client:
+            return ResultObject.success({"connected": False, "status": "not_found"})
+        await client.stop()
+        # 用户主动断开，持久化离线状态到 DB
+        try:
+            await update_ws_heartbeat(db, {
+                "tenantId": tenant_id,
+                "accountId": account_id,
+                "onlineStatus": 0,
+                "wsStatus": 0,
+                "latency": 0,
+            })
+        except Exception as e:
+            logger.warning("websocket_stop 持久化离线状态失败 accountId=%d: %s", account_id, e)
+        return ResultObject.success({"connected": False, "status": "disconnected"})
     except Exception as e:
-        logger.warning("websocket_stop 持久化离线状态失败 accountId=%d: %s", account_id, e)
-    return ResultObject.success({"connected": False, "status": "disconnected"})
+        return safe_route_failure(
+            logger, e, operation="stop websocket", user_message="WebSocket 停止失败，请稍后重试"
+        )
 
 
 @websocket_router.post("/status")
@@ -1299,29 +1405,34 @@ async def websocket_status(
     current_user: dict = Depends(get_current_user)
 ):
     """获取 WebSocket 连接状态。"""
-    account_id = _parse_account_id(data.get("xianyuAccountId") or data.get("accountId"))
-    if not account_id:
-        return ResultObject.validate_failed("accountId 不能为空")
-    tenant_id = current_user.get("tenant_id")
-    if not await _account_belongs_to_tenant(
-        db, tenant_id, account_id, current_user.get("user_id")
-    ):
-        return ResultObject.failed("账号不存在", code=404)
-    client = ws_manager.get_client(account_id)
-    if not client:
+    try:
+        account_id = _parse_account_id(data.get("xianyuAccountId") or data.get("accountId"))
+        if not account_id:
+            return ResultObject.validate_failed("accountId 不能为空")
+        tenant_id = current_user.get("tenant_id")
+        if not await _account_belongs_to_tenant(
+            db, tenant_id, account_id, current_user.get("user_id")
+        ):
+            return ResultObject.failed("账号不存在", code=404)
+        client = ws_manager.get_client(account_id)
+        if not client:
+            return ResultObject.success({
+                "connected": False,
+                "status": "not_found",
+                "hasSid": False,
+                "lastError": "",
+            })
+        status = ws_manager.get_status(account_id)
         return ResultObject.success({
-            "connected": False,
-            "status": "not_found",
-            "hasSid": False,
-            "lastError": "",
+            "connected": bool(getattr(client, "is_connected", False)),
+            "status": _safe_ws_phase(status),
+            "hasSid": bool(status.get("hasSid")),
+            "lastError": _safe_ws_last_error(status),
         })
-    status = ws_manager.get_status(account_id)
-    return ResultObject.success({
-        "connected": bool(getattr(client, "is_connected", False)),
-        "status": _safe_ws_phase(status),
-        "hasSid": bool(status.get("hasSid")),
-        "lastError": _safe_ws_last_error(status),
-    })
+    except Exception as e:
+        return safe_route_failure(
+            logger, e, operation="query websocket status", user_message="WebSocket 状态查询失败，请稍后重试"
+        )
 
 
 @media_router.post("/list")

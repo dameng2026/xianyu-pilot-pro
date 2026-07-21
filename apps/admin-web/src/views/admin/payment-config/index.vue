@@ -3,7 +3,7 @@
     <section class="payment-head">
       <div>
         <h2>支付配置</h2>
-        <p>集中配置微信、支付宝官方接口与易支付通道；支付订单、回调与权益发放由 Java 业务端统一处理。</p>
+        <p>集中配置微信、支付宝官方接口与易支付通道；支付订单、回调与权益发放由 Java 业务端统一处理。Token 充值套餐已独立到「套餐与授权 → Token 套餐」。</p>
       </div>
       <div class="head-actions"><ElButton plain :loading="sandboxLoading" :disabled="configState !== 'ready'" @click="enableSandbox">一键启用沙箱支付</ElButton><ElButton type="primary" :disabled="configState !== 'ready'" @click="openConfig()">新增支付通道</ElButton></div>
     </section>
@@ -55,33 +55,13 @@
 
     <ElCard shadow="never" class="panel-card">
       <template #header>
-        <div class="card-head"><strong>Token 充值套餐</strong><ElButton type="primary" plain :disabled="planState !== 'ready'" @click="openTokenPlan()">新增套餐</ElButton></div>
-      </template>
-      <AdminDataState v-if="planState === 'loading'" state="loading" title="正在读取充值套餐" compact />
-      <AdminDataState
-        v-else-if="planState === 'error'"
-        state="error"
-        title="充值套餐暂不可用"
-        :description="planError"
-        retry-text="重新读取套餐"
-        compact
-        @retry="loadTokenPlans"
-      />
-      <ElTable v-else :data="tokenPlanPage.records" border style="width: 100%">
-        <template #empty><div class="empty-state">暂无充值套餐，点击"新增套餐"创建</div></template>
-        <ElTableColumn prop="planName" label="套餐名称" min-width="140" />
-        <ElTableColumn prop="tokenAmount" label="Token" width="110" />
-        <ElTableColumn prop="bonusToken" label="赠送" width="100" />
-        <ElTableColumn label="价格" width="110"><template #default="{ row }">¥{{ row.priceYuan }}</template></ElTableColumn>
-        <ElTableColumn prop="sortOrder" label="排序" width="90" />
-        <ElTableColumn label="状态" width="90"><template #default="{ row }"><ElTag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '禁用' }}</ElTag></template></ElTableColumn>
-        <ElTableColumn label="操作" width="150" fixed="right"><template #default="{ row }"><ElButton link type="primary" @click="openTokenPlan(row)">编辑</ElButton><ElButton link type="danger" @click="removeTokenPlan(row)">删除</ElButton></template></ElTableColumn>
-      </ElTable>
-    </ElCard>
-
-    <ElCard shadow="never" class="panel-card">
-      <template #header>
-        <div class="card-head"><strong>支付订单</strong><ElButton plain :loading="orderLoading" @click="loadOrders">刷新</ElButton></div>
+        <div class="card-head">
+          <strong>支付订单</strong>
+          <div class="card-head-actions">
+            <ElButton link type="primary" @click="goTokenPlans">管理 Token 套餐</ElButton>
+            <ElButton plain :loading="orderLoading" @click="loadOrders">刷新</ElButton>
+          </div>
+        </div>
       </template>
       <AdminDataState v-if="orderState === 'loading'" state="loading" title="正在读取支付订单" compact />
       <AdminDataState
@@ -134,55 +114,51 @@
       <template #footer><ElButton @click="configDialog = false">取消</ElButton><ElButton type="primary" :loading="configSaving" :disabled="configState !== 'ready'" @click="submitConfig">保存</ElButton></template>
     </ElDialog>
 
-    <ElDialog v-model="tokenDialog" title="Token 充值套餐" width="520px">
-      <ElForm :model="tokenForm" label-width="100px">
-        <ElFormItem label="套餐名称"><ElInput v-model="tokenForm.planName" /></ElFormItem>
-        <ElFormItem label="Token 数"><ElInputNumber v-model="tokenForm.tokenAmount" :min="1" /></ElFormItem>
-        <ElFormItem label="赠送 Token"><ElInputNumber v-model="tokenForm.bonusToken" :min="0" /></ElFormItem>
-        <ElFormItem label="价格/元"><ElInputNumber v-model="tokenForm.priceYuan" :min="0.01" :precision="2" /></ElFormItem>
-        <ElFormItem label="排序"><ElInputNumber v-model="tokenForm.sortOrder" :min="0" /></ElFormItem>
-        <ElFormItem label="状态"><ElSwitch v-model="tokenForm.enabled" /></ElFormItem>
-      </ElForm>
-      <template #footer><ElButton @click="tokenDialog = false">取消</ElButton><ElButton type="primary" :loading="planSaving" :disabled="planState !== 'ready'" @click="submitTokenPlan">保存</ElButton></template>
-    </ElDialog>
+    <ElAlert
+      type="info"
+      :closable="false"
+      show-icon
+      class="token-plans-link-alert"
+    >
+      <template #title>
+        <span>Token 充值套餐已迁移到独立页面：<ElButton link type="primary" @click="goTokenPlans">前往「Token 套餐」管理</ElButton></span>
+      </template>
+    </ElAlert>
   </div>
 </template>
 
 <script setup lang="ts">
   import { computed, onMounted, reactive, ref } from 'vue'
+  import { useRouter } from 'vue-router'
   import { ElMessage, ElMessageBox } from 'element-plus'
   import {
-    deleteTokenRechargePlan,
     fetchPaymentConfigs,
     fetchPaymentOrders,
-    fetchTokenRechargePlans,
     forceMarkPaidOrder,
-    savePaymentConfig,
-    saveTokenRechargePlan
+    savePaymentConfig
   } from '@/api/payment'
   import AdminDataState from '@/components/business/admin-data-state/index.vue'
 
   defineOptions({ name: 'AdminPaymentConfigPage' })
 
+  const router = useRouter()
+
   const configs = ref<any[]>([])
   const sandboxLoading = ref(false)
-  const planLoading = ref(false)
   const orderLoading = ref(false)
   const configLoading = ref(false)
   const configSaving = ref(false)
-  const planSaving = ref(false)
   const orderPage = reactive<any>({ records: [], total: 0 })
-  const tokenPlanPage = reactive<any>({ records: [], total: 0 })
   const configDialog = ref(false)
-  const tokenDialog = ref(false)
   const configForm = reactive<any>({})
-  const tokenForm = reactive<any>({})
   const configState = ref<'loading' | 'ready' | 'error'>('loading')
-  const planState = ref<'loading' | 'ready' | 'error'>('loading')
   const orderState = ref<'loading' | 'ready' | 'error'>('loading')
   const configError = ref('')
-  const planError = ref('')
   const orderError = ref('')
+
+  function goTokenPlans() {
+    router.push({ name: 'AdminTokenPlans' })
+  }
 
   function channelLabel(v: string) { return v === 'wechat' ? '微信支付' : v === 'alipay' ? '支付宝' : `未识别（${v || '-'}）` }
   function providerLabel(v: string) { return v === 'yipay' ? '易支付' : v === 'official' ? '官方接口' : `未识别（${v || '-'}）` }
@@ -222,21 +198,6 @@
       orderState.value = 'error'
     }
     finally { orderLoading.value = false }
-  }
-  async function loadTokenPlans() {
-    planLoading.value = true
-    planState.value = 'loading'
-    planError.value = ''
-    try {
-      const data = await fetchTokenRechargePlans({ current: 1, size: 20 })
-      if (!data || !Array.isArray(data.records)) throw new Error('充值套餐接口返回格式异常')
-      Object.assign(tokenPlanPage, data)
-      planState.value = 'ready'
-    } catch (error: any) {
-      planError.value = error?.message || '充值套餐读取失败，请检查服务状态后重试。'
-      planState.value = 'error'
-    }
-    finally { planLoading.value = false }
   }
 
   function autoFill() {
@@ -282,29 +243,6 @@
     }
   }
 
-  function openTokenPlan(row: any = {}) {
-    if (planState.value !== 'ready') return
-    Object.keys(tokenForm).forEach(k => delete tokenForm[k])
-    Object.assign(tokenForm, { tokenAmount: 100, bonusToken: 0, priceYuan: 1, sortOrder: 100, ...row, enabled: row.status === undefined ? true : row.status === 1 })
-    tokenDialog.value = true
-  }
-  async function submitTokenPlan() {
-    if (planState.value !== 'ready') {
-      ElMessage.error('充值套餐尚未成功读取，已阻止保存')
-      return
-    }
-    planSaving.value = true
-    try {
-      await saveTokenRechargePlan({ ...tokenForm, status: tokenForm.enabled ? 1 : 0 })
-      tokenDialog.value = false
-      await loadTokenPlans()
-    } catch (error: any) {
-      ElMessage.error(error?.message || '充值套餐保存失败')
-    } finally {
-      planSaving.value = false
-    }
-  }
-
   async function enableSandbox() {
     if (configState.value !== 'ready') {
       ElMessage.error('支付通道尚未成功读取，已阻止沙箱配置写入')
@@ -334,16 +272,6 @@
     }
   }
 
-  async function removeTokenPlan(row: any) {
-    try {
-      await ElMessageBox.confirm(`确认删除 ${row.planName}？`, '删除确认')
-      await deleteTokenRechargePlan(row.id)
-      await loadTokenPlans()
-    } catch (error: any) {
-      if (error !== 'cancel' && error !== 'close') ElMessage.error(error?.message || '充值套餐删除失败')
-    }
-  }
-
   const orderForcePaying = ref<Record<string, boolean>>({})
   async function forceMarkPaid(row: any) {
     if (!row?.orderNo) return
@@ -367,13 +295,14 @@
     }
   }
 
-  onMounted(async () => { await Promise.all([loadConfigs(), loadOrders(), loadTokenPlans()]) })
+  onMounted(async () => { await Promise.all([loadConfigs(), loadOrders()]) })
 </script>
 
 <style scoped lang="scss">
 .payment-admin-page { display: grid; gap: 18px; }
 .head-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .card-tags { display: inline-flex; align-items: center; gap: 8px; }
+.card-head-actions { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .form-tip { margin-top: 6px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
 .payment-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px; border-radius: 18px; background: var(--el-bg-color); box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06); }
 .payment-head h2 { margin: 0; font-size: 24px; }
@@ -386,5 +315,6 @@
 .edit-btn { width: 100%; margin-top: 14px; }
 .panel-card { border-radius: 18px; }
 .empty-state { padding: 40px 0; text-align: center; color: var(--el-text-color-secondary); font-size: 14px; }
+.token-plans-link-alert { border-radius: 14px; }
 @media (max-width: 1100px) { .payment-grid { grid-template-columns: 1fr; } }
 </style>

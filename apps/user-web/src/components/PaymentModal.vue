@@ -530,7 +530,7 @@ function isReadableConfigName(name) {
   const str = String(name).trim()
   if (!str || str.length > 40) return false
   // 仅允许字母/数字/空格及常见命名标点，拒绝加密串、乱码或含异常符号的值
-  return /^[\p{L}\p{N}\s\u00B7\u30FB\-_\/()().、+]+$/u.test(str)
+  return /^[\p{L}\p{N}\s\u00B7\u30FB\-_/()().、+]+$/u.test(str)
 }
 
 function paymentMethodLabel(method) {

@@ -155,11 +155,19 @@ public class AiBillingService {
     }
 
     public PageResult<Map<String, Object>> pageUsageLogs(int current, int size, String keyword, String scene, String status) {
+        return pageUsageLogs(current, size, keyword, scene, status, null);
+    }
+
+    public PageResult<Map<String, Object>> pageUsageLogs(int current, int size, String keyword, String scene, String status, Long userId) {
         int safeCurrent = PageUtils.normalizeCurrent(current);
         int safeSize = PageUtils.normalizeSize(size, 200);
         int offset = (safeCurrent - 1) * safeSize;
         List<Object> args = new ArrayList<>();
         StringBuilder where = new StringBuilder(" WHERE l.deleted=0");
+        if (userId != null) {
+            where.append(" AND l.user_id=?");
+            args.add(userId);
+        }
         if (StringUtils.hasText(keyword)) {
             where.append(" AND (l.provider_name LIKE ? OR l.model_name LIKE ? OR u.username LIKE ? OR l.request_id LIKE ?)");
             String kw = "%" + keyword.trim() + "%";
@@ -215,6 +223,64 @@ public class AiBillingService {
             row.put("remark", remarkForLedger(ctStr, row.get("remark")));
         }
         return new PageResult<>(rows, safeCurrent, safeSize, total == null ? 0 : total);
+    }
+
+    /**
+     * 管理端：分页查询 Token 充值记录（token_recharge_record 表）。
+     * 支持按 userId 严格过滤、关键词模糊匹配（用户名/订单号）、source 来源过滤。
+     */
+    public PageResult<Map<String, Object>> pageRechargeRecords(int current, int size, Long userId, String keyword, String source) {
+        int safeCurrent = PageUtils.normalizeCurrent(current);
+        int safeSize = PageUtils.normalizeSize(size, 200);
+        int offset = (safeCurrent - 1) * safeSize;
+        List<Object> args = new ArrayList<>();
+        StringBuilder where = new StringBuilder(" WHERE 1=1");
+        if (userId != null) {
+            where.append(" AND r.user_id=?");
+            args.add(userId);
+        }
+        if (StringUtils.hasText(keyword)) {
+            where.append(" AND (u.username LIKE ? OR r.order_no LIKE ? OR r.remark LIKE ?)");
+            String kw = "%" + keyword.trim() + "%";
+            args.add(kw); args.add(kw); args.add(kw);
+        }
+        if (StringUtils.hasText(source)) {
+            where.append(" AND r.source=?");
+            args.add(source.trim());
+        }
+        Long total = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM token_recharge_record r LEFT JOIN sys_user u ON u.id=r.user_id" + where,
+                Long.class, args.toArray());
+        List<Object> pageArgs = new ArrayList<>(args);
+        pageArgs.add(safeSize); pageArgs.add(offset);
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT r.id, r.tenant_id AS tenantId, r.user_id AS userId, u.username, " +
+                        "r.payment_order_id AS paymentOrderId, r.order_no AS orderNo, " +
+                        "r.token_amount AS tokenAmount, r.before_balance AS beforeBalance, r.after_balance AS afterBalance, " +
+                        "r.source, r.remark, r.created_time AS createdTime " +
+                        "FROM token_recharge_record r LEFT JOIN sys_user u ON u.id=r.user_id" + where +
+                        " ORDER BY r.id DESC LIMIT ? OFFSET ?", pageArgs.toArray());
+        return new PageResult<>(rows, safeCurrent, safeSize, total == null ? 0 : total);
+    }
+
+    /**
+     * 管理端：充值记录汇总统计（用于顶部卡片）。
+     * 若 userId 不为空，则只统计该用户。
+     */
+    public Map<String, Object> rechargeRecordsSummary(Long userId) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        StringBuilder whereUser = new StringBuilder(" WHERE 1=1");
+        List<Object> args = new ArrayList<>();
+        if (userId != null) {
+            whereUser.append(" AND user_id=?");
+            args.add(userId);
+        }
+        m.put("totalRecords", optionalLong("SELECT COUNT(*) FROM token_recharge_record" + whereUser, args.toArray()));
+        m.put("totalTokens", optionalLong("SELECT COALESCE(SUM(token_amount),0) FROM token_recharge_record" + whereUser, args.toArray()));
+        m.put("todayRecords", optionalLong("SELECT COUNT(*) FROM token_recharge_record" + whereUser + " AND DATE(created_time)=CURRENT_DATE()", args.toArray()));
+        m.put("todayTokens", optionalLong("SELECT COALESCE(SUM(token_amount),0) FROM token_recharge_record" + whereUser + " AND DATE(created_time)=CURRENT_DATE()", args.toArray()));
+        m.put("monthTokens", optionalLong("SELECT COALESCE(SUM(token_amount),0) FROM token_recharge_record" + whereUser + " AND created_time >= DATE_FORMAT(CURDATE(), '%Y-%m-01')", args.toArray()));
+        return m;
     }
 
     public Map<String, Object> summary() {
@@ -556,6 +622,7 @@ public class AiBillingService {
         res.put("providerName", providerName);
         res.put("modelName", modelName);
         res.put("modelType", modelType);
+        res.put("moduleKey", price.get("module_key"));
         res.put("billingMode", billingMode);
         res.put("promptTokens", promptTokens);
         res.put("completionTokens", completionTokens);
@@ -654,6 +721,10 @@ public class AiBillingService {
     }
 
     private Map<String, Object> findPriceConfig(Long tenantId, String providerName, String modelName, String modelType) {
+        // 通用模型（model-config-general）按 module_key 显式标识，不依赖 provider/model 匹配。
+        // 当调用方传 provider=default, model=default 时，应优先匹配通用模型记录，
+        // 避免误匹配到 model-config-chat 等其他模型（导致走 token 计费而非按次计费）。
+        boolean isGeneralLookup = "default".equals(providerName) && "default".equals(modelName);
         List<Object> args = new ArrayList<>();
         String sql = "SELECT * FROM ai_model_price_config WHERE deleted=0 AND enabled=1 AND model_type=? AND (tenant_id IS NULL";
         args.add(modelType);
@@ -662,7 +733,11 @@ public class AiBillingService {
             args.add(tenantId);
         }
         sql += ") AND (model_name=? OR model_name='default') AND (provider_name=? OR provider_name='default') " +
-                "ORDER BY CASE WHEN tenant_id IS NULL THEN 1 ELSE 0 END, CASE WHEN model_name=? THEN 0 ELSE 1 END, CASE WHEN provider_name=? THEN 0 ELSE 1 END, id DESC LIMIT 1";
+                "ORDER BY CASE WHEN tenant_id IS NULL THEN 1 ELSE 0 END, ";
+        if (isGeneralLookup) {
+            sql += "CASE WHEN module_key='model-config-general' THEN 0 ELSE 1 END, ";
+        }
+        sql += "CASE WHEN model_name=? THEN 0 ELSE 1 END, CASE WHEN provider_name=? THEN 0 ELSE 1 END, id DESC LIMIT 1";
         args.add(modelName); args.add(providerName); args.add(modelName); args.add(providerName);
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, args.toArray());
         if (!rows.isEmpty()) return rows.get(0);
@@ -925,6 +1000,16 @@ public class AiBillingService {
         }
     }
 
+    private Long optionalLong(String sql, Object... args) {
+        try {
+            Long v = jdbcTemplate.queryForObject(sql, Long.class, args);
+            return v == null ? 0 : v;
+        } catch (Exception e) {
+            log.error("查询 AI 计费汇总数据失败, errorType={}", e.getClass().getSimpleName());
+            throw new BizException(503, "AI 计费汇总数据暂时不可用");
+        }
+    }
+
     private long sceneUsageCountToday(Long userId, String scene) {
         if (userId == null || !StringUtils.hasText(scene)) return 0L;
         try {
@@ -942,6 +1027,14 @@ public class AiBillingService {
     }
 
     private long resolveEffectiveChargeTokens(Map<String, Object> estimate, Map<String, Object> sell) {
+        // 通用模型必须按次计费：场景定价不得覆盖通用模型的按次扣费规则（默认 3 token/次）。
+        // 若允许 sellChargeTokens 覆盖，则场景配置的 sell_tokens_per_reply 会绕过通用模型按次计费，
+        // 导致用户被扣 8 token（场景配置）而非 3 token（通用模型默认）。
+        if ("model-config-general".equals(estimate.get("moduleKey"))) {
+            long estimatedCharge = number(estimate.get("chargeTokens"));
+            if (estimatedCharge > 0) return estimatedCharge;
+            throw new BizException(503, "通用模型按次计费结果为零，请检查通用模型 perCallPrice 配置");
+        }
         long sellChargeTokens = number(sell == null ? null : sell.get("sellChargeTokens"));
         if (sellChargeTokens > 0) {
             return sellChargeTokens;
