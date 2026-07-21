@@ -180,3 +180,49 @@ export async function exportUsersCsv(keyword: string, status: string) {
     `users-${new Date().toISOString().slice(0, 10)}.csv`
   )
 }
+
+// ==================== 数据保留策略 API ====================
+
+// 数据保留策略配置类型
+export interface RetentionPolicyConfig {
+  enabled: boolean
+  retentionDays: number
+  cleanupCron: string
+  categories: {
+    operationLog: boolean
+    clientErrorLog: boolean
+    notificationLog: boolean
+    notificationDedup: boolean
+    chatMessage: boolean
+    captchaRecord: boolean
+    autoReplyLog: boolean
+    uploadRateEvent: boolean
+  }
+  lastCleanup: {
+    time: string
+    totalDeleted: number
+    byCategory: Record<string, number>
+  } | null
+}
+
+// 获取数据保留策略配置
+export function fetchGetRetentionConfig() {
+  return request.get<RetentionPolicyConfig>({
+    url: '/system/retention-config'
+  }).then(value => requireRecordPayload<Record<string, any>>(value, '数据保留策略配置') as RetentionPolicyConfig)
+}
+
+// 保存数据保留策略配置
+export function fetchSaveRetentionConfig(data: Partial<RetentionPolicyConfig>) {
+  return request.post<any>({
+    url: '/system/retention-config',
+    data
+  })
+}
+
+// 手动触发一次数据保留策略清理
+export function fetchRunRetentionCleanup() {
+  return request.post<{ totalDeleted: number; byCategory: Record<string, number> }>({
+    url: '/system/retention-config/run'
+  })
+}
