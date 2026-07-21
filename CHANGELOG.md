@@ -72,6 +72,12 @@
 - 用户端 chunk hash 轮换，避免浏览器 404 缓存
 - 增量前端 dist 上传脚本改为 md5 同步（非文件列表）
 
+#### 后端 - 支付链路修复
+- Nginx 添加 `/open-api/` 转发到后端（18081），修复易支付异步回调被 SPA fallback 拦截导致回调永远无法到达后端的问题
+- 二维码内容直接指向易支付 GET URL，扫码后浏览器直接跳转收银台，避免中间页跳转
+- `PaymentService` / `PaymentConfigController` 配置链路兼容性调整
+- `BusinessSettingsService` 配置同步适配
+
 ### 🔧 变更
 
 #### 前端 - 桌面端配套调整
@@ -118,6 +124,22 @@
 - docker-compose.prod.yml YAML 语法校验通过
 - 本地 token 一致性校验通过（`HIDpsuvrKSlWfczLiFTJa0Ydhqm8gx7Q`）
 - 商业版前端 `VITE_SHOW_DATA_SYNC=false` 校验通过
+
+### 🚀 上线验证（2026-07-21）
+
+#### 中国后端服务器（1.12.66.249）
+- 8 个容器全部 healthy：mysql / redis / crawler-postgres / automation / automation-worker / crawler-service / crawler-worker / backend
+- V1.13 迁移手动执行完成：`xianyu_conversation` 4 字段 + 1 索引、`xianyu_chat_message` 1 字段全部就位
+- MySQL binlog_expire_logs_seconds = 172800（2 天）生效
+- 磁盘占用稳定在 37G / 59G（65%）
+- 健康检查端点 HTTP 200
+
+#### 美国前端服务器（154.9.254.86）
+- user-web 上传成功（sha256 校验通过），rsync 同步完成，nginx reload 成功
+- admin-web 上传成功（sha256 校验通过），rsync 同步完成，nginx reload 成功
+- `https://www.xianyupilot.com/` 返回 HTTP 200
+- `https://admin.xianyupilot.com/` 返回 HTTP 200
+- 旧版本已备份至 `/var/www/backups/{user-web,admin-web}-20260721-222809`
 
 ---
 
