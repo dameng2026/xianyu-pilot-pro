@@ -1661,7 +1661,7 @@ onMounted(() => {
   bottom: 100px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(31, 35, 41, 0.9);
+  background: color-mix(in srgb, var(--m-color-text-primary) 90%, transparent);
   color: var(--m-color-text-inverse);
   padding: var(--m-space-2) var(--m-space-4);
   border-radius: var(--m-radius-pill);

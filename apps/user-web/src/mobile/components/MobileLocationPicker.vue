@@ -54,8 +54,8 @@
                 />
               </div>
             </div>
-            <div v-else class="m-picker-state">
-              <MIcon name="search" :size="36" color="#b0bacb" />
+            <div v-else class="m-picker-state m-picker-empty">
+              <MIcon name="search" :size="36" class="m-empty-icon" />
               <span>未找到匹配地区</span>
             </div>
           </div>
@@ -329,7 +329,7 @@ watch(() => props.visible, (val) => {
 .m-picker-mask {
   position: fixed;
   inset: 0;
-  background: rgba(15,25,50,0.5);
+  background: var(--m-mask-modal);
   z-index: 300;
   display: flex;
   align-items: flex-end;
@@ -340,12 +340,13 @@ watch(() => props.visible, (val) => {
   width: 100%;
   max-width: 500px;
   max-height: 80vh;
-  background: white;
-  border-radius: 20px 20px 0 0;
+  background: var(--m-color-bg-elevated);
+  border-radius: var(--m-radius-2xl) var(--m-radius-2xl) 0 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   padding-bottom: env(safe-area-inset-bottom);
+  box-shadow: var(--m-shadow-elevated);
 }
 
 .m-sheet-enter-active,
@@ -369,44 +370,44 @@ watch(() => props.visible, (val) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px;
-  border-bottom: 1px solid #f1f5f9;
+  padding: var(--m-space-3) var(--m-space-4);
+  border-bottom: 1px solid var(--m-color-border-light);
   flex-shrink: 0;
 }
 
 .m-picker-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #15213d;
+  font-size: var(--m-font-size-h2);
+  font-weight: var(--m-font-weight-bold);
+  color: var(--m-color-text-primary);
 }
 
 .m-picker-btn {
   border: none;
   background: transparent;
-  font-size: 14px;
-  font-weight: 600;
-  padding: 8px 12px;
+  font-size: var(--m-font-size-body);
+  font-weight: var(--m-font-weight-semibold);
+  padding: var(--m-space-2) var(--m-space-3);
   cursor: pointer;
-  border-radius: 8px;
+  border-radius: var(--m-radius-md);
 }
 
 .m-picker-cancel {
-  color: #94a3b8;
+  color: var(--m-color-text-tertiary);
 }
 
 .m-picker-confirm {
-  color: #0d6bff;
+  color: var(--m-color-primary);
 }
 
 .m-picker-confirm:disabled {
-  color: #cbd5e1;
+  color: var(--m-color-text-disabled);
   cursor: not-allowed;
 }
 
 .m-picker-search {
   position: relative;
-  padding: 10px 16px;
-  border-bottom: 1px solid #f1f5f9;
+  padding: var(--m-space-3) var(--m-space-4);
+  border-bottom: 1px solid var(--m-color-border-light);
   flex-shrink: 0;
 }
 
@@ -415,26 +416,26 @@ watch(() => props.visible, (val) => {
   left: 28px;
   top: 50%;
   transform: translateY(-50%);
-  color: #94a3b8;
+  color: var(--m-color-text-tertiary);
   pointer-events: none;
 }
 
 .m-search-input {
   width: 100%;
-  padding: 10px 36px 10px 36px;
-  background: #f5f8ff;
-  border: 1px solid #edf1f7;
-  border-radius: 12px;
-  font-size: 14px;
-  color: #15213d;
+  padding: var(--m-space-3) 36px var(--m-space-3) 36px;
+  background: var(--m-color-bg-subtle);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-lg);
+  font-size: var(--m-font-size-body);
+  color: var(--m-color-text-primary);
   box-sizing: border-box;
   outline: none;
   transition: border-color 0.2s;
 }
 
 .m-search-input:focus {
-  border-color: #0d6bff;
-  background: white;
+  border-color: var(--m-color-primary);
+  background: var(--m-color-bg-card);
 }
 
 .m-search-clear {
@@ -445,9 +446,9 @@ watch(() => props.visible, (val) => {
   width: 22px;
   height: 22px;
   border: none;
-  background: #cbd5e1;
-  color: white;
-  border-radius: 50%;
+  background: var(--m-color-text-disabled);
+  color: var(--m-color-text-inverse);
+  border-radius: var(--m-radius-circle);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -473,7 +474,7 @@ watch(() => props.visible, (val) => {
 .m-cascader-col {
   flex: 1;
   min-width: 0;
-  border-right: 1px solid #f1f5f9;
+  border-right: 1px solid var(--m-color-border-light);
   overflow-y: auto;
 }
 
@@ -482,44 +483,44 @@ watch(() => props.visible, (val) => {
 }
 
 .m-cascader-empty {
-  padding: 24px 12px;
+  padding: var(--m-space-6) var(--m-space-3);
   text-align: center;
-  font-size: 13px;
-  color: #94a3b8;
+  font-size: var(--m-font-size-body-sm);
+  color: var(--m-color-text-tertiary);
 }
 
 .m-cascader-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 12px;
-  font-size: 14px;
-  color: #475569;
+  padding: var(--m-space-3) var(--m-space-3);
+  font-size: var(--m-font-size-body);
+  color: var(--m-color-text-secondary);
   cursor: pointer;
-  border-bottom: 1px solid #f5f8fc;
+  border-bottom: 1px solid var(--m-color-border-light);
   position: relative;
   transition: background 0.15s;
 }
 
 .m-cascader-item:active {
-  background: #f1f5f9;
+  background: var(--m-color-bg-hover);
 }
 
 .m-cascader-item.active {
-  background: linear-gradient(90deg, #e8f1ff 0%, #f5f9ff 100%);
-  color: #0d6bff;
-  font-weight: 600;
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
+  font-weight: var(--m-font-weight-semibold);
 }
 
 .m-cascader-item.active::before {
   content: '';
   position: absolute;
   left: 0;
-  top: 8px;
-  bottom: 8px;
+  top: var(--m-space-2);
+  bottom: var(--m-space-2);
   width: 3px;
-  background: linear-gradient(180deg, #0d6bff, #3b9bff);
-  border-radius: 0 3px 3px 0;
+  background: var(--m-color-primary);
+  border-radius: 0 var(--m-radius-sm) var(--m-radius-sm) 0;
 }
 
 .m-cascader-label {
@@ -531,19 +532,19 @@ watch(() => props.visible, (val) => {
 }
 
 .m-cascader-arrow {
-  color: #cbd5e1;
+  color: var(--m-color-text-disabled);
   flex-shrink: 0;
-  margin-left: 6px;
+  margin-left: var(--m-space-2);
 }
 
 .m-cascader-item.active .m-cascader-arrow {
-  color: #0d6bff;
+  color: var(--m-color-primary);
 }
 
 .m-cascader-check {
-  color: #0d6bff;
+  color: var(--m-color-primary);
   flex-shrink: 0;
-  margin-left: 6px;
+  margin-left: var(--m-space-2);
 }
 
 .m-picker-state {
@@ -551,22 +552,26 @@ watch(() => props.visible, (val) => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  padding: 48px 20px;
-  color: #8c98ae;
-  font-size: 14px;
+  gap: var(--m-space-3);
+  padding: var(--m-space-12) var(--m-space-5);
+  color: var(--m-color-text-tertiary);
+  font-size: var(--m-font-size-body);
+}
+
+.m-picker-empty .m-empty-icon {
+  color: var(--m-color-text-disabled);
 }
 
 .m-picker-error {
-  color: #ff4757;
+  color: var(--m-color-danger);
 }
 
 .m-picker-spinner {
   width: 28px;
   height: 28px;
-  border: 2.5px solid #e7edf7;
-  border-top-color: #0d6bff;
-  border-radius: 50%;
+  border: 2.5px solid var(--m-color-border);
+  border-top-color: var(--m-color-primary);
+  border-radius: var(--m-radius-circle);
   animation: m-picker-spin 0.8s linear infinite;
 }
 
@@ -575,14 +580,14 @@ watch(() => props.visible, (val) => {
 }
 
 .m-retry-btn {
-  margin-top: 6px;
-  padding: 6px 18px;
-  background: linear-gradient(135deg, #0d6bff, #3b9bff);
-  color: white;
+  margin-top: var(--m-space-2);
+  padding: var(--m-space-2) var(--m-space-5);
+  background: var(--m-color-primary);
+  color: var(--m-color-text-inverse);
   border: none;
-  border-radius: 100px;
-  font-size: 13px;
-  font-weight: 600;
+  border-radius: var(--m-radius-pill);
+  font-size: var(--m-font-size-body-sm);
+  font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
 }
 
@@ -596,56 +601,56 @@ watch(() => props.visible, (val) => {
 .m-search-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 16px;
-  border-bottom: 1px solid #f5f8fc;
+  gap: var(--m-space-3);
+  padding: var(--m-space-3) var(--m-space-4);
+  border-bottom: 1px solid var(--m-color-border-light);
   cursor: pointer;
   transition: background 0.15s;
 }
 
 .m-search-item:active {
-  background: #f1f5f9;
+  background: var(--m-color-bg-hover);
 }
 
 .m-search-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: #15213d;
+  font-size: var(--m-font-size-body);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
   flex-shrink: 0;
 }
 
 .m-search-path {
   flex: 1;
-  font-size: 12px;
-  color: #94a3b8;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .m-search-check {
-  color: #0d6bff;
+  color: var(--m-color-primary);
   flex-shrink: 0;
 }
 
 .m-picker-footer {
   flex-shrink: 0;
-  padding: 10px 16px;
-  background: #f5f8ff;
-  border-top: 1px solid #edf1f7;
+  padding: var(--m-space-3) var(--m-space-4);
+  background: var(--m-color-bg-subtle);
+  border-top: 1px solid var(--m-color-border-light);
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
+  gap: var(--m-space-2);
+  font-size: var(--m-font-size-body-sm);
 }
 
 .m-current-label {
-  color: #94a3b8;
+  color: var(--m-color-text-tertiary);
 }
 
 .m-current-value {
-  color: #0d6bff;
-  font-weight: 600;
+  color: var(--m-color-primary);
+  font-weight: var(--m-font-weight-semibold);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -654,8 +659,8 @@ watch(() => props.visible, (val) => {
 
 @media (max-width: 360px) {
   .m-cascader-item {
-    padding: 12px 10px;
-    font-size: 13px;
+    padding: var(--m-space-3) var(--m-space-2);
+    font-size: var(--m-font-size-body-sm);
   }
 }
 </style>
