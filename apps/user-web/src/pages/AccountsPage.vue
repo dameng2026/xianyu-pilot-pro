@@ -3291,10 +3291,98 @@ onBeforeUnmount(() => {
   color: #ef4444;
 }
 
+/* 冷却中：灰色 + 弱化 */
+.solve-op-btn.cooldown {
+  color: #94a3b8;
+}
+
 .solve-op-btn:disabled {
   cursor: not-allowed;
   opacity: 0.7;
 }
+
+/* 滑块求解状态说明卡片（统计卡片上方常驻） */
+.solve-info-card {
+  margin-bottom: 14px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f8fafc, #f1f5f9);
+  border: 1px solid #e2e8f0;
+}
+
+.solve-info-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.solve-info-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.solve-info-sub {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.solve-info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 16px;
+}
+
+@media (max-width: 1024px) {
+  .solve-info-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .solve-info-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.solve-info-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.solve-info-item strong {
+  display: block;
+  font-size: 13px;
+  color: #1e293b;
+  margin-bottom: 2px;
+}
+
+.solve-info-item p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #475569;
+  word-break: break-word;
+}
+
+.solve-info-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: #cbd5e1;
+}
+
+.solve-info-dot.dot-red { background: #ef4444; }
+.solve-info-dot.dot-orange { background: #f59e0b; }
+.solve-info-dot.dot-purple { background: #8b5cf6; }
+.solve-info-dot.dot-blue { background: #3b82f6; }
+.solve-info-dot.dot-gray { background: #94a3b8; }
+.solve-info-dot.dot-green { background: #16bf78; }
 
 /* 滑块求解状态横幅（统计卡片下方集中提示） */
 .captcha-alert-list {
