@@ -40,5 +40,17 @@ export function getDashboardAccountHealth(params) {
   })
 }
 
+/**
+ * 获取最近操作日志（首页"最近动态"用）
+ * @param {object} params { limit?: number }
+ */
+export function getDashboardRecentLogs(params = {}) {
+  return request({
+    url: '/dashboard/recent-logs',
+    method: 'get',
+    params: { limit: params.limit ?? 10 }
+  })
+}
+
 // 向后兼容：DashboardPage.vue 仍使用 getDashboardStats
 export const getDashboardStats = getDashboardSummary
