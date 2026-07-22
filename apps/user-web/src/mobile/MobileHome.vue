@@ -272,7 +272,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, useId } from 'vue'
 import MIcon from './MIcon.vue'
 import MobileUnavailableState from './MobileUnavailableState.vue'
 import MEmpty from './components/MEmpty.vue'
@@ -314,8 +314,7 @@ const recentEvents = ref([])
 const sseStatus = ref(getSseStatus())
 const activityTab = ref('events')
 
-let trendGradientSeq = 0
-const trendGradientId = `m-trend-grad-${++trendGradientSeq}`
+const trendGradientId = `m-trend-grad-${useId()}`
 
 // ===== 派生：用户与问候 =====
 const userName = computed(() => getCachedUsername() || '店主')
