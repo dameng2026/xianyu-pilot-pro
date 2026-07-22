@@ -100,11 +100,11 @@
           <div class="m-order-header">
             <span class="m-order-id">{{ order.externalOrderId || '-' }}</span>
             <span :class="['m-status-badge', statusBadgeClass(order)]">
-              {{ order.orderStatusText || '未知状态' }}
+              {{ orderStatusText(order) }}
             </span>
           </div>
 
-          <div class="m-order-time">{{ order.createTimeText || '-' }}</div>
+          <div class="m-order-time">{{ createTimeText(order) }}</div>
 
           <div class="m-order-goods">
             <div class="m-goods-image-wrap">
@@ -129,7 +129,7 @@
                 <div class="m-progress">
                   <div class="m-progress-bar" :style="{ width: deliveryProgress(order) + '%' }"></div>
                 </div>
-                <span class="m-progress-text">{{ order.deliveryProgressText || '1/1' }}</span>
+                <span class="m-progress-text">{{ deliveryProgressText(order) }}</span>
               </div>
             </div>
           </div>
@@ -155,7 +155,7 @@
       </div>
 
       <div v-if="hasMore" class="m-load-more">
-        <button class="m-load-btn" @click="loadMore" :disabled="loadingMore">
+        <button class="m-load-btn" :disabled="loadingMore" @click="loadMore">
           {{ loadingMore ? '加载中...' : '加载更多' }}
         </button>
       </div>
@@ -178,6 +178,7 @@ import MIcon from './MIcon.vue'
 import MobileUnavailableState from './MobileUnavailableState.vue'
 import MobileOrderShipForm from './components/MobileOrderShipForm.vue'
 import { getOrders, syncOrder as apiSyncOrder, syncOrders as apiSyncOrders } from '../api/orders.js'
+import { toast } from './toast.js'
 
 const emit = defineEmits(['navigate', 'force-desktop', 'back'])
 
@@ -265,6 +266,49 @@ function formatMoney(n) {
   return Number(n).toFixed(2)
 }
 
+const ORDER_STATUS_TEXT = {
+  0: '待付款',
+  1: '已付款',
+  2: '待发货',
+  3: '已发货',
+  4: '已完成',
+  5: '已关闭'
+}
+
+function orderStatusText(order) {
+  // 优先使用后端预格式化字段，回退到本地映射
+  if (order?.orderStatusText) return order.orderStatusText
+  return ORDER_STATUS_TEXT[Number(order?.orderStatus)] || '未知状态'
+}
+
+function formatDateTime(dt) {
+  if (!dt) return '-'
+  const d = new Date(dt)
+  if (isNaN(d.getTime())) return '-'
+  const now = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  if (d.toDateString() === now.toDateString()) return `今天 ${time}`
+  const yesterday = new Date(now)
+  yesterday.setDate(now.getDate() - 1)
+  if (d.toDateString() === yesterday.toDateString()) return `昨天 ${time}`
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${time}`
+}
+
+function createTimeText(order) {
+  // 优先使用后端预格式化字段，回退到本地格式化
+  if (order?.createTimeText) return order.createTimeText
+  return formatDateTime(order?.createTime || order?.createdTime)
+}
+
+function deliveryProgressText(order) {
+  // 优先使用后端预格式化字段，回退到本地计算
+  if (order?.deliveryProgressText) return order.deliveryProgressText
+  const sent = Number(order?.quantitySent || 0)
+  const total = Number(order?.quantityRequested || order?.quantityTotal || 1) || 1
+  return `${sent}/${total}`
+}
+
 function firstGoodsItem(order) {
   if (!order) return {}
   const items = order.orderItems || order.goodsItems || order.items || []
@@ -289,11 +333,6 @@ function firstGoodsTitle(order) {
   return item.goodsTitle || item.title || item.itemTitle || order.goodsTitle || ''
 }
 
-function firstGoodsId(order) {
-  const item = firstGoodsItem(order)
-  return item.externalGoodsId || item.itemId || item.goodsId || ''
-}
-
 function onImageError(e, order) {
   const img = firstGoodsImage(order)
   if (img) failedImages.add(img)
@@ -311,7 +350,7 @@ function statusBadgeClass(order) {
 }
 
 function deliveryProgress(order) {
-  const text = order.deliveryProgressText || '1/1'
+  const text = deliveryProgressText(order)
   const match = text.match(/(\d+)\s*\/\s*(\d+)/)
   if (!match) return 100
   const [, delivered, total] = match
@@ -320,7 +359,7 @@ function deliveryProgress(order) {
   return Math.min(100, Math.round((d / t) * 100))
 }
 
-function canSync(order) {
+function canSync(_order) {
   return true
 }
 
@@ -368,7 +407,7 @@ async function loadOrders(append = false) {
   }
 }
 
-function calculateStats(list, total) {
+function calculateStats(list, _total) {
   let pending = 0, completed = 0, closed = 0, shipped = 0
   list.forEach(o => {
     const s = Number(o.orderStatus)
@@ -401,9 +440,11 @@ async function syncOrder(order) {
   syncing.value = true
   try {
     await apiSyncOrder(order.id)
+    toast.success('订单同步成功')
     await loadOrders()
   } catch (e) {
     console.error('同步失败', e)
+    toast.error(e?.message || '订单同步失败，请稍后重试')
   } finally {
     syncing.value = false
   }
@@ -414,10 +455,12 @@ async function syncOrders() {
   syncing.value = true
   try {
     await apiSyncOrders({})
+    toast.success('订单批量同步成功')
     query.current = 1
     await loadOrders()
   } catch (e) {
     console.error('同步失败', e)
+    toast.error(e?.message || '批量同步失败，请稍后重试')
   } finally {
     syncing.value = false
   }
@@ -439,7 +482,7 @@ async function handleShipSuccess() {
   await loadOrders()
 }
 
-function repurchase(order) {
+function repurchase(_order) {
   emit('force-desktop', 'products')
 }
 

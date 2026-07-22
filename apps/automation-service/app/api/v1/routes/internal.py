@@ -250,7 +250,7 @@ async def internal_qrlogin_generate(
         user_id, tenant_id = _required_qr_owner(body)
         if user_id is None or tenant_id is None:
             return ResultObject.validate_failed("userId 和 tenantId 必须为正整数")
-        result = generate_qrcode(user_id=user_id, tenant_id=tenant_id)
+        result = await _asyncio.to_thread(generate_qrcode, user_id=user_id, tenant_id=tenant_id)
         if "qrImage" in result and "qrCodeBase64" not in result:
             result["qrCodeBase64"] = result["qrImage"]
         result.setdefault("status", "pending")
@@ -462,7 +462,8 @@ async def internal_confirm_shipment(
     buyer_id = body.get("buyerId")
 
     try:
-        result = confirm_order_shipment(
+        result = await _asyncio.to_thread(
+            confirm_order_shipment,
             int(account_id),
             str(external_order_id),
             is_bargain=is_bargain,

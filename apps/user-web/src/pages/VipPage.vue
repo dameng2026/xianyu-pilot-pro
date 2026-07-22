@@ -43,10 +43,24 @@
           </template>
         </EmptyState>
         <EmptyState v-else-if="!loading && !displayPlans.length" icon="📭" title="暂无可选套餐" description="后台尚未配置套餐，请联系管理员。" />
+        <template v-else>
+          <div class="vip-period-switcher">
+            <button
+              v-for="opt in periodOptions"
+              :key="opt.value"
+              :class="['vip-period-btn', { active: selectedPeriod === opt.value }]"
+              type="button"
+              @click="selectedPeriod = opt.value"
+            >
+              <span class="vip-period-label">{{ opt.label }}</span>
+              <small class="vip-period-hint">{{ opt.hint }}</small>
+            </button>
+          </div>
+          <EmptyState v-if="!hasPaidPlans" icon="📭" :title="`暂无${currentPeriodLabel}`" description="该周期暂未配置可购买套餐，请选择其他周期。" />
           <div v-else class="vip-plan-grid" :aria-busy="loading ? 'true' : 'false'">
           <article
             v-for="plan in displayPlans"
-            :key="plan.planCode"
+            :key="plan.id || plan.planCode"
             class="vip-plan vip-card-surface"
             :class="[plan.cardClass, { recommend: plan.level === 'vip' }]"
           >
@@ -54,12 +68,12 @@
             <div class="vip-plan-head">
               <div>
                 <strong>{{ plan.planName }}</strong>
-                <h3>{{ plan.price }} <small v-if="plan.durationLabel">/{{ plan.durationLabel }}</small></h3>
+                <h3>{{ plan.price }} <small v-if="plan.periodLabel">/{{ plan.periodLabel }}</small></h3>
               </div>
               <div class="vip-plan-ornament" :class="plan.ornament"><Icon :name="plan.level === 'normal' ? 'diamond' : 'crown'" /></div>
             </div>
             <p>{{ plan.summary }}</p>
-            <ul>
+            <ul v-if="plan.features && plan.features.length">
               <li v-for="item in plan.features" :key="item">{{ item }}</li>
             </ul>
             <button class="vip-btn" :class="plan.buttonClass" type="button" :disabled="plan.level !== 'normal' && !plan.canPurchase" @click="handlePlanClick(plan)">
@@ -67,6 +81,7 @@
             </button>
           </article>
         </div>
+        </template>
 
         <div class="vip-compare vip-card-surface">
           <div class="vip-panel-title">
@@ -237,6 +252,7 @@ const heroPoints = [
 ]
 
 const plans = ref([])
+const selectedPeriod = ref('month')
 const loadError = ref('')
 const loading = ref(true)
 const paymentVisible = ref(false)
@@ -278,35 +294,18 @@ function handleAvatarError() {
 
 const normalizeLevel = plan => {
   const code = String(plan?.level || plan?.planCode || '').trim().toLowerCase()
-  if (code === 'svip') return 'svp'
-  if (code === 'svp' || code === 'vip') return code
-  if (code === 'normal') return 'normal'
+  if (code.startsWith('svip') || code.startsWith('svp')) return 'svp'
+  if (code.startsWith('vip')) return 'vip'
+  if (code.startsWith('normal') || code === 'free') return 'normal'
   return 'unknown'
 }
 
-// 套餐默认权益描述：当后台未返回具体 features 时使用。
-// 描述与下方「功能对比」表保持一致，仅作概览展示，详细差异以功能对比表为准。
-const PLAN_DEFAULT_FEATURES = {
-  normal: [
-    '闲鱼账号、商品管理、发布商品',
-    '订单管理、在线消息、自动发货',
-    '自动回复、操作日志、反馈建议',
-    '通知设置、系统设置'
-  ],
-  vip: [
-    '包含普通会员全部功能',
-    '商机发掘页面',
-    '货源商城页面',
-    '滑块求解功能'
-  ],
-  svp: [
-    '包含 VIP 会员全部功能',
-    '工作流页面、工作流任务',
-    '商品草稿箱',
-    '图片生成记录'
-  ],
-  unknown: []
-}
+const PERIOD_LABELS = { month: '月', quarter: '季', year: '年' }
+const periodOptions = [
+  { value: 'month', label: '月套餐', hint: '灵活开通' },
+  { value: 'quarter', label: '季套餐', hint: '更划算' },
+  { value: 'year', label: '年套餐', hint: '最优惠' }
+]
 
 const PLAN_DEFAULT_SUMMARY = {
   normal: '基础运营功能全套开放，适合个人闲鱼卖家',
@@ -316,32 +315,47 @@ const PLAN_DEFAULT_SUMMARY = {
 }
 
 const displayPlans = computed(() => {
-  return plans.value.map(raw => {
-    const level = normalizeLevel(raw)
-    const durationLabel = raw.durationText && raw.durationText !== '永久' ? raw.durationText : ''
-    const planName = raw.planName || (level === 'svp' ? 'SVP 用户' : level === 'vip' ? 'VIP 用户' : level === 'normal' ? '普通用户' : '套餐名称未配置')
-    const priceCent = Number(raw.priceCent)
-    const hasPrice = raw.price !== null && raw.price !== undefined && String(raw.price).trim() !== ''
-    const canPurchase = ['vip', 'svp'].includes(level) && hasPrice && Number.isFinite(priceCent) && priceCent > 0
-    const rawFeatures = Array.isArray(raw.features) ? raw.features : []
-    // 后端 features 仅包含功能开关类描述（如"支持自动发货"），数量限制已移除；
-    // 当后端返回为空时，使用与等级匹配的默认权益描述。
-    const features = rawFeatures.length > 0 ? rawFeatures : (PLAN_DEFAULT_FEATURES[level] || [])
-    return {
-      ...raw,
-      level,
-      planName,
-      price: hasPrice ? String(raw.price) : '价格未配置',
-      canPurchase,
-      durationLabel,
-      summary: raw.summary || raw.description || PLAN_DEFAULT_SUMMARY[level] || '具体权益与限制以后台套餐配置为准',
-      features,
-      cardClass: level === 'svp' ? 'svip' : level,
-      ornament: level === 'svp' ? 'warm' : level === 'vip' ? 'blue' : 'muted',
-      buttonClass: level === 'svp' ? 'vip-btn-warm' : level === 'vip' ? 'vip-btn-primary' : 'vip-btn-ghost',
-      ribbon: raw.ribbon || (raw.recommended === true ? '推荐' : (level === 'vip' ? '推荐' : ''))
-    }
-  })
+  return plans.value
+    .map(raw => {
+      const level = normalizeLevel(raw)
+      // 所有套餐都显示，按 selectedPeriod 取对应周期价格
+      const period = selectedPeriod.value
+      const periodLabel = PERIOD_LABELS[period] || ''
+      const durationLabel = raw.durationText && raw.durationText !== '永久' ? raw.durationText : ''
+      const planName = raw.planName || (level === 'svp' ? 'SVP 用户' : level === 'vip' ? 'VIP 用户' : level === 'normal' ? '普通用户' : '套餐名称未配置')
+      // 根据选中周期取对应价格（priceMonth / priceQuarter / priceYear 为格式化字符串；*Cent 为分值）
+      const priceField = `price${period.charAt(0).toUpperCase()}${period.slice(1)}`
+      const priceCentField = `price${period.charAt(0).toUpperCase()}${period.slice(1)}Cent`
+      const priceCent = Number(raw[priceCentField] ?? 0)
+      const priceDisplay = raw[priceField]
+      const hasPrice = priceDisplay !== null && priceDisplay !== undefined && String(priceDisplay).trim() !== '' && String(priceDisplay).trim() !== '免费' && priceCent > 0
+      const canPurchase = ['vip', 'svp'].includes(level) && hasPrice && Number.isFinite(priceCent) && priceCent > 0
+      // 前台套餐介绍严格使用后台 featuresText 按行拆分后的数组；为空则不展示任何 li
+      const features = Array.isArray(raw.features) ? raw.features : []
+      return {
+        ...raw,
+        level,
+        planName,
+        // 普通用户套餐在后台无论配置为免费还是带价，前台统一展示为「免费」
+        price: level === 'normal' ? '免费' : (hasPrice ? String(priceDisplay) : '价格未配置'),
+        canPurchase,
+        durationLabel,
+        periodLabel,
+        periodType: period,
+        summary: raw.summary || raw.description || PLAN_DEFAULT_SUMMARY[level] || '具体权益与限制以后台套餐配置为准',
+        features,
+        cardClass: level === 'svp' ? 'svip' : level,
+        ornament: level === 'svp' ? 'warm' : level === 'vip' ? 'blue' : 'muted',
+        buttonClass: level === 'svp' ? 'vip-btn-warm' : level === 'vip' ? 'vip-btn-primary' : 'vip-btn-ghost',
+        ribbon: raw.ribbon || (raw.recommended === true ? '推荐' : (level === 'vip' ? '推荐' : ''))
+      }
+    })
+})
+
+const hasPaidPlans = computed(() => displayPlans.value.some(p => p.level !== 'normal'))
+const currentPeriodLabel = computed(() => {
+  const opt = periodOptions.find(o => o.value === selectedPeriod.value)
+  return opt ? opt.label : ''
 })
 
 const recommendedUpgradePlan = computed(() => {
@@ -697,6 +711,81 @@ onMounted(() => {
   color: var(--orange);
 }
 
+/* ----- 周期切换器 ----- */
+.vip-period-switcher {
+  display: flex;
+  gap: 10px;
+  padding: 4px 0 14px;
+  flex-wrap: wrap;
+}
+
+.vip-period-btn {
+  flex: 1 1 0;
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 14px 18px;
+  border-radius: 16px;
+  border: 1.5px solid #e3eaf5;
+  background: #fff;
+  cursor: pointer;
+  transition: all 0.22s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.vip-period-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(47, 102, 255, 0.08), rgba(74, 138, 255, 0.04));
+  opacity: 0;
+  transition: opacity 0.22s ease;
+  pointer-events: none;
+}
+
+.vip-period-btn:hover {
+  border-color: #c3d4f0;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(35, 73, 142, 0.08);
+}
+
+.vip-period-btn.active {
+  border-color: #2f66ff;
+  background: linear-gradient(135deg, #f4f8ff, #fff);
+  box-shadow: 0 10px 22px rgba(47, 102, 255, 0.18);
+}
+
+.vip-period-btn.active::before {
+  opacity: 1;
+}
+
+.vip-period-label {
+  position: relative;
+  font-size: 15px;
+  font-weight: 800;
+  color: #18233d;
+  letter-spacing: 0.02em;
+}
+
+.vip-period-btn.active .vip-period-label {
+  color: #2f66ff;
+}
+
+.vip-period-hint {
+  position: relative;
+  font-size: 12px;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.vip-period-btn.active .vip-period-hint {
+  color: #5b7bbf;
+}
+
 /* ----- 套餐卡片网格 ----- */
 .vip-plan-grid {
   display: grid;
@@ -708,6 +797,14 @@ onMounted(() => {
   position: relative;
   padding: 18px 18px 16px;
   overflow: hidden;
+  /* 让三个套餐卡片等高，并使按钮底部对齐 */
+  display: flex;
+  flex-direction: column;
+}
+
+/* 按钮被推到卡片底部，保证三个卡片的按钮处于同一水平线 */
+.vip-plan > .vip-btn {
+  margin-top: auto;
 }
 
 .vip-plan.free {
@@ -1327,6 +1424,26 @@ onMounted(() => {
 
   .vip-plan-head h3 {
     font-size: 24px;
+  }
+
+  /* 移动端周期切换器：三按钮等宽排布，紧凑显示 */
+  .vip-period-switcher {
+    gap: 8px;
+    padding: 2px 0 12px;
+  }
+
+  .vip-period-btn {
+    min-width: 0;
+    padding: 12px 6px;
+    gap: 2px;
+  }
+
+  .vip-period-label {
+    font-size: 14px;
+  }
+
+  .vip-period-hint {
+    font-size: 11px;
   }
 }
 

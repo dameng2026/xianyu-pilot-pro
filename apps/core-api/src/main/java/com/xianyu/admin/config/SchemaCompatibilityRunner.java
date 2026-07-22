@@ -803,6 +803,11 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
                     enable_kami TINYINT DEFAULT 0,
                     enable_ai_reply TINYINT DEFAULT 0,
                     enable_workflow TINYINT DEFAULT 0,
+                    features_text TEXT NULL,
+                    period_type VARCHAR(20) NOT NULL DEFAULT 'month',
+                    price_month_cent BIGINT DEFAULT 0,
+                    price_quarter_cent BIGINT DEFAULT 0,
+                    price_year_cent BIGINT DEFAULT 0,
                     status TINYINT DEFAULT 1,
                     created_time DATETIME,
                     updated_time DATETIME,
@@ -1628,6 +1633,17 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
     }
 
     private void ensureCompatibilityColumns() {
+        // billing_plan：V1.26 自定义介绍文本与周期类型 + V1.29 月/季/年三档价格
+        addColumnIfMissing("billing_plan", "features_text", "TEXT NULL COMMENT '自定义套餐介绍文本（换行分隔多条权益）'");
+        addColumnIfMissing("billing_plan", "period_type", "VARCHAR(20) NOT NULL DEFAULT 'month' COMMENT '周期类型：month=月 / quarter=季 / year=年'");
+        addColumnIfMissing("billing_plan", "price_month_cent", "BIGINT DEFAULT 0 COMMENT '月度价格（分），0 表示未配置'");
+        addColumnIfMissing("billing_plan", "price_quarter_cent", "BIGINT DEFAULT 0 COMMENT '季度价格（分），0 表示未配置'");
+        addColumnIfMissing("billing_plan", "price_year_cent", "BIGINT DEFAULT 0 COMMENT '年度价格（分），0 表示未配置'");
+        // 回填：将现有 price_cent 按 period_type 写入对应周期字段（仅回填 price>0 且目标字段仍为 0 的记录）
+        executeQuietly("UPDATE billing_plan SET price_month_cent = price_cent WHERE period_type = 'month' AND price_cent > 0 AND price_month_cent = 0 AND deleted = 0");
+        executeQuietly("UPDATE billing_plan SET price_quarter_cent = price_cent WHERE period_type = 'quarter' AND price_cent > 0 AND price_quarter_cent = 0 AND deleted = 0");
+        executeQuietly("UPDATE billing_plan SET price_year_cent = price_cent WHERE period_type = 'year' AND price_cent > 0 AND price_year_cent = 0 AND deleted = 0");
+
         addColumnIfMissing("mall_product", "copy", "TEXT NULL");
         addColumnIfMissing("xianyu_account", "created_by_user_id", "BIGINT NULL");
         addColumnIfMissing("xianyu_account", "risk_level", "TINYINT DEFAULT 0");

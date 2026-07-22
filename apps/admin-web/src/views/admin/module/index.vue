@@ -691,13 +691,23 @@
             <ElOption label="拦截" value="拦截" />
             <ElOption label="审核" value="审核" />
           </ElSelect>
+          <ElInputNumber
+            v-else-if="isPriceField(col.prop)"
+            v-model="drawer.form[col.prop]"
+            :min="0"
+            :precision="2"
+            :step="1"
+            :controls="false"
+            style="width: 100%"
+            :placeholder="`请输入${col.label}（元），0 表示未配置`"
+          />
           <ElSwitch v-else-if="isBooleanField(col)" v-model="drawer.form[col.prop]" inline-prompt active-text="启用" inactive-text="停用" />
           <ElInput
-            v-else-if="isTextareaField(col.prop)"
+            v-else-if="isTextareaField(col)"
             v-model="drawer.form[col.prop]"
             type="textarea"
-            :rows="col.prop === 'promptTemplate' ? 14 : 5"
-            :placeholder="`请输入${col.label}`"
+            :rows="col.prop === 'promptTemplate' ? 14 : col.prop === 'featuresText' ? 8 : 5"
+            :placeholder="`请输入${col.label}，每行一条`"
           />
           <ElInput v-else v-model="drawer.form[col.prop]" :placeholder="`请输入${col.label}`" />
         </ElFormItem>
@@ -852,12 +862,13 @@
   const READONLY_MODULE_KEYS = ['goods', 'orders', 'messages', 'delivery', 'auto-reply', 'kami', 'hot-goods']
   const inherentlyReadonlyModule = computed(() => READONLY_MODULE_KEYS.includes(moduleKey.value))
   const buttonCapabilities = computed(() => getAdminButtonCapabilities(userStore.info?.buttons))
-  const canAdd = computed(() => !inherentlyReadonlyModule.value && buttonCapabilities.value.canAdd)
-  const canEdit = computed(() => !inherentlyReadonlyModule.value && buttonCapabilities.value.canEdit)
-  const canDelete = computed(() => !inherentlyReadonlyModule.value && buttonCapabilities.value.canDelete)
-  const canExport = computed(() => buttonCapabilities.value.canExport)
-  const canRefreshStats = computed(() => buttonCapabilities.value.canEdit)
   const isSuperAdmin = computed(() => userStore.info?.roles?.includes('R_SUPER') === true)
+  // 超级管理员直接拥有全部按钮权限（兜底），避免 buttons 权限码缺失导致按钮不显示
+  const canAdd = computed(() => !inherentlyReadonlyModule.value && (isSuperAdmin.value || buttonCapabilities.value.canAdd))
+  const canEdit = computed(() => !inherentlyReadonlyModule.value && (isSuperAdmin.value || buttonCapabilities.value.canEdit))
+  const canDelete = computed(() => !inherentlyReadonlyModule.value && (isSuperAdmin.value || buttonCapabilities.value.canDelete))
+  const canExport = computed(() => isSuperAdmin.value || buttonCapabilities.value.canExport)
+  const canRefreshStats = computed(() => isSuperAdmin.value || buttonCapabilities.value.canEdit)
   const readonlyModule = computed(() =>
     inherentlyReadonlyModule.value || (!canAdd.value && !canEdit.value && !canDelete.value)
   )
@@ -891,8 +902,9 @@ function denyUnauthorizedAction() {
   ElMessage.error('当前账号无此操作权限')
 }
 
-function isTextareaField(prop: string) {
-  return isImagePromptModule.value && ['matchKeywords', 'promptTemplate'].includes(prop)
+function isTextareaField(col: any) {
+  if (col?.type === 'textarea') return true
+  return isImagePromptModule.value && ['matchKeywords', 'promptTemplate'].includes(col?.prop)
 }
 
 function isBooleanField(col: any) {
@@ -913,8 +925,15 @@ function isActionField(prop: string) {
   return prop === 'action'
 }
 
+// 套餐管理模块：priceMonth / priceQuarter / priceYear 为三周期价格（元）输入框
+function isPriceField(prop: string) {
+  return prop === 'priceMonth' || prop === 'priceQuarter' || prop === 'priceYear'
+}
+
 function drawerDefaults() {
-  return isImagePromptModule.value ? { status: '正常', enabled: true, sortOrder: 100 } : { status: '正常' }
+  if (isImagePromptModule.value) return { status: '正常', enabled: true, sortOrder: 100 }
+  if (moduleKey.value === 'plans') return { status: '正常', priceMonth: 0, priceQuarter: 0, priceYear: 0 }
+  return { status: '正常' }
 }
 
 function normalizeBooleanValue(value: any) {
@@ -924,13 +943,34 @@ function normalizeBooleanValue(value: any) {
 }
 
 function normalizeDrawerForm(form: Record<string, any>) {
-  if (!isImagePromptModule.value) return { ...form }
-  return {
-    ...drawerDefaults(),
-    ...form,
-    enabled: normalizeBooleanValue(form.enabled ?? true),
-    sortOrder: form.sortOrder ?? 100,
+  if (isImagePromptModule.value) {
+    return {
+      ...drawerDefaults(),
+      ...form,
+      enabled: normalizeBooleanValue(form.enabled ?? true),
+      sortOrder: form.sortOrder ?? 100,
+    }
   }
+  // 套餐管理模块：编辑表单的价格字段使用元值数字（priceMonthYuan 等），而非格式化字符串（priceMonth）
+  if (moduleKey.value === 'plans') {
+    const next = { ...form }
+    for (const [prop, yuanKey] of [
+      ['priceMonth', 'priceMonthYuan'],
+      ['priceQuarter', 'priceQuarterYuan'],
+      ['priceYear', 'priceYearYuan'],
+    ] as const) {
+      const yuan = form[yuanKey]
+      if (yuan !== undefined && yuan !== null && yuan !== '') {
+        next[prop] = Number(yuan)
+      } else if (form[prop] !== undefined && form[prop] !== null && form[prop] !== '' && !String(form[prop]).startsWith('¥')) {
+        next[prop] = Number(form[prop])
+      } else {
+        next[prop] = 0
+      }
+    }
+    return next
+  }
+  return { ...form }
 }
 
 function formatFieldValue(col: any, value: any) {

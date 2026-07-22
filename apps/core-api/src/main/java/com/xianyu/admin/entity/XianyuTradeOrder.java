@@ -51,6 +51,9 @@ public class XianyuTradeOrder extends BaseEntity {
     @Column(name = "buyer_message", columnDefinition = "TEXT")
     private String buyerMessage;
 
+    @Column(name = "seller_remark", columnDefinition = "TEXT")
+    private String sellerRemark;
+
     @Column(name = "item_id")
     private String itemId;
 
@@ -163,6 +166,14 @@ public class XianyuTradeOrder extends BaseEntity {
 
     public void setBuyerMessage(String buyerMessage) {
         this.buyerMessage = buyerMessage;
+    }
+
+    public String getSellerRemark() {
+        return sellerRemark;
+    }
+
+    public void setSellerRemark(String sellerRemark) {
+        this.sellerRemark = sellerRemark;
     }
 
     public String getItemId() {

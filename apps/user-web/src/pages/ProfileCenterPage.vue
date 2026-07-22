@@ -1153,7 +1153,10 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, nextTick } from 'vue'
-import * as echarts from 'echarts'
+import * as echarts from 'echarts/core'
+import { LineChart, PieChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 import PaymentModal from '../components/PaymentModal.vue'
 import EmptyState from '../components/EmptyState.vue'
 import {
@@ -1171,6 +1174,8 @@ import { globalConfirm } from '../composables/confirmState.js'
 import { getFeatureSwitchStatus, getFeatureSwitchComparison } from '../api/feature-switch.js'
 import { getTokenRechargePlans } from '../api/payment.js'
 import { APP_VERSION } from '../utils/appMeta.js'
+
+echarts.use([LineChart, PieChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
 const tabs = [
   { key: 'overview', label: '概览' },

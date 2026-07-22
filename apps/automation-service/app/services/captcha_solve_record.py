@@ -102,7 +102,7 @@ async def create_solve_record(
                     "(tenant_id, account_id, account_name, event_desc, open_reason, solve_reason, trigger_scene, "
                     " result, status, engine, retry_count, created_at, updated_at, deleted) "
                     "VALUES (:tid, :aid, :aname, :edesc, :oreason, :sreason, :scene, "
-                    " '', 'retrying', 'Playwright', :rc, NOW(), NOW(), 0)"
+                    " '', 'queued', 'Playwright', :rc, NOW(), NOW(), 0)"
                 ),
                 {
                     "tid": tenant_id,
@@ -157,7 +157,7 @@ async def update_solve_record(
 
     Args:
         record_id: 记录 ID（为 None 或 0 时静默跳过）
-        status: 处理状态 (retrying/success/fail)
+        status: 处理状态 (queued/retrying/success/fail)
         result: 处理结果 (slider_success/slider_fail)
         error_message: 错误详情
         retry_count: 重试次数
@@ -316,7 +316,7 @@ async def broadcast_captcha_solve(
     前端监听后更新求解状态指示器。
 
     Args:
-        status: retrying/success/fail
+        status: queued/retrying/success/fail
         result: slider_success/slider_fail
         reason: 失败原因或额外信息
     """
@@ -346,56 +346,139 @@ async def broadcast_captcha_solve(
 # ============================================================
 
 # 僵尸记录判定阈值：started_at 超过此分钟数仍为 retrying 状态 → 标记为 stale_terminated
-STALE_RECORD_TIMEOUT_MINUTES = 15
+# 5 分钟超时：避免浏览器窗口/HTTP 调用长时间挂起占用服务器资源
+STALE_RECORD_TIMEOUT_MINUTES = 5
 
 # 清理循环间隔（秒）
 STALE_CLEANUP_INTERVAL_SECONDS = 300  # 5 分钟
+
+# 超时终止后允许重新入队的最大次数（避免无限重试）
+STALE_TERMINATED_MAX_RETRY = 1
 
 
 async def cleanup_stale_records() -> int:
     """清理僵尸求解记录：将超时仍为 retrying 的记录标记为 stale_terminated。
 
-    判定条件：
+    判定条件（仅针对正在处理的任务，排队中的任务不受影响）：
     - status = 'retrying'
-    - started_at IS NOT NULL AND started_at < NOW() - INTERVAL 15 MINUTE
-    - 或 started_at IS NULL AND queued_at IS NOT NULL AND queued_at < NOW() - INTERVAL 15 MINUTE
-      （入队但从未被 worker 取出的记录）
+    - started_at IS NOT NULL AND started_at < NOW() - INTERVAL 5 MINUTE
+      （started_at 由 worker 取出任务时设置，表示已正式开始处理）
+
+    注意：status='queued'（排队中）的记录不会被清理，避免排队任务被误判超时。
+    只有 worker 正式开始处理的任务（status='retrying' 且 started_at 非空）才适用 5 分钟超时。
+
+    超时后执行三步动作：
+    1. 标记为 stale_terminated（status=fail, result=stale_terminated, failure_reason=stale_terminated）
+    2. 广播 SSE captcha_solve 事件，让前后台实时看到状态变化
+    3. 触发重新入队（cookie 预校验由 worker 自动处理，cookie 无效则不重试）
 
     Returns:
         被清理的记录数
     """
+    import asyncio
+
     try:
         async with async_session() as db:
-            result = await db.execute(
+            # 1. 先查询超时的 retrying 记录详情（用于广播和重新入队）
+            # 仅清理已正式开始处理（started_at 非空）且超时的记录，排队中（queued）的任务不受影响
+            rows = (await db.execute(
                 text(
                     """
+                    SELECT id, account_id, tenant_id, account_name, retry_count,
+                           trigger_scene, priority, open_reason, solve_reason
+                    FROM xianyu_captcha_solve_record
+                    WHERE status = 'retrying'
+                      AND COALESCE(deleted, 0) = 0
+                      AND started_at IS NOT NULL
+                      AND started_at < DATE_SUB(NOW(), INTERVAL :min1 MINUTE)
+                    """,
+                ),
+                {"min1": STALE_RECORD_TIMEOUT_MINUTES},
+            )).mappings().all()
+
+            if not rows:
+                return 0
+
+            # 2. 批量更新为 stale_terminated
+            record_ids = [int(r["id"]) for r in rows]
+            # 构造 IN 子句参数
+            id_params = {f"rid{i}": rid for i, rid in enumerate(record_ids)}
+            in_clause = ",".join(f":rid{i}" for i in range(len(record_ids)))
+            await db.execute(
+                text(
+                    f"""
                     UPDATE xianyu_captcha_solve_record
                     SET status = 'fail',
                         result = 'stale_terminated',
                         failure_reason = 'stale_terminated',
                         error_message = CONCAT(COALESCE(error_message, ''),
-                            '[系统清理] 求解任务超时无响应，已自动终止'),
+                            '[系统清理] 求解任务超时无响应（超过{STALE_RECORD_TIMEOUT_MINUTES}分钟），已自动终止'),
                         finished_at = NOW(),
                         updated_at = NOW()
-                    WHERE status = 'retrying'
-                      AND COALESCE(deleted, 0) = 0
-                      AND (
-                        (started_at IS NOT NULL AND started_at < DATE_SUB(NOW(), INTERVAL :min1 MINUTE))
-                        OR
-                        (started_at IS NULL AND queued_at IS NOT NULL
-                         AND queued_at < DATE_SUB(NOW(), INTERVAL :min2 MINUTE))
-                      )
+                    WHERE id IN ({in_clause})
                     """,
                 ),
-                {"min1": STALE_RECORD_TIMEOUT_MINUTES, "min2": STALE_RECORD_TIMEOUT_MINUTES},
+                id_params,
             )
             await db.commit()
-            affected = int(getattr(result, "rowcount", 0) or 0)
-            if affected > 0:
-                logger.warning(
-                    "僵尸滑块求解记录清理：已将 %d 条超时 retrying 记录标记为 stale_terminated",
-                    affected,
-                )
+
+            affected = len(rows)
+            logger.warning(
+                "僵尸滑块求解记录清理：已将 %d 条超时 retrying 记录标记为 stale_terminated（超时=%d分钟）",
+                affected, STALE_RECORD_TIMEOUT_MINUTES,
+            )
+
+            # 3. 对每条记录广播 SSE + 触发重新入队
+            for row in rows:
+                record_id = int(row["id"])
+                account_id = int(row["account_id"])
+                tenant_id = int(row["tenant_id"])
+                account_name = str(row.get("account_name") or "")
+                retry_count = int(row.get("retry_count") or 0)
+                trigger_scene = str(row.get("trigger_scene") or "manual")
+                priority = int(row.get("priority") or 0)
+                open_reason = str(row.get("open_reason") or "")
+                solve_reason = str(row.get("solve_reason") or "")
+
+                # 3a. 广播 SSE 事件（前端实时看到状态从"进行中"变为"超时终止"）
+                try:
+                    await broadcaster.broadcast(
+                        tenant_id,
+                        "captcha_solve",
+                        {
+                            "accountId": account_id,
+                            "accountName": account_name,
+                            "status": "fail",
+                            "result": "stale_terminated",
+                            "engine": "Playwright",
+                            "reason": f"求解超时（{STALE_RECORD_TIMEOUT_MINUTES}分钟无响应），已自动终止",
+                            "recordId": record_id,
+                        },
+                    )
+                except Exception as exc:
+                    log_service_failure(
+                        logger, exc, operation="broadcast_stale_terminated",
+                        tenant_id=tenant_id, account_id=account_id, level=logging.DEBUG,
+                    )
+
+                # 3b. 触发重新入队（cookie 预校验由 worker 在 _process_task 中自动处理）
+                # 仅在未达到最大重试次数时重新入队
+                if retry_count < STALE_TERMINATED_MAX_RETRY:
+                    asyncio.create_task(_reenqueue_after_stale(
+                        account_id=account_id,
+                        tenant_id=tenant_id,
+                        trigger_scene=trigger_scene,
+                        open_reason=f"超时自动重试（第 {retry_count + 1} 次，原记录已超时终止）",
+                        solve_reason=solve_reason,
+                        priority=priority,
+                        retry_count=retry_count + 1,
+                    ))
+                else:
+                    logger.info(
+                        "超时终止记录已达到最大重试次数，不再重新入队 accountId=%d retry=%d/%d",
+                        account_id, retry_count, STALE_TERMINATED_MAX_RETRY,
+                    )
+
             return affected
     except Exception as e:
         log_service_failure(
@@ -405,14 +488,64 @@ async def cleanup_stale_records() -> int:
         return 0
 
 
+async def _reenqueue_after_stale(
+    account_id: int,
+    tenant_id: int,
+    trigger_scene: str,
+    open_reason: str,
+    solve_reason: str,
+    priority: int,
+    retry_count: int,
+) -> None:
+    """超时终止后重新入队（异步执行，不阻塞清理循环）。
+
+    重新入队后，worker 会自动进行 cookie 预校验（precheck_cookie_status）：
+    - Cookie 有效 → 继续求解
+    - Cookie 触发滑块 → 继续求解（这正是要解决的）
+    - Cookie 无效/Session 过期 → 标记为 cookie_invalid，不重试
+
+    注意：必须 skip_dedup=True，因为原任务才5分钟前入队，
+    30 分钟去重会跳过超时重试。
+    """
+    try:
+        from .captcha_queue import get_queue_manager
+        manager = await get_queue_manager()
+        # 直接调用 manager.enqueue，skip_dedup=True 跳过30分钟去重
+        record_id = await manager.enqueue(
+            account_id=account_id,
+            tenant_id=tenant_id,
+            trigger_scene=trigger_scene,
+            open_reason=open_reason,
+            solve_reason=solve_reason,
+            priority=priority,
+            retry_count=retry_count,
+            skip_dedup=True,
+        )
+        if record_id:
+            logger.info(
+                "超时终止后已重新入队 accountId=%d tenantId=%d retry=%d recordId=%d（cookie 预校验将由 worker 处理）",
+                account_id, tenant_id, retry_count, record_id,
+            )
+        else:
+            logger.warning(
+                "超时终止后重新入队失败（被去重或其他原因跳过）accountId=%d", account_id,
+            )
+    except Exception as e:
+        log_service_failure(
+            logger, e, operation="reenqueue_after_stale",
+            tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
+        )
+
+
 async def run_stale_cleanup_loop() -> None:
     """僵尸记录清理循环（在 FastAPI lifespan 中启动）。
 
-    每 5 分钟扫描一次，将超过 15 分钟仍为 retrying 状态的记录标记为 stale_terminated。
+    每 5 分钟扫描一次，将超过 5 分钟仍为 retrying 状态的记录标记为 stale_terminated，
+    广播 SSE 事件，并在 cookie 有效时触发重新入队。
     """
     import asyncio
-    logger.info("僵尸滑块求解记录清理循环已启动，间隔=%ds 超时=%dmin",
-                STALE_CLEANUP_INTERVAL_SECONDS, STALE_RECORD_TIMEOUT_MINUTES)
+    logger.info("僵尸滑块求解记录清理循环已启动，间隔=%ds 超时=%dmin 最大重试=%d",
+                STALE_CLEANUP_INTERVAL_SECONDS, STALE_RECORD_TIMEOUT_MINUTES, STALE_TERMINATED_MAX_RETRY)
     while True:
         try:
             await asyncio.sleep(STALE_CLEANUP_INTERVAL_SECONDS)

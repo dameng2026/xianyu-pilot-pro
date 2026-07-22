@@ -6,7 +6,7 @@
         <StatCard title="总记录数" :value="total" change="服务端总数" icon="record" />
         <StatCard title="成功数" :value="successCount" change="本页统计" icon="shield" color="green" />
         <StatCard title="失败数" :value="failedCount" change="本页统计" icon="warning" color="red" />
-        <StatCard title="重试中数" :value="retryingCount" change="本页统计" icon="refresh" color="orange" />
+        <StatCard title="求解中数" :value="retryingCount" change="本页统计" icon="refresh" color="orange" />
       </div>
       <CardPanel title="滑块求解记录" desc="点击表格行查看完整详情">
         <div class="toolbar">
@@ -14,7 +14,8 @@
             <option value="">全部状态</option>
             <option value="success">成功</option>
             <option value="fail">失败</option>
-            <option value="retrying">重试中</option>
+            <option value="retrying">求解中</option>
+            <option value="queued">排队中</option>
           </select>
           <select v-model="filters.triggerScene" class="input" @change="search">
             <option value="">全部触发场景</option>
@@ -36,7 +37,8 @@
           <template #failed="{row}">
             <Badge v-if="row.status === 'fail'" type="red">失败</Badge>
             <Badge v-else-if="row.status === 'success'" type="green">成功</Badge>
-            <Badge v-else type="orange">重试中</Badge>
+            <Badge v-else-if="row.status === 'queued'" type="blue">排队中</Badge>
+            <Badge v-else type="orange">求解中</Badge>
           </template>
           <template #failReason="{row}">
             <span v-if="row.failureReason" :title="failureReasonText(row.failureReason)" class="cell-truncate fail-text">{{ failureReasonText(row.failureReason) }}</span>
@@ -63,7 +65,8 @@
           <div class="metric-tile"><span>是否失败</span>
             <Badge v-if="detail.status === 'fail'" type="red">失败</Badge>
             <Badge v-else-if="detail.status === 'success'" type="green">成功</Badge>
-            <Badge v-else type="orange">重试中</Badge>
+            <Badge v-else-if="detail.status === 'queued'" type="blue">排队中</Badge>
+            <Badge v-else type="orange">求解中</Badge>
           </div>
           <div class="metric-tile"><span>处理结果</span><Badge :type="resultBadge(detail.result)">{{ resultText(detail.result) }}</Badge></div>
           <div class="metric-tile"><span>验证引擎</span><b :title="detail.engine">{{ detail.engine || '-' }}</b></div>
@@ -157,13 +160,15 @@ function resultBadge(result) {
 function statusText(status) {
   if (status === 'success') return '成功'
   if (status === 'fail') return '失败'
-  if (status === 'retrying') return '重试中'
+  if (status === 'retrying') return '求解中'
+  if (status === 'queued') return '排队中'
   return status || '-'
 }
 function statusBadge(status) {
   if (status === 'success') return 'green'
   if (status === 'fail') return 'red'
   if (status === 'retrying') return 'orange'
+  if (status === 'queued') return 'blue'
   return 'gray'
 }
 function triggerSceneText(scene) {

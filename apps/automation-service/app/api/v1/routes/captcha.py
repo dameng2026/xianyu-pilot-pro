@@ -108,8 +108,9 @@ async def auto_solve_captcha(
         "solveReason": ""
     }
 
-    说明：统一走 handle_captcha_for_account(auto_solve=True)，保证每次求解
-    （手动/重试/自动）都落库到 xianyu_captcha_solve_record，可在记录页查看。
+    说明：统一入队优先级队列，由 worker 异步处理。
+    手动/自动触发都走队列，手动优先级高于自动。
+    求解结果通过 SSE captcha_solve 事件广播到前端。
     """
     try:
         account_id = int(data.get("accountId") or 0)
@@ -121,37 +122,42 @@ async def auto_solve_captcha(
         open_reason = str(data.get("openReason") or "")
         solve_reason = str(data.get("solveReason") or "")
 
-        # 查询账号优先级（SVIP=2, VIP=1, 普通=0），写入记录用于展示
-        from ....services.captcha_precheck import lookup_account_priority
-        priority = await lookup_account_priority(account_id, tenant_id)
+        # 查询用户级优先级（手动>自动 + SVIP>VIP>普通）
+        from ....services.captcha_precheck import compute_solve_priority
+        from ....services.captcha_queue import enqueue_solve, get_queue_position
+        _level, priority = await compute_solve_priority(tenant_id, trigger_scene)
 
-        # 统一走综合处理：创建记录 + 预校验 + 求解 + 更新记录 + SSE
-        # 手动求解直接调用（不走队列），确保用户获得即时反馈
-        # 预校验（账号活跃度 + Cookie 状态 + 退避检查）在 handle_captcha_for_account 内执行
-        handled = await handle_captcha_for_account(
+        # 入队优先级队列，由 worker 异步处理
+        # manual_retry（失败后重试）跳过同账号去重，对齐前端"失败后可立即重试"设计
+        record_id = await enqueue_solve(
             account_id=account_id,
             tenant_id=tenant_id,
-            response=None,
-            auto_solve=True,
             trigger_scene=trigger_scene,
             open_reason=open_reason,
             solve_reason=solve_reason,
             priority=priority,
+            skip_dedup=(trigger_scene == "manual_retry"),
         )
-        result = handled.get("autoSolveResult") or {}
-        if not result.get("success") and not result.get("solved"):
-            # 与旧接口兼容：失败时返回 503 业务码（外层 Java 会再包装）
-            return ResultObject.failed(
-                result.get("error") or "滑块自动求解暂不可用，请按人工指引处理",
-                503,
-            )
-        # 附带 handle 元信息，便于前端判断 recovered
-        result = {
-            **result,
-            "recovered": bool(handled.get("recovered")),
-            "detected": bool(handled.get("detected")),
-        }
-        return ResultObject.success(result)
+
+        if not record_id:
+            # 被去重跳过（同账号 60 秒内已入队）
+            return ResultObject.success({
+                "queued": False,
+                "deduplicated": True,
+                "message": "该账号近期已触发过求解，请稍后再试",
+            })
+
+        # 查询排队位置
+        position, total = await get_queue_position(record_id)
+
+        return ResultObject.success({
+            "queued": True,
+            "recordId": record_id,
+            "queuePosition": position,
+            "queueTotal": total,
+            "status": "queued",
+            "message": f"任务已入队，排队中（第 {position} 位，共 {total} 个任务）",
+        })
     except Exception as e:
         return safe_route_failure(logger, e, operation="auto solve captcha", user_message="自动求解滑块失败，请稍后重试")
 
@@ -172,6 +178,10 @@ async def handle_captcha(
         "openReason": "",               # 开启原因（为什么打开滑块求解流程）
         "solveReason": ""               # 求解原因（为什么进行滑块求解）
     }
+
+    当 autoSolve=True 时入队优先级队列，返回排队信息；
+    当 autoSolve=False 时仅做检测，返回检测结果。
+    求解结果通过 SSE captcha_solve 事件广播到前端。
     """
     try:
         account_id = int(data.get("accountId") or 0)
@@ -185,23 +195,136 @@ async def handle_captcha(
         if not account_id or not tenant_id:
             return ResultObject.validate_failed("accountId 和 tenantId 不能为空")
 
-        # 查询账号优先级（SVIP=2, VIP=1, 普通=0），写入记录用于展示
-        from ....services.captcha_precheck import lookup_account_priority
-        priority = await lookup_account_priority(account_id, tenant_id)
+        # 仅检测模式（autoSolve=False）：直接调用检测，不入队
+        if not auto_solve:
+            result = await handle_captcha_for_account(
+                account_id=account_id,
+                tenant_id=tenant_id,
+                response=response,
+                auto_solve=False,
+                trigger_scene=trigger_scene,
+                open_reason=open_reason,
+                solve_reason=solve_reason,
+            )
+            return ResultObject.success(result)
 
-        result = await handle_captcha_for_account(
+        # 自动求解模式：入队优先级队列
+        from ....services.captcha_precheck import compute_solve_priority
+        from ....services.captcha_queue import enqueue_solve, get_queue_position
+        _level, priority = await compute_solve_priority(tenant_id, trigger_scene)
+
+        # manual_retry（失败后重试）跳过同账号去重，对齐前端"失败后可立即重试"设计
+        record_id = await enqueue_solve(
             account_id=account_id,
             tenant_id=tenant_id,
-            response=response,
-            auto_solve=auto_solve,
             trigger_scene=trigger_scene,
             open_reason=open_reason,
             solve_reason=solve_reason,
             priority=priority,
+            skip_dedup=(trigger_scene == "manual_retry"),
         )
-        return ResultObject.success(result)
+
+        if not record_id:
+            # 被去重跳过（同账号 60 秒内已入队）
+            return ResultObject.success({
+                "queued": False,
+                "deduplicated": True,
+                "message": "该账号近期已触发过求解，请稍后再试",
+            })
+
+        # 查询排队位置
+        position, total = await get_queue_position(record_id)
+
+        return ResultObject.success({
+            "queued": True,
+            "recordId": record_id,
+            "queuePosition": position,
+            "queueTotal": total,
+            "status": "queued",
+            "message": f"任务已入队，排队中（第 {position} 位，共 {total} 个任务）",
+        })
     except Exception as e:
         return safe_route_failure(logger, e, operation="handle captcha", user_message="处理滑块失败，请稍后重试")
+
+
+@router.get("/queue-position", response_model=ResultObject[dict])
+async def get_captcha_queue_position(
+    recordId: int = 0,
+    accountId: int = 0,
+    current_user: dict = Depends(get_current_user),
+):
+    """查询滑块求解任务的排队位置。
+
+    查询参数:
+        recordId: 求解记录 ID（优先使用）
+        accountId: 账号 ID（备选，查询该账号最近一条 queued 记录的位置）
+
+    返回:
+        {
+            "position": int,   # 排队位置（1=下一个出队，0=不在排队中/已开始处理）
+            "total": int,       # 排队中总数
+            "status": str,      # 记录当前状态（queued/retrying/success/fail）
+        }
+    """
+    try:
+        tenant_id = int(current_user.get("tenant_id") or 0)
+        if not tenant_id:
+            return ResultObject.validate_failed("租户上下文不能为空")
+
+        from ....services.captcha_queue import get_queue_position as _get_pos
+        from sqlalchemy import text as sql_text
+        from ....core.database import async_session
+
+        record_id = int(recordId or 0)
+
+        # 如果没传 recordId 但传了 accountId，查询该账号最近一条 queued 记录
+        if not record_id and accountId:
+            async with async_session() as db:
+                row = (await db.execute(
+                    sql_text(
+                        "SELECT id FROM xianyu_captcha_solve_record "
+                        "WHERE account_id = :aid AND tenant_id = :tid "
+                        "  AND status = 'queued' AND COALESCE(deleted, 0) = 0 "
+                        "ORDER BY created_at DESC LIMIT 1"
+                    ),
+                    {"aid": accountId, "tid": tenant_id},
+                )).mappings().first()
+                if row:
+                    record_id = int(row["id"])
+
+        if not record_id:
+            return ResultObject.success({
+                "position": 0,
+                "total": 0,
+                "status": "unknown",
+            })
+
+        position, total = await _get_pos(record_id)
+
+        # 查询记录当前状态
+        status = "unknown"
+        try:
+            async with async_session() as db:
+                row = (await db.execute(
+                    sql_text(
+                        "SELECT status FROM xianyu_captcha_solve_record "
+                        "WHERE id = :rid AND tenant_id = :tid LIMIT 1"
+                    ),
+                    {"rid": record_id, "tid": tenant_id},
+                )).mappings().first()
+                if row:
+                    status = str(row["status"])
+        except Exception:
+            pass
+
+        return ResultObject.success({
+            "position": position,
+            "total": total,
+            "status": status,
+            "recordId": record_id,
+        })
+    except Exception as e:
+        return safe_route_failure(logger, e, operation="get queue position", user_message="查询排队位置失败")
 
 
 @router.get("/records", response_model=ResultObject[dict])
@@ -219,7 +342,7 @@ async def list_captcha_records(
         page: 页码（默认1）
         pageSize: 每页条数（默认20）
         accountId: 账号ID筛选（可选）
-        status: 状态筛选（可选: retrying/success/fail）
+        status: 状态筛选（可选: queued/retrying/success/fail）
         triggerScene: 触发场景筛选（可选: manual/manual_retry/ws_connect/cookie_keepalive/token_refresh）
     """
     try:

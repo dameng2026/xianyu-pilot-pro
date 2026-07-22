@@ -346,7 +346,10 @@ async def _handle_bargain_waiting_message(
 
             # 3. 调用免拼接口（confirm_freeshipping 已支持幂等：ORDER_ALREADY_DELIVERY 视为成功）
             from .xianyu_api_service import confirm_freeshipping
-            result = confirm_freeshipping(account_id, order_id or "", xy_goods_id, buyer_user_id)
+            result = await asyncio.to_thread(
+                confirm_freeshipping,
+                account_id, order_id or "", xy_goods_id, buyer_user_id,
+            )
 
             if result and result.get("success"):
                 logger.info(

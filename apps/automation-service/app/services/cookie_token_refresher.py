@@ -360,26 +360,36 @@ async def _do_cookie_keepalive(state: AccountRefreshState) -> bool:
                 # 自动触发滑块求解（cookie_keepalive 场景），通过优先级队列处理
                 try:
                     from .captcha_queue import enqueue_solve
-                    from .captcha_precheck import lookup_account_priority
-                    priority = await lookup_account_priority(state.account_id, state.tenant_id)
-                    record_id = await enqueue_solve(
-                        account_id=state.account_id,
-                        tenant_id=state.tenant_id,
-                        trigger_scene="cookie_keepalive",
-                        open_reason="Cookie 保活失败自动触发",
-                        solve_reason=f"Cookie 保活触发滑块验证（{err_str}）",
-                        priority=priority,
-                    )
-                    if record_id is None:
+                    from .captcha_precheck import is_auto_slider_solve_allowed, lookup_user_level
+                    # 功能开关校验：auto-slider-solve 关闭时静默跳过
+                    allowed, _level = await is_auto_slider_solve_allowed(state.tenant_id)
+                    if not allowed:
                         logger.info(
-                            "Cookie 保活触发滑块求解入队去重跳过 accountId=%d（30 分钟内已入队）",
-                            state.account_id,
+                            "Cookie 保活触发滑块求解被开关拦截（静默跳过）"
+                            "accountId=%d tenantId=%d",
+                            state.account_id, state.tenant_id,
                         )
                     else:
-                        logger.info(
-                            "Cookie 保活触发滑块，已入队优先级队列 accountId=%d priority=%d recordId=%d",
-                            state.account_id, priority, record_id,
+                        # 查询用户级优先级（SVIP=2, VIP=1, 普通=0）
+                        _lvl, priority = await lookup_user_level(state.tenant_id)
+                        record_id = await enqueue_solve(
+                            account_id=state.account_id,
+                            tenant_id=state.tenant_id,
+                            trigger_scene="cookie_keepalive",
+                            open_reason="Cookie 保活失败自动触发",
+                            solve_reason=f"Cookie 保活触发滑块验证（{err_str}）",
+                            priority=priority,
                         )
+                        if record_id is None:
+                            logger.info(
+                                "Cookie 保活触发滑块求解入队去重跳过 accountId=%d（30 分钟内已入队）",
+                                state.account_id,
+                            )
+                        else:
+                            logger.info(
+                                "Cookie 保活触发滑块，已入队优先级队列 accountId=%d priority=%d recordId=%d",
+                                state.account_id, priority, record_id,
+                            )
                 except Exception as solve_err:
                     log_service_failure(
                         logger, solve_err, operation="enqueue_auto_solve_after_cookie_keepalive_captcha",

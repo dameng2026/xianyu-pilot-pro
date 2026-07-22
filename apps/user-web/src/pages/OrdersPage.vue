@@ -352,7 +352,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue'
 import Badge from '../components/Badge.vue'
 import AppButton from '../components/AppButton.vue'
 import Icon from '../components/Icon.vue'
@@ -364,7 +364,7 @@ import { accountName } from '../utils/format.js'
 import { buildManualDeliveryPayload, buildOrderDetailViewModel, buildOrderRowViewModel, buildOrdersQuery } from '../utils/orderPageState.js'
 
 const accounts = ref([])
-const orders = ref([])
+const orders = shallowRef([])
 const selected = ref(null)
 const total = ref(0)
 const error = ref('')
@@ -407,18 +407,26 @@ const totalPages = computed(() => Math.max(1, Math.ceil(total.value / query.size
 const syncButtonText = computed(() => query.accountId ? '同步当前账号真实订单' : '同步全部账号的真实订单')
 
 const stats = computed(() => {
-  const pending = orders.value.filter(o => Number(o.orderStatus) === 2).length
-  const completed = orders.value.filter(o => Number(o.orderStatus) === 4 || Number(o.orderStatus) === 3).length
-  const closed = orders.value.filter(o => Number(o.orderStatus) === 5).length
-  const pendingDelivery = orders.value.filter(o => {
+  // Single pass over orders.value to compute all four counters at once.
+  // Replaces the previous implementation that called .filter() five times.
+  let pending = 0
+  let completed = 0
+  let closed = 0
+  let pendingDelivery = 0
+  let failedDelivery = 0
+  for (const o of orders.value) {
+    const s = Number(o.orderStatus)
     const ds = String(o.deliveryStatus || '').toLowerCase()
-    return Number(o.orderStatus) >= 1 && (ds === 'pending' || ds === 'running' || ds === 'failed' || !ds)
-  }).length
-  const abnormal = closed + orders.value.filter(o => String(o.deliveryStatus || '').toLowerCase() === 'failed').length
+    if (s === 2) pending++
+    if (s === 4 || s === 3) completed++
+    if (s === 5) closed++
+    if (s >= 1 && (ds === 'pending' || ds === 'running' || ds === 'failed' || !ds)) pendingDelivery++
+    if (ds === 'failed') failedDelivery++
+  }
   return {
     pendingDelivery: Math.max(pendingDelivery, pending),
     completed,
-    abnormal: Math.max(abnormal, closed)
+    abnormal: Math.max(closed + failedDelivery, closed)
   }
 })
 

@@ -58,7 +58,7 @@ function buildPagedResponse(result, records, total) {
   }
 }
 
-function fetchAccountPage(params, { force = false, cacheTtlMs = 15000 } = {}) {
+function fetchAccountPage(params, { force = false, cacheTtlMs = 60000 } = {}) {
   return withRequestCache({
     keyParts: [ACCOUNT_CACHE_NAMESPACE, params],
     ttlMs: cacheTtlMs,
@@ -67,7 +67,7 @@ function fetchAccountPage(params, { force = false, cacheTtlMs = 15000 } = {}) {
   })
 }
 
-function fetchLiteAccountPage(params, { force = false, cacheTtlMs = 15000 } = {}) {
+function fetchLiteAccountPage(params, { force = false, cacheTtlMs = 60000 } = {}) {
   return withRequestCache({
     keyParts: [ACCOUNT_LITE_CACHE_NAMESPACE, params],
     ttlMs: cacheTtlMs,

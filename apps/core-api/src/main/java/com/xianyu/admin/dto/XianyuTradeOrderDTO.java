@@ -7,6 +7,7 @@ public class XianyuTradeOrderDTO {
     private Integer orderStatus;
     private String buyerName;
     private String buyerId;
+    private String sellerRemark;
 
     public Integer getOrderStatus() { return orderStatus; }
     public void setOrderStatus(Integer orderStatus) { this.orderStatus = orderStatus; }
@@ -14,4 +15,6 @@ public class XianyuTradeOrderDTO {
     public void setBuyerName(String buyerName) { this.buyerName = buyerName; }
     public String getBuyerId() { return buyerId; }
     public void setBuyerId(String buyerId) { this.buyerId = buyerId; }
+    public String getSellerRemark() { return sellerRemark; }
+    public void setSellerRemark(String sellerRemark) { this.sellerRemark = sellerRemark; }
 }

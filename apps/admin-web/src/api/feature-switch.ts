@@ -16,6 +16,10 @@ export interface FeatureSwitchItem {
   vip: boolean
   /** SVP 是否可访问 */
   svp: boolean
+  /** 关闭原因（仅 manual-slider-solve 使用，选填）
+   * 管理员填写后，前台被拦截时展示给用户；未填写时使用系统默认文案。
+   * 后端会做长度截断（≤200）与 HTML 标签过滤。 */
+  reason?: string
 }
 
 /**

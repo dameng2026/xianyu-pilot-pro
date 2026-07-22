@@ -69,7 +69,7 @@ public interface XianyuTradeOrderMapper {
 
     @Update("UPDATE xianyu_trade_order SET order_status = #{orderStatus}, total_amount = #{totalAmount}, " +
             "buyer_name = #{buyerName}, buyer_id = #{buyerId}, pay_time = #{payTime}, ship_time = #{shipTime}, " +
-            "confirm_time = #{confirmTime}, buyer_message = #{buyerMessage}, updated_time = NOW() " +
+            "confirm_time = #{confirmTime}, buyer_message = #{buyerMessage}, seller_remark = #{sellerRemark}, updated_time = NOW() " +
             "WHERE tenant_id = #{tenantId} AND id = #{id} AND deleted = 0")
     int update(XianyuTradeOrder order);
 

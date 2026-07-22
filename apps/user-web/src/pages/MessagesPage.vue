@@ -56,7 +56,7 @@
             v-if="captchaSolveStatus?.status === 'fail' && captchaRetryCount >= CAPTCHA_MAX_RETRY"
             type="button"
             class="xya-msg-captcha-retry"
-            :disabled="captchaSolveStatus?.status === 'retrying'"
+            :disabled="captchaSolveStatus?.status === 'retrying' || captchaSolveStatus?.status === 'queued'"
             @click="handleManualCaptchaSolve"
           >重试求解</button>
         </div>
@@ -677,6 +677,13 @@ const captchaSolveStatus = computed(() => {
 const captchaBannerText = computed(() => {
   const s = captchaSolveStatus.value
   if (!s) return ''
+  if (s.status === 'queued') {
+    const pos = s.queuePosition || 0
+    const total = s.queueTotal || 0
+    return pos > 0
+      ? `滑块求解排队中…（第 ${pos} 位，共 ${total} 个任务）`
+      : '滑块求解排队中…请耐心等待'
+  }
   if (s.status === 'retrying') return `正在自动求解滑块…（第 ${captchaRetryCount.value + 1} 次尝试）`
   if (s.status === 'success') return '滑块求解成功，正在刷新消息…'
   if (s.status === 'fail') {
@@ -688,6 +695,7 @@ const captchaBannerText = computed(() => {
 const captchaBannerType = computed(() => {
   const s = captchaSolveStatus.value
   if (!s) return ''
+  if (s.status === 'queued') return 'queued'
   if (s.status === 'retrying') return 'solving'
   if (s.status === 'success') return 'success'
   if (s.status === 'fail') return captchaRetryCount.value < CAPTCHA_MAX_RETRY ? 'solving' : 'fail'
@@ -1246,6 +1254,69 @@ function conversationDedupeKey(conversation) {
   return getConversationIdentityKey(conversation)
 }
 
+// 本地已读状态管理：记录每个会话用户最后查看时的最新消息时间
+// 当服务端轮询返回的会话最后消息时间 <= 本地记录时间时，强制 unreadCount = 0
+// 这样无需依赖服务端 markRead 的最终一致性（后端会话列表混用 IM redPoint + 内存缓存 +
+// xianyu_chat_message.read_status，markRead 只清零 xianyu_conversation.unread_count，
+// 无法立即清除其他来源的未读数），用户读完消息后小红点立即消失，只有再来新消息才再次显示未读。
+const READ_STATE_STORAGE_KEY = 'xya-msg-read-state-v1'
+
+function loadReadStateFromStorage() {
+  try {
+    const raw = localStorage.getItem(READ_STATE_STORAGE_KEY)
+    if (raw) {
+      const data = JSON.parse(raw)
+      if (data && typeof data === 'object') {
+        const map = new Map()
+        Object.entries(data).forEach(([key, value]) => {
+          const num = Number(value)
+          if (Number.isFinite(num) && num > 0) map.set(key, num)
+        })
+        return map
+      }
+    }
+  } catch { /* localStorage 解析失败时回退到空 Map */ }
+  return new Map()
+}
+
+function persistReadState(state) {
+  try {
+    const obj = {}
+    state.forEach((value, key) => { obj[key] = value })
+    localStorage.setItem(READ_STATE_STORAGE_KEY, JSON.stringify(obj))
+  } catch { /* localStorage 写入失败时忽略，本地已读状态非关键路径 */ }
+}
+
+const readState = loadReadStateFromStorage()
+
+function getConversationLastMessageTime(conv) {
+  return parseMessageTimestamp(
+    conv?.lastMessageTime ?? conv?.updatedAt ?? conv?.messageTime ?? conv?.createdAt ?? 0
+  )
+}
+
+function applyLocalReadState(conv) {
+  const convKey = conversationDedupeKey(conv)
+  if (!convKey) return conv
+  const lastReadTime = readState.get(convKey)
+  if (!lastReadTime) return conv
+  const lastMsgTime = getConversationLastMessageTime(conv)
+  if (!lastMsgTime) return conv
+  // 本地已读时间 >= 会话最后消息时间：会话已被用户查看过且没有新消息
+  if (lastReadTime >= lastMsgTime && Number(conv.unreadCount || 0) > 0) {
+    return applyConversationUnreadState(conv, 0, compareConversationStatus)
+  }
+  return conv
+}
+
+function markConversationReadLocally(conv) {
+  const convKey = conversationDedupeKey(conv)
+  if (!convKey) return
+  const lastMsgTime = getConversationLastMessageTime(conv) || Date.now()
+  readState.set(convKey, lastMsgTime)
+  persistReadState(readState)
+}
+
 function resolvePeerName(conversation) {
   return (
     conversation?.name ||
@@ -1453,8 +1524,11 @@ function toDisplayConversation(dto) {
   const normalized = {
     ...dto,
     raw: dto,
-    id: dto?.id,
-    rawId: dto?.id,
+    // Python get_online_conversations 返回的会话主键字段名是 conversationId（SQL: MIN(conv.id) AS conversationId）
+    // 此处兼容映射到 id，确保 markConversationRead 能拿到正确的记录编号
+    id: dto?.id || dto?.conversationId,
+    rawId: dto?.id || dto?.conversationId,
+    conversationId: dto?.conversationId || dto?.id,
     xianyuAccountId: accountId,
     accountId,
     sid,
@@ -1700,6 +1774,7 @@ async function loadConversations(preserveSelected = true, { silent = false } = {
         .flatMap(batch => batch.list.map(item => toDisplayConversation({ ...item, xianyuAccountId: batch.accountId })))
         .filter(Boolean)
     ).map(item => mergeConversationDisplaySnapshot(previousConversationMap.get(conversationDedupeKey(item)), item) || item)
+      .map(item => applyLocalReadState(item))
 
     const preserveLoadedPages = Boolean(
       silent &&
@@ -1813,6 +1888,7 @@ async function loadMoreConversations() {
       .map(item => toDisplayConversation({ ...item, xianyuAccountId: accountId }))
       .filter(Boolean)
       .map(item => mergeConversationDisplaySnapshot(previousConversationMap.get(conversationDedupeKey(item)), item) || item)
+      .map(item => applyLocalReadState(item))
     const merged = new Map(conversations.value.map(item => [conversationDedupeKey(item), item]))
     nextBatch.forEach(item => {
       const key = conversationDedupeKey(item)
@@ -1959,6 +2035,10 @@ async function selectChat(conversation) {
   error.value = ''
   restoreCachedConversationContext(selectedAccountId(), selected.value, { scrollBottom: true })
   await loadContext(true)
+  // 立即在本地标记为已读：记录该会话最后查看时的最新消息时间
+  // 这样即使服务端 markRead 因后端数据源割裂（IM redPoint + 内存缓存 + read_status）未能立即清零，
+  // 下次轮询返回时 applyLocalReadState 也会强制 unreadCount = 0，避免小红点持续显示
+  markConversationReadLocally(selected.value)
   await markSelectedConversationRead(selected.value)
   refreshAiScopeState()
   schedulePersistCurrentAccountCache()
@@ -3418,6 +3498,12 @@ onBeforeUnmount(() => {
   background: linear-gradient(135deg, #fff7e6, #fff1d6);
   border-color: #ffd591;
   color: #ad6800;
+}
+
+.xya-msg-captcha-banner.queued {
+  background: linear-gradient(135deg, #eff6ff, #dbeafe);
+  border-color: #93c5fd;
+  color: #1e40af;
 }
 
 .xya-msg-captcha-banner.success {

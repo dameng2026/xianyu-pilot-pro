@@ -54,7 +54,7 @@
           <div v-for="(item, i) in items" :key="item.link + i" :class="['op-product', {active: selectedItem && selectedItem.link === item.link}]" @click="selectItem(item)">
             <input type="checkbox" :checked="selectedItem && selectedItem.link === item.link">
             <div class="product-thumb">
-              <img v-if="item.image" :src="item.image" alt="" style="width:100%;height:100%;object-fit:cover">
+              <img v-if="item.image" :src="item.image" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover">
             </div>
             <div style="flex:1;min-width:0">
               <h3 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="item.title">{{ item.title }}</h3>
@@ -96,7 +96,7 @@
           <div v-if="showDrafts" class="draft-list">
             <div v-for="d in savedDrafts" :key="d.id" class="draft-item">
               <div class="draft-info">
-                <img v-if="d.productImage" :src="d.productImage" alt="" class="draft-thumb">
+                <img v-if="d.productImage" :src="d.productImage" alt="" loading="lazy" class="draft-thumb">
                 <div class="draft-meta">
                   <span class="draft-title">{{ d.productTitle }}</span>
                   <span class="draft-time">步骤{{ d.step || 1 }} · {{ d.savedAt }}</span>

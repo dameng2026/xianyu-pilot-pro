@@ -531,15 +531,28 @@ async def test_category_management_requires_authentication():
 async def test_captcha_routes_only_use_authenticated_tenant(monkeypatch):
     captured = []
 
-    async def auto_solve(**kwargs):
-        captured.append(kwargs)
-        return {"success": False, "error": "test"}
+    async def compute_priority(tenant_id, trigger_scene="manual"):
+        captured.append({"tenant_id": tenant_id, "_source": "compute_priority"})
+        return ("normal", 0)
+
+    async def enqueue(account_id, tenant_id, **kwargs):
+        captured.append({"tenant_id": tenant_id, "_source": "enqueue", "account_id": account_id})
+        return 42
+
+    async def get_pos(record_id):
+        return (1, 1)
 
     async def handle(**kwargs):
-        captured.append(kwargs)
+        captured.append({"tenant_id": kwargs.get("tenant_id"), "_source": "handle"})
         return {"detected": False}
 
-    monkeypatch.setattr(captcha, "try_auto_solve", auto_solve)
+    # auto_solve_captcha 内部从 captcha_precheck / captcha_queue 模块导入函数，
+    # 需要在源模块上 monkeypatch 才能生效
+    from app.services import captcha_precheck, captcha_queue
+    monkeypatch.setattr(captcha_precheck, "compute_solve_priority", compute_priority)
+    monkeypatch.setattr(captcha_queue, "enqueue_solve", enqueue)
+    monkeypatch.setattr(captcha_queue, "get_queue_position", get_pos)
+    # handle_captcha 在 autoSolve=False 时仍直接调用 handle_captcha_for_account
     monkeypatch.setattr(captcha, "handle_captcha_for_account", handle)
     user = {"tenant_id": 1, "user_id": 7}
 
@@ -552,10 +565,15 @@ async def test_captcha_routes_only_use_authenticated_tenant(monkeypatch):
         current_user=user,
     )
 
+    # auto_solve_captcha 应使用 current_user 的 tenant_id=1，而非 body 中的 tenantId=999
     assert captured[0]["tenant_id"] == 1
     assert captured[1]["tenant_id"] == 1
-    assert auto_result.code == 503
-    assert auto_result.data is None
+    # handle_captcha（autoSolve=False）也应使用 current_user 的 tenant_id=1
+    assert captured[2]["tenant_id"] == 1
+    # auto_solve_captcha 入队成功后返回 200 + 排队信息
+    assert auto_result.code == 200
+    assert auto_result.data["recordId"] == 42
+    assert auto_result.data["status"] == "queued"
 
 
 @pytest.mark.asyncio

@@ -81,6 +81,22 @@
               />
             </template>
           </ElTableColumn>
+          <ElTableColumn label="关闭原因" min-width="240">
+            <template #default="{ row }">
+              <ElInput
+                v-if="row.key === 'manual-slider-solve'"
+                v-model="row.reason"
+                type="textarea"
+                :rows="1"
+                :disabled="isAllOn(row as FeatureSwitchItem)"
+                placeholder="选填，被拦截时展示给用户。如：会员专属功能，升级 VIP 即可使用"
+                maxlength="120"
+                show-word-limit
+                resize="none"
+              />
+              <span v-else class="reason-placeholder">—</span>
+            </template>
+          </ElTableColumn>
           <template #empty>
             <div class="empty-state">暂无功能项</div>
           </template>
@@ -224,5 +240,6 @@ onMounted(loadConfig)
 .feature-cell { display: flex; flex-direction: column; gap: 2px; }
 .feature-title { font-size: 14px; font-weight: 500; }
 .feature-key { font-size: 12px; color: var(--el-text-color-secondary); }
+.reason-placeholder { color: var(--el-text-color-placeholder); font-size: 13px; }
 .empty-state { padding: 16px 0; text-align: center; color: var(--el-text-color-secondary); font-size: 13px; }
 </style>

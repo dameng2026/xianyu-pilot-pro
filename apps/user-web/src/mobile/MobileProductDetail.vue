@@ -12,14 +12,17 @@
     </div>
 
     <template v-else>
+      <!-- ============ 顶部 Hero 卡 ============ -->
       <div class="m-product-hero">
         <div class="m-hero-images">
-          <div class="m-main-image">
+          <div class="m-main-image" @click="openImagePreview(0)">
             <img
-              v-if="formData.imageUrls[0] || formData.mainImageUrl"
-              :src="formData.imageUrls[0] || formData.mainImageUrl"
+              v-if="mainImage"
+              :src="mainImage"
               :alt="formData.title"
               class="m-img-main"
+              loading="lazy"
+              @error="onImgError"
             />
             <div v-else class="m-img-placeholder">
               <MIcon name="image" :size="48" />
@@ -31,8 +34,9 @@
               :key="idx"
               class="m-thumb-item"
               :class="{ active: idx === 0 }"
+              @click="openImagePreview(idx)"
             >
-              <img :src="img" alt="" class="m-thumb-img" />
+              <img :src="img" alt="" class="m-thumb-img" loading="lazy" />
             </div>
             <div v-if="formData.imageUrls.length > 4" class="m-thumb-more">
               +{{ formData.imageUrls.length - 4 }}
@@ -45,7 +49,9 @@
             <span class="m-status-badge" :class="statusClass">{{ statusText }}</span>
             <button
               class="m-toggle-status"
-              :class="{ on: isOnShelf }"
+              :class="{ on: isOnShelf, loading: togglingStatus }"
+              :disabled="togglingStatus"
+              :aria-label="isOnShelf ? '下架商品' : '上架商品'"
               @click="toggleStatus"
             >
               <span class="m-toggle-track">
@@ -58,23 +64,31 @@
           <div class="m-price-row">
             <span class="m-price-symbol">¥</span>
             <span class="m-price-value">{{ formatPrice(formData.price) }}</span>
-            <span v-if="formData.originalPrice > formData.price" class="m-price-original">
-              ¥{{ formatPrice(formData.originalPrice) }}
+            <span
+              v-if="formData.soldPrice && Number(formData.soldPrice) > 0 && Number(formData.soldPrice) < Number(formData.price)"
+              class="m-price-original"
+            >
+              ¥{{ formatPrice(formData.soldPrice) }}
             </span>
           </div>
           <div class="m-meta-row">
             <span class="m-meta-item">
               <MIcon name="database" :size="14" />
-              库存 {{ formData.stock }}
+              库存 {{ formData.quantity ?? 0 }}
             </span>
-            <span v-if="formData.sales || formData.soldCount" class="m-meta-item">
-              <MIcon name="trendingUp" :size="14" />
-              已售 {{ formData.sales || formData.soldCount || 0 }}
+            <span class="m-meta-item">
+              <MIcon name="heart" :size="14" />
+              想要 {{ formData.wantCount ?? 0 }}
+            </span>
+            <span class="m-meta-item">
+              <MIcon name="eye" :size="14" />
+              曝光 {{ formData.exposureCount ?? 0 }}
             </span>
           </div>
         </div>
       </div>
 
+      <!-- ============ Tabs 导航 ============ -->
       <div class="m-tabs-nav">
         <button
           v-for="tab in tabs"
@@ -88,78 +102,26 @@
       </div>
 
       <div class="m-form-content">
-        <div v-if="activeTab === 'basic'" class="m-tab-panel">
-          <div class="m-form-section">
-            <div class="m-section-title">商品图片</div>
-            <div class="m-image-upload">
-              <div class="m-upload-grid">
-                <div
-                  v-for="(img, idx) in formData.imageUrls"
-                  :key="idx"
-                  class="m-upload-item"
-                >
-                  <img :src="img" alt="" class="m-upload-img" />
-                  <button class="m-remove-img" @click="removeImage(idx)">
-                    <MIcon name="x" :size="14" />
-                  </button>
-                </div>
-                <div
-                  v-if="formData.imageUrls.length < 10"
-                  class="m-upload-add"
-                  @click="triggerImageUpload"
-                >
-                  <MIcon name="camera" :size="24" />
-                  <span>添加图片</span>
-                </div>
-              </div>
-              <input
-                ref="imageInputRef"
-                type="file"
-                accept="image/*"
-                multiple
-                class="m-file-input"
-                @change="handleImageUpload"
-              />
-            </div>
-          </div>
-
+        <!-- ============ Tab 1: 商品信息 ============ -->
+        <div v-if="activeTab === 'info'" class="m-tab-panel">
           <div class="m-form-section">
             <div class="m-section-title">基本信息</div>
             <div class="m-form-field">
-              <label class="m-field-label">商品名称 <span class="m-required">*</span></label>
+              <label class="m-field-label">商品标题 <span class="m-required">*</span></label>
               <input
                 v-model="formData.title"
                 type="text"
                 class="m-field-input"
-                placeholder="请输入商品名称"
+                placeholder="请输入商品标题"
                 maxlength="100"
               />
               <div class="m-field-count">{{ formData.title.length }}/100</div>
             </div>
             <div class="m-form-field">
-              <label class="m-field-label">商品副标题</label>
-              <input
-                v-model="formData.subTitle"
-                type="text"
-                class="m-field-input"
-                placeholder="请输入商品副标题（选填）"
-                maxlength="200"
-              />
-            </div>
-            <div class="m-form-field">
               <label class="m-field-label">商品分类</label>
               <div class="m-field-select" @click="showCategoryPicker = true">
-                <span :class="{ placeholder: !formData.categoryPath }">
-                  {{ formData.categoryPath || '请选择商品分类' }}
-                </span>
-                <MIcon name="chevronRight" :size="16" />
-              </div>
-            </div>
-            <div class="m-form-field">
-              <label class="m-field-label">发货地区</label>
-              <div class="m-field-select" @click="showLocationPicker = true">
-                <span :class="{ placeholder: !formData.addressText }">
-                  {{ formData.addressText || '请选择发货地区' }}
+                <span :class="{ placeholder: !formData.category }">
+                  {{ formData.category || '请选择商品分类' }}
                 </span>
                 <MIcon name="chevronRight" :size="16" />
               </div>
@@ -173,24 +135,22 @@
                 rows="4"
                 maxlength="2000"
               ></textarea>
+              <div class="m-field-count">{{ formData.description.length }}/2000</div>
             </div>
           </div>
-        </div>
 
-        <div v-if="activeTab === 'pricing'" class="m-tab-panel">
           <div class="m-form-section">
-            <div class="m-section-title">价格设置</div>
+            <div class="m-section-title">价格与库存</div>
             <div class="m-form-field">
               <label class="m-field-label">售价 <span class="m-required">*</span></label>
               <div class="m-price-input">
                 <span class="m-price-prefix">¥</span>
                 <input
-                  v-model.number="formData.price"
-                  type="number"
+                  v-model="formData.price"
+                  type="text"
                   class="m-field-input"
                   placeholder="0.00"
-                  min="0"
-                  step="0.01"
+                  inputmode="decimal"
                 />
               </div>
             </div>
@@ -199,37 +159,18 @@
               <div class="m-price-input">
                 <span class="m-price-prefix">¥</span>
                 <input
-                  v-model.number="formData.originalPrice"
-                  type="number"
+                  v-model="formData.soldPrice"
+                  type="text"
                   class="m-field-input"
-                  placeholder="0.00"
-                  min="0"
-                  step="0.01"
+                  placeholder="0.00（选填）"
+                  inputmode="decimal"
                 />
               </div>
             </div>
-            <div class="m-form-field">
-              <label class="m-field-label">成本价</label>
-              <div class="m-price-input">
-                <span class="m-price-prefix">¥</span>
-                <input
-                  v-model.number="formData.costPrice"
-                  type="number"
-                  class="m-field-input"
-                  placeholder="0.00"
-                  min="0"
-                  step="0.01"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div class="m-form-section">
-            <div class="m-section-title">库存设置</div>
             <div class="m-form-field">
               <label class="m-field-label">库存数量</label>
               <input
-                v-model.number="formData.stock"
+                v-model.number="formData.quantity"
                 type="number"
                 class="m-field-input"
                 placeholder="0"
@@ -238,108 +179,9 @@
               />
             </div>
             <div class="m-form-field">
-              <label class="m-field-label">库存预警阈值</label>
-              <input
-                v-model.number="formData.lowStockThreshold"
-                type="number"
-                class="m-field-input"
-                placeholder="10"
-                min="0"
-                step="1"
-              />
-              <div class="m-field-hint">当库存低于此值时会提醒补货</div>
-            </div>
-            <div class="m-form-field">
-              <label class="m-field-label">限购数量</label>
-              <input
-                v-model.number="formData.purchaseLimit"
-                type="number"
-                class="m-field-input"
-                placeholder="0（不限购）"
-                min="0"
-                step="1"
-              />
-              <div class="m-field-hint">0 表示不限购</div>
-            </div>
-          </div>
-        </div>
-
-        <div v-if="activeTab === 'settings'" class="m-tab-panel">
-          <div class="m-form-section">
-            <div class="m-section-title">发货设置</div>
-            <div class="m-switch-field">
-              <div class="m-switch-info">
-                <div class="m-switch-label">自动发货</div>
-                <div class="m-switch-desc">开启后买家付款后自动发送发货内容</div>
-              </div>
-              <button
-                class="m-switch-btn"
-                :class="{ on: formData.autoDelivery }"
-                @click="formData.autoDelivery = !formData.autoDelivery"
-              >
-                <span class="m-switch-knob"></span>
-              </button>
-            </div>
-            <div v-if="formData.autoDelivery" class="m-form-field">
-              <label class="m-field-label">发货内容</label>
-              <textarea
-                v-model="formData.deliveryContent"
-                class="m-field-textarea"
-                placeholder="请输入自动发货内容，如卡密、网盘链接等"
-                rows="4"
-              ></textarea>
-            </div>
-          </div>
-
-          <div class="m-form-section">
-            <div class="m-section-title">售后设置</div>
-            <div class="m-switch-field">
-              <div class="m-switch-info">
-                <div class="m-switch-label">支持退款</div>
-                <div class="m-switch-desc">允许买家申请退款</div>
-              </div>
-              <button
-                class="m-switch-btn"
-                :class="{ on: formData.supportRefund }"
-                @click="formData.supportRefund = !formData.supportRefund"
-              >
-                <span class="m-switch-knob"></span>
-              </button>
-            </div>
-            <div class="m-switch-field">
-              <div class="m-switch-info">
-                <div class="m-switch-label">7天无理由退货</div>
-                <div class="m-switch-desc">支持7天无理由退换货</div>
-              </div>
-              <button
-                class="m-switch-btn"
-                :class="{ on: formData.support7DayReturn }"
-                @click="formData.support7DayReturn = !formData.support7DayReturn"
-              >
-                <span class="m-switch-knob"></span>
-              </button>
-            </div>
-          </div>
-
-          <div class="m-form-section">
-            <div class="m-section-title">其他设置</div>
-            <div class="m-switch-field">
-              <div class="m-switch-info">
-                <div class="m-switch-label">推荐商品</div>
-                <div class="m-switch-desc">在首页推荐位展示此商品</div>
-              </div>
-              <button
-                class="m-switch-btn"
-                :class="{ on: formData.isFeatured }"
-                @click="formData.isFeatured = !formData.isFeatured"
-              >
-                <span class="m-switch-knob"></span>
-              </button>
-            </div>
-            <div class="m-form-field">
               <label class="m-field-label">排序权重</label>
               <input
-                v-model.number="formData.sortWeight"
+                v-model.number="formData.sortOrder"
                 type="number"
                 class="m-field-input"
                 placeholder="0"
@@ -348,19 +190,218 @@
               />
               <div class="m-field-hint">数值越大排序越靠前</div>
             </div>
-            <div class="m-form-field">
-              <label class="m-field-label">备注</label>
-              <textarea
-                v-model="formData.remark"
-                class="m-field-textarea"
-                placeholder="内部备注（买家不可见）"
-                rows="2"
-              ></textarea>
+          </div>
+        </div>
+
+        <!-- ============ Tab 2: 图片 ============ -->
+        <div v-if="activeTab === 'images'" class="m-tab-panel">
+          <div class="m-form-section">
+            <div class="m-section-title">商品图片</div>
+            <div class="m-field-hint" style="margin-bottom: 12px;">
+              最多上传 10 张图片，第一张为封面图。点击图片可设为封面。
             </div>
+            <div class="m-upload-grid">
+              <div
+                v-for="(img, idx) in formData.imageUrls"
+                :key="idx"
+                class="m-upload-item"
+                :class="{ cover: idx === 0 }"
+              >
+                <img :src="img" alt="" class="m-upload-img" loading="lazy" />
+                <span v-if="idx === 0" class="m-cover-tag">封面</span>
+                <div class="m-upload-actions">
+                  <button
+                    v-if="idx > 0"
+                    class="m-img-action"
+                    aria-label="设为封面"
+                    @click="setAsCover(idx)"
+                  >
+                    <MIcon name="star" :size="14" />
+                  </button>
+                  <button
+                    class="m-img-action m-img-action-danger"
+                    aria-label="删除图片"
+                    @click="removeImage(idx)"
+                  >
+                    <MIcon name="x" :size="14" />
+                  </button>
+                </div>
+              </div>
+              <div
+                v-if="formData.imageUrls.length < 10"
+                class="m-upload-add"
+                @click="triggerImageUpload"
+              >
+                <MIcon name="camera" :size="24" />
+                <span>添加图片</span>
+              </div>
+            </div>
+            <input
+              ref="imageInputRef"
+              type="file"
+              accept="image/*"
+              multiple
+              class="m-file-input"
+              @change="handleImageUpload"
+            />
+          </div>
+        </div>
+
+        <!-- ============ Tab 3: 参数 ============ -->
+        <div v-if="activeTab === 'params'" class="m-tab-panel">
+          <div class="m-form-section">
+            <div class="m-section-title">商品数据</div>
+            <div class="m-param-grid">
+              <div class="m-param-item">
+                <div class="m-param-label">曝光数</div>
+                <div class="m-param-value">{{ formData.exposureCount ?? 0 }}</div>
+              </div>
+              <div class="m-param-item">
+                <div class="m-param-label">浏览数</div>
+                <div class="m-param-value">{{ formData.viewCount ?? 0 }}</div>
+              </div>
+              <div class="m-param-item">
+                <div class="m-param-label">想要数</div>
+                <div class="m-param-value">{{ formData.wantCount ?? 0 }}</div>
+              </div>
+              <div class="m-param-item">
+                <div class="m-param-label">库存</div>
+                <div class="m-param-value">{{ formData.quantity ?? 0 }}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="m-form-section">
+            <div class="m-section-title">商品链接</div>
+            <div class="m-form-field">
+              <label class="m-field-label">详情链接</label>
+              <input
+                v-model="formData.detailUrl"
+                type="text"
+                class="m-field-input"
+                placeholder="商品详情页链接"
+              />
+            </div>
+            <div class="m-form-field">
+              <label class="m-field-label">外部商品ID</label>
+              <input
+                v-model="formData.externalGoodsId"
+                type="text"
+                class="m-field-input"
+                placeholder="闲鱼商品ID"
+                readonly
+              />
+            </div>
+          </div>
+
+          <div class="m-form-section">
+            <div class="m-section-title">详情信息</div>
+            <div class="m-form-field">
+              <label class="m-field-label">详情内容</label>
+              <textarea
+                v-model="formData.detailInfo"
+                class="m-field-textarea"
+                placeholder="商品详情信息（选填）"
+                rows="6"
+                maxlength="5000"
+              ></textarea>
+              <div class="m-field-count">{{ (formData.detailInfo || '').length }}/5000</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ============ Tab 4: 自动化配置 ============ -->
+        <div v-if="activeTab === 'automation'" class="m-tab-panel">
+          <div class="m-form-section">
+            <div class="m-section-title">自动回复</div>
+            <div class="m-switch-field">
+              <div class="m-switch-info">
+                <div class="m-switch-label">商品级自动回复</div>
+                <div class="m-switch-desc">
+                  开启后，买家咨询此商品时使用 AI 自动回复
+                </div>
+              </div>
+              <button
+                class="m-switch-btn"
+                :class="{ on: autoReplyEnabled, loading: togglingAutoReply }"
+                :disabled="togglingAutoReply"
+                :aria-label="autoReplyEnabled ? '关闭自动回复' : '开启自动回复'"
+                @click="toggleAutoReply"
+              >
+                <span class="m-switch-knob"></span>
+              </button>
+            </div>
+            <div class="m-switch-status">
+              当前状态：
+              <span :class="autoReplyEnabled ? 'm-status-on' : 'm-status-off'">
+                {{ autoReplyEnabled ? '已开启' : '已关闭' }}
+              </span>
+            </div>
+          </div>
+
+          <div class="m-form-section">
+            <div class="m-section-title">快捷操作</div>
+            <button class="m-action-row" @click="goAutoDeliveryConfig">
+              <MIcon name="truck" :size="20" color="#ff9f22" />
+              <div class="m-action-row-info">
+                <div class="m-action-row-label">配置自动发货</div>
+                <div class="m-action-row-desc">设置发货内容、卡密或网盘链接</div>
+              </div>
+              <MIcon name="chevronRight" :size="16" />
+            </button>
+          </div>
+        </div>
+
+        <!-- ============ Tab 5: 发货配置 ============ -->
+        <div v-if="activeTab === 'delivery'" class="m-tab-panel">
+          <div class="m-form-section">
+            <div class="m-section-title">自动发货</div>
+            <div class="m-delivery-status">
+              <div class="m-delivery-status-label">当前状态</div>
+              <div class="m-delivery-status-value">
+                <span
+                  class="m-delivery-badge"
+                  :class="autoDeliveryOn ? 'on' : 'off'"
+                >
+                  {{ autoDeliveryOn ? '已启用' : '未启用' }}
+                </span>
+                <span class="m-delivery-type">{{ deliveryTypeText }}</span>
+              </div>
+            </div>
+            <div class="m-field-hint" style="margin-top: 12px;">
+              自动发货规则通过发货配置页管理，支持卡密、文本、自定义内容。
+            </div>
+          </div>
+
+          <div class="m-form-section">
+            <div class="m-section-title">操作</div>
+            <button
+              class="m-action-row"
+              @click="goAutoDeliveryConfig"
+            >
+              <MIcon name="settings" :size="20" color="#3380ff" />
+              <div class="m-action-row-info">
+                <div class="m-action-row-label">前往发货配置</div>
+                <div class="m-action-row-desc">配置自动发货内容与规则</div>
+              </div>
+              <MIcon name="chevronRight" :size="16" />
+            </button>
+            <button
+              class="m-action-row"
+              @click="goDeliveryRecords"
+            >
+              <MIcon name="fileText" :size="20" color="#16bf78" />
+              <div class="m-action-row-info">
+                <div class="m-action-row-label">查看发货记录</div>
+                <div class="m-action-row-desc">查看此商品的历史自动发货记录</div>
+              </div>
+              <MIcon name="chevronRight" :size="16" />
+            </button>
           </div>
         </div>
       </div>
 
+      <!-- ============ 底部固定操作栏 ============ -->
       <div class="m-bottom-bar">
         <button class="m-bar-btn m-bar-btn-secondary" @click="handleBack">
           返回
@@ -379,6 +420,7 @@
       <div class="m-safe-bottom"></div>
     </template>
 
+    <!-- ============ 上下架确认弹窗 ============ -->
     <div v-if="showStatusDialog" class="m-dialog-mask" @click="showStatusDialog = false">
       <div class="m-dialog" @click.stop>
         <div class="m-dialog-title">
@@ -389,48 +431,51 @@
         </div>
         <div class="m-dialog-actions">
           <button class="m-dialog-btn m-dialog-btn-cancel" @click="showStatusDialog = false">取消</button>
-          <button class="m-dialog-btn m-dialog-btn-confirm" @click="confirmToggleStatus">
+          <button
+            class="m-dialog-btn"
+            :class="isOnShelf ? 'm-dialog-btn-danger' : 'm-dialog-btn-confirm'"
+            @click="confirmToggleStatus"
+          >
             确认{{ isOnShelf ? '下架' : '上架' }}
           </button>
         </div>
       </div>
     </div>
 
+    <!-- ============ 未保存离开确认弹窗 ============ -->
     <div v-if="showBackDialog" class="m-dialog-mask" @click="showBackDialog = false">
       <div class="m-dialog" @click.stop>
         <div class="m-dialog-title">有未保存的更改</div>
         <div class="m-dialog-msg">您有未保存的修改，确定要离开吗？</div>
         <div class="m-dialog-actions">
           <button class="m-dialog-btn m-dialog-btn-cancel" @click="showBackDialog = false">继续编辑</button>
-          <button class="m-dialog-btn m-dialog-btn-confirm" @click="confirmBack">确认离开</button>
+          <button class="m-dialog-btn m-dialog-btn-danger" @click="confirmBack">确认离开</button>
         </div>
       </div>
     </div>
 
+    <!-- ============ 图片预览 ============ -->
+    <div v-if="previewImage" class="m-preview-mask" @click="previewImage = ''">
+      <img :src="previewImage" alt="" class="m-preview-img" />
+    </div>
+
     <MobileCategoryPicker
       :visible="showCategoryPicker"
-      :initial-category-id="formData.categoryId"
+      :initial-category-id="formData.category"
       @close="showCategoryPicker = false"
       @select="handleCategorySelect"
-    />
-
-    <MobileLocationPicker
-      :visible="showLocationPicker"
-      :initial-address="formData.location"
-      @close="showLocationPicker = false"
-      @select="handleLocationSelect"
     />
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import MIcon from './MIcon.vue'
 import MobileCategoryPicker from './components/MobileCategoryPicker.vue'
-import MobileLocationPicker from './components/MobileLocationPicker.vue'
 import { getGoodsDetail, updateGoods } from '../api/goods.js'
-import { offShelfItem, republishItem } from '../api/items.js'
+import { offShelfItem, republishItem, updateAutoReplyStatus } from '../api/items.js'
 import { uploadImage } from '../api/misc.js'
+import { resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
 
 const props = defineProps({
   productId: [String, Number],
@@ -439,69 +484,85 @@ const props = defineProps({
 
 const emit = defineEmits(['navigate', 'force-desktop', 'back', 'updated'])
 
+// FE 状态码（与后端 XianyuGoodsService 一致）：0=在售 1=下架 2=已售 3=已删除
+const FE_STATUS_ON_SALE = 0
+const FE_STATUS_OFF_SHELF = 1
+
 const loading = ref(false)
 const loadError = ref('')
 const saving = ref(false)
-const activeTab = ref('basic')
+const togglingStatus = ref(false)
+const togglingAutoReply = ref(false)
+const activeTab = ref('info')
 const imageInputRef = ref(null)
 const showCategoryPicker = ref(false)
-const showLocationPicker = ref(false)
 const showStatusDialog = ref(false)
 const showBackDialog = ref(false)
+const previewImage = ref('')
 let initialData = null
 
 const tabs = [
-  { key: 'basic', label: '基本信息' },
-  { key: 'pricing', label: '库存价格' },
-  { key: 'settings', label: '其他设置' }
+  { key: 'info', label: '商品信息' },
+  { key: 'images', label: '图片' },
+  { key: 'params', label: '参数' },
+  { key: 'automation', label: '自动化' },
+  { key: 'delivery', label: '发货' }
 ]
 
+// formData 对齐后端 XianyuGoodsVO 字段
 const formData = reactive({
+  id: null,
   title: '',
-  subTitle: '',
+  price: '',
+  soldPrice: '',
+  coverPic: '',
+  imageUrl: '',
+  stock: '',
+  quantity: 0,
+  exposureCount: 0,
+  viewCount: 0,
+  wantCount: 0,
+  detailUrl: '',
+  detailInfo: '',
   description: '',
-  detailContent: '',
-  price: 0,
-  originalPrice: 0,
-  costPrice: 0,
-  stock: 0,
-  lowStockThreshold: 10,
-  purchaseLimit: 0,
-  status: 0,
-  imageUrls: [],
-  mainImageUrl: '',
-  categoryId: '',
-  categoryPath: '',
-  goodsType: '',
-  tags: [],
-  skus: [],
-  autoDelivery: false,
-  deliveryContent: '',
-  supportRefund: true,
-  support7DayReturn: false,
-  isFeatured: false,
-  sortWeight: 0,
-  sales: 0,
-  soldCount: 0,
+  category: '',
+  sortOrder: 0,
+  status: FE_STATUS_OFF_SHELF,
+  externalGoodsId: '',
   accountId: null,
-  xianyuAccountId: null,
-  remark: '',
-  province: '',
-  city: '',
-  district: '',
-  addressText: '',
-  location: null
+  autoDeliveryType: null,
+  xianyuAutoDeliveryOn: 0,
+  xianyuAutoReplyOn: 0,
+  // 前端派生字段
+  imageUrls: []
 })
 
-const isOnShelf = computed(() => formData.status === 1 || formData.onShelf === true)
+const isOnShelf = computed(() => Number(formData.status) === FE_STATUS_ON_SALE)
+
+const autoReplyEnabled = computed(() => Number(formData.xianyuAutoReplyOn) === 1)
+const autoDeliveryOn = computed(() => Number(formData.xianyuAutoDeliveryOn) === 1)
+
+const deliveryTypeText = computed(() => {
+  const t = formData.autoDeliveryType
+  if (t === 0) return '卡密发货'
+  if (t === 1) return '文本发货'
+  if (t === 2) return '自定义发货'
+  return '未配置'
+})
+
+const mainImage = computed(() => {
+  if (formData.imageUrls.length > 0) return formData.imageUrls[0]
+  if (formData.coverPic) return resolveTrustedMediaUrl(formData.coverPic)
+  return ''
+})
 
 const statusText = computed(() => {
-  if (formData.stock <= 0) return '已售罄'
+  if ((formData.quantity ?? 0) <= 0 && isOnShelf.value) return '已售罄'
   return isOnShelf.value ? '上架中' : '已下架'
 })
 
 const statusClass = computed(() => {
-  if (formData.stock <= 0) return 'm-status-soldout'
+  if ((formData.quantity ?? 0) <= 0 && isOnShelf.value) return 'm-status-soldout'
   return isOnShelf.value ? 'm-status-onshelf' : 'm-status-offshelf'
 })
 
@@ -517,6 +578,19 @@ function formatPrice(price) {
   return Number.isInteger(num) ? String(num) : num.toFixed(2)
 }
 
+function parseImageUrls(data) {
+  const urls = []
+  if (Array.isArray(data.imageUrls)) {
+    urls.push(...data.imageUrls)
+  } else if (typeof data.imageUrl === 'string' && data.imageUrl) {
+    urls.push(...data.imageUrl.split(',').filter(Boolean))
+  }
+  if (data.coverPic && !urls.includes(data.coverPic)) {
+    urls.unshift(data.coverPic)
+  }
+  return urls.map(u => resolveTrustedMediaUrl(u)).filter(Boolean)
+}
+
 async function loadProduct() {
   const id = props.productId || props.product?.id || props.product?.itemId
   if (!id) {
@@ -530,58 +604,34 @@ async function loadProduct() {
     let data = props.product
     if (!data || !data.title) {
       const res = await getGoodsDetail(id)
-      data = res?.data || {}
+      data = res?.data || res || {}
     }
 
     Object.assign(formData, {
-      title: data.name || data.title || '',
-      subTitle: data.subTitle || data.subtitle || '',
+      id: data.id || id,
+      title: data.title || data.name || '',
+      price: data.price != null ? String(data.price) : '',
+      soldPrice: data.soldPrice != null ? String(data.soldPrice) : '',
+      coverPic: data.coverPic || '',
+      imageUrl: data.imageUrl || '',
+      stock: data.stock != null ? String(data.stock) : '',
+      quantity: Number(data.quantity ?? 0),
+      exposureCount: Number(data.exposureCount ?? 0),
+      viewCount: Number(data.viewCount ?? 0),
+      wantCount: Number(data.wantCount ?? 0),
+      detailUrl: data.detailUrl || '',
+      detailInfo: data.detailInfo || '',
       description: data.description || data.detail || '',
-      detailContent: data.detailContent || data.detail || '',
-      price: Number(data.price || data.soldPrice || 0),
-      originalPrice: Number(data.originalPrice || data.marketPrice || 0),
-      costPrice: Number(data.costPrice || 0),
-      stock: Number(data.stock || data.quantity || 0),
-      lowStockThreshold: Number(data.lowStockThreshold || data.stockWarning || 10),
-      purchaseLimit: Number(data.purchaseLimit || data.buyLimit || 0),
-      status: data.status != null ? data.status : (data.onShelf ? 1 : 0),
-      imageUrls: Array.isArray(data.imageUrls) ? data.imageUrls : (data.images ? data.images.split(',').filter(Boolean) : (data.coverPic ? [data.coverPic] : [])),
-      mainImageUrl: data.mainImageUrl || data.coverPic || '',
-      categoryId: data.categoryId || '',
-      categoryPath: data.categoryPath || data.categoryName || '',
-      goodsType: data.goodsType || '',
-      tags: Array.isArray(data.tags) ? data.tags : [],
-      skus: Array.isArray(data.skus) ? data.skus : [],
-      autoDelivery: data.autoDelivery === true || data.autoDeliver === true,
-      deliveryContent: data.deliveryContent || data.autoDeliveryContent || '',
-      supportRefund: data.supportRefund !== false,
-      support7DayReturn: data.support7DayReturn === true || data.sevenDayReturn === true,
-      isFeatured: data.isFeatured === true || data.recommended === true,
-      sortWeight: Number(data.sortWeight || data.sort || 0),
-      sales: Number(data.sales || data.soldCount || 0),
-      soldCount: Number(data.soldCount || data.sales || 0),
-      accountId: data.accountId || data.xianyuAccountId,
-      xianyuAccountId: data.xianyuAccountId || data.accountId,
-      remark: data.remark || data.internalRemark || '',
-      province: data.province || data.prov || (data.location && data.location.prov) || '',
-      city: data.city || (data.location && data.location.city) || '',
-      district: data.district || data.area || (data.location && data.location.area) || '',
-      addressText: data.addressText || data.locationText || (data.location ? [data.location.prov, data.location.city, data.location.area].filter(Boolean).join(' ') : ''),
-      location: data.location || (data.prov ? {
-        prov: data.prov,
-        city: data.city,
-        area: data.area,
-        divisionId: data.divisionId,
-        gps: data.gps,
-        poiId: data.poiId,
-        poiName: data.poiName,
-        source: data.source || 'legacy'
-      } : null)
+      category: data.category || data.categoryName || '',
+      sortOrder: Number(data.sortOrder ?? 0),
+      status: data.status != null ? Number(data.status) : FE_STATUS_OFF_SHELF,
+      externalGoodsId: data.externalGoodsId || '',
+      accountId: data.accountId || data.xianyuAccountId || null,
+      autoDeliveryType: data.autoDeliveryType != null ? Number(data.autoDeliveryType) : null,
+      xianyuAutoDeliveryOn: Number(data.xianyuAutoDeliveryOn ?? 0),
+      xianyuAutoReplyOn: Number(data.xianyuAutoReplyOn ?? 0),
+      imageUrls: parseImageUrls(data)
     })
-
-    if (!formData.mainImageUrl && formData.imageUrls.length > 0) {
-      formData.mainImageUrl = formData.imageUrls[0]
-    }
 
     initialData = JSON.parse(JSON.stringify(formData))
   } catch (e) {
@@ -599,16 +649,22 @@ async function handleImageUpload(e) {
   const files = e.target.files
   if (!files || files.length === 0) return
 
-  const accountId = formData.accountId || formData.xianyuAccountId
+  const accountId = formData.accountId
+  if (!accountId) {
+    showToast('缺少账号信息，无法上传图片', 'error')
+    e.target.value = ''
+    return
+  }
+
   const remaining = 10 - formData.imageUrls.length
   const toUpload = Array.from(files).slice(0, remaining)
 
   for (const file of toUpload) {
     try {
-      const res = await uploadImage(file, accountId)
+      const res = await uploadImage(accountId, file)
       const url = res?.data?.url || res?.url || res?.data
       if (url) {
-        formData.imageUrls.push(url)
+        formData.imageUrls.push(resolveTrustedMediaUrl(url))
       }
     } catch (err) {
       showToast(err?.message || '图片上传失败', 'error')
@@ -620,6 +676,28 @@ async function handleImageUpload(e) {
 
 function removeImage(idx) {
   formData.imageUrls.splice(idx, 1)
+  if (idx === 0 && formData.imageUrls.length > 0) {
+    formData.coverPic = formData.imageUrls[0]
+  } else if (formData.imageUrls.length === 0) {
+    formData.coverPic = ''
+  }
+}
+
+function setAsCover(idx) {
+  if (idx === 0) return
+  const [img] = formData.imageUrls.splice(idx, 1)
+  formData.imageUrls.unshift(img)
+  formData.coverPic = img
+  showToast('已设为封面')
+}
+
+function openImagePreview(idx) {
+  const url = formData.imageUrls[idx]
+  if (url) previewImage.value = url
+}
+
+function onImgError(e) {
+  e.target.style.display = 'none'
 }
 
 function toggleStatus() {
@@ -628,65 +706,117 @@ function toggleStatus() {
 
 async function confirmToggleStatus() {
   showStatusDialog.value = false
-  const id = props.productId || props.product?.id || props.product?.itemId
-  const accountId = formData.accountId || formData.xianyuAccountId
+  const id = formData.id || props.productId || props.product?.id
+  const accountId = formData.accountId
+  if (!id || !accountId) {
+    showToast('缺少商品ID或账号信息', 'error')
+    return
+  }
 
+  togglingStatus.value = true
   try {
     if (isOnShelf.value) {
       await offShelfItem({ id, accountId })
-      formData.status = 0
-      formData.onShelf = false
+      formData.status = FE_STATUS_OFF_SHELF
       showToast('已下架')
     } else {
-      if (formData.stock <= 0) {
-        showToast('库存为0，无法上架', 'error')
-        return
-      }
       await republishItem({ id, accountId })
-      formData.status = 1
-      formData.onShelf = true
+      formData.status = FE_STATUS_ON_SALE
       showToast('已上架')
     }
     initialData = JSON.parse(JSON.stringify(formData))
-    emit('updated', { ...formData, id })
+    emit('updated', { ...formData })
   } catch (e) {
     showToast(e?.message || '操作失败', 'error')
+  } finally {
+    togglingStatus.value = false
   }
+}
+
+async function toggleAutoReply() {
+  const id = formData.id || props.productId || props.product?.id
+  if (!id) {
+    showToast('缺少商品ID', 'error')
+    return
+  }
+
+  togglingAutoReply.value = true
+  const target = autoReplyEnabled.value ? 0 : 1
+  try {
+    await updateAutoReplyStatus({ itemId: id, enabled: target })
+    formData.xianyuAutoReplyOn = target
+    initialData = JSON.parse(JSON.stringify(formData))
+    showToast(target === 1 ? '已开启自动回复' : '已关闭自动回复')
+    emit('updated', { ...formData })
+  } catch (e) {
+    showToast(e?.message || '操作失败', 'error')
+  } finally {
+    togglingAutoReply.value = false
+  }
+}
+
+function goAutoDeliveryConfig() {
+  const id = formData.id || props.productId || props.product?.id
+  if (!id) {
+    showToast('缺少商品ID', 'error')
+    return
+  }
+  emit('navigate', 'auto-delivery-config', { productId: id })
+}
+
+function goDeliveryRecords() {
+  emit('navigate', 'delivery-records')
 }
 
 async function handleSave() {
   if (!formData.title.trim()) {
-    showToast('请输入商品名称', 'error')
-    activeTab.value = 'basic'
+    showToast('请输入商品标题', 'error')
+    activeTab.value = 'info'
     return
   }
-  if (formData.price < 0) {
-    showToast('价格不能为负数', 'error')
-    activeTab.value = 'pricing'
+  const priceNum = Number(formData.price)
+  if (isNaN(priceNum) || priceNum < 0) {
+    showToast('价格必须为非负数字', 'error')
+    activeTab.value = 'info'
     return
   }
-  if (formData.stock < 0) {
+  if (formData.quantity < 0) {
     showToast('库存不能为负数', 'error')
-    activeTab.value = 'pricing'
+    activeTab.value = 'info'
     return
   }
 
   saving.value = true
   try {
-    const id = props.productId || props.product?.id || props.product?.itemId
-    const data = { ...formData }
-    data.mainImageUrl = data.imageUrls[0] || ''
-
-    if (id) {
-      await updateGoods(id, data)
-      initialData = JSON.parse(JSON.stringify(formData))
-      showToast('保存成功')
-      emit('updated', { ...formData, id })
-    } else {
-      saving.value = false
-      emit('navigate', 'product-publish')
+    const id = formData.id || props.productId || props.product?.id
+    if (!id) {
+      showToast('缺少商品ID，无法保存', 'error')
       return
     }
+
+    const payload = {
+      title: formData.title,
+      price: formData.price,
+      soldPrice: formData.soldPrice,
+      coverPic: formData.imageUrls[0] || formData.coverPic || '',
+      imageUrl: formData.imageUrls.join(','),
+      stock: String(formData.quantity),
+      quantity: formData.quantity,
+      detailUrl: formData.detailUrl,
+      detailInfo: formData.detailInfo,
+      description: formData.description,
+      category: formData.category,
+      sortOrder: formData.sortOrder,
+      status: formData.status,
+      accountId: formData.accountId
+    }
+
+    await updateGoods(id, payload)
+    formData.coverPic = payload.coverPic
+    formData.imageUrl = payload.imageUrl
+    initialData = JSON.parse(JSON.stringify(formData))
+    showToast('保存成功')
+    emit('updated', { ...formData })
   } catch (e) {
     showToast(e?.message || '保存失败', 'error')
   } finally {
@@ -708,31 +838,13 @@ function confirmBack() {
 }
 
 function handleCategorySelect(payload) {
-  formData.categoryId = payload.categoryId
-  formData.categoryPath = payload.path
+  formData.category = payload.path || payload.categoryName || ''
   showCategoryPicker.value = false
 }
 
-function handleLocationSelect(payload) {
-  formData.province = payload.province
-  formData.city = payload.city
-  formData.district = payload.district
-  formData.addressText = payload.fullText
-  formData.location = {
-    prov: payload.province,
-    city: payload.city,
-    area: payload.district,
-    divisionId: payload.divisionId || '',
-    gps: payload.gps || '',
-    poiId: payload.poiId || '',
-    poiName: payload.poiName || payload.district,
-    source: 'address-dict'
-  }
-  showLocationPicker.value = false
-}
-
 defineExpose({
-  handleBack
+  handleBack,
+  handleSave
 })
 
 let toastTimer = null
@@ -830,6 +942,7 @@ onMounted(() => {
   overflow: hidden;
   flex-shrink: 0;
   background: var(--m-color-bg-subtle);
+  cursor: pointer;
 }
 
 .m-img-main {
@@ -862,6 +975,7 @@ onMounted(() => {
   border-radius: var(--m-radius-md);
   overflow: hidden;
   border: 2px solid transparent;
+  cursor: pointer;
 }
 
 .m-thumb-item.active {
@@ -934,6 +1048,11 @@ onMounted(() => {
 .m-toggle-status.on {
   background: var(--m-color-success-bg);
   color: var(--m-color-success-text);
+}
+
+.m-toggle-status.loading {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .m-toggle-track {
@@ -1024,19 +1143,23 @@ onMounted(() => {
   gap: var(--m-space-1);
   padding: 0 var(--m-space-3);
   margin-bottom: var(--m-space-3);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .m-tab-btn {
   flex: 1;
-  padding: var(--m-space-3);
+  min-width: 60px;
+  padding: var(--m-space-3) var(--m-space-2);
   background: var(--m-color-bg-card);
   border: 1px solid var(--m-color-border-light);
   border-radius: var(--m-radius-lg);
-  font-size: var(--m-font-size-body);
+  font-size: var(--m-font-size-body-sm);
   font-weight: var(--m-font-weight-medium);
   color: var(--m-color-text-secondary);
   cursor: pointer;
   transition: all 0.2s;
+  white-space: nowrap;
 }
 
 .m-tab-btn.active {
@@ -1073,70 +1196,6 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: var(--m-space-2);
-}
-
-.m-image-upload {
-  width: 100%;
-}
-
-.m-upload-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--m-space-2);
-}
-
-.m-upload-item {
-  position: relative;
-  aspect-ratio: 1;
-  border-radius: var(--m-radius-lg);
-  overflow: hidden;
-}
-
-.m-upload-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.m-remove-img {
-  position: absolute;
-  top: var(--m-space-1);
-  right: var(--m-space-1);
-  width: 22px;
-  height: 22px;
-  background: var(--m-mask-modal);
-  border: none;
-  border-radius: var(--m-radius-circle);
-  color: var(--m-color-text-inverse);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-
-.m-upload-add {
-  aspect-ratio: 1;
-  border: 2px dashed var(--m-color-border);
-  border-radius: var(--m-radius-lg);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--m-space-1);
-  color: var(--m-color-text-tertiary);
-  font-size: var(--m-font-size-caption);
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.m-upload-add:active {
-  border-color: var(--m-color-primary);
-  background: var(--m-color-primary-bg);
-  color: var(--m-color-primary);
-}
-
-.m-file-input {
-  display: none;
 }
 
 .m-form-field {
@@ -1179,6 +1238,12 @@ onMounted(() => {
 
 .m-field-input::placeholder {
   color: var(--m-color-text-placeholder);
+}
+
+.m-field-input[readonly] {
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
+  cursor: not-allowed;
 }
 
 .m-field-count {
@@ -1255,6 +1320,121 @@ onMounted(() => {
   color: var(--m-color-text-placeholder);
 }
 
+/* === 图片上传 === */
+.m-upload-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--m-space-2);
+}
+
+.m-upload-item {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: var(--m-radius-lg);
+  overflow: hidden;
+  border: 2px solid transparent;
+}
+
+.m-upload-item.cover {
+  border-color: var(--m-color-primary);
+}
+
+.m-upload-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.m-cover-tag {
+  position: absolute;
+  top: var(--m-space-1);
+  left: var(--m-space-1);
+  padding: 2px 6px;
+  background: var(--m-color-primary);
+  color: var(--m-color-text-inverse);
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-semibold);
+  border-radius: var(--m-radius-pill);
+}
+
+.m-upload-actions {
+  position: absolute;
+  bottom: var(--m-space-1);
+  right: var(--m-space-1);
+  display: flex;
+  gap: var(--m-space-1);
+}
+
+.m-img-action {
+  width: 24px;
+  height: 24px;
+  background: var(--m-mask-modal);
+  border: none;
+  border-radius: var(--m-radius-circle);
+  color: var(--m-color-text-inverse);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.m-img-action-danger {
+  background: var(--m-color-danger);
+}
+
+.m-upload-add {
+  aspect-ratio: 1;
+  border: 2px dashed var(--m-color-border);
+  border-radius: var(--m-radius-lg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--m-space-1);
+  color: var(--m-color-text-tertiary);
+  font-size: var(--m-font-size-caption);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.m-upload-add:active {
+  border-color: var(--m-color-primary);
+  background: var(--m-color-primary-bg);
+  color: var(--m-color-primary);
+}
+
+.m-file-input {
+  display: none;
+}
+
+/* === 参数网格 === */
+.m-param-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--m-space-3);
+}
+
+.m-param-item {
+  background: var(--m-color-bg-subtle);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3);
+  text-align: center;
+}
+
+.m-param-label {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  margin-bottom: var(--m-space-1);
+}
+
+.m-param-value {
+  font-size: var(--m-font-size-h2);
+  font-weight: var(--m-font-weight-bold);
+  color: var(--m-color-text-primary);
+}
+
+/* === 开关字段 === */
 .m-switch-field {
   display: flex;
   align-items: center;
@@ -1263,7 +1443,7 @@ onMounted(() => {
   border-bottom: 1px solid var(--m-color-border-light);
 }
 
-.m-switch-field:last-child {
+.m-switch-field:last-of-type {
   border-bottom: none;
   padding-bottom: 0;
 }
@@ -1303,6 +1483,11 @@ onMounted(() => {
   background: var(--m-color-primary);
 }
 
+.m-switch-btn.loading {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .m-switch-knob {
   position: absolute;
   top: 3px;
@@ -1317,6 +1502,99 @@ onMounted(() => {
 
 .m-switch-btn.on .m-switch-knob {
   transform: translateX(20px);
+}
+
+.m-switch-status {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  margin-top: var(--m-space-3);
+}
+
+.m-status-on {
+  color: var(--m-color-success-text);
+  font-weight: var(--m-font-weight-semibold);
+}
+
+.m-status-off {
+  color: var(--m-color-text-tertiary);
+  font-weight: var(--m-font-weight-semibold);
+}
+
+/* === 发货状态 === */
+.m-delivery-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--m-space-3) 0;
+}
+
+.m-delivery-status-label {
+  font-size: var(--m-font-size-h3);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
+}
+
+.m-delivery-status-value {
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-2);
+}
+
+.m-delivery-badge {
+  font-size: var(--m-font-size-caption);
+  font-weight: var(--m-font-weight-semibold);
+  padding: var(--m-space-1) var(--m-space-2);
+  border-radius: var(--m-radius-pill);
+}
+
+.m-delivery-badge.on {
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success-text);
+}
+
+.m-delivery-badge.off {
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
+}
+
+.m-delivery-type {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+}
+
+/* === 操作行 === */
+.m-action-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-3);
+  padding: var(--m-space-3) 0;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--m-color-border-light);
+  cursor: pointer;
+  text-align: left;
+}
+
+.m-action-row:last-child {
+  border-bottom: none;
+}
+
+.m-action-row-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.m-action-row-label {
+  font-size: var(--m-font-size-body);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
+  margin-bottom: var(--m-space-1);
+}
+
+.m-action-row-desc {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
 }
 
 /* === 底部固定操作栏 === */
@@ -1427,6 +1705,29 @@ onMounted(() => {
   color: var(--m-color-text-inverse);
 }
 
+.m-dialog-btn-danger {
+  background: var(--m-color-danger);
+  color: var(--m-color-text-inverse);
+}
+
+/* === 图片预览 === */
+.m-preview-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.9);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--m-space-4);
+}
+
+.m-preview-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
 .m-safe-bottom {
   height: calc(var(--m-space-5) + var(--m-safe-area-bottom));
 }
@@ -1449,6 +1750,12 @@ onMounted(() => {
   .m-bottom-bar {
     padding-left: var(--m-space-2);
     padding-right: var(--m-space-2);
+  }
+  .m-upload-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .m-param-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

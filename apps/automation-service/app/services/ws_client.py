@@ -1256,6 +1256,13 @@ class XianyuWebSocketClient:
         6. Cookie 失效时更新状态 + 发送飞书通知
         7. 滑块失败时自动重试（最多 3 次）
 
+        功能开关：
+        - 查询 auto-slider-solve 开关，关闭时静默跳过（不入队、不写记录、不广播 SSE）
+        - 用户级会员（sys_user.vip_level）控制开关，与 Java FeatureSwitchService 一致
+
+        优先级：基于用户级会员（sys_user.vip_level），SVIP=2 > VIP=1 > 普通=0。
+        一个用户的所有闲鱼账号共享同一等级。
+
         Args:
             scene: 触发场景，"captcha" 表示滑块验证，"expired" 表示 Session 过期
         """
@@ -1267,10 +1274,20 @@ class XianyuWebSocketClient:
 
         try:
             from .captcha_queue import enqueue_solve
-            from .captcha_precheck import lookup_account_priority
+            from .captcha_precheck import is_auto_slider_solve_allowed, lookup_user_level
 
-            # 查询账号优先级（SVIP=2, VIP=1, 普通=0）
-            priority = await lookup_account_priority(self.account_id, self.tenant_id)
+            # 功能开关校验：auto-slider-solve 关闭时静默跳过，不占用服务器资源
+            allowed, level_code = await is_auto_slider_solve_allowed(self.tenant_id)
+            if not allowed:
+                logger.info(
+                    "WS Token 失败后自动滑块求解被开关拦截（静默跳过）"
+                    "accountId=%d tenantId=%d level=%s scene=%s",
+                    self.account_id, self.tenant_id, level_code, scene,
+                )
+                return
+
+            # 查询用户级优先级（SVIP=2, VIP=1, 普通=0），一个用户的所有账号共享同一等级
+            _level, priority = await lookup_user_level(self.tenant_id)
 
             # 入队到优先级队列（队列内部处理去重、预校验、求解、重试、后处理）
             record_id = await enqueue_solve(

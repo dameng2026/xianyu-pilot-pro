@@ -130,6 +130,7 @@ public class XianyuTradeOrderService {
         order.setOrderStatus(dto.getOrderStatus() != null ? dto.getOrderStatus() : existing.getOrderStatus());
         order.setBuyerName(dto.getBuyerName() != null ? dto.getBuyerName() : existing.getBuyerName());
         order.setBuyerId(dto.getBuyerId() != null ? dto.getBuyerId() : existing.getBuyerId());
+        order.setSellerRemark(dto.getSellerRemark() != null ? dto.getSellerRemark() : existing.getSellerRemark());
         orderMapper.update(order);
         log.info("更新订单成功: id={}, tenantId={}", id, tenantId);
     }
@@ -147,6 +148,7 @@ public class XianyuTradeOrderService {
         vo.setPayTime(o.getPayTime());
         vo.setShipTime(o.getShipTime());
         vo.setItemId(o.getItemId());
+        vo.setSellerRemark(o.getSellerRemark());
         vo.setIsBargain(o.getIsBargain());
         vo.setIsRated(o.getIsRated());
         vo.setIsRedFlower(o.getIsRedFlower());

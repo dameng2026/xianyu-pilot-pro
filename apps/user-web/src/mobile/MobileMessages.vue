@@ -128,8 +128,8 @@
           <span>ID：{{ activeChat.xyGoodsId || activeChat.goodsId || '--' }}</span>
         </div>
         <div class="m-chat-product-actions">
-          <button type="button" class="m-chat-product-secondary" @click="$emit('force-desktop')">查看商品</button>
-          <button type="button" class="m-chat-product-primary" @click="$emit('force-desktop')">发送商品</button>
+          <button v-if="activeChat.xyGoodsId || activeChat.goodsId" type="button" class="m-chat-product-secondary" @click="$emit('navigate', 'product-detail', { id: activeChat.xyGoodsId || activeChat.goodsId })">查看商品</button>
+          <button type="button" class="m-chat-product-primary" @click="openProductLinkPicker">发送商品</button>
         </div>
       </div>
 
@@ -191,6 +191,7 @@
       <div class="m-chat-compose">
         <div v-if="sendError" class="m-chat-send-error" role="alert">{{ sendError }}</div>
         <button type="button" class="m-chat-attach" @click="$emit('force-desktop')"><MIcon name="plus" :size="20" /></button>
+        <button type="button" class="m-chat-quick-reply-btn" aria-label="快捷回复" @click="openQuickReply"><MIcon name="reply" :size="18" /></button>
         <textarea
           v-model="draft"
           rows="2"
@@ -218,6 +219,33 @@
       @select="handleSelectProduct"
     />
 
+    <!-- 快捷回复模板底部弹层 -->
+    <div v-if="showQuickReplySheet" class="m-quick-reply-mask" @click="showQuickReplySheet = false">
+      <div class="m-quick-reply-sheet" @click.stop>
+        <div class="m-quick-reply-header">
+          <span>快捷回复</span>
+          <button class="m-quick-reply-close" aria-label="关闭" @click="showQuickReplySheet = false">
+            <MIcon name="x" :size="20" />
+          </button>
+        </div>
+        <div class="m-quick-reply-body">
+          <div v-if="quickReplyLoading" class="m-quick-reply-loading">加载中...</div>
+          <div v-else-if="quickReplyTemplates.length === 0" class="m-quick-reply-empty">暂无快捷回复模板</div>
+          <div v-else class="m-quick-reply-list">
+            <button
+              v-for="tpl in quickReplyTemplates"
+              :key="tpl.id"
+              class="m-quick-reply-item"
+              @click="insertQuickReply(tpl)"
+            >
+              <div class="m-quick-reply-item-title">{{ tpl.title || '未命名' }}</div>
+              <div class="m-quick-reply-item-content">{{ tpl.content || '' }}</div>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="m-safe-bottom"></div>
   </div>
 </template>
@@ -237,6 +265,7 @@ import {
   toggleConversationAutoReply,
   getConversationAutoReplyStatus,
 } from '../api/autoReplyScope.js'
+import { listQuickReplyTemplates } from '../api/quickReply.js'
 import {
   extractMessageDisplayText,
   findConversationMatchIndex,
@@ -317,7 +346,7 @@ function loadReadStateFromStorage() {
         return map
       }
     }
-  } catch {}
+  } catch { /* localStorage 解析失败时回退到空 Map */ }
   return new Map()
 }
 
@@ -326,7 +355,7 @@ function persistReadState(state) {
     const obj = {}
     state.forEach((value, key) => { obj[key] = value })
     localStorage.setItem(READ_STATE_STORAGE_KEY, JSON.stringify(obj))
-  } catch {}
+  } catch { /* localStorage 写入失败时忽略，本地已读状态非关键路径 */ }
 }
 
 const readState = loadReadStateFromStorage()
@@ -540,7 +569,9 @@ function mapConversationItem(item, fallbackAccountId) {
 
 async function fetchConversationBatch(accountId) {
   const res = await onlineConversations(accountId, { pageSize: 100 })
-  const list = res?.data?.records || (Array.isArray(res?.data) ? res.data : null)
+  // 后端 /msg/online/conversations 返回 { conversations: [...], hasMore, nextCursor }
+  // 兼容 records / 数组 等其他可能格式
+  const list = res?.data?.conversations || res?.data?.records || (Array.isArray(res?.data) ? res.data : null)
   if (!Array.isArray(list)) throw new Error('会话列表响应格式异常')
   return list.map(item => mapConversationItem(item, accountId))
 }
@@ -635,7 +666,7 @@ async function openConversation(conv) {
     if (recordId) {
       await markConversationRead(recordId).catch(() => {})
     }
-  } catch {}
+  } catch { /* 服务端已读回执失败时不影响本地状态 */ }
   // 加载会话级自动回复状态（V1.13 引入）
   loadConversationAutoReplyStatus().catch(() => {})
 }
@@ -931,11 +962,17 @@ function closeChat() {
   // 关闭弹层
   imageUploaderVisible.value = false
   productLinkPickerVisible.value = false
+  showQuickReplySheet.value = false
 }
 
 // ---- 图片发送 ----
 const imageUploaderVisible = ref(false)
 const productLinkPickerVisible = ref(false)
+
+// ---- 快捷回复模板 ----
+const showQuickReplySheet = ref(false)
+const quickReplyTemplates = ref([])
+const quickReplyLoading = ref(false)
 
 const currentAccountId = computed(() => {
   const conv = activeChat.value
@@ -1051,6 +1088,38 @@ function openProductLinkPicker() {
 
 function closeProductLinkPicker() {
   productLinkPickerVisible.value = false
+}
+
+// ---- 快捷回复模板 ----
+async function loadQuickReplyTemplates() {
+  quickReplyLoading.value = true
+  try {
+    const res = await listQuickReplyTemplates({ current: 1, size: 100 })
+    const data = res?.data || res || {}
+    quickReplyTemplates.value = data.records || data.list || data.items || (Array.isArray(data) ? data : [])
+  } catch {
+    quickReplyTemplates.value = []
+  } finally {
+    quickReplyLoading.value = false
+  }
+}
+
+async function openQuickReply() {
+  if (!activeChat.value) {
+    sendError.value = '请先选择会话'
+    return
+  }
+  showQuickReplySheet.value = true
+  if (quickReplyTemplates.value.length === 0) {
+    await loadQuickReplyTemplates()
+  }
+}
+
+function insertQuickReply(template) {
+  const content = template?.content || ''
+  if (!content) return
+  draft.value = draft.value ? `${draft.value}\n${content}` : content
+  showQuickReplySheet.value = false
 }
 
 function handleSelectProduct(product) {
@@ -1636,7 +1705,7 @@ onBeforeUnmount(() => {
 }
 .m-chat-compose {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) auto;
+  grid-template-columns: 30px 30px minmax(0, 1fr) auto;
   gap: var(--m-space-2);
   align-items: end;
   margin: 0 calc(-1 * var(--m-space-4));
@@ -1720,5 +1789,100 @@ onBeforeUnmount(() => {
   font-size: var(--m-font-size-caption);
   color: var(--m-color-info-text);
   line-height: var(--m-line-height-base);
+}
+
+/* 快捷回复按钮（输入框内） */
+.m-chat-quick-reply-btn {
+  width: 30px;
+  height: 30px;
+  margin-bottom: var(--m-space-2);
+  padding: 0;
+  border: 1px solid var(--m-color-text-tertiary);
+  border-radius: var(--m-radius-circle);
+  background: var(--m-color-bg-card);
+  color: var(--m-color-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.m-chat-quick-reply-btn:active { background: var(--m-color-primary-bg); color: var(--m-color-primary); }
+
+/* 快捷回复模板底部弹层 */
+.m-quick-reply-mask {
+  position: fixed;
+  inset: 0;
+  background: var(--m-mask-modal);
+  z-index: 250;
+  display: flex;
+  align-items: flex-end;
+}
+.m-quick-reply-sheet {
+  background: var(--m-color-bg-elevated);
+  border-radius: var(--m-radius-2xl) var(--m-radius-2xl) 0 0;
+  width: 100%;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+}
+.m-quick-reply-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--m-space-4);
+  border-bottom: 1px solid var(--m-color-border-light);
+  font-size: var(--m-font-size-h3);
+  font-weight: var(--m-font-weight-bold);
+}
+.m-quick-reply-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--m-color-text-tertiary);
+  padding: var(--m-space-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.m-quick-reply-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: var(--m-space-3);
+}
+.m-quick-reply-loading,
+.m-quick-reply-empty {
+  text-align: center;
+  padding: var(--m-space-8) var(--m-space-4);
+  color: var(--m-color-text-tertiary);
+  font-size: var(--m-font-size-body);
+}
+.m-quick-reply-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--m-space-2);
+}
+.m-quick-reply-item {
+  text-align: left;
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3);
+  cursor: pointer;
+}
+.m-quick-reply-item:active { background: var(--m-color-bg-hover); }
+.m-quick-reply-item-title {
+  font-size: var(--m-font-size-body-sm);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
+  margin-bottom: var(--m-space-1);
+}
+.m-quick-reply-item-content {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

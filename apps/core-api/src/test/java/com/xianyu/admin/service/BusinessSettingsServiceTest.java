@@ -35,9 +35,10 @@ class BusinessSettingsServiceTest {
         String systemPrompt = String.valueOf(merged.get("systemPrompt"));
         String welcomeMessage = String.valueOf(merged.get("welcomeMessage"));
 
-        assertTrue(systemPrompt.contains("不要主动提自己是AI"));
-        assertTrue(systemPrompt.contains("推进成交"));
-        assertTrue(welcomeMessage.contains("配置、成色、价格或者发货"));
+        assertTrue(systemPrompt.contains("禁止编造"));
+        assertTrue(systemPrompt.contains("信息优先级"));
+        assertTrue(welcomeMessage.contains("欢迎咨询"));
+        assertTrue(welcomeMessage.contains("转人工客服核实"));
         assertEquals(defaults.get("systemPrompt"), systemPrompt);
         assertEquals(defaults.get("welcomeMessage"), welcomeMessage);
     }

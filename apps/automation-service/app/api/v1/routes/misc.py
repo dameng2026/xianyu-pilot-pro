@@ -1273,9 +1273,22 @@ async def websocket_start(
             # - 求解失败：返回原始失败提示
             try:
                 from app.services.captcha_solver import handle_captcha_for_account
-                from app.services.captcha_precheck import lookup_account_priority
-                # 查询账号优先级，写入记录用于展示
-                priority = await lookup_account_priority(account_id, tenant_id)
+                from app.services.captcha_precheck import is_auto_slider_solve_allowed, lookup_user_level
+                # 功能开关校验：auto-slider-solve 关闭时静默跳过
+                allowed, _level = await is_auto_slider_solve_allowed(tenant_id)
+                if not allowed:
+                    logger.info(
+                        "WS 连接失败自动滑块求解被开关拦截（静默跳过）"
+                        "accountId=%d tenantId=%d",
+                        account_id, tenant_id,
+                    )
+                    # 直接返回失败，前端提示用户联系管理员或升级会员
+                    return ResultObject.failed(
+                        "自动滑块求解功能未开启，请联系管理员或升级会员等级",
+                        code=403,
+                    )
+                # 查询用户级优先级（SVIP=2, VIP=1, 普通=0），写入记录用于展示
+                _lvl, priority = await lookup_user_level(tenant_id)
                 captcha_result = await handle_captcha_for_account(
                     account_id=account_id,
                     tenant_id=tenant_id,

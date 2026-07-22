@@ -32,24 +32,24 @@
       <div class="m-detail-card m-status-card">
         <div class="m-status-top">
           <span :class="['m-status-pill', statusBadgeClass]">{{ orderStatusText }}</span>
-          <span v-if="order.deliveryStatusText" :class="['m-status-pill', 'm-status-pill-soft', deliveryBadgeClass]">
-            {{ order.deliveryStatusText }}
+          <span v-if="deliveryStatusText" :class="['m-status-pill', 'm-status-pill-soft', deliveryBadgeClass]">
+            {{ deliveryStatusText }}
           </span>
         </div>
         <div class="m-status-row">
           <span class="m-status-label">订单号</span>
           <span class="m-status-value m-mono">{{ order.externalOrderId || '-' }}</span>
-          <button class="m-copy-mini" @click="copyOrderNo" aria-label="复制订单号">
+          <button class="m-copy-mini" aria-label="复制订单号" @click="copyOrderNo">
             <MIcon name="copy" :size="14" />
           </button>
         </div>
         <div class="m-status-row">
           <span class="m-status-label">创建时间</span>
-          <span class="m-status-value">{{ order.createTimeText || '-' }}</span>
+          <span class="m-status-value">{{ createTimeText }}</span>
         </div>
-        <div v-if="order.payTimeText" class="m-status-row">
+        <div v-if="payTimeText" class="m-status-row">
           <span class="m-status-label">付款时间</span>
-          <span class="m-status-value">{{ order.payTimeText }}</span>
+          <span class="m-status-value">{{ payTimeText }}</span>
         </div>
       </div>
 
@@ -124,15 +124,15 @@
         </div>
         <div class="m-info-row">
           <span class="m-info-label">发货状态</span>
-          <span class="m-info-value">{{ order.deliveryStatusText || '-' }}</span>
+          <span class="m-info-value">{{ deliveryStatusText || '-' }}</span>
         </div>
         <div class="m-info-row">
           <span class="m-info-label">发货进度</span>
-          <span class="m-info-value">{{ order.deliveryProgressText || '-' }}</span>
+          <span class="m-info-value">{{ deliveryProgressText || '-' }}</span>
         </div>
-        <div v-if="order.shipTimeText" class="m-info-row">
+        <div v-if="shipTimeText" class="m-info-row">
           <span class="m-info-label">发货时间</span>
-          <span class="m-info-value">{{ order.shipTimeText }}</span>
+          <span class="m-info-value">{{ shipTimeText }}</span>
         </div>
         <div v-if="order.deliveryFailReason" class="m-info-row m-info-row-error">
           <span class="m-info-label">失败原因</span>
@@ -351,6 +351,62 @@ const deliveryMethodText = computed(() => {
   return DELIVERY_METHOD_TEXT[m] || m || '-'
 })
 
+const DELIVERY_STATUS_TEXT = {
+  pending: '待发货',
+  running: '发货中',
+  partial: '部分发货',
+  success: '已发货',
+  failed: '发货失败',
+  done: '已完成'
+}
+
+function formatDateTime(dt) {
+  if (!dt) return ''
+  const d = new Date(dt)
+  if (isNaN(d.getTime())) return ''
+  const now = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  if (d.toDateString() === now.toDateString()) return `今天 ${time}`
+  const yesterday = new Date(now)
+  yesterday.setDate(now.getDate() - 1)
+  if (d.toDateString() === yesterday.toDateString()) return `昨天 ${time}`
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`
+}
+
+const createTimeText = computed(() => {
+  if (!order.value) return '-'
+  if (order.value.createTimeText) return order.value.createTimeText
+  return formatDateTime(order.value.createTime || order.value.createdTime) || '-'
+})
+
+const payTimeText = computed(() => {
+  if (!order.value) return ''
+  if (order.value.payTimeText) return order.value.payTimeText
+  return formatDateTime(order.value.payTime)
+})
+
+const shipTimeText = computed(() => {
+  if (!order.value) return ''
+  if (order.value.shipTimeText) return order.value.shipTimeText
+  return formatDateTime(order.value.shipTime)
+})
+
+const deliveryStatusText = computed(() => {
+  if (!order.value) return ''
+  if (order.value.deliveryStatusText) return order.value.deliveryStatusText
+  const ds = String(order.value.deliveryStatus || '').toLowerCase()
+  return DELIVERY_STATUS_TEXT[ds] || ds || ''
+})
+
+const deliveryProgressText = computed(() => {
+  if (!order.value) return ''
+  if (order.value.deliveryProgressText) return order.value.deliveryProgressText
+  const sent = Number(order.value.quantitySent || 0)
+  const total = Number(order.value.quantityRequested || order.value.quantityTotal || 1) || 1
+  return `${sent}/${total}`
+})
+
 const itemList = computed(() => {
   if (!order.value) return []
   const items = order.value.orderItems || order.value.goodsItems || order.value.items || []
@@ -365,24 +421,27 @@ const timeline = computed(() => {
   if (!order.value) return []
   const o = order.value
   const status = Number(o.orderStatus)
+  const createT = formatDateTime(o.createTime || o.createdTime)
+  const payT = formatDateTime(o.payTime)
+  const shipT = formatDateTime(o.shipTime)
   const steps = [
     {
       title: '创建订单',
-      time: o.createTimeText || '',
-      done: !!o.createTimeText,
-      active: !o.createTimeText
+      time: createT,
+      done: !!createT,
+      active: !createT
     },
     {
       title: '买家付款',
-      time: o.payTimeText || '',
-      done: !!o.payTimeText,
-      active: !!o.createTimeText && !o.payTimeText
+      time: payT,
+      done: !!payT,
+      active: !!createT && !payT
     },
     {
       title: '卖家发货',
-      time: o.shipTimeText || '',
-      done: !!o.shipTimeText,
-      active: !!o.payTimeText && !o.shipTimeText
+      time: shipT,
+      done: !!shipT,
+      active: !!payT && !shipT
     },
     {
       title: '确认收货',

@@ -327,11 +327,23 @@ def split_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
 # ============================================================
 # Embedding 调用（OpenAI 兼容协议）
 # ============================================================
+# Embedding 配置缓存（避免每次生成都查库，与 ai_provider._load_chat_model_config_from_db 同款 60s TTL）
+_embedding_config_cache: dict[str, str] = {}
+_embedding_config_cache_ts: float = 0
+_EMBEDDING_CONFIG_TTL = 60
+
+
 async def _load_embedding_config() -> dict[str, str]:
     """从 admin_module_record 加载 embedding 模型配置。
 
     优先级：model-config-embedding > model-config-general > 环境变量
     """
+    global _embedding_config_cache, _embedding_config_cache_ts
+    now = time.time()
+    # 缓存命中：直接返回，避免每次生成都查库
+    if _embedding_config_cache and (now - _embedding_config_cache_ts) < _EMBEDDING_CONFIG_TTL:
+        return dict(_embedding_config_cache)
+
     try:
         async with async_session() as db:
             rows = await db.execute(
@@ -369,9 +381,13 @@ async def _load_embedding_config() -> dict[str, str]:
             if not model:
                 model = DEFAULT_EMBEDDING_MODEL
 
-            return {"base_url": base_url, "api_key": api_key, "model": model}
+            result = {"base_url": base_url, "api_key": api_key, "model": model}
+            _embedding_config_cache = dict(result)
+            _embedding_config_cache_ts = now
+            return result
     except Exception as e:
         logger.warning("加载 embedding 配置失败，使用环境变量 errorType=%s", type(e).__name__)
+        # 查询失败不缓存，下次仍会尝试查库
         return {
             "base_url": os.environ.get("EMBEDDING_BASE_URL", ""),
             "api_key": os.environ.get("EMBEDDING_API_KEY", ""),

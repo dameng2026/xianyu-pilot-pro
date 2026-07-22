@@ -11,6 +11,7 @@ import { fetchGoofishItemDetail } from './crawler/goofishItemDetail.js';
 import { resolveStoreUserId } from './crawler/goofish.js';
 import { solveGoofishSlider, isHeadedDisplayAvailable } from './crawler/sliderSolver.js';
 import { captureQrCodeOnly, completeQrLoginSession } from './crawler/qrLoginSolver.js';
+import { processRegistry, processMonitor } from './crawler/processRegistry.js';
 import {
   isCorsOriginAllowed,
   isProductionLike,
@@ -219,7 +220,9 @@ async function reconcileOrphanedCrawlJobs(): Promise<void> {
 }
 
 function requireInternalAuth(req: Request, res: Response, next: NextFunction) {
-  if (req.path === '/api/health' || req.path === '/api/ready') return next();
+  // /api/health 和 /api/health/processes 豁免 internal token（仅暴露运行状态，不涉及业务数据）
+  // /api/ready 豁免（Docker healthcheck 使用）
+  if (req.path === '/api/health' || req.path === '/api/health/processes' || req.path === '/api/ready') return next();
 
   if (!internalTokenPolicy.ready) {
     return res.status(503).json({ ok: false, error: internalTokenPolicy.reason || 'internal authentication is not ready' });
@@ -786,6 +789,42 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'crawler-service', check: 'liveness' });
 });
 
+// ---- 进程监测健康端点：查看当前注册的求解进程和最近清理日志 ----
+app.get('/api/health/processes', (_req, res) => {
+  const entries = processRegistry.list();
+  const cleanupLog = processRegistry.getCleanupLog();
+  const now = Date.now();
+  res.json({
+    status: 'ok',
+    timestamp: now,
+    activeSessions: entries.map((e) => ({
+      sessionId: e.sessionId,
+      kind: e.kind,
+      pid: e.pid || null,
+      childPids: e.childPids,
+      hasUserDataDir: !!e.userDataDir,
+      tenantId: e.tenantId,
+      startedAt: e.startedAt,
+      deadlineAt: e.deadlineAt,
+      lastActivityAt: e.lastActivityAt,
+      ageMs: now - e.startedAt,
+      overdueMs: Math.max(0, now - e.deadlineAt),
+      description: e.description,
+    })),
+    activeCount: entries.length,
+    recentCleanups: cleanupLog.slice(-20).map((a) => ({
+      sessionId: a.sessionId,
+      pid: a.pid,
+      reason: a.reason,
+      result: a.result,
+      ageMs: a.ageMs,
+      overdueMs: a.overdueMs,
+      timestamp: a.timestamp,
+    })),
+    cleanupLogCount: cleanupLog.length,
+  });
+});
+
 app.get('/api/ready', async (_req, res) => {
   const dependencies = { database: false, redis: false };
   try {
@@ -1040,6 +1079,39 @@ async function start() {
     : undefined;
   reconciliationTimer?.unref();
 
+  // 定期清理孤儿 Chrome 进程：Chrome 崩溃后 Playwright 连接断开，close() 失败导致子进程残留。
+  // 这些进程被 init 收养（PPID=1），累积会耗尽资源导致新 Chrome 无法启动（恶性循环）。
+  // 每 5 分钟清理一次，只杀 PPID=1 的 chrome 进程；正常 Chrome 的父进程是 Node/Playwright，不受影响。
+  let orphanCleanerTimer: NodeJS.Timeout | undefined;
+  if (process.platform !== 'win32' && process.platform !== 'darwin') {
+    const cleanOrphanChrome = () => {
+      try {
+        const { execSync } = require('child_process');
+        const output = execSync(
+          "ps -eo pid,ppid,cmd | grep '/opt/google/chrome/chrome' | grep -v grep | awk '$2==1{print $1}'",
+          { encoding: 'utf-8', timeout: 5000 }
+        );
+        const pids = output.trim().split('\n').map((s: string) => s.trim()).filter(Boolean);
+        if (pids.length === 0) return;
+        console.log(`[OrphanCleaner] 发现 ${pids.length} 个孤儿 Chrome 进程，正在清理: ${pids.join(', ')}`);
+        for (const pidStr of pids) {
+          const pid = Number(pidStr);
+          if (Number.isSafeInteger(pid) && pid > 0) {
+            try { process.kill(pid, 'SIGKILL'); } catch { /* ignore */ }
+          }
+        }
+      } catch {
+        // ps 失败（无孤儿进程或命令不可用）时静默
+      }
+    };
+    orphanCleanerTimer = setInterval(cleanOrphanChrome, 5 * 60 * 1000);
+    orphanCleanerTimer.unref();
+  }
+
+  // 启动滑块求解进程监测器：定期扫描注册表，清理超时/已结束的求解进程
+  // 安全策略：只清理注册表中的 PID，PID < 100 不清理，优先 SIGTERM 再 SIGKILL
+  processMonitor.start();
+
   const server = app.listen(PORT, () => {
     console.log(`[Server] 爬虫服务已启动: port=${PORT}`);
   });
@@ -1055,6 +1127,8 @@ async function start() {
     }, 30000);
     forcedExit.unref();
     if (reconciliationTimer) clearInterval(reconciliationTimer);
+    if (orphanCleanerTimer) clearInterval(orphanCleanerTimer);
+    processMonitor.stop();
     const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()));
     await closeAllQrLoginSessions();
     await serverClosed;

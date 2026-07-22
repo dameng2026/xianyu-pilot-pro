@@ -26,7 +26,7 @@
           </slot>
         </td>
       </tr>
-      <tr v-for="(row, idx) in rows" :key="idx" :class="rowClass?.(row, idx) || ''" @click="$emit('row-click', row)">
+      <tr v-for="(row, idx) in rows" :key="rowKey(row, idx)" :class="rowClass?.(row, idx) || ''" @click="$emit('row-click', row)">
         <td v-if="selectable" class="col-select" @click.stop="onRowSelectClick(row, idx, $event)">
           <input
             type="checkbox"

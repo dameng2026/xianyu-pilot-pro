@@ -97,7 +97,7 @@
             class="products-table"
             @row-click="selectProduct"
           >
-            <template #info="{row}"><div class="product-cell"><img v-if="row.coverPic" :src="row.coverPic" class="product-thumb" alt="" @error="onCoverError"><div v-else class="product-thumb product-thumb-placeholder"></div><div class="product-info-text"><strong :title="row.raw?.title || row.name">{{ row.name }}</strong><em>ID：{{ row.xyGoodId }}</em></div></div></template>
+            <template #info="{row}"><div class="product-cell"><img v-if="row.coverPic" :src="row.coverPic" class="product-thumb" alt="" loading="lazy" @error="onCoverError"><div v-else class="product-thumb product-thumb-placeholder"></div><div class="product-info-text"><strong :title="row.raw?.title || row.name">{{ row.name }}</strong><em>ID：{{ row.xyGoodId }}</em></div></div></template>
             <template #price="{row}"><div class="cell-price">{{ row.price }}</div></template>
             <template #stock="{row}"><div class="cell-center cell-muted">{{ row.stock }}</div></template>
             <template #status="{row}"><div class="cell-center"><Badge :type="row.statusType">{{ row.status }}</Badge></div></template>
@@ -202,7 +202,7 @@
   </div>
 </template>
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue'
 import StatCard from '../components/StatCard.vue';import CardPanel from '../components/CardPanel.vue';import BaseTable from '../components/BaseTable.vue';import Badge from '../components/Badge.vue';import ToggleSwitch from '../components/ToggleSwitch.vue';import AppButton from '../components/AppButton.vue';import EmptyState from '../components/EmptyState.vue'
 import { confirmAction } from '../utils/confirmAction.js'
 import { globalConfirm } from '../composables/confirmState.js'
@@ -219,7 +219,7 @@ const emit = defineEmits(['navigate'])
 const accounts = ref([])
 const accountsAvailable = ref(false)
 const accountsLoadError = ref('')
-const items = ref([])
+const items = shallowRef([])
 const totalCount = ref(0)
 const goodsStats = ref({ total: null, onSale: null, offShelfOrDraft: null, autoDeliveryOn: null, autoReplyAccounts: null })
 const statsError = ref('')

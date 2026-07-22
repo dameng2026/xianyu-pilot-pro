@@ -436,7 +436,10 @@ export function didPreservedConversationIdentityChange(previousSelection, nextSe
 }
 
 export function getConversationRecordId(conv) {
-  const id = conv?.id || conv?.rawId || conv?.conversationDbId
+  // 注意：Python get_online_conversations 返回的会话主键字段名是 conversationId
+  // （SQL: MIN(conv.id) AS conversationId），而非 id。此处需同时兼容两种字段名，
+  // 否则 markConversationRead(id) 会因 id 为 null 被静默跳过，导致未读状态无法清除。
+  const id = conv?.id || conv?.rawId || conv?.conversationDbId || conv?.conversationId
   return Number.isFinite(Number(id)) ? Number(id) : null
 }
 

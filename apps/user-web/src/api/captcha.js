@@ -1,13 +1,19 @@
 import request from '../utils/request.js'
 
-// 滑块求解涉及 Playwright 浏览器操作 + 多场景重试（加载转圈/点击重试/下载失败刷新），需 180 秒超时
-const SOLVE_TIMEOUT = 180000
+// 入队后立即返回排队信息（不再等待求解完成），30 秒超时足够
+const HANDLE_TIMEOUT = 30000
 
 export const detectCaptcha = data => request.post('/captcha/detect', data)
 export const getCaptchaInstructions = data => request.post('/captcha/instructions', data)
-export const autoSolveCaptcha = data => request.post('/captcha/auto-solve', data, { timeout: SOLVE_TIMEOUT })
-export const handleCaptcha = data => request.post('/captcha/handle', data, { timeout: SOLVE_TIMEOUT })
+export const autoSolveCaptcha = data => request.post('/captcha/auto-solve', data, { timeout: HANDLE_TIMEOUT })
+export const handleCaptcha = data => request.post('/captcha/handle', data, { timeout: HANDLE_TIMEOUT })
 export const getCaptchaRecords = (params = {}) => request.get('/captcha/records', { params })
+
+/**
+ * 查询滑块求解任务的排队位置（前端轮询用）。
+ * @param {Object} params - { recordId?: number, accountId?: number }
+ */
+export const getCaptchaQueuePosition = (params = {}) => request.get('/captcha/queue-position', { params })
 
 /**
  * 获取"用户不在场时"滑块自动求解成功摘要（仅好消息）。

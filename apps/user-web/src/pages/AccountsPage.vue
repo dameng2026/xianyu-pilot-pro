@@ -27,6 +27,13 @@
             </div>
           </div>
           <div class="solve-info-item">
+            <span class="solve-info-dot dot-red"></span>
+            <div>
+              <strong>触发人机验证</strong>
+              <p>闲鱼平台监测到自动化访问行为后，会要求用户完成滑块验证以证明自身为人类（即"人机验证"）。系统会自动尝试通过浏览器模拟滑动求解，若持续失败建议手动在闲鱼 APP 中完成验证。</p>
+            </div>
+          </div>
+          <div class="solve-info-item">
             <span class="solve-info-dot dot-purple"></span>
             <div>
               <strong>WS Token 获取失败</strong>
@@ -93,7 +100,7 @@
       <CardPanel>
         <EmptyState v-if="!accountsAvailable" icon="⚠" title="账号列表不可用" :description="accountsLoadError || '正在加载账号列表，请稍候。'" />
         <BaseTable v-else :columns="cols" :rows="rows" :row-class="rowClass">
-          <template #account="{ row }"><div class="product-cell" style="cursor:pointer" @click="selectAccount(row.raw)"><img v-if="row.avatar" :src="row.avatar" class="avatar small" alt="" @error="onListAvatarError"><div v-else class="avatar small avatar-img"></div><div><strong>{{ row.name }}</strong><em>{{ row.tag }}</em></div></div></template>
+          <template #account="{ row }"><div class="product-cell" style="cursor:pointer" @click="selectAccount(row.raw)"><img v-if="row.avatar" :src="row.avatar" class="avatar small" alt="" loading="lazy" @error="onListAvatarError"><div v-else class="avatar small avatar-img"></div><div><strong>{{ row.name }}</strong><em>{{ row.tag }}</em></div></div></template>
           <template #status="{ row }">
             <div class="status-cell">
               <Badge :type="row.statusType">{{ row.statusText }}</Badge>
@@ -823,7 +830,7 @@
   </Teleport>
 </template>
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import StatCard from '../components/StatCard.vue'; import CardPanel from '../components/CardPanel.vue'; import BaseTable from '../components/BaseTable.vue'; import Badge from '../components/Badge.vue'; import AppButton from '../components/AppButton.vue'; import Icon from '../components/Icon.vue'; import EmptyState from '../components/EmptyState.vue'; import Pagination from '../components/Pagination.vue'
 import { checkAccountAuth, deleteAccount, getLiteAccounts, createAccountByCookie, getAccountDetail, refreshAccountProfile, updateAccountCookie, runItemPolish, getItemPolishProgress, getAccountAutoRateConfig, saveAccountAutoRateConfig, getAccountFaceVerifications, markAccountFaceVerificationRead, getAccountStrategyConfig as getAccountStrategyConfigRequest, saveAccountStrategyConfig as saveAccountStrategyConfigRequest, getAccountLoginCredential as getAccountLoginCredentialRequest, saveAccountLoginCredential as saveAccountLoginCredentialRequest } from '../api/accounts.js'
 import { startWebSocket, stopWebSocket, websocketStatus } from '../api/websocket.js'
@@ -836,8 +843,10 @@ import { recordsOfOrThrow } from '../utils/apiData.js'
 import { accountAuthUsable, accountCookieBadgeType, accountCookieLabel, accountLoginHint, accountWsConnectionState, resolveAccountAuthDisplayState } from '../utils/accountAuth.js'
 import { extractKeyFields, maskKeyFields, validateCookie, checkIdentity, maskValue } from '../utils/cookie.js'
 import { useCaptchaSolver } from '../composables/useCaptchaSolver.js'
+import { getFeatureStatus, invalidateFeatureSwitchCache } from '../api/feature-switch.js'
+import { globalConfirm } from '../composables/confirmState.js'
 
-const { solveStates, isAccountSolving, getAccountSolveStatus, solveManually, initCaptchaSolverListener, destroyCaptchaSolverListener } = useCaptchaSolver()
+const { solveStates, isAccountSolving, isAccountQueued, getAccountSolveStatus, solveManually, initCaptchaSolverListener, destroyCaptchaSolverListener } = useCaptchaSolver()
 
 const modal = ref('')
 const manual = reactive({ accountNote:'', cookie:'' })
@@ -860,6 +869,9 @@ const wsMap = reactive({})
 const wsBusyMap = reactive({})
 // 滑块求解成功后正在自动连接 WebSocket 的账号 ID 集合（用于横幅文案与状态展示）
 const autoConnectingWs = reactive(new Set())
+// 手动求解入队成功后标记"待自动连接 WS"，等 SSE success 事件到达时触发自动连接
+// 求解改为队列异步后，成功结果不再同步返回，需要通过 SSE 事件异步触发
+const pendingAutoConnectWsAfterSolve = reactive(new Set())
 const selectedWs = computed(() => wsMap[selected.value?.id] || {})
 const selectedWsState = computed(() => accountWsConnectionState(selected.value, selectedWs.value))
 const selectedAuthDisplay = computed(() => resolveAccountAuthDisplayState(selected.value, selectedWs.value))
@@ -944,6 +956,7 @@ function accountHealth(){ return null } // 健康分接口开发中
 function captchaSolveBadge(accountId) {
   const state = getAccountSolveStatus(accountId)
   if (!state) return null
+  if (state.status === 'queued') return { text: '排队中', color: 'blue' }
   if (state.status === 'retrying') return { text: '滑块求解中', color: 'orange' }
   if (state.status === 'success') return { text: '求解成功', color: 'green' }
   if (state.status === 'fail') return { text: '求解失败', color: 'red' }
@@ -975,6 +988,13 @@ ensureCooldownTimer()
 
 async function handleManualSolve(accountId) {
   if (!accountId || manualRetryBusy.value === accountId || isAccountSolving(accountId)) return
+  // 前端双层校验：manual-slider-solve 功能开关
+  // 被拦截时弹窗展示关闭原因 + 引导升级会员，不发请求
+  const fsStatus = await getFeatureStatus('manual-slider-solve')
+  if (!fsStatus.allowed) {
+    await showManualSolveBlockedDialog(fsStatus)
+    return
+  }
   // 根据当前求解状态判断场景：已有失败状态时为"重试求解"，否则为"手动触发"
   const state = getAccountSolveStatus(accountId)
   const isRetry = !!(state && state.status === 'fail')
@@ -999,14 +1019,51 @@ async function handleManualSolve(accountId) {
         ? '用户在账号管理页点击重试求解（上次求解失败）'
         : '用户在账号管理页主动触发滑块求解',
     })
-    // 求解成功且 Cookie 已恢复 → 自动连接 WebSocket，避免用户忽略状态反复点击求解
-    if (result?.success && result?.recovered) {
-      const account = accounts.value.find(a => a.id === accountId)
-      if (account) autoConnectWsAfterSolve(account)
+    // 求解改为队列异步后，成功/失败通过 SSE 通知
+    // 入队成功时标记"待自动连接 WS"，等 SSE success 事件触发时执行
+    if (result?.queued) {
+      pendingAutoConnectWsAfterSolve.add(Number(accountId))
+    } else if (result?.deduplicated) {
+      // 被后端去重跳过（同账号 60 秒内已入队）：展示临时提示，不污染求解状态
+      error.value = result.message || '该账号近期已触发过求解，请稍后再试'
+      setTimeout(() => { if (error.value && error.value.includes('已触发过求解')) error.value = '' }, 4000)
+    }
+  } catch (e) {
+    // 后端 403 拦截（前端绕过场景）：解析 errData 中的 reason_text 弹窗引导
+    const errData = e?.data || e?.raw?.data || {}
+    if (e?.code === 403 && errData?.feature_key === 'manual-slider-solve') {
+      await showManualSolveBlockedDialog({
+        allowed: false,
+        reason: errData.reason,
+        required_level: errData.required_level,
+        reason_text: errData.reason_text,
+      })
+      // 强制刷新功能开关缓存，避免前端缓存陈旧
+      invalidateFeatureSwitchCache()
+    } else {
+      throw e
     }
   } finally {
     manualRetryBusy.value = null
   }
+}
+
+/**
+ * 手动滑块求解被功能开关拦截时的弹窗引导。
+ * 展示管理员填写的关闭原因 + 需升级到的会员等级，提供"去升级"按钮跳转会员中心。
+ */
+async function showManualSolveBlockedDialog(status) {
+  const levelText = { vip: 'VIP', svp: 'SVIP', normal: '普通用户' }[status.required_level] || 'VIP'
+  const reasonText = status.reason_text || '您的会员等级未开启手动滑块求解功能'
+  const description = status.reason === 'disabled'
+    ? `${reasonText}\n\n该功能目前对所有等级关闭，如有需要请联系管理员开启。`
+    : `${reasonText}\n\n请升级到 ${levelText} 会员后使用此功能。`
+  const confirmed = await globalConfirm.confirm(
+    '无法使用手动滑块求解',
+    description,
+    '去升级会员',
+  )
+  if (confirmed) emit('navigate', 'vip')
 }
 
 // 滑块求解状态横幅：从 solveStates 提取所有有状态的账号，生成原因+下一步操作
@@ -1035,10 +1092,20 @@ const captchaAlerts = computed(() => {
       nextAction = autoConnectingWs.has(accountId)
         ? '正在自动连接 WebSocket，请留意在线状态'
         : '可重新启动 WebSocket 连接'
+    } else if (state.status === 'queued') {
+      type = 'queued'
+      statusText = '排队中'
+      const pos = state.queuePosition || 0
+      const total = state.queueTotal || 0
+      reason = pos > 0
+        ? `任务已入队，当前排队第 ${pos} 位（共 ${total} 个任务），前方任务处理完毕后自动开始求解`
+        : (state.reason || '任务已入队，等待排队...')
+      nextAction = '请耐心等待，无需重复点击求解'
+      canRetry = false
     } else if (state.status === 'retrying') {
       type = 'solving'
       statusText = '求解中'
-      reason = state.reason || '正在自动求解滑块...'
+      reason = state.reason || 'worker 已开始处理，正在自动求解滑块...'
       canRetry = false
     } else if (state.status === 'fail') {
       type = 'fail'
@@ -1083,9 +1150,28 @@ const captchaAlerts = computed(() => {
   return alerts
 })
 
+// 监听求解状态变化：手动求解成功后自动连接 WebSocket
+// 求解改为队列异步后，成功结果通过 SSE captcha_solve 事件通知，不再由 solveManually 同步返回
+watch(
+  () => Object.keys(solveStates).map(k => `${k}:${solveStates[k]?.status}`),
+  () => {
+    for (const key of Object.keys(solveStates)) {
+      const state = solveStates[key]
+      if (!state || state.status !== 'success') continue
+      const accountId = Number(key)
+      if (!pendingAutoConnectWsAfterSolve.has(accountId)) continue
+      pendingAutoConnectWsAfterSolve.delete(accountId)
+      const account = accounts.value.find(a => a.id === accountId)
+      if (account) autoConnectWsAfterSolve(account)
+    }
+  }
+)
+
 // 操作列滑块求解按钮文字
 function solveOpBtnText(accountId) {
-  if (manualRetryBusy.value === accountId || isAccountSolving(accountId)) return '求解中...'
+  if (manualRetryBusy.value === accountId) return '提交中...'
+  if (isAccountQueued(accountId)) return '排队中...'
+  if (isAccountSolving(accountId)) return '求解中...'
   void cooldownTick.value  // 响应冷却倒计时刷新
   const state = getAccountSolveStatus(accountId)
   if (!state) {
@@ -1101,7 +1187,9 @@ function solveOpBtnText(accountId) {
 
 // 操作列滑块求解按钮状态样式类
 function solveOpBtnClass(accountId) {
-  if (manualRetryBusy.value === accountId || isAccountSolving(accountId)) return 'solving'
+  if (manualRetryBusy.value === accountId) return 'solving'
+  if (isAccountQueued(accountId)) return 'queued'
+  if (isAccountSolving(accountId)) return 'solving'
   void cooldownTick.value  // 响应冷却倒计时刷新
   const state = getAccountSolveStatus(accountId)
   if (!state) {
@@ -3370,6 +3458,10 @@ onBeforeUnmount(() => {
   color: #f59e0b;
 }
 
+.solve-op-btn.queued {
+  color: #3b82f6;
+}
+
 .solve-op-btn.success {
   color: #16bf78;
 }
@@ -3495,6 +3587,11 @@ onBeforeUnmount(() => {
   border-color: #ffd591;
 }
 
+.captcha-alert-banner.queued {
+  background: linear-gradient(135deg, #eff6ff, #dbeafe);
+  border-color: #93c5fd;
+}
+
 .captcha-alert-banner.success {
   background: linear-gradient(135deg, #f0f9eb, #e1f3d8);
   border-color: #b7eb8f;
@@ -3533,6 +3630,11 @@ onBeforeUnmount(() => {
 .captcha-alert-tag.solving {
   background: #ffd591;
   color: #ad6800;
+}
+
+.captcha-alert-tag.queued {
+  background: #93c5fd;
+  color: #1e40af;
 }
 
 .captcha-alert-tag.success {

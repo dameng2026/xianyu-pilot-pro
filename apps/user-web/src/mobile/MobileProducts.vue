@@ -1,32 +1,28 @@
 <template>
   <div class="m-products-page">
+    <!-- ============ 顶部统计卡 ============ -->
     <div v-if="statsLoading" class="m-stats-skeleton">
-      <div v-for="i in 6" :key="i" class="m-stat-card-skeleton"></div>
+      <div v-for="i in 4" :key="i" class="m-stat-card-skeleton"></div>
     </div>
     <div v-else class="m-stats-grid">
       <button
         v-for="card in statCards"
         :key="card.key"
         class="m-stat-card"
-        :class="{ active: activeFilter === card.key }"
-        @click="selectFilter(card.key)"
+        :class="{ active: activeStatus === card.key }"
+        @click="selectStatus(card.key)"
       >
         <div class="m-stat-icon" :style="{ background: card.iconBg }">
           <MIcon :name="card.icon" :size="20" :color="card.iconColor" />
         </div>
         <div class="m-stat-info">
           <div class="m-stat-label">{{ card.label }}</div>
-          <div class="m-stat-value-row">
-            <span class="m-stat-value">{{ card.value }}</span>
-            <span v-if="card.trend" class="m-stat-trend" :class="card.trendClass">
-              <MIcon :name="card.trendIcon" :size="10" />
-              {{ card.trend }}
-            </span>
-          </div>
+          <div class="m-stat-value">{{ card.value }}</div>
         </div>
       </button>
     </div>
 
+    <!-- ============ 状态 Tabs ============ -->
     <div class="m-tabs-bar">
       <div class="m-tabs-scroll">
         <button
@@ -39,42 +35,28 @@
           {{ tab.label }}
           <span v-if="tab.count != null" class="m-tab-count">{{ tab.count }}</span>
         </button>
-        <button class="m-tab-item m-tab-more" @click="showMoreTabs = !showMoreTabs">
-          更多
-          <MIcon name="chevronDown" :size="14" :class="{ rotated: showMoreTabs }" />
-        </button>
-      </div>
-      <div v-if="showMoreTabs" class="m-more-tabs-panel">
-        <button
-          v-for="tab in moreStatusTabs"
-          :key="tab.key"
-          class="m-more-tab-item"
-          :class="{ active: activeStatus === tab.key }"
-          @click="selectStatus(tab.key); showMoreTabs = false"
-        >
-          {{ tab.label }}
-        </button>
       </div>
     </div>
 
+    <!-- ============ 工具栏：排序 ============ -->
     <div class="m-toolbar">
-      <div class="m-toolbar-left">
-        <button class="m-toolbar-btn" :disabled="batchMode" @click="showSortMenu = true">
-          <span>{{ currentSortLabel }}</span>
-          <MIcon name="chevronDown" :size="14" />
-        </button>
-        <button class="m-toolbar-btn m-toolbar-filter" :disabled="batchMode" @click="showFilterSheet = true">
-          <MIcon name="filter" :size="16" />
-          <span>筛选</span>
-          <span v-if="activeFilterCount > 0" class="m-filter-badge">{{ activeFilterCount }}</span>
-        </button>
-      </div>
-      <button v-if="!batchMode" class="m-toolbar-btn m-toolbar-batch" :disabled="!filteredProducts.length" @click="enterBatchMode">
+      <button class="m-toolbar-btn" :disabled="batchMode" @click="showSortMenu = true">
+        <MIcon name="filter" :size="14" />
+        <span>{{ currentSortLabel }}</span>
+        <MIcon name="chevronDown" :size="12" />
+      </button>
+      <button
+        v-if="!batchMode"
+        class="m-toolbar-btn m-toolbar-batch"
+        :disabled="!products.length"
+        @click="enterBatchMode"
+      >
         <MIcon name="check" :size="14" />
-        <span>批量操作</span>
+        <span>批量</span>
       </button>
     </div>
 
+    <!-- ============ 列表 ============ -->
     <div v-if="loading" class="m-list-skeleton">
       <div v-for="i in 5" :key="i" class="m-list-item-skeleton">
         <div class="m-skeleton-img"></div>
@@ -86,25 +68,37 @@
       </div>
     </div>
 
-    <MobileUnavailableState v-else-if="loadError" compact title="加载失败" :description="loadError" @retry="loadProducts" />
+    <MobileUnavailableState
+      v-else-if="loadError"
+      compact
+      title="商品加载失败"
+      :description="loadError"
+      @retry="loadProducts"
+    />
 
-    <div v-else-if="filteredProducts.length === 0" class="m-empty-state">
+    <div v-else-if="products.length === 0" class="m-empty-state">
       <div class="m-empty-icon">
         <MIcon name="bag" :size="48" />
       </div>
       <div class="m-empty-title">{{ searchKeyword ? '未找到相关商品' : '暂无商品' }}</div>
-      <div class="m-empty-desc">{{ searchKeyword ? '尝试更换关键词或清除筛选条件' : '点击右上角加号发布您的第一个商品' }}</div>
+      <div class="m-empty-desc">
+        {{ searchKeyword ? '尝试更换关键词或清除筛选条件' : '点击底部"发布"按钮发布第一个商品' }}
+      </div>
       <div class="m-empty-actions">
-        <button v-if="searchKeyword || activeFilter !== 'all'" class="m-empty-btn m-empty-btn-secondary" @click="clearAllFilters">
+        <button v-if="searchKeyword || activeStatus !== 'all'" class="m-empty-btn" @click="clearAllFilters">
           清除筛选
+        </button>
+        <button class="m-empty-btn m-empty-btn-primary" @click="goToPublish">
+          <MIcon name="plus" :size="14" />
+          发布商品
         </button>
       </div>
     </div>
 
     <div v-else class="m-product-list">
       <div
-        v-for="prod in filteredProducts"
-        :key="prod.id || prod.itemId"
+        v-for="prod in sortedProducts"
+        :key="prod.id"
         class="m-product-item"
         :class="{ 'm-batch-mode': batchMode, 'm-selected': isSelected(prod) }"
       >
@@ -122,66 +116,58 @@
             <img
               v-if="coverUrlOf(prod)"
               :src="coverUrlOf(prod)"
-              :alt="prod.name || prod.title"
+              :alt="prod.title"
               class="m-product-img"
-              @error="onImgError($event, prod)"
               loading="lazy"
+              @error="onImgError($event, prod)"
             />
             <div v-else class="m-product-cover-placeholder">
               <MIcon name="bag" :size="24" />
             </div>
+            <span class="m-product-status-tag" :class="statusBadgeClass(prod)">{{ statusText(prod) }}</span>
           </div>
           <div class="m-product-info">
-            <div class="m-product-name">{{ prod.name || prod.title || '未命名商品' }}</div>
+            <div class="m-product-name">{{ prod.title || '未命名商品' }}</div>
             <div class="m-product-price-row">
-              <span class="m-product-price">¥{{ formatPrice(prod.price ?? prod.soldPrice) }}</span>
+              <span class="m-product-price">¥{{ formatPrice(prod.soldPrice ?? prod.price) }}</span>
+              <span v-if="Number(prod.quantity) <= 0" class="m-stock-tag m-stock-out">无货</span>
+              <span v-else-if="Number(prod.quantity) <= 10" class="m-stock-tag m-stock-low">库存{{ prod.quantity }}</span>
             </div>
             <div class="m-product-meta-row">
-              <span
-                class="m-product-stock"
-                :class="{
-                  'm-stock-warning': prod.stock <= 0,
-                  'm-stock-low': prod.stock > 0 && prod.stock <= (prod.lowStockThreshold || 10)
-                }"
-              >
-                库存 {{ prod.stock != null ? prod.stock : '—' }}
+              <span class="m-meta-chip">
+                <MIcon name="trendingUp" :size="11" />
+                想要 {{ Number(prod.wantCount) || 0 }}
               </span>
-              <span class="m-product-status-badge" :class="statusBadgeClass(prod)">
-                {{ statusText(prod) }}
+              <span class="m-meta-chip">
+                <MIcon name="eye" :size="11" />
+                曝光 {{ Number(prod.exposureCount) || 0 }}
               </span>
+              <span v-if="prod.category" class="m-meta-chip m-meta-cat">{{ prod.category }}</span>
             </div>
           </div>
         </div>
         <div v-if="!batchMode" class="m-product-actions">
           <button
             class="m-toggle-switch"
-            :class="{
-              on: isOnShelf(prod),
-              disabled: isSwitchDisabled(prod),
-              loading: prod._toggling
-            }"
-            :disabled="isSwitchDisabled(prod) || prod._toggling"
-            @click.stop="toggleOnShelf(prod)"
+            :class="{ on: isOnShelf(prod), loading: prod._toggling }"
+            :disabled="prod._toggling"
             :aria-label="isOnShelf(prod) ? '下架商品' : '上架商品'"
+            @click.stop="toggleOnShelf(prod)"
           >
             <span class="m-toggle-knob"></span>
           </button>
-          <button class="m-product-more" @click.stop="showProductMenu = prod" aria-label="更多操作">
+          <button class="m-product-more" aria-label="更多操作" @click.stop="showProductMenu = prod">
             <MIcon name="moreVertical" :size="18" />
           </button>
         </div>
       </div>
     </div>
 
-    <div v-if="!loading && !loadError && filteredProducts.length > 0" class="m-pagination">
+    <!-- ============ 分页 ============ -->
+    <div v-if="!loading && !loadError && products.length > 0" class="m-pagination">
       <span class="m-pagination-total">共 {{ total }} 条</span>
       <div class="m-pagination-pages">
-        <button
-          class="m-page-btn"
-          :disabled="currentPage <= 1"
-          @click="goToPage(currentPage - 1)"
-          aria-label="上一页"
-        >
+        <button class="m-page-btn" :disabled="currentPage <= 1" aria-label="上一页" @click="goToPage(currentPage - 1)">
           <MIcon name="chevronLeft" :size="16" />
         </button>
         <button
@@ -196,16 +182,20 @@
         <button
           class="m-page-btn"
           :disabled="currentPage >= totalPages"
-          @click="goToPage(currentPage + 1)"
           aria-label="下一页"
+          @click="goToPage(currentPage + 1)"
         >
           <MIcon name="chevronRight" :size="16" />
         </button>
       </div>
     </div>
 
+    <!-- ============ 单商品操作菜单 ============ -->
     <div v-if="showProductMenu" class="m-menu-mask" @click="showProductMenu = null"></div>
     <div v-if="showProductMenu" class="m-action-menu">
+      <div class="m-action-header">
+        <div class="m-action-header-title">{{ showProductMenu.title || '未命名商品' }}</div>
+      </div>
       <button class="m-action-item" @click="doViewDetail">
         <MIcon name="eye" :size="18" />
         <span>查看详情</span>
@@ -214,31 +204,26 @@
         <MIcon name="edit" :size="18" />
         <span>编辑商品</span>
       </button>
-      <button class="m-action-item" @click="doCopyProduct">
-        <MIcon name="copy" :size="18" />
-        <span>复制商品</span>
-      </button>
-      <button class="m-action-item" @click="doUpdateStock">
-        <MIcon name="database" :size="18" />
-        <span>调整库存</span>
-      </button>
       <button v-if="isOnShelf(showProductMenu)" class="m-action-item m-action-warn" @click="doQuickOffShelf">
         <MIcon name="arrowDown" :size="18" />
-        <span>快速下架</span>
+        <span>下架商品</span>
       </button>
-      <button v-else class="m-action-item" @click="doQuickOnShelf">
+      <button v-else class="m-action-item m-action-success" @click="doQuickOnShelf">
         <MIcon name="arrowUp" :size="18" />
-        <span>快速上架</span>
+        <span>上架商品</span>
+      </button>
+      <button class="m-action-item" @click="doPublishCopy">
+        <MIcon name="copy" :size="18" />
+        <span>复制发布新商品</span>
       </button>
       <button class="m-action-item m-action-danger" @click="doDeleteProduct">
         <MIcon name="trash" :size="18" />
         <span>删除商品</span>
       </button>
-      <button class="m-action-item m-action-cancel" @click="showProductMenu = null">
-        取消
-      </button>
+      <button class="m-action-item m-action-cancel" @click="showProductMenu = null">取消</button>
     </div>
 
+    <!-- ============ 排序选择 ============ -->
     <div v-if="showSortMenu" class="m-menu-mask" @click="showSortMenu = false"></div>
     <div v-if="showSortMenu" class="m-bottom-sheet">
       <div class="m-sheet-handle"></div>
@@ -255,48 +240,27 @@
       </button>
     </div>
 
-    <div v-if="showFilterSheet" class="m-menu-mask" @click="showFilterSheet = false"></div>
-    <div v-if="showFilterSheet" class="m-bottom-sheet m-filter-sheet">
-      <div class="m-sheet-handle"></div>
-      <div class="m-sheet-header">
-        <div class="m-sheet-title">筛选条件</div>
-        <button class="m-sheet-reset" @click="resetFilters">重置</button>
-      </div>
-      <div class="m-filter-content">
-        <div class="m-filter-group">
-          <div class="m-filter-label">商品状态</div>
-          <div class="m-filter-options">
-            <button
-              v-for="opt in filterStatusOptions"
-              :key="opt.key"
-              class="m-filter-chip"
-              :class="{ active: filterStatus === opt.key }"
-              @click="filterStatus = opt.key"
-            >
-              {{ opt.label }}
-            </button>
-          </div>
-        </div>
-      </div>
-      <div class="m-sheet-footer">
-        <button class="m-sheet-btn m-sheet-btn-cancel" @click="showFilterSheet = false">取消</button>
-        <button class="m-sheet-btn m-sheet-btn-confirm" @click="applyFilters">确定</button>
-      </div>
-    </div>
-
-    <div v-if="showConfirmDialog" class="m-dialog-mask" @click="showConfirmDialog = null">
+    <!-- ============ 确认弹窗 ============ -->
+    <div v-if="showConfirmDialog" class="m-dialog-mask" @click="cancelConfirm">
       <div class="m-dialog" @click.stop>
         <div class="m-dialog-title">{{ confirmDialog.title }}</div>
         <div class="m-dialog-msg">{{ confirmDialog.message }}</div>
         <div class="m-dialog-actions">
           <button class="m-dialog-btn m-dialog-btn-cancel" @click="cancelConfirm">取消</button>
-          <button class="m-dialog-btn m-dialog-btn-confirm" @click="confirmAction">确定</button>
+          <button
+            class="m-dialog-btn"
+            :class="confirmDialog.danger ? 'm-dialog-btn-danger' : 'm-dialog-btn-confirm'"
+            @click="confirmAction"
+          >
+            {{ confirmDialog.confirmText || '确定' }}
+          </button>
         </div>
       </div>
     </div>
 
     <div class="m-safe-bottom"></div>
 
+    <!-- ============ 批量操作工具栏 ============ -->
     <div v-if="batchMode" class="m-batch-toolbar">
       <div class="m-batch-toolbar-top">
         <button class="m-batch-select-all" :disabled="batchProcessing" @click="toggleSelectAll">
@@ -307,16 +271,13 @@
         </button>
         <span class="m-batch-count">
           <template v-if="batchProcessing">
-            {{ batchProgress.action }} {{ batchProgress.done }}/{{ batchProgress.total }} 已处理
+            {{ batchProgress.action }} {{ batchProgress.done }}/{{ batchProgress.total }}
           </template>
           <template v-else>已选 {{ selectedCount }} 件</template>
         </span>
       </div>
       <div v-if="batchProcessing" class="m-batch-progress-bar">
         <div class="m-batch-progress-fill" :style="{ width: progressPercent + '%' }"></div>
-      </div>
-      <div v-if="batchProcessing && batchProgress.current" class="m-batch-current">
-        正在处理：{{ batchProgress.current }}
       </div>
       <div v-else class="m-batch-actions">
         <button class="m-batch-btn m-batch-on" :disabled="!hasSelected" @click="batchOnShelf">
@@ -344,6 +305,7 @@ import MobileUnavailableState from './MobileUnavailableState.vue'
 import { getGoods, getGoodsStats, deleteGoodsLocal } from '../api/goods.js'
 import { offShelfItem, republishItem } from '../api/items.js'
 import { resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
+import { recordsOf, totalOf, unwrap } from '../utils/apiData.js'
 
 const props = defineProps({
   searchMode: Boolean,
@@ -352,8 +314,14 @@ const props = defineProps({
 
 const emit = defineEmits(['navigate', 'force-desktop', 'back', 'open-detail', 'close-search'])
 
+// ===== 后端 status 值（FE 视角）：0=在售 1=下架 2=已售 3=已删除 =====
+const FE_STATUS_ON_SALE = 0
+const FE_STATUS_OFF_SHELF = 1
+const FE_STATUS_DELETED = 3
+
+// ===== 状态 =====
 const products = ref([])
-const stats = ref({ total: 0, onShelf: 0, offShelf: 0, lowStock: 0, soldOut: 0, disabled: 0 })
+const stats = ref({ total: 0, onSale: 0, offShelfOrDraft: 0, autoDeliveryOn: 0, autoReplyAccounts: 0 })
 const loading = ref(false)
 const statsLoading = ref(false)
 const loadError = ref('')
@@ -361,83 +329,74 @@ const currentPage = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
 const activeStatus = ref('all')
-const activeFilter = ref('all')
 const currentSort = ref('default')
-const filterStatus = ref('')
 const showSortMenu = ref(false)
-const showFilterSheet = ref(false)
-const showMoreTabs = ref(false)
 const showProductMenu = ref(null)
-const showConfirmDialog = ref(null)
-const confirmAction = ref(() => {})
+const showConfirmDialog = ref(false)
+const confirmDialog = ref({ title: '', message: '', confirmText: '确定', danger: false })
+const pendingAction = ref(() => {})
 const searchKeywordInternal = ref('')
 
-// 批量模式状态
+// 批量模式
 const batchMode = ref(false)
 const selectedIds = ref(new Set())
 const batchProcessing = ref(false)
-const batchProgress = ref({ action: '', done: 0, total: 0, current: '' })
+const batchProgress = ref({ action: '', done: 0, total: 0 })
 
 const sortOptions = [
   { key: 'default', label: '默认排序' },
-  { key: 'newest', label: '创建时间从新到旧' },
-  { key: 'oldest', label: '创建时间从旧到新' },
-  { key: 'priceAsc', label: '价格从低到高' },
+  { key: 'newest', label: '最新创建' },
   { key: 'priceDesc', label: '价格从高到低' },
-  { key: 'stockAsc', label: '库存从低到高' },
-  { key: 'salesDesc', label: '销量从高到低' }
+  { key: 'priceAsc', label: '价格从低到高' },
+  { key: 'wantDesc', label: '想要数从高到低' },
+  { key: 'exposureDesc', label: '曝光量从高到低' },
+  { key: 'stockAsc', label: '库存从低到高' }
 ]
 
 const statusTabs = computed(() => [
   { key: 'all', label: '全部', count: stats.value.total || 0 },
-  { key: 'onShelf', label: '上架中', count: stats.value.onShelf || 0 },
-  { key: 'offShelf', label: '下架中', count: stats.value.offShelf || 0 }
+  { key: 'onSale', label: '上架中', count: stats.value.onSale || 0 },
+  { key: 'offShelf', label: '下架中', count: stats.value.offShelfOrDraft || 0 }
 ])
-
-const moreStatusTabs = computed(() => [
-  { key: 'lowStock', label: '库存预警' },
-  { key: 'soldOut', label: '已售罄' },
-  { key: 'disabled', label: '已禁用' }
-])
-
-const filterStatusOptions = [
-  { key: '', label: '全部' },
-  { key: 'onShelf', label: '上架中' },
-  { key: 'offShelf', label: '下架中' },
-  { key: 'soldOut', label: '已售罄' }
-]
 
 const statCards = computed(() => [
-  { key: 'all', label: '全部商品', value: stats.value.total || 0, trend: '', icon: 'bag', iconBg: 'rgba(13,107,255,0.1)', iconColor: '#0d6bff', trendClass: '', trendIcon: 'arrowUp' },
-  { key: 'onShelf', label: '上架中', value: stats.value.onShelf || 0, trend: '', icon: 'pieChart', iconBg: 'rgba(22,191,120,0.1)', iconColor: '#16bf78', trendClass: '', trendIcon: 'arrowUp' },
-  { key: 'offShelf', label: '下架中', value: stats.value.offShelf || 0, trend: null, icon: 'arrowDown', iconBg: 'rgba(140,152,174,0.12)', iconColor: '#8c98ae', trendClass: '', trendIcon: 'arrowDown' },
-  { key: 'lowStock', label: '库存预警', value: stats.value.lowStock || 0, trend: null, icon: 'alertTriangle', iconBg: 'rgba(255,159,34,0.12)', iconColor: '#ff9f22', trendClass: '', trendIcon: 'alertTriangle' },
-  { key: 'soldOut', label: '已售罄', value: stats.value.soldOut || 0, trend: null, icon: 'xCircle', iconBg: 'rgba(255,71,87,0.1)', iconColor: '#ff4757', trendClass: '', trendIcon: 'xCircle' },
-  { key: 'disabled', label: '已禁用', value: stats.value.disabled || 0, trend: stats.value.disabled > 0 ? String(stats.value.disabled) : null, icon: 'lock', iconBg: 'rgba(255,71,87,0.1)', iconColor: '#ff4757', trendClass: 'm-trend-down', trendIcon: 'arrowUp' }
+  {
+    key: 'all',
+    label: '全部商品',
+    value: stats.value.total || 0,
+    icon: 'bag',
+    iconBg: 'rgba(13,107,255,0.1)',
+    iconColor: '#0d6bff'
+  },
+  {
+    key: 'onSale',
+    label: '上架中',
+    value: stats.value.onSale || 0,
+    icon: 'pieChart',
+    iconBg: 'rgba(22,191,120,0.1)',
+    iconColor: '#16bf78'
+  },
+  {
+    key: 'offShelf',
+    label: '下架中',
+    value: stats.value.offShelfOrDraft || 0,
+    icon: 'arrowDown',
+    iconBg: 'rgba(140,152,174,0.12)',
+    iconColor: '#8c98ae'
+  },
+  {
+    key: 'autoDelivery',
+    label: '自动发货',
+    value: stats.value.autoDeliveryOn || 0,
+    icon: 'truck',
+    iconBg: 'rgba(139,92,246,0.1)',
+    iconColor: '#8b5cf6'
+  }
 ])
 
 const currentSortLabel = computed(() => {
   const s = sortOptions.find(o => o.key === currentSort.value)
   return s ? s.label : '默认排序'
-})
-
-const activeFilterCount = computed(() => {
-  let count = 0
-  if (filterStatus.value) count++
-  return count
-})
-
-// 批量模式计算属性
-const selectedCount = computed(() => selectedIds.value.size)
-const hasSelected = computed(() => selectedIds.value.size > 0)
-const isAllSelected = computed(() => {
-  const list = filteredProducts.value
-  if (!list.length) return false
-  return list.every(p => selectedIds.value.has(p.id || p.itemId))
-})
-const progressPercent = computed(() => {
-  if (!batchProgress.value.total) return 0
-  return Math.round((batchProgress.value.done / batchProgress.value.total) * 100)
 })
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
@@ -448,90 +407,92 @@ const visiblePages = computed(() => {
   const cp = currentPage.value
   if (tp <= 5) {
     for (let i = 1; i <= tp; i++) pages.push(i)
+  } else if (cp <= 3) {
+    for (let i = 1; i <= 5; i++) pages.push(i)
+  } else if (cp >= tp - 2) {
+    for (let i = tp - 4; i <= tp; i++) pages.push(i)
   } else {
-    if (cp <= 3) {
-      for (let i = 1; i <= 5; i++) pages.push(i)
-    } else if (cp >= tp - 2) {
-      for (let i = tp - 4; i <= tp; i++) pages.push(i)
-    } else {
-      for (let i = cp - 2; i <= cp + 2; i++) pages.push(i)
-    }
+    for (let i = cp - 2; i <= cp + 2; i++) pages.push(i)
   }
   return pages
 })
 
-const filteredProducts = computed(() => {
-  let list = [...products.value]
-  const kw = searchKeywordInternal.value?.toLowerCase()
-  if (kw) {
-    list = list.filter(p => {
-      const name = (p.name || p.title || '').toLowerCase()
-      const id = String(p.id || p.itemId || '').toLowerCase()
-      return name.includes(kw) || id.includes(kw)
-    })
-  }
-  const key = activeFilter.value
-  if (key === 'onShelf') list = list.filter(p => isOnShelf(p))
-  else if (key === 'offShelf') list = list.filter(p => !isOnShelf(p) && !isDisabled(p) && p.stock > 0)
-  else if (key === 'lowStock') list = list.filter(p => p.stock > 0 && p.stock <= (p.lowStockThreshold || 10))
-  else if (key === 'soldOut') list = list.filter(p => p.stock <= 0)
-  else if (key === 'disabled') list = list.filter(p => isDisabled(p))
-
-  if (filterStatus.value === 'onShelf') list = list.filter(p => isOnShelf(p))
-  else if (filterStatus.value === 'offShelf') list = list.filter(p => !isOnShelf(p) && !isDisabled(p))
-  else if (filterStatus.value === 'soldOut') list = list.filter(p => p.stock <= 0)
-
+// 前端排序（基于已加载的当前页数据）
+const sortedProducts = computed(() => {
+  const list = [...products.value]
+  const numKey = (p, k) => Number(p[k]) || 0
   switch (currentSort.value) {
-    case 'newest': list.sort((a, b) => (b.createTime || 0) - (a.createTime || 0)); break
-    case 'oldest': list.sort((a, b) => (a.createTime || 0) - (b.createTime || 0)); break
-    case 'priceAsc': list.sort((a, b) => (a.price || 0) - (b.price || 0)); break
-    case 'priceDesc': list.sort((a, b) => (b.price || 0) - (a.price || 0)); break
-    case 'stockAsc': list.sort((a, b) => (a.stock || 0) - (b.stock || 0)); break
-    case 'salesDesc': list.sort((a, b) => (b.sales || b.soldCount || 0) - (a.sales || a.soldCount || 0)); break
+    case 'newest':
+      list.sort((a, b) => (b.id || 0) - (a.id || 0))
+      break
+    case 'priceDesc':
+      list.sort((a, b) => numKey(b, 'soldPrice') - numKey(a, 'soldPrice'))
+      break
+    case 'priceAsc':
+      list.sort((a, b) => numKey(a, 'soldPrice') - numKey(b, 'soldPrice'))
+      break
+    case 'wantDesc':
+      list.sort((a, b) => numKey(b, 'wantCount') - numKey(a, 'wantCount'))
+      break
+    case 'exposureDesc':
+      list.sort((a, b) => numKey(b, 'exposureCount') - numKey(a, 'exposureCount'))
+      break
+    case 'stockAsc':
+      list.sort((a, b) => numKey(a, 'quantity') - numKey(b, 'quantity'))
+      break
   }
   return list
 })
 
+// ===== 批量 =====
+const selectedCount = computed(() => selectedIds.value.size)
+const hasSelected = computed(() => selectedIds.value.size > 0)
+const isAllSelected = computed(() => {
+  const list = sortedProducts.value
+  if (!list.length) return false
+  return list.every(p => selectedIds.value.has(p.id))
+})
+const progressPercent = computed(() => {
+  if (!batchProgress.value.total) return 0
+  return Math.round((batchProgress.value.done / batchProgress.value.total) * 100)
+})
+
 watch(() => props.searchKeyword, (val) => {
   searchKeywordInternal.value = val || ''
+  currentPage.value = 1
   clearBatchSelectionIfActive()
+  loadProducts()
 })
 
 function onSearch(kw) {
   searchKeywordInternal.value = kw || ''
   currentPage.value = 1
   clearBatchSelectionIfActive()
+  loadProducts()
 }
 
-defineExpose({
-  onSearch,
-  refreshProduct
-})
+defineExpose({ onSearch, refreshProduct })
 
+// ===== 状态判断 =====
 function isOnShelf(p) {
-  return p.status === 1 || p.onShelf === true || p.statusCode === 1
+  // 后端 FE 视角：0=在售
+  return Number(p.status) === FE_STATUS_ON_SALE
 }
 
-function isDisabled(p) {
-  return p.status === 3 || p.disabled === true || p.statusCode === 3
-}
-
-function isSwitchDisabled(p) {
-  return isDisabled(p)
+function isDeleted(p) {
+  return Number(p.status) === FE_STATUS_DELETED
 }
 
 function statusText(p) {
-  if (isDisabled(p)) return '已禁用'
-  if (p.stock <= 0) return '已售罄'
+  if (isDeleted(p)) return '已删除'
   if (isOnShelf(p)) return '上架中'
-  return '下架中'
+  return '已下架'
 }
 
 function statusBadgeClass(p) {
-  if (isDisabled(p)) return 'm-badge-disabled'
-  if (p.stock <= 0) return 'm-badge-soldout'
-  if (isOnShelf(p)) return 'm-badge-onshelf'
-  return 'm-badge-offshelf'
+  if (isDeleted(p)) return 'm-tag-deleted'
+  if (isOnShelf(p)) return 'm-tag-onshelf'
+  return 'm-tag-offshelf'
 }
 
 function formatPrice(price) {
@@ -544,19 +505,23 @@ function formatPrice(price) {
 function onImgError(e, prod) {
   prod.coverPic = ''
   prod.imageUrl = ''
-  prod.mainImage = ''
 }
 
-// 清洗商品封面图 URL：过滤脏数据/历史格式及非白名单域名
 function coverUrlOf(prod) {
   if (!prod) return ''
-  return resolveTrustedMediaUrl(prod.coverPic || prod.imageUrl || prod.mainImage || '')
+  return resolveTrustedMediaUrl(prod.coverPic || prod.imageUrl || '')
 }
 
+// ===== 导航 =====
 function openDetail(prod) {
   emit('open-detail', prod)
 }
 
+function goToPublish() {
+  emit('navigate', 'product-publish')
+}
+
+// ===== 菜单操作 =====
 function doViewDetail() {
   const p = showProductMenu.value
   showProductMenu.value = null
@@ -569,22 +534,16 @@ function doEditProduct() {
   if (p) openDetail(p)
 }
 
-function doCopyProduct() {
+function doPublishCopy() {
   const p = showProductMenu.value
   showProductMenu.value = null
-  if (p) {
-    showToast('已为您打开商品详情')
-    openDetail(p)
-  }
-}
-
-function doUpdateStock() {
-  const p = showProductMenu.value
-  showProductMenu.value = null
-  if (p) {
-    showToast('已为您打开商品详情，可在详情页调整库存')
-    openDetail(p)
-  }
+  if (!p) return
+  // 复制发布：跳转到发布页（发布页会读取 sessionStorage 中的草稿，这里暂存标题作为预填）
+  try {
+    sessionStorage.setItem('mobile_publish_draft_title', p.title || '')
+  } catch { /* sessionStorage 不可用时忽略 */ }
+  emit('navigate', 'product-publish')
+  showToast('已跳转到发布页，可复用商品信息')
 }
 
 function doQuickOffShelf() {
@@ -603,60 +562,61 @@ function doDeleteProduct() {
   const p = showProductMenu.value
   showProductMenu.value = null
   if (!p) return
-  showConfirmDialog.value = {
+  confirmDialog.value = {
     title: '删除商品',
-    message: '确定要删除该商品吗？删除后不可恢复。'
+    message: `确定要删除「${p.title || '该商品'}」吗？此操作仅删除本地记录，不影响闲鱼线上商品，且不可恢复。`,
+    confirmText: '确认删除',
+    danger: true
   }
-  confirmAction.value = async () => {
+  pendingAction.value = async () => {
     try {
-      const id = p.id || p.itemId
-      if (id) await deleteGoodsLocal(id)
-      products.value = products.value.filter(x => (x.id || x.itemId) !== id)
-      stats.value.total = Math.max(0, (stats.value.total || 0) - 1)
+      await deleteGoodsLocal(p.id)
+      products.value = products.value.filter(x => x.id !== p.id)
       total.value = Math.max(0, total.value - 1)
       showToast('删除成功')
+      await loadStats()
     } catch (e) {
       showToast(e?.message || '删除失败', 'error')
     }
-    showConfirmDialog.value = null
+    showConfirmDialog.value = false
   }
+  showConfirmDialog.value = true
 }
 
 function cancelConfirm() {
-  showConfirmDialog.value = null
-  confirmAction.value = () => {}
+  showConfirmDialog.value = false
+  pendingAction.value = () => {}
 }
 
+function confirmAction() {
+  const fn = pendingAction.value
+  pendingAction.value = () => {}
+  if (typeof fn === 'function') fn()
+}
+
+// ===== 上架/下架 =====
 async function toggleOnShelf(prod) {
   if (prod._toggling) return
-  const prev = isOnShelf(prod)
+  const wasOnShelf = isOnShelf(prod)
   prod._toggling = true
   try {
-    const id = prod.id || prod.itemId
-    const accountId = prod.accountId || prod.xianyuAccountId
-    if (!id) throw new Error('商品ID不存在')
-    if (prev) {
-      await offShelfItem({ id, accountId })
-      prod.status = 0
-      prod.onShelf = false
-      prod.statusCode = 0
-      stats.value.onShelf = Math.max(0, (stats.value.onShelf || 0) - 1)
-      stats.value.offShelf = (stats.value.offShelf || 0) + 1
+    if (!prod.id) throw new Error('商品ID不存在')
+    const accountId = prod.accountId
+    if (wasOnShelf) {
+      await offShelfItem({ id: prod.id, accountId })
+      prod.status = FE_STATUS_OFF_SHELF
       showToast('已下架')
     } else {
-      if (prod.stock <= 0) {
+      if (Number(prod.quantity) <= 0) {
         showToast('库存为0，无法上架', 'error')
         prod._toggling = false
         return
       }
-      await republishItem({ id, accountId })
-      prod.status = 1
-      prod.onShelf = true
-      prod.statusCode = 1
-      stats.value.offShelf = Math.max(0, (stats.value.offShelf || 0) - 1)
-      stats.value.onShelf = (stats.value.onShelf || 0) + 1
+      await republishItem({ id: prod.id, accountId })
+      prod.status = FE_STATUS_ON_SALE
       showToast('已上架')
     }
+    await loadStats()
   } catch (e) {
     showToast(e?.message || '操作失败', 'error')
   } finally {
@@ -665,34 +625,28 @@ async function toggleOnShelf(prod) {
 }
 
 // ===== 批量操作 =====
-function productId(prod) {
-  return prod.id || prod.itemId
-}
-
 function isSelected(prod) {
-  return selectedIds.value.has(productId(prod))
+  return selectedIds.value.has(prod.id)
 }
 
 function toggleSelect(prod) {
   if (batchProcessing.value) return
-  const id = productId(prod)
   const next = new Set(selectedIds.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
+  if (next.has(prod.id)) next.delete(prod.id)
+  else next.add(prod.id)
   selectedIds.value = next
 }
 
 function toggleSelectAll() {
   if (batchProcessing.value) return
-  const list = filteredProducts.value
+  const list = sortedProducts.value
   if (isAllSelected.value) {
-    // 仅取消当前可见列表的选择，保留其它页面的选择（如果存在）
     const next = new Set(selectedIds.value)
-    list.forEach(p => next.delete(productId(p)))
+    list.forEach(p => next.delete(p.id))
     selectedIds.value = next
   } else {
     const next = new Set(selectedIds.value)
-    list.forEach(p => next.add(productId(p)))
+    list.forEach(p => next.add(p.id))
     selectedIds.value = next
   }
 }
@@ -701,155 +655,105 @@ function enterBatchMode() {
   batchMode.value = true
   selectedIds.value = new Set()
   batchProcessing.value = false
-  batchProgress.value = { action: '', done: 0, total: 0, current: '' }
+  batchProgress.value = { action: '', done: 0, total: 0 }
 }
 
 function exitBatchMode() {
   if (batchProcessing.value) return
   batchMode.value = false
   selectedIds.value = new Set()
-  batchProgress.value = { action: '', done: 0, total: 0, current: '' }
 }
 
 async function runBatch(action, runnable) {
-  const selectedProducts = filteredProducts.value.filter(p => selectedIds.value.has(productId(p)))
+  const selectedProducts = sortedProducts.value.filter(p => selectedIds.value.has(p.id))
   if (!selectedProducts.length) {
     showToast('请先选择商品', 'error')
     return
   }
   batchProcessing.value = true
-  batchProgress.value = {
-    action,
-    done: 0,
-    total: selectedProducts.length,
-    current: ''
-  }
+  batchProgress.value = { action, done: 0, total: selectedProducts.length }
   let success = 0
   let failed = 0
   for (const prod of selectedProducts) {
-    batchProgress.value = {
-      ...batchProgress.value,
-      current: (prod.name || prod.title || '未命名商品').slice(0, 20)
-    }
     try {
       await runnable(prod)
       success++
     } catch {
       failed++
-      // 单个失败不中断后续
     }
-    batchProgress.value = {
-      ...batchProgress.value,
-      done: batchProgress.value.done + 1
-    }
+    batchProgress.value = { ...batchProgress.value, done: batchProgress.value.done + 1 }
   }
   batchProcessing.value = false
-  batchProgress.value = { action: '', done: 0, total: 0, current: '' }
-  if (failed === 0) {
-    showToast(`${action}完成，共处理 ${success} 件`)
-  } else {
-    showToast(`${action}完成：成功 ${success} / 失败 ${failed}`, 'error')
-  }
-  // 刷新列表与统计
-  try {
-    await loadProducts()
-    await loadStats()
-  } catch {
-    // 刷新失败不阻塞退出批量模式
-  }
+  batchProgress.value = { action: '', done: 0, total: 0 }
+  showToast(failed === 0 ? `${action}完成，共处理 ${success} 件` : `${action}：成功 ${success} / 失败 ${failed}`, failed === 0 ? 'success' : 'error')
+  await loadProducts()
+  await loadStats()
   exitBatchMode()
 }
 
 async function batchOnShelf() {
-  if (batchProcessing.value) return
   if (!hasSelected.value) {
     showToast('请先选择商品', 'error')
     return
   }
   await runBatch('批量上架', async (prod) => {
-    if (isOnShelf(prod)) return // 已上架跳过
-    if (prod.stock <= 0) throw new Error('库存为0，无法上架')
-    const id = prod.id || prod.itemId
-    const accountId = prod.accountId || prod.xianyuAccountId
-    if (!id) throw new Error('商品ID不存在')
-    await republishItem({ id, accountId })
+    if (isOnShelf(prod)) return
+    if (Number(prod.quantity) <= 0) throw new Error('库存为0')
+    await republishItem({ id: prod.id, accountId: prod.accountId })
   })
 }
 
 async function batchOffShelf() {
-  if (batchProcessing.value) return
   if (!hasSelected.value) {
     showToast('请先选择商品', 'error')
     return
   }
   await runBatch('批量下架', async (prod) => {
-    if (!isOnShelf(prod)) return // 已下架跳过
-    const id = prod.id || prod.itemId
-    const accountId = prod.accountId || prod.xianyuAccountId
-    if (!id) throw new Error('商品ID不存在')
-    await offShelfItem({ id, accountId })
+    if (!isOnShelf(prod)) return
+    await offShelfItem({ id: prod.id, accountId: prod.accountId })
   })
 }
 
 function batchDelete() {
-  if (batchProcessing.value) return
   if (!hasSelected.value) {
     showToast('请先选择商品', 'error')
     return
   }
-  showConfirmDialog.value = {
+  confirmDialog.value = {
     title: '批量删除商品',
-    message: `确定要删除选中的 ${selectedCount.value} 件商品吗？此操作仅删除本地记录，不可恢复。`
+    message: `确定要删除选中的 ${selectedCount.value} 件商品吗？此操作仅删除本地记录，不可恢复。`,
+    confirmText: '确认删除',
+    danger: true
   }
-  confirmAction.value = async () => {
-    showConfirmDialog.value = null
+  pendingAction.value = async () => {
+    showConfirmDialog.value = false
     await runBatch('批量删除', async (prod) => {
-      const id = prod.id || prod.itemId
-      if (!id) throw new Error('商品ID不存在')
-      await deleteGoodsLocal(id)
+      await deleteGoodsLocal(prod.id)
     })
   }
+  showConfirmDialog.value = true
 }
 
-function selectFilter(key) {
-  activeFilter.value = key
-  activeStatus.value = key === 'all' ? 'all' : key
-  currentPage.value = 1
-  clearBatchSelectionIfActive()
-}
-
+// ===== 筛选/排序 =====
 function selectStatus(key) {
   activeStatus.value = key
-  activeFilter.value = key
   currentPage.value = 1
   clearBatchSelectionIfActive()
+  loadProducts()
 }
 
 function selectSort(key) {
   currentSort.value = key
   showSortMenu.value = false
-  currentPage.value = 1
-  clearBatchSelectionIfActive()
-}
-
-function resetFilters() {
-  filterStatus.value = ''
-}
-
-function applyFilters() {
-  showFilterSheet.value = false
-  currentPage.value = 1
-  clearBatchSelectionIfActive()
 }
 
 function clearAllFilters() {
-  activeFilter.value = 'all'
   activeStatus.value = 'all'
-  filterStatus.value = ''
   searchKeywordInternal.value = ''
   currentPage.value = 1
   emit('close-search')
   clearBatchSelectionIfActive()
+  loadProducts()
 }
 
 function goToPage(p) {
@@ -869,21 +773,21 @@ function clearBatchSelectionIfActive() {
   }
 }
 
+// ===== 数据加载 =====
 async function loadStats() {
   statsLoading.value = true
   try {
     const res = await getGoodsStats()
-    const d = res?.data || {}
+    const d = unwrap(res) || {}
     stats.value = {
-      total: d.total || d.totalCount || 0,
-      onShelf: d.onShelf || d.onlineCount || d.listingCount || 0,
-      offShelf: d.offShelf || d.offlineCount || d.delistingCount || 0,
-      lowStock: d.lowStock || d.warningCount || 0,
-      soldOut: d.soldOut || d.outOfStockCount || 0,
-      disabled: d.disabled || d.bannedCount || 0
+      total: Number(d.total) || 0,
+      onSale: Number(d.onSale) || 0,
+      offShelfOrDraft: Number(d.offShelfOrDraft) || 0,
+      autoDeliveryOn: Number(d.autoDeliveryOn) || 0,
+      autoReplyAccounts: Number(d.autoReplyAccounts) || 0
     }
   } catch {
-    stats.value = { total: 0, onShelf: 0, offShelf: 0, lowStock: 0, soldOut: 0, disabled: 0 }
+    stats.value = { total: 0, onSale: 0, offShelfOrDraft: 0, autoDeliveryOn: 0, autoReplyAccounts: 0 }
   } finally {
     statsLoading.value = false
   }
@@ -893,27 +797,24 @@ async function loadProducts() {
   loading.value = true
   loadError.value = ''
   try {
+    // 后端参数：current/size/keyword/status/excludeStatus/accountId
     const params = {
-      page: currentPage.value,
-      pageSize: pageSize.value
+      current: currentPage.value,
+      size: pageSize.value
     }
+    const kw = (searchKeywordInternal.value || '').trim()
+    if (kw) params.keyword = kw
+    if (activeStatus.value === 'onSale') params.status = FE_STATUS_ON_SALE
+    else if (activeStatus.value === 'offShelf') params.status = FE_STATUS_OFF_SHELF
+    // all 不传 status，但排除已删除（excludeStatus=3）
+    if (activeStatus.value === 'all') params.excludeStatus = FE_STATUS_DELETED
+
     const res = await getGoods(params)
-    const data = res?.data
-    if (data?.records) {
-      products.value = data.records
-      total.value = data.total || data.totalCount || data.records.length
-    } else if (data?.list) {
-      products.value = data.list
-      total.value = data.total || data.list.length
-    } else if (Array.isArray(data)) {
-      products.value = data
-      total.value = data.length
-    } else {
-      products.value = []
-      total.value = 0
-    }
+    products.value = recordsOf(res)
+    total.value = totalOf(res, products.value.length)
   } catch (error) {
     products.value = []
+    total.value = 0
     loadError.value = error?.message || '加载失败，请检查网络后重试'
   } finally {
     loading.value = false
@@ -922,8 +823,7 @@ async function loadProducts() {
 
 function refreshProduct(updated) {
   if (!updated) return
-  const id = updated.id || updated.itemId
-  const idx = products.value.findIndex(p => (p.id || p.itemId) === id)
+  const idx = products.value.findIndex(p => p.id === updated.id)
   if (idx >= 0) {
     products.value[idx] = { ...products.value[idx], ...updated }
   }
@@ -945,10 +845,6 @@ function showToast(msg, type = 'success') {
   }, 2000)
 }
 
-function goToPublish() {
-  emit('navigate', 'product-publish')
-}
-
 onMounted(() => {
   loadStats()
   loadProducts()
@@ -960,13 +856,8 @@ onMounted(() => {
   padding: 0 var(--m-space-3);
 }
 
-.m-stats-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--m-space-2);
-  padding: var(--m-space-3) 0;
-}
-
+/* ===== 顶部统计卡 ===== */
+.m-stats-grid,
 .m-stats-skeleton {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -993,6 +884,7 @@ onMounted(() => {
   transition: all 0.2s;
   text-align: left;
   box-shadow: var(--m-shadow-card);
+  font-family: inherit;
 }
 
 .m-stat-card:active {
@@ -1026,12 +918,6 @@ onMounted(() => {
   margin-bottom: var(--m-space-1);
 }
 
-.m-stat-value-row {
-  display: flex;
-  align-items: baseline;
-  gap: var(--m-space-2);
-}
-
 .m-stat-value {
   font-size: var(--m-font-size-h1);
   font-weight: var(--m-font-weight-extrabold);
@@ -1039,21 +925,8 @@ onMounted(() => {
   line-height: 1;
 }
 
-.m-stat-trend {
-  font-size: var(--m-font-size-tiny);
-  font-weight: var(--m-font-weight-semibold);
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-  color: var(--m-color-success);
-}
-
-.m-stat-trend.m-trend-down {
-  color: var(--m-color-danger);
-}
-
+/* ===== Tabs ===== */
 .m-tabs-bar {
-  position: relative;
   margin-bottom: var(--m-space-2);
 }
 
@@ -1065,7 +938,9 @@ onMounted(() => {
   padding-bottom: 2px;
 }
 
-.m-tabs-scroll::-webkit-scrollbar { display: none; }
+.m-tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
 
 .m-tab-item {
   display: inline-flex;
@@ -1082,6 +957,7 @@ onMounted(() => {
   white-space: nowrap;
   border-radius: var(--m-radius-md);
   transition: all 0.15s;
+  font-family: inherit;
 }
 
 .m-tab-item.active {
@@ -1110,63 +986,12 @@ onMounted(() => {
   color: var(--m-color-primary);
 }
 
-.m-tab-more {
-  color: var(--m-color-text-secondary);
-}
-
-.m-tab-more :deep(svg) {
-  transition: transform 0.2s;
-}
-
-.m-tab-more :deep(svg).rotated {
-  transform: rotate(180deg);
-}
-
-.m-more-tabs-panel {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  background: var(--m-color-bg-elevated);
-  border-radius: var(--m-radius-lg);
-  box-shadow: var(--m-shadow-elevated);
-  padding: var(--m-space-2);
-  z-index: 20;
-  min-width: 140px;
-}
-
-.m-more-tab-item {
-  width: 100%;
-  padding: var(--m-space-2) var(--m-space-3);
-  background: transparent;
-  border: none;
-  font-size: var(--m-font-size-body);
-  color: var(--m-color-text-primary);
-  text-align: left;
-  border-radius: var(--m-radius-md);
-  cursor: pointer;
-}
-
-.m-more-tab-item:active {
-  background: var(--m-color-bg-hover);
-}
-
-.m-more-tab-item.active {
-  color: var(--m-color-primary);
-  background: var(--m-color-primary-bg);
-  font-weight: var(--m-font-weight-semibold);
-}
-
+/* ===== 工具栏 ===== */
 .m-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: var(--m-space-2) 0 var(--m-space-3);
-}
-
-.m-toolbar-left {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--m-space-2);
 }
 
 .m-toolbar-btn {
@@ -1181,6 +1006,7 @@ onMounted(() => {
   color: var(--m-color-text-secondary);
   cursor: pointer;
   transition: all 0.15s;
+  font-family: inherit;
 }
 
 .m-toolbar-btn:active {
@@ -1192,16 +1018,11 @@ onMounted(() => {
   cursor: not-allowed;
 }
 
-.m-toolbar-filter {
-  gap: var(--m-space-2);
-}
-
 .m-toolbar-batch {
   background: var(--m-color-primary);
   border: none;
   color: var(--m-color-text-inverse);
   font-weight: var(--m-font-weight-semibold);
-  gap: var(--m-space-1);
 }
 
 .m-toolbar-batch:active {
@@ -1210,24 +1031,10 @@ onMounted(() => {
 
 .m-toolbar-batch:disabled {
   background: var(--m-color-primary-bg-hover);
-  color: var(--m-color-text-inverse);
   opacity: 0.7;
 }
 
-.m-filter-badge {
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  background: var(--m-color-primary);
-  color: var(--m-color-text-inverse);
-  font-size: var(--m-font-size-tiny);
-  font-weight: var(--m-font-weight-semibold);
-  border-radius: var(--m-radius-pill);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
+/* ===== 列表 ===== */
 .m-product-list {
   display: flex;
   flex-direction: column;
@@ -1303,12 +1110,13 @@ onMounted(() => {
 }
 
 .m-product-cover {
-  width: 80px;
-  height: 80px;
+  width: 88px;
+  height: 88px;
   border-radius: var(--m-radius-lg);
   overflow: hidden;
   flex-shrink: 0;
   background: var(--m-color-bg-subtle);
+  position: relative;
 }
 
 .m-product-img {
@@ -1326,6 +1134,30 @@ onMounted(() => {
   justify-content: center;
   color: var(--m-color-text-disabled);
   background: var(--m-color-bg-subtle);
+}
+
+.m-product-status-tag {
+  position: absolute;
+  top: var(--m-space-1);
+  left: var(--m-space-1);
+  font-size: 10px;
+  font-weight: var(--m-font-weight-semibold);
+  padding: 2px 6px;
+  border-radius: var(--m-radius-sm);
+  color: #fff;
+  backdrop-filter: blur(4px);
+}
+
+.m-tag-onshelf {
+  background: rgba(22, 191, 120, 0.9);
+}
+
+.m-tag-offshelf {
+  background: rgba(140, 152, 174, 0.9);
+}
+
+.m-tag-deleted {
+  background: rgba(255, 71, 87, 0.9);
 }
 
 .m-product-info {
@@ -1362,6 +1194,23 @@ onMounted(() => {
   color: var(--m-color-danger-text);
 }
 
+.m-stock-tag {
+  font-size: var(--m-font-size-tiny);
+  font-weight: var(--m-font-weight-semibold);
+  padding: 2px 6px;
+  border-radius: var(--m-radius-sm);
+}
+
+.m-stock-low {
+  background: var(--m-color-warning-bg);
+  color: var(--m-color-warning-text);
+}
+
+.m-stock-out {
+  background: var(--m-color-danger-bg);
+  color: var(--m-color-danger-text);
+}
+
 .m-product-meta-row {
   display: flex;
   align-items: center;
@@ -1369,45 +1218,22 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
-.m-product-stock {
-  font-size: var(--m-font-size-caption);
-  color: var(--m-color-text-tertiary);
-}
-
-.m-product-stock.m-stock-low {
-  color: var(--m-color-warning-text);
-}
-
-.m-product-stock.m-stock-warning {
-  color: var(--m-color-danger-text);
-  font-weight: var(--m-font-weight-semibold);
-}
-
-.m-product-status-badge {
+.m-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
   font-size: var(--m-font-size-tiny);
-  font-weight: var(--m-font-weight-semibold);
-  padding: 3px var(--m-space-2);
-  border-radius: var(--m-radius-pill);
-}
-
-.m-badge-onshelf {
-  background: var(--m-color-success-bg);
-  color: var(--m-color-success);
-}
-
-.m-badge-offshelf {
-  background: var(--m-color-bg-subtle);
   color: var(--m-color-text-tertiary);
-}
-
-.m-badge-soldout {
-  background: var(--m-color-danger-bg);
-  color: var(--m-color-danger);
-}
-
-.m-badge-disabled {
   background: var(--m-color-bg-subtle);
-  color: var(--m-color-text-tertiary);
+  padding: 2px 6px;
+  border-radius: var(--m-radius-sm);
+}
+
+.m-meta-cat {
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .m-product-actions {
@@ -1431,12 +1257,7 @@ onMounted(() => {
 }
 
 .m-toggle-switch.on {
-  background: var(--m-color-primary);
-}
-
-.m-toggle-switch.disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+  background: var(--m-color-success);
 }
 
 .m-toggle-switch.loading {
@@ -1477,6 +1298,7 @@ onMounted(() => {
   background: var(--m-color-bg-hover);
 }
 
+/* ===== 分页 ===== */
 .m-pagination {
   display: flex;
   align-items: center;
@@ -1507,6 +1329,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+  font-family: inherit;
 }
 
 .m-page-btn:disabled {
@@ -1521,6 +1344,7 @@ onMounted(() => {
   font-weight: var(--m-font-weight-semibold);
 }
 
+/* ===== 骨架屏 ===== */
 .m-list-skeleton {
   display: flex;
   flex-direction: column;
@@ -1537,8 +1361,8 @@ onMounted(() => {
 }
 
 .m-skeleton-img {
-  width: 80px;
-  height: 80px;
+  width: 88px;
+  height: 88px;
   border-radius: var(--m-radius-lg);
   background: var(--m-color-bg-subtle);
   animation: m-skeleton-pulse 1.5s ease-in-out infinite;
@@ -1568,6 +1392,7 @@ onMounted(() => {
   50% { opacity: 0.5; }
 }
 
+/* ===== 空状态 ===== */
 .m-empty-state {
   text-align: center;
   padding: 60px var(--m-space-5);
@@ -1610,15 +1435,22 @@ onMounted(() => {
   font-size: var(--m-font-size-body-sm);
   font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
-  border: none;
-}
-
-.m-empty-btn-secondary {
-  background: var(--m-color-bg-card);
   border: 1px solid var(--m-color-border);
+  background: var(--m-color-bg-card);
   color: var(--m-color-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--m-space-1);
+  font-family: inherit;
 }
 
+.m-empty-btn-primary {
+  background: var(--m-color-primary);
+  border-color: var(--m-color-primary);
+  color: var(--m-color-text-inverse);
+}
+
+/* ===== 菜单/底部弹窗 ===== */
 .m-menu-mask {
   position: fixed;
   inset: 0;
@@ -1643,6 +1475,21 @@ onMounted(() => {
   to { transform: translateY(0); }
 }
 
+.m-action-header {
+  padding: var(--m-space-3) var(--m-space-4);
+  border-bottom: 1px solid var(--m-color-border-light);
+  margin-bottom: var(--m-space-1);
+}
+
+.m-action-header-title {
+  font-size: var(--m-font-size-body);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .m-action-item {
   width: 100%;
   display: flex;
@@ -1656,6 +1503,7 @@ onMounted(() => {
   cursor: pointer;
   border-radius: var(--m-radius-lg);
   text-align: left;
+  font-family: inherit;
 }
 
 .m-action-item:active {
@@ -1664,6 +1512,10 @@ onMounted(() => {
 
 .m-action-item.m-action-warn {
   color: var(--m-color-warning-text);
+}
+
+.m-action-item.m-action-success {
+  color: var(--m-color-success-text);
 }
 
 .m-action-item.m-action-danger {
@@ -1699,26 +1551,11 @@ onMounted(() => {
   margin: 0 auto var(--m-space-3);
 }
 
-.m-sheet-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--m-space-4);
-}
-
 .m-sheet-title {
   font-size: var(--m-font-size-h2);
   font-weight: var(--m-font-weight-bold);
   color: var(--m-color-text-primary);
-}
-
-.m-sheet-reset {
-  background: none;
-  border: none;
-  color: var(--m-color-primary);
-  font-size: var(--m-font-size-body);
-  cursor: pointer;
-  padding: var(--m-space-1) var(--m-space-2);
+  margin-bottom: var(--m-space-2);
 }
 
 .m-sheet-option {
@@ -1734,6 +1571,7 @@ onMounted(() => {
   cursor: pointer;
   border-bottom: 1px solid var(--m-color-border-light);
   text-align: left;
+  font-family: inherit;
 }
 
 .m-sheet-option.active {
@@ -1741,71 +1579,7 @@ onMounted(() => {
   font-weight: var(--m-font-weight-semibold);
 }
 
-.m-filter-content {
-  max-height: 50vh;
-  overflow-y: auto;
-}
-
-.m-filter-group {
-  margin-bottom: var(--m-space-5);
-}
-
-.m-filter-label {
-  font-size: var(--m-font-size-body-sm);
-  font-weight: var(--m-font-weight-semibold);
-  color: var(--m-color-text-secondary);
-  margin-bottom: var(--m-space-2);
-}
-
-.m-filter-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--m-space-2);
-}
-
-.m-filter-chip {
-  padding: var(--m-space-2) var(--m-space-4);
-  background: var(--m-color-bg-hover);
-  border: 1px solid transparent;
-  border-radius: var(--m-radius-pill);
-  font-size: var(--m-font-size-body-sm);
-  color: var(--m-color-text-secondary);
-  cursor: pointer;
-}
-
-.m-filter-chip.active {
-  background: var(--m-color-primary-bg);
-  border-color: var(--m-color-primary);
-  color: var(--m-color-primary);
-  font-weight: var(--m-font-weight-semibold);
-}
-
-.m-sheet-footer {
-  display: flex;
-  gap: var(--m-space-2);
-  padding-top: var(--m-space-4);
-}
-
-.m-sheet-btn {
-  flex: 1;
-  padding: 13px;
-  border-radius: var(--m-radius-lg);
-  font-size: var(--m-font-size-h3);
-  font-weight: var(--m-font-weight-semibold);
-  cursor: pointer;
-  border: none;
-}
-
-.m-sheet-btn-cancel {
-  background: var(--m-color-bg-subtle);
-  color: var(--m-color-text-secondary);
-}
-
-.m-sheet-btn-confirm {
-  background: var(--m-color-primary);
-  color: var(--m-color-text-inverse);
-}
-
+/* ===== 对话框 ===== */
 .m-dialog-mask {
   position: fixed;
   inset: 0;
@@ -1852,6 +1626,7 @@ onMounted(() => {
   font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
   border: none;
+  font-family: inherit;
 }
 
 .m-dialog-btn-cancel {
@@ -1864,9 +1639,16 @@ onMounted(() => {
   color: var(--m-color-text-inverse);
 }
 
-.m-safe-bottom { height: calc(var(--m-space-4) + var(--m-safe-area-bottom)); }
+.m-dialog-btn-danger {
+  background: var(--m-color-danger);
+  color: var(--m-color-text-inverse);
+}
 
-/* ===== 批量操作工具栏 ===== */
+.m-safe-bottom {
+  height: calc(var(--m-space-4) + var(--m-safe-area-bottom));
+}
+
+/* ===== 批量工具栏 ===== */
 .m-batch-toolbar {
   position: fixed;
   left: var(--m-space-2);
@@ -1875,7 +1657,7 @@ onMounted(() => {
   background: var(--m-color-bg-elevated);
   border-radius: var(--m-radius-xl);
   box-shadow: var(--m-shadow-elevated);
-  padding: var(--m-space-3) var(--m-space-3) calc(var(--m-space-3) + var(--m-safe-area-bottom));
+  padding: var(--m-space-3);
   z-index: 150;
   display: flex;
   flex-direction: column;
@@ -1906,6 +1688,7 @@ onMounted(() => {
   cursor: pointer;
   padding: var(--m-space-1);
   font-weight: var(--m-font-weight-medium);
+  font-family: inherit;
 }
 
 .m-batch-select-all:disabled {
@@ -1931,16 +1714,6 @@ onMounted(() => {
   height: 100%;
   background: var(--m-color-primary);
   transition: width 0.25s ease;
-  border-radius: var(--m-radius-sm);
-}
-
-.m-batch-current {
-  font-size: var(--m-font-size-caption);
-  color: var(--m-color-text-tertiary);
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .m-batch-actions {
@@ -1964,6 +1737,7 @@ onMounted(() => {
   color: var(--m-color-text-primary);
   cursor: pointer;
   transition: all 0.15s;
+  font-family: inherit;
 }
 
 .m-batch-btn:active:not(:disabled) {
@@ -1995,11 +1769,58 @@ onMounted(() => {
   color: var(--m-color-text-secondary);
 }
 
+/* ===== 全局 Toast（与详情页共用样式） ===== */
+:global(.m-toast-global) {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.9);
+  background: rgba(21, 33, 61, 0.94);
+  color: #fff;
+  padding: 12px 20px;
+  border-radius: var(--m-radius-lg);
+  font-size: var(--m-font-size-body-sm);
+  font-weight: 500;
+  z-index: 9999;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s;
+  max-width: 80%;
+  text-align: center;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+:global(.m-toast-global.m-toast-show) {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+:global(.m-toast-global.m-toast-error) {
+  background: rgba(220, 38, 38, 0.94);
+}
+
+/* ===== 小屏适配 ===== */
 @media (max-width: 360px) {
-  .m-products-page { padding: 0 var(--m-space-2); }
-  .m-stat-card { padding: var(--m-space-2); gap: var(--m-space-2); }
-  .m-stat-icon { width: 38px; height: 38px; }
-  .m-stat-value { font-size: 18px; }
-  .m-product-cover { width: 72px; height: 72px; }
+  .m-products-page {
+    padding: 0 var(--m-space-2);
+  }
+  .m-stat-card {
+    padding: var(--m-space-2);
+    gap: var(--m-space-2);
+  }
+  .m-stat-icon {
+    width: 38px;
+    height: 38px;
+  }
+  .m-stat-value {
+    font-size: 18px;
+  }
+  .m-product-cover {
+    width: 76px;
+    height: 76px;
+  }
+  .m-meta-chip {
+    font-size: 10px;
+  }
 }
 </style>

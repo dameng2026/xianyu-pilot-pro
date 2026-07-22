@@ -214,6 +214,38 @@
           "sha256": "85f750b076a5a5c2160c7af42d33cdc78e646bc5ce3354ab966c5be47b43ce07",
           "risk": "expand",
           "rollback": "restore"
+        },
+        {
+          "version": "1.26",
+          "description": "add features_text and period_type to billing_plan",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.26__add_billing_plan_features_text_and_period_type.sql",
+          "sha256": "c818db66e5a42cff2026b15b3ed5973795136b3783e6cb92f3c057972e94587f",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.27",
+          "description": "refresh default AI customer service persona (systemPrompt, welcomeMessage, chatRules) for existing users still on initial defaults",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.27__refresh_default_ai_customer_service_persona.sql",
+          "sha256": "a2fa31a8c456547fb44c4dd39c0d3a5128b69bfe6cf61ef19cf8027951bdf260",
+          "risk": "backfill",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.28",
+          "description": "添加订单卖家备注字段",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.28__add_seller_remark_to_trade_order.sql",
+          "sha256": "9780999fb6856def49000132c1c9ad22ada7d5309bb4b23d889827f509ec7a7a",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.29",
+          "description": "套餐表新增月/季/年三档价格字段并回填现有价格",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.29__add_billing_plan_period_prices.sql",
+          "sha256": "01507fbb99d821d998a234b1e66aac5e1a6902d455d9dcf585efb87876c12ca2",
+          "risk": "expand",
+          "rollback": "restore"
         }
       ],
       "quarantined": [
@@ -350,7 +382,7 @@
           "version": "1.15",
           "description": "add priority, failure_reason, queued_at, started_at, finished_at to captcha_solve_record for priority queue scheduling",
           "path": "apps/automation-service/migrations/V1.15__add_captcha_solve_record_priority_and_tracking.sql",
-          "sha256": "4f671e7d95b3d0314489a8dea49fcc53cbe555eb03d2b7ddeb6633ab1aec8007",
+          "sha256": "44fd236b1b57368e79a8d73730c46efa9adf9d4fd49f0bdfe7020b1b4cc19338",
           "risk": "expand",
           "rollback": "restore"
         }

@@ -20,6 +20,7 @@
         <div class="m-auto-kpi-cell">
           <div class="m-auto-kpi-value">{{ overviewMetric('todayExecutionCount') }}</div>
           <div class="m-auto-kpi-label">今日执行</div>
+          <div class="m-auto-kpi-sub">运行中 {{ overviewMetric('runningCount') }}</div>
         </div>
         <div class="m-auto-kpi-divider"></div>
         <div class="m-auto-kpi-cell">
@@ -297,7 +298,7 @@
           v-for="exec in executions"
           :key="exec.executionId || exec.id"
           class="m-auto-exec-item"
-          @click="openWorkflowDetail({ id: exec.workflowId || exec.definitionId, name: exec.workflowName || exec.name })"
+          @click="openExecutionDetail(exec)"
         >
           <div class="m-auto-exec-top">
             <div class="m-auto-exec-name">{{ exec.workflowName || exec.name || '未命名工作流' }}</div>
@@ -346,13 +347,13 @@
           </div>
           <MIcon name="chevronRight" :size="16" class="m-auto-menu-arrow" />
         </div>
-        <div class="m-auto-menu-item" @click="$emit('navigate', 'card-warehouse')">
+        <div class="m-auto-menu-item" @click="$emit('navigate', 'delivery-source-library')">
           <div class="m-auto-menu-icon m-auto-menu-icon--purple">
             <MIcon name="box" :size="20" />
           </div>
           <div class="m-auto-menu-info">
-            <div class="m-auto-menu-title">卡密仓库</div>
-            <div class="m-auto-menu-desc">数字商品库存管理</div>
+            <div class="m-auto-menu-title">货源库</div>
+            <div class="m-auto-menu-desc">文本货源与卡密管理</div>
           </div>
           <MIcon name="chevronRight" :size="16" class="m-auto-menu-arrow" />
         </div>
@@ -368,7 +369,7 @@
           <div class="m-auto-sheet-handle"></div>
           <div class="m-auto-sheet-header">
             <div class="m-auto-sheet-title">{{ selectedWorkflow?.name || '工作流详情' }}</div>
-            <button class="m-auto-sheet-close" @click="closeSheet" aria-label="关闭">
+            <button class="m-auto-sheet-close" aria-label="关闭" @click="closeSheet">
               <MIcon name="close" :size="20" />
             </button>
           </div>
@@ -552,6 +553,15 @@ async function loadWorkflows() {
   }
 }
 
+function openExecutionDetail(exec) {
+  const wfId = exec.workflowId || exec.definitionId
+  if (wfId) {
+    openWorkflowDetail({ id: wfId, name: exec.workflowName || exec.name })
+  } else {
+    showToast('该执行记录无关联工作流')
+  }
+}
+
 async function openWorkflowDetail(wf) {
   if (!wf?.id) {
     showToast('该工作流缺少 ID，无法查看详情')
@@ -703,9 +713,21 @@ function taskTypeText(type) {
   const map = {
     sync_goods: '商品同步',
     sync_orders: '订单同步',
-    one_click_polish: '一键润色',
+    sync_delivery_status: '发货状态同步',
+    redelivery: '重新发货',
+    polish_goods: '商品润色',
+    workflow: '工作流执行',
+    auto_delivery: '自动发货',
+    delivery: '自动发货',
+    'auto-delivery': '自动发货',
+    sync_account: '账号同步',
+    account_sync: '账号同步',
+    refresh_account: '账号同步',
+    auto_reply: '自动回复',
+    reply: '自动回复',
+    'auto-reply': '自动回复',
     auto_redelivery: '自动重发货',
-    workflow: '工作流执行'
+    one_click_polish: '一键润色'
   }
   return map[type] || type || '-'
 }
@@ -734,7 +756,7 @@ function nodeTypeLabel(type) {
 }
 
 function execStatusText(s) {
-  return ({ success: '成功', failed: '失败', running: '运行中', queued: '排队中', partial_success: '部分成功' })[s] || s || '-'
+  return ({ success: '成功', failed: '失败', running: '运行中', queued: '排队中', partial_success: '部分成功', terminated: '已终止' })[s] || s || '-'
 }
 
 function execStatusClass(s) {
@@ -1386,6 +1408,10 @@ onMounted(() => {
 .m-exec-partial_success {
   background: var(--m-color-warning-bg);
   color: var(--m-color-warning-text);
+}
+.m-exec-terminated {
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-tertiary);
 }
 .m-exec-unknown {
   background: var(--m-color-bg-subtle);

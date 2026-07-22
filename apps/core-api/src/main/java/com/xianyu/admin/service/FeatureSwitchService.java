@@ -94,9 +94,14 @@ public class FeatureSwitchService {
         list.add(feature("delivery-records", "发货记录", "automation", true, true, true));
         list.add(feature("scheduled-tasks", "定时任务", "automation", false, false, false));
         list.add(feature("auto-reply", "自动回复", "automation", true, true, true));
-        // 系统设置：滑块求解记录仅 VIP 及以上可用
+        // 系统设置：
+        //   - 滑块求解记录页：默认全开（仅控制记录页可见性，与求解动作解耦）
+        //   - 手动滑块求解：仅 VIP 及以上可用（AccountsPage 求解按钮）
+        //   - 自动滑块求解：仅 VIP 及以上可用（Python 被动自动求解）
         list.add(feature("logs", "操作日志", "system", true, true, true));
-        list.add(feature("slider-solve-records", "滑块求解", "system", false, true, true));
+        list.add(feature("slider-solve-records", "滑块求解记录", "system", true, true, true));
+        list.add(feature("manual-slider-solve", "手动滑块求解", "system", false, true, true));
+        list.add(feature("auto-slider-solve", "自动滑块求解", "system", false, true, true));
         list.add(feature("feedback", "反馈建议", "system", true, true, true));
         list.add(feature("settings-notify", "通知设置", "system", true, true, true));
         list.add(feature("user-manual", "使用手册", "system", true, true, true));
@@ -122,6 +127,12 @@ public class FeatureSwitchService {
         m.put("svp", svp);
         return m;
     }
+
+    /** 支持关闭原因（reason）的功能 key 集合。其他功能项忽略 reason 字段。 */
+    private static final Set<String> REASON_SUPPORTED_KEYS = Set.of("manual-slider-solve");
+
+    /** reason 字段默认值（管理员未填写时使用） */
+    private static final String DEFAULT_MANUAL_REASON = "您的会员等级未开启手动滑块求解功能";
 
     /**
      * 管理端：列出所有功能开关（合并默认值）。
@@ -149,6 +160,14 @@ public class FeatureSwitchService {
                 }
                 if (override.containsKey("title")) merged.put("title", override.get("title"));
                 if (override.containsKey("group")) merged.put("group", override.get("group"));
+                // 仅 REASON_SUPPORTED_KEYS 中的功能保留 reason 字段
+                if (REASON_SUPPORTED_KEYS.contains(key) && override.containsKey("reason")) {
+                    merged.put("reason", sanitizeReason(String.valueOf(override.get("reason"))));
+                }
+            }
+            // REASON_SUPPORTED_KEYS 中的功能始终返回 reason 字段（即使为空）
+            if (REASON_SUPPORTED_KEYS.contains(key) && !merged.containsKey("reason")) {
+                merged.put("reason", "");
             }
             result.add(merged);
         }
@@ -208,11 +227,84 @@ public class FeatureSwitchService {
                 info.put("reason", "disabled");
                 info.put("required_level", normalizeLevel(userLevel));
             }
+            // 对于支持 reason 的功能（如 manual-slider-solve），返回管理员填写的关闭原因
+            // 没填写时返回系统默认文案，便于前端弹窗展示
+            if (REASON_SUPPORTED_KEYS.contains(key)) {
+                String reasonText = resolveReasonText(key, def, stored);
+                info.put("reason_text", reasonText);
+            }
             blocked.put(key, info);
         }
         status.put("accessible", accessible);
         status.put("blocked", blocked);
         return status;
+    }
+
+    /**
+     * 查询单个功能对当前用户的拦截信息。
+     * 返回：
+     *   allowed=true  → 该功能对当前用户允许使用
+     *   allowed=false → 该功能被拦截，附带 {reason, required_level, reason_text}
+     *
+     * 用于 Java 网关在 captcha/handle 入口校验 manual-slider-solve。
+     */
+    public Map<String, Object> getFeatureStatusForUser(Long userId, String featureKey) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("feature_key", featureKey);
+        if (featureKey == null || featureKey.isBlank()) {
+            result.put("allowed", true);  // 未知 key 默认放行，避免锁死
+            return result;
+        }
+        String userLevel = resolveUserLevel(userId);
+        Map<String, Object> def = findDefaultFeature(featureKey);
+        if (def == null) {
+            result.put("allowed", true);  // 非预置功能默认放行
+            return result;
+        }
+        Map<String, Map<String, Object>> stored;
+        try {
+            stored = loadStoredFeatures();
+        } catch (Exception e) {
+            log.warn("getFeatureStatusForUser 读取存储配置失败，降级放行 featureKey={}", featureKey);
+            result.put("allowed", true);
+            return result;
+        }
+        Map<String, Boolean> levelSwitches = resolveLevelSwitches(featureKey, def, stored);
+        boolean userAllowed = boolOr(levelSwitches.get(normalizeLevel(userLevel)), true);
+        result.put("allowed", userAllowed);
+        if (userAllowed) {
+            return result;
+        }
+        // 拦截时附带 required_level
+        String firstHigherOn = findFirstHigherEnabled(userLevel, levelSwitches);
+        if (firstHigherOn != null) {
+            result.put("reason", "level");
+            result.put("required_level", firstHigherOn);
+        } else {
+            result.put("reason", "disabled");
+            result.put("required_level", normalizeLevel(userLevel));
+        }
+        if (REASON_SUPPORTED_KEYS.contains(featureKey)) {
+            result.put("reason_text", resolveReasonText(featureKey, def, stored));
+        }
+        return result;
+    }
+
+    /** 解析某功能的 reason_text：管理员填写 > 系统默认文案 */
+    private String resolveReasonText(String key, Map<String, Object> def, Map<String, Map<String, Object>> stored) {
+        Map<String, Object> override = stored.get(key);
+        if (override != null && override.containsKey("reason")) {
+            String r = String.valueOf(override.get("reason")).trim();
+            if (!r.isEmpty() && !"null".equals(r)) return r;
+        }
+        return DEFAULT_MANUAL_REASON;
+    }
+
+    private Map<String, Object> findDefaultFeature(String key) {
+        for (Map<String, Object> def : DEFAULT_FEATURES) {
+            if (String.valueOf(def.get("key")).equals(key)) return def;
+        }
+        return null;
     }
 
     /**
@@ -386,9 +478,28 @@ public class FeatureSwitchService {
             }
             if (f.containsKey("title")) m.put("title", f.get("title"));
             if (f.containsKey("group")) m.put("group", f.get("group"));
+            // 仅 REASON_SUPPORTED_KEYS 中的功能保留 reason 字段
+            if (REASON_SUPPORTED_KEYS.contains(key)) {
+                Object reasonVal = f.get("reason");
+                m.put("reason", sanitizeReason(reasonVal == null ? "" : String.valueOf(reasonVal)));
+            }
             result.put(key, m);
         }
         return result;
+    }
+
+    /**
+     * reason 字段清洗：去首尾空白，截断到 200 字符，移除潜在的 HTML/脚本标签。
+     * 防止管理员输入富文本导致前端展示时 XSS。
+     */
+    private static String sanitizeReason(String input) {
+        if (input == null) return "";
+        String s = input.trim();
+        if (s.isEmpty()) return "";
+        if (s.length() > 200) s = s.substring(0, 200);
+        // 移除 < > 标签，防止 XSS（前端用 v-text 或 textarea 渲染，但保险起见后端也清洗）
+        s = s.replaceAll("<[^>]+>", "");
+        return s;
     }
 
     /**

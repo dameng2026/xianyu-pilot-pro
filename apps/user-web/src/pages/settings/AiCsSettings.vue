@@ -310,13 +310,15 @@ const form = reactive({
 const LEGACY_SYSTEM_PROMPT_MARKERS = [
   '你是闲鱼店铺的专业客服助手',
   '你是本店的AI客服',
-  '使用"您好""亲"等称呼'
+  '使用"您好""亲"等称呼',
+  '你是一个友好的闲鱼客服助手'
 ]
 
 const LEGACY_WELCOME_MESSAGE_MARKERS = [
   '我是AI客服小鱼',
   '欢迎光临本店',
-  '商品拍下后48小时内发货'
+  '商品拍下后48小时内发货',
+  '您好，欢迎来看看这件商品'
 ]
 
 function normalizeEntry(item, fallbackName) {

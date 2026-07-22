@@ -23,6 +23,12 @@ import {
   isSafeBrowserResourceUrl,
   safeErrorType,
 } from '../policy.js';
+import {
+  processRegistry,
+  processMonitor,
+  generateSessionId,
+  type ProcessKind,
+} from './processRegistry.js';
 
 export interface SlideSolveOptions {
   cookieStr?: string;
@@ -1503,6 +1509,23 @@ async function solveSliderViaPythonScript(
       cwd: process.cwd(),
     });
 
+    // 注册到进程监测器：超时后由监测器兜底清理（防止 spawn 句柄泄露 + 进程残留）
+    const pySessionId = generateSessionId();
+    const pyTotalTimeout = Math.max(timeoutMs, 90000);
+    if (child.pid) {
+      processRegistry.register({
+        sessionId: pySessionId,
+        kind: 'python',
+        pid: child.pid,
+        childPids: [],
+        tenantId: '',
+        startedAt: Date.now(),
+        deadlineAt: Date.now() + pyTotalTimeout + 30_000, // 超时 + 30s 宽限期
+        childProcess: child,
+        description: `sliderSolve.py target=${targetUrl}`,
+      });
+    }
+
     let stdout = '';
     let stderr = '';
     let lastJsonLine: string | null = null;
@@ -1512,18 +1535,21 @@ async function solveSliderViaPythonScript(
       stdout += text;
       // 实时打印 Python 脚本输出（便于诊断）
       process.stdout.write(`[sliderSolve.py] ${text}`);
+      // heartbeat：进程仍在输出，更新活动时间，避免监测器误杀
+      processRegistry.heartbeat(pySessionId);
     });
     child.stderr.on('data', (data: Buffer) => {
       const text = data.toString('utf-8');
       stderr += text;
       process.stderr.write(`[sliderSolve.py:err] ${text}`);
+      processRegistry.heartbeat(pySessionId);
     });
 
     // 总超时：与调用方传入的 timeoutMs 对齐（搜索场景 90s，连接场景 30s）。
     // 搜索链路预算：Node Playwright 启动+搜索+4次slider(30-40s) → solveGoofishSlider(≤90s) → 重试MTOP(5-10s) → searchViaPythonScript(60s)，
     // 总计需在前端 180s 超时内完成。Python 内部 main_async 会根据 elapsed 跳过第二轮求解，保证 90s 内出结果。
     // 之前 max(120000) 会把 Python 跑满两轮（120-180s），导致 searchViaPythonScript 兜底还没机会执行就被前端超时 kill。
-    const totalTimeout = Math.max(timeoutMs, 90000);
+    const totalTimeout = pyTotalTimeout;
     const timer = setTimeout(() => {
       console.warn(`[SliderSolver] Python 脚本超时 (${totalTimeout}ms)，终止进程`);
       try { child.kill('SIGTERM'); } catch { /* ignore */ }
@@ -1535,6 +1561,8 @@ async function solveSliderViaPythonScript(
 
     child.on('close', (code: number) => {
       clearTimeout(timer);
+      // 进程已退出，从监测器注销（避免监测器误判为残留进程）
+      processRegistry.unregister(pySessionId);
       // 清理临时 Cookie 文件
       fs.unlink(cookieFile).catch(() => {});
 
@@ -1576,6 +1604,7 @@ async function solveSliderViaPythonScript(
 
     child.on('error', (err: Error) => {
       clearTimeout(timer);
+      processRegistry.unregister(pySessionId);
       fs.unlink(cookieFile).catch(() => {});
       console.warn(`[SliderSolver] 启动 Python 脚本失败: ${safeErrorType(err)}`);
       resolve(null);
@@ -1624,6 +1653,11 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
   let screenshotPath: string | undefined;
   // 持久化上下文的 userDataDir，需在 finally 中清理以防 Cookie/缓存残留磁盘
   let userDataDirForCleanup: string | null = null;
+  // 浏览器进程的会话 ID，注册到进程监测器，超时后由监测器兜底清理
+  // （Chrome 崩溃后 Playwright 连接断开，close() 失败导致进程残留为孤儿，监测器会扫描清理）
+  let browserSessionId: string | null = null;
+  // 浏览器进程的 deadline：solveGoofishSlider 总超时 = timeoutMs × maxRetries + 60s 启动预算
+  const browserDeadlineAt = Date.now() + timeoutMs * maxRetries + 60_000;
 
   try {
     const contextOptions: BrowserContextOptions = {
@@ -1742,6 +1776,22 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
         }
         usingCDP = true;
         console.log('[SliderSolver] 已启动持久化 Chrome 并注入反检测脚本 + 预热 Cookie');
+
+        // 注册 Chrome 进程到监测器：browser._initialPagePid 是 Playwright 内部字段，
+        // 这里直接用 browser.pid（若可用）或从 /proc 扫描。简单起见，注册一个"逻辑会话"，
+        // 监测器通过 userDataDir 精确清理（pkill -f userDataDir）。
+        browserSessionId = generateSessionId();
+        processRegistry.register({
+          sessionId: browserSessionId,
+          kind: 'chrome-persistent',
+          pid: 0, // Chrome 主 PID 不直接可知（Playwright 不暴露），靠 userDataDir 精确清理
+          childPids: [],
+          userDataDir: userDataDirForCleanup || undefined,
+          tenantId: '',
+          startedAt: Date.now(),
+          deadlineAt: browserDeadlineAt,
+          description: `launchPersistentContext chrome=${chromePath} userDataDir=${userDataDirForCleanup}`,
+        });
       } catch (e: any) {
         console.warn(`[SliderSolver] 持久化 Chrome 启动失败，回退: ${safeErrorType(e)}`);
         if (browser) { await browser.close().catch(() => {}); browser = null; }
@@ -2300,13 +2350,27 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
     } catch {
       // ignore
     }
-    // 清理持久化上下文的 userDataDir，防止用户 Cookie/localStorage 残留磁盘
+    // 兜底清理：Chrome 崩溃后 Playwright 连接断开，close() 会失败且子进程残留为孤儿。
+    // 按 userDataDir 精确 kill 残留 Chrome 进程（每次请求 userDataDir 含唯一 timestamp，不会误杀并发请求）。
     if (userDataDirForCleanup) {
+      try {
+        const { execSync } = await import('child_process');
+        execSync(`pkill -9 -f '${userDataDirForCleanup}' 2>/dev/null || true`, { stdio: 'ignore', timeout: 5000 });
+      } catch {
+        // ignore
+      }
+      // 清理持久化上下文的 userDataDir，防止用户 Cookie/localStorage 残留磁盘
       try {
         await fs.rm(userDataDirForCleanup, { recursive: true, force: true });
       } catch {
         // 清理失败不影响主流程，下次启动会创建新目录
       }
+    }
+    // 从进程监测器注销：finally 块执行完毕表示求解已结束（无论成功/失败/异常），
+    // 监测器不再需要兜底清理此会话。如果 Chrome 进程残留，上面的 pkill 已清理。
+    if (browserSessionId) {
+      processRegistry.unregister(browserSessionId);
+      browserSessionId = null;
     }
   }
 }

@@ -75,13 +75,22 @@ request.interceptors.response.use(
     if (res.code === 1001) {
       emit('xya-captcha-required', res.data)
       // 自动触发滑块求解（带冷却去重，不影响原 reject）
+      // 受 auto-slider-solve 功能开关控制：关闭时不触发自动求解
       try {
         const captchaData = res.data || {}
         const accountId = captchaData.accountId || captchaData.account_id
         if (accountId) {
-          import('../composables/useCaptchaSolver.js').then(({ useCaptchaSolver }) => {
-            useCaptchaSolver().autoSolveIfNeeded(accountId)
-          })
+          import('../api/feature-switch.js').then(({ getFeatureStatus }) => {
+            return getFeatureStatus('auto-slider-solve')
+          }).then(status => {
+            if (!status?.allowed) {
+              // 自动求解被开关拦截，静默跳过（不弹窗，不打扰用户）
+              return
+            }
+            import('../composables/useCaptchaSolver.js').then(({ useCaptchaSolver }) => {
+              useCaptchaSolver().autoSolveIfNeeded(accountId)
+            })
+          }).catch(() => { /* 查询失败不影响错误传递 */ })
         }
       } catch { /* 自动求解失败不影响错误传递 */ }
       return Promise.reject(createStructuredError(res.msg || '需要滑块验证', requestId, {

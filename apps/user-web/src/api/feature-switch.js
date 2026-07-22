@@ -44,3 +44,40 @@ export const invalidateFeatureSwitchCache = () => {
   invalidateRequestCache(STATUS_CACHE_NAMESPACE)
   invalidateRequestCache(COMPARISON_CACHE_NAMESPACE)
 }
+
+/**
+ * 查询当前用户对指定功能的拦截信息。
+ * 返回：
+ *   { allowed: true }  → 允许使用
+ *   { allowed: false, reason, required_level, reason_text? }  → 被拦截
+ *
+ * 内部复用 getFeatureSwitchStatus 缓存，避免重复请求。
+ * 失败降级：返回 { allowed: true }，避免后端故障锁死用户操作。
+ *
+ * @param {string} featureKey 功能 key（如 'manual-slider-solve'）
+ * @param {object} options { force?: boolean }
+ */
+export const getFeatureStatus = async (featureKey, options = {}) => {
+  try {
+    const status = await getFeatureSwitchStatus(options)
+    const accessible = status?.accessible || {}
+    const blocked = status?.blocked || {}
+    if (accessible[featureKey] === true) {
+      return { allowed: true }
+    }
+    const info = blocked[featureKey]
+    if (!info) {
+      // 既不在 accessible 也不在 blocked，视为允许（向后兼容）
+      return { allowed: true }
+    }
+    return {
+      allowed: false,
+      reason: info.reason || 'disabled',
+      required_level: info.required_level || 'vip',
+      reason_text: info.reason_text || '',
+    }
+  } catch {
+    // 后端故障降级放行
+    return { allowed: true }
+  }
+}

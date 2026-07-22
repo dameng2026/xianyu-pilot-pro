@@ -12,7 +12,7 @@
    - cookie_invalid（Cookie 失效）→ 不重试，通知用户重新扫码
    - account_inactive/account_disabled → 不重试
    - precheck_rejected → 不重试
-4. **任务去重**：同账号 30 分钟内只入队一次（保留原有去重逻辑）
+4. **任务去重**：同账号 60 秒内只入队一次（对齐产品设计"每分钟可主动求解一次"；manual_retry 失败重试场景由调用方传 skip_dedup=True 跳过）
 
 设计说明：
 - 使用 asyncio.PriorityQueue 实现优先级排序
@@ -43,8 +43,8 @@ logger = logging.getLogger(__name__)
 # 不超过 crawler-service 全局并发（4），避免 503 拒绝
 SOLVE_WORKER_CONCURRENCY = 2
 
-# 同账号去重冷却时间（秒）：30 分钟内同账号只入队一次
-SOLVE_DEDUP_COOLDOWN_SEC = 1800
+# 同账号去重冷却时间（秒）：60 秒内同账号只入队一次（对齐产品设计"每分钟可主动求解一次"）
+SOLVE_DEDUP_COOLDOWN_SEC = 60
 
 # 最大重试次数（按失败原因分类）
 MAX_RETRY_BY_REASON = {
@@ -129,6 +129,10 @@ class CaptchaQueueManager:
         # 同账号去重表：account_id -> 上次入队时间戳
         self._enqueued_ts: dict[int, float] = {}
         self._dedup_lock = asyncio.Lock()
+        # 排队中任务跟踪表：record_id -> SolveTask（用于查询排队位置）
+        # worker 取出任务时从此表移除
+        self._pending_tasks: dict[int, SolveTask] = {}
+        self._pending_lock = asyncio.Lock()
 
     async def start(self) -> None:
         """启动 worker 协程（幂等，重复调用安全）"""
@@ -246,10 +250,42 @@ class CaptchaQueueManager:
         )
         await self._queue.put(task)
 
+        # 加入排队跟踪表（用于查询排队位置）
+        if record_id:
+            async with self._pending_lock:
+                self._pending_tasks[record_id] = task
+
+        # 计算排队位置并广播 queued 状态（让前端即时看到"排队中"）
+        queue_position, queue_total = await self.get_queue_position(record_id)
+        try:
+            from .captcha_solve_record import broadcast_captcha_solve, _lookup_account_name
+            from .ws_sse import broadcaster
+            account_name = await _lookup_account_name(tenant_id, account_id)
+            await broadcaster.broadcast(
+                tenant_id,
+                "captcha_solve",
+                {
+                    "accountId": account_id,
+                    "accountName": account_name,
+                    "status": "queued",
+                    "result": "",
+                    "engine": "Playwright",
+                    "reason": f"任务已入队，排队中（第 {queue_position} 位，共 {queue_total} 个任务）",
+                    "recordId": record_id,
+                    "queuePosition": queue_position,
+                    "queueTotal": queue_total,
+                },
+            )
+        except Exception as e:
+            log_service_failure(
+                logger, e, operation="broadcast_queued_status",
+                tenant_id=tenant_id, account_id=account_id, level=logging.DEBUG,
+            )
+
         logger.info(
-            "滑块求解任务已入队 accountId=%d tenantId=%d priority=%d scene=%s retry=%d recordId=%s 队列长度=%d",
+            "滑块求解任务已入队 accountId=%d tenantId=%d priority=%d scene=%s retry=%d recordId=%s 队列长度=%d 排队位置=%d/%d",
             account_id, tenant_id, priority, trigger_scene, retry_count,
-            record_id, self._queue.qsize(),
+            record_id, self._queue.qsize(), queue_position, queue_total,
         )
         return record_id
 
@@ -283,7 +319,12 @@ class CaptchaQueueManager:
             worker_id, task.account_id, task.priority, task.retry_count, task.record_id,
         )
 
-        # 更新记录 started_at
+        # 从排队跟踪表移除（已开始处理，不再排队）
+        if task.record_id:
+            async with self._pending_lock:
+                self._pending_tasks.pop(task.record_id, None)
+
+        # 更新记录 started_at + 状态从 queued → retrying（正式开始处理）
         if task.record_id:
             try:
                 async with async_session() as db:
@@ -299,6 +340,28 @@ class CaptchaQueueManager:
                 log_service_failure(
                     logger, e, operation="update_solve_record_started",
                     level=logging.WARNING,
+                )
+            # 广播 retrying 状态（让前端知道已从"排队中"变为"求解中"）
+            try:
+                from .ws_sse import broadcaster
+                account_name = await _lookup_account_name(task.tenant_id, task.account_id)
+                await broadcaster.broadcast(
+                    task.tenant_id,
+                    "captcha_solve",
+                    {
+                        "accountId": task.account_id,
+                        "accountName": account_name,
+                        "status": "retrying",
+                        "result": "",
+                        "engine": "Playwright",
+                        "reason": "worker 已取出任务，开始处理滑块求解",
+                        "recordId": task.record_id,
+                    },
+                )
+            except Exception as e:
+                log_service_failure(
+                    logger, e, operation="broadcast_retrying_status",
+                    tenant_id=task.tenant_id, account_id=task.account_id, level=logging.DEBUG,
                 )
 
         # 执行求解（handle_captcha_for_account 内部已包含预校验逻辑）
@@ -440,6 +503,33 @@ class CaptchaQueueManager:
             skip_dedup=True,
         )
 
+    async def get_queue_position(self, record_id: Optional[int]) -> tuple[int, int]:
+        """查询指定记录在队列中的排队位置。
+
+        排队位置按优先级排序计算：高优先级（sort_priority 更小）排前面，
+        同优先级按入队顺序（enqueued_seq）FIFO。
+
+        Args:
+            record_id: 求解记录 ID
+
+        Returns:
+            (position, total) - position 从 1 开始（1=下一个出队），total=排队中总数
+            若 record_id 不在排队表中（已被 worker 取出或不存在），返回 (0, total)
+        """
+        if not record_id:
+            return (0, 0)
+        async with self._pending_lock:
+            pending = list(self._pending_tasks.values())
+        if not pending:
+            return (0, 0)
+        # 按 (sort_priority, enqueued_seq) 排序，与 PriorityQueue 出队顺序一致
+        pending.sort(key=lambda t: (t.sort_priority, t.enqueued_seq))
+        total = len(pending)
+        for i, t in enumerate(pending):
+            if t.record_id == record_id:
+                return (i + 1, total)
+        return (0, total)
+
     @property
     def queue_size(self) -> int:
         """当前队列长度"""
@@ -481,8 +571,16 @@ async def enqueue_solve(
     open_reason: str = "",
     solve_reason: str = "",
     priority: int = 0,
+    retry_count: int = 0,
+    skip_dedup: bool = False,
 ) -> Optional[int]:
     """便捷接口：入队一个滑块求解任务。
+
+    Args:
+        retry_count: 重试次数（首次入队为 0，超时自动重试时传入递增后的值）
+        skip_dedup: 是否跳过同账号去重检查（manual_retry 失败重试场景传 True，
+            对齐前端"失败后可立即重试"设计；前端已保证重试仅在 status=fail 时触发、
+            求解中不可重复点击，不会导致滥用）
 
     Returns:
         record_id 或 None（被去重跳过）
@@ -495,4 +593,17 @@ async def enqueue_solve(
         open_reason=open_reason,
         solve_reason=solve_reason,
         priority=priority,
+        retry_count=retry_count,
+        skip_dedup=skip_dedup,
     )
+
+
+async def get_queue_position(record_id: Optional[int]) -> tuple[int, int]:
+    """便捷接口：查询指定记录的排队位置。
+
+    Returns:
+        (position, total) - position 从 1 开始，total=排队中总数
+        若 record_id 已被 worker 取出（不在排队中），返回 (0, total)
+    """
+    manager = await get_queue_manager()
+    return await manager.get_queue_position(record_id)

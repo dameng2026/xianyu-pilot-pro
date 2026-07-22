@@ -6,6 +6,7 @@ import com.xianyu.admin.common.BizException;
 import com.xianyu.admin.security.TenantContext;
 import com.xianyu.admin.service.AiProviderService;
 import com.xianyu.admin.service.AutomationClient;
+import com.xianyu.admin.service.FeatureSwitchService;
 import com.xianyu.admin.service.ModelConfigService;
 import com.xianyu.admin.service.OperationAuditService;
 import com.xianyu.admin.service.OpportunityDraftService;
@@ -58,6 +59,7 @@ public class AutomationProxyController {
     private final XianyuAccountService accountService;
     private final TenantSupportService tenantSupportService;
     private final OpenSourceContentService contentService;
+    private final FeatureSwitchService featureSwitchService;
     private static final ObjectMapper jsonMapper = new ObjectMapper();
 
     @Value("${xianyu.cookie.crypto-secret:dev-only-cookie-crypto-secret-change-me-32-chars}")
@@ -72,7 +74,7 @@ public class AutomationProxyController {
                                      AiProviderService aiProviderService, OpportunityDraftService opportunityDraftService,
                                      ImageGenerationService imageGenerationService, ModelConfigService modelConfigService,
                                      XianyuAccountService accountService, TenantSupportService tenantSupportService,
-                                     OpenSourceContentService contentService) {
+                                     OpenSourceContentService contentService, FeatureSwitchService featureSwitchService) {
         this.automationClient = automationClient;
         this.jdbcTemplate = jdbcTemplate;
         this.auditService = auditService;
@@ -82,6 +84,7 @@ public class AutomationProxyController {
         this.modelConfigService = modelConfigService;
         this.accountService = accountService;
         this.tenantSupportService = tenantSupportService;
+        this.featureSwitchService = featureSwitchService;
         this.contentService = contentService;
     }
 
@@ -1428,9 +1431,9 @@ public class AutomationProxyController {
     public Result<Object> captchaAutoSolve(@RequestBody(required = false) Map<String, Object> body) {
         if (body == null) body = new java.util.LinkedHashMap<>();
         injectTenantId(body);
-        // 滑块求解涉及 Playwright 浏览器操作 + 多场景重试（加载转圈/点击重试/下载失败刷新），需 180 秒超时
+        // 入队后立即返回排队信息，不再等待求解完成（结果通过 SSE 广播）
         try {
-            return Result.ok(automationClient.postInternalForData("/api/captcha/auto-solve", body, 180));
+            return Result.ok(automationClient.postInternalForData("/api/captcha/auto-solve", body, 30));
         } catch (BizException e) {
             // automation 宕机时仍落一条失败记录，保证记录页可追溯
             if (e.getCode() == 503) {
@@ -1444,17 +1447,70 @@ public class AutomationProxyController {
     public Result<Object> captchaHandle(@RequestBody(required = false) Map<String, Object> body) {
         if (body == null) body = new java.util.LinkedHashMap<>();
         injectTenantId(body);
-        // 滑块求解涉及 Playwright 浏览器操作 + 多场景重试（加载转圈/点击重试/下载失败刷新），需 180 秒超时
+        // 后端双层校验：手动求解场景（manual / manual_retry）校验 manual-slider-solve 功能开关
+        // 被拦截时返回 403 + {reason, required_level, reason_text, feature_key}，前端弹充值引导
+        String scene = stringValue(body.get("triggerScene"));
+        if (scene == null || scene.isBlank()) scene = "manual";
+        if (isManualSolveScene(scene)) {
+            checkManualSliderSolveAllowed();
+        }
+        // 入队后立即返回排队信息，不再等待求解完成（结果通过 SSE 广播）
         try {
-            return Result.ok(automationClient.postInternalForData("/api/captcha/handle", body, 180));
+            return Result.ok(automationClient.postInternalForData("/api/captcha/handle", body, 30));
         } catch (BizException e) {
             if (e.getCode() == 503) {
-                String scene = stringValue(body.get("triggerScene"));
-                if (scene == null || scene.isBlank()) scene = "manual";
                 persistCaptchaSolveFallbackRecord(body, scene, e.getMessage());
             }
             throw e;
         }
+    }
+
+    @GetMapping("/captcha/queue-position")
+    public Result<Object> captchaQueuePosition(
+            @RequestParam(defaultValue = "0") Long recordId,
+            @RequestParam(defaultValue = "0") Long accountId) {
+        // 查询滑块求解任务的排队位置（前端轮询用）
+        java.util.Map<String, Object> query = new java.util.LinkedHashMap<>();
+        if (recordId != null && recordId > 0) {
+            query.put("recordId", recordId);
+        } else if (accountId != null && accountId > 0) {
+            query.put("accountId", accountId);
+        }
+        return Result.ok(automationClient.getInternalForData("/api/captcha/queue-position", query));
+    }
+
+    /** 判断是否为手动触发场景（受 manual-slider-solve 开关控制） */
+    private static boolean isManualSolveScene(String scene) {
+        return "manual".equals(scene) || "manual_retry".equals(scene);
+    }
+
+    /**
+     * 校验当前用户是否允许手动滑块求解。
+     * 被拦截时抛出 403 BizException，body 含 {reason, required_level, reason_text, feature_key}，
+     * 前端用 reason_text 弹窗、required_level 引导充值。
+     */
+    private void checkManualSliderSolveAllowed() {
+        Long userId = TenantContext.getCurrentUserId();
+        if (userId == null) return;  // 未登录由其他 401 拦截处理
+        Map<String, Object> status;
+        try {
+            status = featureSwitchService.getFeatureStatusForUser(userId, "manual-slider-solve");
+        } catch (Exception e) {
+            log.warn("校验手动滑块求解开关失败，降级放行 userId={} errorType={}", userId, e.getClass().getSimpleName());
+            return;  // 后端故障降级放行，避免锁死
+        }
+        Object allowed = status.get("allowed");
+        if (Boolean.TRUE.equals(allowed)) return;
+        // 被拦截：构造 403 错误，前端据 reason_text + required_level 弹充值引导
+        Map<String, Object> errData = new LinkedHashMap<>();
+        errData.put("feature_key", "manual-slider-solve");
+        errData.put("reason", status.getOrDefault("reason", "disabled"));
+        errData.put("required_level", status.getOrDefault("required_level", "vip"));
+        errData.put("reason_text", status.getOrDefault("reason_text", "您的会员等级未开启手动滑块求解功能"));
+        String errMsg = String.valueOf(errData.get("reason_text"));
+        log.info("手动滑块求解被功能开关拦截 userId={} requiredLevel={} reason={}",
+                userId, errData.get("required_level"), errData.get("reason"));
+        throw new BizException(403, errMsg, errData);
     }
 
     /**

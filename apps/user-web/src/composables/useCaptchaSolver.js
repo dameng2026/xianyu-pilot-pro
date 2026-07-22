@@ -1,15 +1,23 @@
 import { reactive, readonly } from 'vue'
-import { handleCaptcha } from '../api/captcha.js'
+import { handleCaptcha, getCaptchaQueuePosition } from '../api/captcha.js'
 
 /**
  * 全局滑块求解状态管理
  *
  * 监听 SSE captcha_solve 事件，维护每个账号的求解状态。
- * 提供 isAccountSolving / getAccountSolveStatus / solveManually 方法。
+ * 提供 isAccountSolving / isAccountQueued / getAccountSolveStatus / solveManually 方法。
  *
- * 状态字段: { status, result, reason, accountName, timestamp, recordId }
- *   status: 'retrying' | 'success' | 'fail'
+ * 状态字段: { status, result, reason, accountName, timestamp, recordId, queuePosition, queueTotal }
+ *   status: 'queued' | 'retrying' | 'success' | 'fail'
+ *     - queued: 任务已入队，等待 worker 处理（不触发 5 分钟超时）
+ *     - retrying: worker 已取出任务，正在执行滑块求解（适用 5 分钟超时）
+ *     - success: 求解成功
+ *     - fail: 求解失败
  *   result: 'slider_success' | 'slider_fail' | ''
+ *   queuePosition: number (排队位置，1=下一个出队，0=不在排队中/已开始处理)
+ *   queueTotal: number (排队中总数)
+ *
+ * 求解改为队列异步后，solveManually 入队后立即返回，成功/失败通过 SSE 事件异步通知。
  */
 
 const solveStates = reactive({})  // accountId(string) → state object
@@ -18,22 +26,42 @@ const solveStates = reactive({})  // accountId(string) → state object
 const autoSolveTimestamps = {}
 const AUTO_SOLVE_COOLDOWN_MS = 30000
 
+// 排队位置轮询定时器：accountId(string) → interval id
+const queuePollTimers = {}
+const QUEUE_POLL_INTERVAL_MS = 5000  // 5 秒轮询一次
+
 function setSolveState(accountId, payload) {
   if (!accountId) return
   const key = String(accountId)
+  const prev = solveStates[key]
   solveStates[key] = {
     status: payload.status || 'retrying',
     result: payload.result || '',
     reason: payload.reason || '',
-    accountName: payload.accountName || solveStates[key]?.accountName || '',
+    accountName: payload.accountName || prev?.accountName || '',
     timestamp: Date.now(),
-    recordId: payload.recordId || null,
+    recordId: payload.recordId ?? prev?.recordId ?? null,
+    queuePosition: payload.queuePosition ?? prev?.queuePosition ?? 0,
+    queueTotal: payload.queueTotal ?? prev?.queueTotal ?? 0,
   }
 }
 
+/**
+ * 账号是否处于活跃求解状态（排队中 OR 处理中）。
+ * 用于防止重复提交：排队中和处理中都不允许再次触发。
+ */
 function isAccountSolving(accountId) {
   const state = solveStates[String(accountId)]
-  return state?.status === 'retrying'
+  return state?.status === 'retrying' || state?.status === 'queued'
+}
+
+/**
+ * 账号是否处于排队中（仅 queued，不含处理中）。
+ * 用于前端区分"排队中"与"求解中"两种展示。
+ */
+function isAccountQueued(accountId) {
+  const state = solveStates[String(accountId)]
+  return state?.status === 'queued'
 }
 
 function getAccountSolveStatus(accountId) {
@@ -41,7 +69,57 @@ function getAccountSolveStatus(accountId) {
 }
 
 function clearSolveStatus(accountId) {
-  delete solveStates[String(accountId)]
+  const key = String(accountId)
+  stopQueuePolling(key)
+  delete solveStates[key]
+}
+
+// ============================================================
+// 排队位置轮询：当状态为 queued 时定时查询排队位置
+// SSE 可能因网络延迟未及时到达，轮询作为兜底确保排队位置实时更新
+// ============================================================
+function startQueuePolling(accountId, recordId) {
+  const key = String(accountId)
+  if (!recordId) return
+  // 已有轮询则跳过
+  if (queuePollTimers[key]) return
+  const poll = async () => {
+    try {
+      const res = await getCaptchaQueuePosition({ recordId })
+      const data = res?.data || res || {}
+      const position = Number(data.position || 0)
+      const total = Number(data.total || 0)
+      const status = data.status || ''
+      // 后端返回的状态已变更（不再是 queued），停止轮询
+      if (status && status !== 'queued') {
+        stopQueuePolling(key)
+        return
+      }
+      // 更新排队位置（不覆盖 status，保持 queued）
+      const prev = solveStates[key]
+      if (prev && prev.status === 'queued') {
+        solveStates[key] = {
+          ...prev,
+          queuePosition: position,
+          queueTotal: total,
+          timestamp: Date.now(),
+        }
+      } else {
+        // 状态已变更，停止轮询
+        stopQueuePolling(key)
+      }
+    } catch {
+      // 查询失败静默处理，等下次轮询
+    }
+  }
+  queuePollTimers[key] = setInterval(poll, QUEUE_POLL_INTERVAL_MS)
+}
+
+function stopQueuePolling(accountIdKey) {
+  if (queuePollTimers[accountIdKey]) {
+    clearInterval(queuePollTimers[accountIdKey])
+    delete queuePollTimers[accountIdKey]
+  }
 }
 
 /**
@@ -51,22 +129,28 @@ function clearSolveStatus(accountId) {
  * @param {object} extra 额外参数 { openReason, solveReason }
  *   - openReason: 开启原因（为什么打开滑块求解流程）
  *   - solveReason: 求解原因（为什么进行滑块求解）
- * @returns {Promise<{success: boolean, recovered: boolean, message: string}>}
+ * @returns {Promise<{queued: boolean, deduplicated?: boolean, recordId?: number, queuePosition?: number, queueTotal?: number, message: string}>}
+ *   求解结果不再同步返回（入队后立即返回），成功/失败通过 SSE 事件异步通知
  */
 async function solveManually(accountId, triggerScene = 'manual', extra = {}) {
-  if (!accountId) return { success: false, recovered: false, message: '账号ID不能为空' }
+  if (!accountId) return { queued: false, message: '账号ID不能为空' }
   const key = String(accountId)
   const openReason = extra.openReason || ''
   const solveReason = extra.solveReason || ''
 
-  // 标记为求解中
+  // 保存调用前状态，用于被去重时回滚（避免乐观标记的 queued 状态残留导致按钮永久禁用）
+  const prev = solveStates[key] ? { ...solveStates[key] } : null
+
+  // 标记为排队中（不再立即标记为 retrying，避免被误判为"处理中"触发超时）
   solveStates[key] = {
-    status: 'retrying',
+    status: 'queued',
     result: '',
-    reason: solveReason || '手动触发滑块求解',
+    reason: solveReason || '任务已提交，等待排队...',
     accountName: solveStates[key]?.accountName || '',
     timestamp: Date.now(),
     recordId: null,
+    queuePosition: 0,
+    queueTotal: 0,
   }
 
   try {
@@ -78,42 +162,53 @@ async function solveManually(accountId, triggerScene = 'manual', extra = {}) {
       solveReason,
     })
     const data = res?.data || res || {}
-    const recovered = Boolean(data.recovered)
-    const autoSolveResult = data.autoSolveResult || {}
-    const cookieVerified = autoSolveResult.cookieVerified !== false
 
-    if (recovered) {
-      solveStates[key] = {
-        status: 'success',
-        result: 'slider_success',
-        reason: '滑块求解成功，Cookie 已恢复',
-        accountName: solveStates[key]?.accountName || '',
-        timestamp: Date.now(),
-        recordId: null,
+    // 被去重跳过（同账号 60 秒内已入队）
+    // 回滚到调用前状态：避免乐观标记的 queued 残留导致 isAccountSolving 误判按钮禁用；
+    // 同时不把状态置为 fail，避免污染 isRetry 判定（否则下次点击被判为重试跳过前端冷却，
+    // 又触发后端去重，形成死循环）。仅通过返回值把 message 交给调用方展示临时提示
+    if (data.deduplicated) {
+      if (prev) {
+        solveStates[key] = prev
+      } else {
+        delete solveStates[key]
       }
-      return { success: true, recovered: true, message: '滑块求解成功，Cookie 已恢复' }
+      return { queued: false, deduplicated: true, message: data.message || '该账号近期已触发过求解，请稍后再试' }
     }
-    if (autoSolveResult.solved && !cookieVerified) {
-      solveStates[key] = {
-        status: 'fail',
-        result: 'slider_success',
-        reason: '滑块已通过但 Cookie Session 已过期，需重新扫码登录',
-        accountName: solveStates[key]?.accountName || '',
-        timestamp: Date.now(),
-        recordId: null,
-      }
-      return { success: false, recovered: false, message: '滑块已通过但 Cookie Session 已过期，需重新扫码登录' }
-    }
+
+    // 入队成功：更新排队位置信息
+    const recordId = data.recordId || null
+    const queuePosition = Number(data.queuePosition || 0)
+    const queueTotal = Number(data.queueTotal || 0)
     solveStates[key] = {
-      status: 'fail',
-      result: 'slider_fail',
-      reason: autoSolveResult.error || '滑块求解失败',
+      status: 'queued',
+      result: '',
+      reason: data.message || `任务已入队，排队中（第 ${queuePosition} 位，共 ${queueTotal} 个任务）`,
       accountName: solveStates[key]?.accountName || '',
       timestamp: Date.now(),
-      recordId: null,
+      recordId,
+      queuePosition,
+      queueTotal,
     }
-    return { success: false, recovered: false, message: autoSolveResult.error || '滑块求解失败' }
+
+    // 启动排队位置轮询（SSE 可能因网络延迟未及时到达，轮询作为兜底）
+    if (recordId) {
+      startQueuePolling(accountId, recordId)
+    }
+
+    return {
+      queued: true,
+      recordId,
+      queuePosition,
+      queueTotal,
+      message: data.message || '任务已入队',
+    }
   } catch (e) {
+    // 后端 403 功能开关拦截（前端绕过场景）：重新抛出，让调用方弹窗引导
+    // autoSolveIfNeeded 用 .catch(() => {}) 吞掉所有错误，不会受影响
+    if (e?.code === 403 && e?.data?.feature_key) {
+      throw e
+    }
     solveStates[key] = {
       status: 'fail',
       result: 'slider_fail',
@@ -121,8 +216,10 @@ async function solveManually(accountId, triggerScene = 'manual', extra = {}) {
       accountName: solveStates[key]?.accountName || '',
       timestamp: Date.now(),
       recordId: null,
+      queuePosition: 0,
+      queueTotal: 0,
     }
-    return { success: false, recovered: false, message: e?.message || '滑块求解请求失败' }
+    return { queued: false, message: e?.message || '滑块求解请求失败' }
   }
 }
 
@@ -154,13 +251,29 @@ function onSseCaptchaSolve(event) {
   if (eventType !== 'captcha_solve') return
   const accountId = data.accountId
   if (!accountId) return
+  const key = String(accountId)
+
   setSolveState(accountId, {
     status: data.status,
     result: data.result,
     reason: data.reason,
     accountName: data.accountName,
     recordId: data.recordId,
+    queuePosition: data.queuePosition,
+    queueTotal: data.queueTotal,
   })
+
+  // 状态变更时管理轮询
+  const newStatus = data.status
+  if (newStatus === 'queued') {
+    // 进入排队状态，启动轮询（如有 recordId）
+    if (data.recordId) {
+      startQueuePolling(accountId, data.recordId)
+    }
+  } else {
+    // 离开排队状态（retrying/success/fail），停止轮询
+    stopQueuePolling(key)
+  }
 }
 
 function initCaptchaSolverListener() {
@@ -169,12 +282,15 @@ function initCaptchaSolverListener() {
 
 function destroyCaptchaSolverListener() {
   window.removeEventListener('xya-sse-event', onSseCaptchaSolve)
+  // 清理所有轮询定时器
+  Object.keys(queuePollTimers).forEach(stopQueuePolling)
 }
 
 export function useCaptchaSolver() {
   return {
     solveStates: readonly(solveStates),
     isAccountSolving,
+    isAccountQueued,
     getAccountSolveStatus,
     clearSolveStatus,
     solveManually,

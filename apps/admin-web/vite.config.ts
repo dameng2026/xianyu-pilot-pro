@@ -7,6 +7,7 @@ import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import ElementPlus from 'unplugin-element-plus/vite'
 import tailwindcss from '@tailwindcss/vite'
+import viteCompression from 'vite-plugin-compression'
 
 export default defineConfig({
   define: {
@@ -108,6 +109,14 @@ export default defineConfig({
     }),
     ElementPlus({
       useSource: true,
+    }),
+    // Pre-compress assets to .gz at build time so nginx can serve them with
+    // `gzip_static on` and skip on-the-fly compression CPU cost.
+    viteCompression({
+      algorithm: 'gzip',
+      ext: '.gz',
+      threshold: 10240,
+      deleteOriginFile: false,
     }),
   ],
   resolve: {

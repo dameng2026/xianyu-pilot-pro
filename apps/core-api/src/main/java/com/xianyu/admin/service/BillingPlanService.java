@@ -50,7 +50,7 @@ public class BillingPlanService {
         pageArgs.add(safeSize);
         pageArgs.add(offset);
         List<Map<String, Object>> records = jdbcTemplate.query(
-                baseSelect() + where + " ORDER BY CASE plan_code WHEN 'normal' THEN 1 WHEN 'vip' THEN 2 WHEN 'svp' THEN 3 WHEN 'svip' THEN 3 ELSE 9 END, price_cent ASC, id ASC LIMIT ? OFFSET ?",
+                baseSelect() + where + " ORDER BY CASE WHEN plan_code LIKE 'normal%' THEN 1 WHEN plan_code LIKE 'svip%' OR plan_code LIKE 'svp%' THEN 3 WHEN plan_code LIKE 'vip%' THEN 2 ELSE 9 END, price_month_cent ASC, id ASC LIMIT ? OFFSET ?",
                 (rs, rowNum) -> toMap(rs),
                 pageArgs.toArray()
         );
@@ -59,7 +59,7 @@ public class BillingPlanService {
 
     public List<Map<String, Object>> enabledPlans() {
         return jdbcTemplate.query(
-                baseSelect() + " WHERE deleted=0 AND status=1 ORDER BY CASE plan_code WHEN 'normal' THEN 1 WHEN 'vip' THEN 2 WHEN 'svp' THEN 3 WHEN 'svip' THEN 3 ELSE 9 END, price_cent ASC, id ASC",
+                baseSelect() + " WHERE deleted=0 AND status=1 ORDER BY CASE WHEN plan_code LIKE 'normal%' THEN 1 WHEN plan_code LIKE 'svip%' OR plan_code LIKE 'svp%' THEN 3 WHEN plan_code LIKE 'vip%' THEN 2 ELSE 9 END, price_month_cent ASC, id ASC",
                 (rs, rowNum) -> toMap(rs)
         );
     }
@@ -93,23 +93,30 @@ public class BillingPlanService {
         if (exists != null && exists > 0) {
             throw new BizException(400, "套餐编码已存在");
         }
+        long priceMonthCent = parsePeriodMoneyCent(data, "priceMonth", "priceMonthCent", "price_month_cent");
+        long priceQuarterCent = parsePeriodMoneyCent(data, "priceQuarter", "priceQuarterCent", "price_quarter_cent");
+        long priceYearCent = parsePeriodMoneyCent(data, "priceYear", "priceYearCent", "price_year_cent");
+        // price_cent 保留为月度价格，兼容旧逻辑（如排序、向前台暴露单值）
+        long priceCent = priceMonthCent;
         jdbcTemplate.update(
-                "INSERT INTO billing_plan(plan_name, plan_code, price_cent, duration_days, max_xianyu_accounts, max_goods_count, " +
-                        "max_ai_reply_per_day, max_workflow_per_day, max_storage_mb, enable_auto_delivery, enable_kami, enable_ai_reply, enable_workflow, status, created_time, updated_time, deleted) " +
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)",
+                "INSERT INTO billing_plan(plan_name, plan_code, price_cent, duration_days, " +
+                        "max_storage_mb, enable_auto_delivery, enable_kami, enable_ai_reply, enable_workflow, " +
+                        "features_text, period_type, price_month_cent, price_quarter_cent, price_year_cent, status, created_time, updated_time, deleted) " +
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)",
                 planName,
                 planCode,
-                parseMoneyCent(data),
+                priceCent,
                 parseInt(first(data, "durationDays", "duration_days"), 30),
-                parseInt(first(data, "maxAccounts", "maxXianyuAccounts", "max_xianyu_accounts"), 1),
-                parseInt(first(data, "maxGoodsCount", "max_goods_count"), 100),
-                parseInt(first(data, "aiQuota", "maxAiReplyPerDay", "max_ai_reply_per_day"), 100),
-                parseInt(first(data, "maxWorkflowPerDay", "max_workflow_per_day"), 0),
                 parseInt(first(data, "maxStorageMb", "max_storage_mb"), 500),
                 boolInt(first(data, "enableAutoDelivery", "enable_auto_delivery")),
                 boolInt(first(data, "enableKami", "enable_kami")),
                 boolInt(first(data, "enableAiReply", "enable_ai_reply")),
                 boolInt(first(data, "enableWorkflow", "enable_workflow")),
+                textOrNull(first(data, "featuresText", "features_text")),
+                "month",
+                priceMonthCent,
+                priceQuarterCent,
+                priceYearCent,
                 parseStatus(first(data, "status")) == null ? 1 : parseStatus(first(data, "status"))
         );
         Long newId = jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
@@ -125,23 +132,30 @@ public class BillingPlanService {
         if (exists != null && exists > 0) {
             throw new BizException(400, "套餐编码已存在");
         }
+        long priceMonthCent = parsePeriodMoneyCentWithDefault(data, "priceMonth", "priceMonthCent", "price_month_cent", ((Number) old.get("priceMonthCent")).longValue());
+        long priceQuarterCent = parsePeriodMoneyCentWithDefault(data, "priceQuarter", "priceQuarterCent", "price_quarter_cent", ((Number) old.get("priceQuarterCent")).longValue());
+        long priceYearCent = parsePeriodMoneyCentWithDefault(data, "priceYear", "priceYearCent", "price_year_cent", ((Number) old.get("priceYearCent")).longValue());
+        // price_cent 跟随月度价格，兼容旧逻辑
+        long priceCent = priceMonthCent;
         jdbcTemplate.update(
-                "UPDATE billing_plan SET plan_name=?, plan_code=?, price_cent=?, duration_days=?, max_xianyu_accounts=?, max_goods_count=?, " +
-                        "max_ai_reply_per_day=?, max_workflow_per_day=?, max_storage_mb=?, enable_auto_delivery=?, enable_kami=?, enable_ai_reply=?, enable_workflow=?, status=?, updated_time=NOW() " +
+                "UPDATE billing_plan SET plan_name=?, plan_code=?, price_cent=?, duration_days=?, " +
+                        "max_storage_mb=?, enable_auto_delivery=?, enable_kami=?, enable_ai_reply=?, enable_workflow=?, " +
+                        "features_text=?, period_type=?, price_month_cent=?, price_quarter_cent=?, price_year_cent=?, status=?, updated_time=NOW() " +
                         "WHERE id=? AND deleted=0",
                 planName,
                 planCode,
-                parseMoneyCentWithDefault(data, ((Number) old.get("priceCent")).longValue()),
+                priceCent,
                 parseInt(first(data, "durationDays", "duration_days"), ((Number) old.get("durationDays")).intValue()),
-                parseInt(first(data, "maxAccounts", "maxXianyuAccounts", "max_xianyu_accounts"), ((Number) old.get("maxAccounts")).intValue()),
-                parseInt(first(data, "maxGoodsCount", "max_goods_count"), ((Number) old.get("maxGoodsCount")).intValue()),
-                parseInt(first(data, "aiQuota", "maxAiReplyPerDay", "max_ai_reply_per_day"), ((Number) old.get("aiQuota")).intValue()),
-                parseInt(first(data, "maxWorkflowPerDay", "max_workflow_per_day"), ((Number) old.get("maxWorkflowPerDay")).intValue()),
                 parseInt(first(data, "maxStorageMb", "max_storage_mb"), ((Number) old.get("maxStorageMb")).intValue()),
                 data.containsKey("enableAutoDelivery") || data.containsKey("enable_auto_delivery") ? boolInt(first(data, "enableAutoDelivery", "enable_auto_delivery")) : boolInt(old.get("enableAutoDelivery")),
                 data.containsKey("enableKami") || data.containsKey("enable_kami") ? boolInt(first(data, "enableKami", "enable_kami")) : boolInt(old.get("enableKami")),
                 data.containsKey("enableAiReply") || data.containsKey("enable_ai_reply") ? boolInt(first(data, "enableAiReply", "enable_ai_reply")) : boolInt(old.get("enableAiReply")),
                 data.containsKey("enableWorkflow") || data.containsKey("enable_workflow") ? boolInt(first(data, "enableWorkflow", "enable_workflow")) : boolInt(old.get("enableWorkflow")),
+                data.containsKey("featuresText") || data.containsKey("features_text") ? textOrNull(first(data, "featuresText", "features_text")) : old.get("featuresText"),
+                "month",
+                priceMonthCent,
+                priceQuarterCent,
+                priceYearCent,
                 parseStatus(first(data, "status")) == null ? parseStatus(old.get("status")) : parseStatus(first(data, "status")),
                 id
         );
@@ -193,21 +207,21 @@ public class BillingPlanService {
 
     private String baseSelect() {
         return "SELECT id, plan_name, plan_code, price_cent, duration_days, max_xianyu_accounts, max_goods_count, " +
-                "max_ai_reply_per_day, max_workflow_per_day, max_storage_mb, enable_auto_delivery, enable_kami, enable_ai_reply, enable_workflow, status, created_time, updated_time " +
+                "max_ai_reply_per_day, max_workflow_per_day, max_storage_mb, enable_auto_delivery, enable_kami, enable_ai_reply, enable_workflow, " +
+                "features_text, period_type, price_month_cent, price_quarter_cent, price_year_cent, status, created_time, updated_time " +
                 "FROM billing_plan";
     }
 
     private Map<String, Object> toMap(ResultSet rs) throws SQLException {
         Map<String, Object> row = new LinkedHashMap<>();
         long priceCent = rs.getLong("price_cent");
+        long priceMonthCent = rs.getLong("price_month_cent");
+        long priceQuarterCent = rs.getLong("price_quarter_cent");
+        long priceYearCent = rs.getLong("price_year_cent");
         String planCode = normalizePlanCode(rs.getString("plan_code"));
         String planName = rs.getString("plan_name");
         int durationDays = rs.getInt("duration_days");
         int status = rs.getInt("status");
-        int maxAccounts = rs.getInt("max_xianyu_accounts");
-        int maxGoods = rs.getInt("max_goods_count");
-        int aiQuota = rs.getInt("max_ai_reply_per_day");
-        int workflowQuota = rs.getInt("max_workflow_per_day");
         int storageMb = rs.getInt("max_storage_mb");
 
         row.put("id", rs.getLong("id"));
@@ -217,40 +231,45 @@ public class BillingPlanService {
         row.put("priceCent", priceCent);
         row.put("price", formatPrice(priceCent));
         row.put("priceYuan", BigDecimal.valueOf(priceCent).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP));
+        // 三周期价格（前台按 selectedPeriod 取对应值展示）
+        row.put("priceMonthCent", priceMonthCent);
+        row.put("priceQuarterCent", priceQuarterCent);
+        row.put("priceYearCent", priceYearCent);
+        row.put("priceMonth", formatPrice(priceMonthCent));
+        row.put("priceQuarter", formatPrice(priceQuarterCent));
+        row.put("priceYear", formatPrice(priceYearCent));
+        row.put("priceMonthYuan", BigDecimal.valueOf(priceMonthCent).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP));
+        row.put("priceQuarterYuan", BigDecimal.valueOf(priceQuarterCent).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP));
+        row.put("priceYearYuan", BigDecimal.valueOf(priceYearCent).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP));
         row.put("durationDays", durationDays);
         row.put("durationText", durationDays <= 0 ? "永久" : durationDays + "天");
-        row.put("maxAccounts", maxAccounts);
-        row.put("maxXianyuAccounts", maxAccounts);
-        row.put("maxGoodsCount", maxGoods);
-        row.put("aiQuota", aiQuota);
-        row.put("maxAiReplyPerDay", aiQuota);
-        row.put("maxWorkflowPerDay", workflowQuota);
         row.put("maxStorageMb", storageMb);
         row.put("enableAutoDelivery", rs.getInt("enable_auto_delivery") == 1);
         row.put("enableKami", rs.getInt("enable_kami") == 1);
         row.put("enableAiReply", rs.getInt("enable_ai_reply") == 1);
         row.put("enableWorkflow", rs.getInt("enable_workflow") == 1 ? "启用" : "禁用");
         row.put("enableWorkflowValue", rs.getInt("enable_workflow") == 1);
+        String featuresText = rs.getString("features_text");
+        row.put("featuresText", featuresText);
+        row.put("periodType", normalizePeriodType(rs.getString("period_type")));
         row.put("status", status == 1 ? "正常" : "禁用");
         row.put("statusValue", status);
-        row.put("features", buildFeatures(maxAccounts, maxGoods, aiQuota, workflowQuota, storageMb,
-                rs.getInt("enable_auto_delivery") == 1, rs.getInt("enable_kami") == 1,
-                rs.getInt("enable_ai_reply") == 1, rs.getInt("enable_workflow") == 1));
+        // features 严格按后台 featuresText 按行拆分；为空时返回空数组（前台展示空列表）
+        row.put("features", buildFeatures(featuresText));
         row.put("createdTime", rs.getTimestamp("created_time"));
         row.put("updatedTime", rs.getTimestamp("updated_time"));
         return row;
     }
 
-    private List<String> buildFeatures(int maxAccounts, int maxGoods, int aiQuota, int workflowQuota, int storageMb,
-                                       boolean autoDelivery, boolean kami, boolean aiReply, boolean workflow) {
-        // 套餐权益描述：仅展示功能开关，不再展示账号数/商品数/AI 额度/存储空间等数量限制
-        // 具体功能对比由后台「功能管理」统一维护，VIP 会员中心与个人中心共用同一份对比数据
-        List<String> features = new ArrayList<>();
-        if (autoDelivery) features.add("支持自动发货");
-        if (kami) features.add("支持卡密仓库");
-        if (aiReply) features.add("支持智能自动回复");
-        if (workflow) features.add("支持自动化工作流，每日 " + workflowQuota + " 次");
-        return features;
+    private List<String> buildFeatures(String featuresText) {
+        // 严格按后台自定义文本按行展示（每行一条权益）；为空时返回空数组
+        if (featuresText == null || featuresText.isBlank()) {
+            return Collections.emptyList();
+        }
+        return Arrays.stream(featuresText.split("\\r?\\n"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toList());
     }
 
     private String formatPrice(long priceCent) {
@@ -285,10 +304,25 @@ public class BillingPlanService {
     }
 
     private String normalizeLevel(String code) {
-        String c = normalizePlanCode(code);
-        if ("svp".equals(c)) return "svp";
-        if ("vip".equals(c)) return "vip";
+        if (code == null) return "normal";
+        String c = code.trim().toLowerCase(Locale.ROOT);
+        if (c.startsWith("svp") || c.startsWith("svip")) return "svp";
+        if (c.startsWith("vip")) return "vip";
         return "normal";
+    }
+
+    private String normalizePeriodType(Object value) {
+        if (value == null) return "month";
+        String s = String.valueOf(value).trim().toLowerCase(Locale.ROOT);
+        if ("quarter".equals(s) || "season".equals(s)) return "quarter";
+        if ("year".equals(s) || "annual".equals(s)) return "year";
+        return "month";
+    }
+
+    private String textOrNull(Object value) {
+        if (value == null) return null;
+        String s = String.valueOf(value).trim();
+        return s.isEmpty() ? null : s;
     }
 
     private Integer parseStatus(Object value) {
@@ -306,20 +340,27 @@ public class BillingPlanService {
         try { return Integer.parseInt(String.valueOf(value).replaceAll("[^0-9-]", "")); } catch (Exception e) { return def; }
     }
 
-    private long parseMoneyCent(Map<String, Object> data) {
-        return parseMoneyCentWithDefault(data, 0L);
+    /**
+     * 解析三周期价格之一（元 → 分）。0 表示未配置，允许传 0 / "0" / "免费"。
+     * 支持的 key 顺序：显示元值键（如 priceMonth）、分值键（如 priceMonthCent）、蛇形键（如 price_month_cent）。
+     */
+    private long parsePeriodMoneyCent(Map<String, Object> data, String... keys) {
+        return parsePeriodMoneyCentWithDefault(data, keys[0], keys[1], keys.length > 2 ? keys[2] : keys[1], 0L);
     }
 
-    private long parseMoneyCentWithDefault(Map<String, Object> data, long def) {
-        Object value = first(data, "priceCent", "price_cent");
-        if (value != null && !String.valueOf(value).isBlank()) {
-            if (value instanceof Number) return ((Number) value).longValue();
-            try { return Long.parseLong(String.valueOf(value).replaceAll("[^0-9-]", "")); } catch (Exception ignored) {}
+    private long parsePeriodMoneyCentWithDefault(Map<String, Object> data, String displayKey, String centKey, String snakeKey, long def) {
+        // 1. 优先读分值（如 priceMonthCent）
+        Object centValue = data.containsKey(centKey) ? data.get(centKey) : data.get(snakeKey);
+        if (centValue != null && !String.valueOf(centValue).isBlank()) {
+            if (centValue instanceof Number) return ((Number) centValue).longValue();
+            try { return Long.parseLong(String.valueOf(centValue).replaceAll("[^0-9-]", "")); } catch (Exception ignored) {}
         }
-        Object price = first(data, "price", "priceYuan");
-        if (price == null || String.valueOf(price).isBlank() || "免费".equals(String.valueOf(price))) return def;
+        // 2. 再读元值（如 priceMonth）
+        Object yuanValue = data.get(displayKey);
+        if (yuanValue == null || String.valueOf(yuanValue).isBlank() || "免费".equals(String.valueOf(yuanValue))) return def;
+        if (yuanValue instanceof Number) return ((Number) yuanValue).longValue() * 100;
         try {
-            String clean = String.valueOf(price).replace("¥", "").replace("元", "").trim();
+            String clean = String.valueOf(yuanValue).replace("¥", "").replace("元", "").trim();
             return new BigDecimal(clean).multiply(BigDecimal.valueOf(100)).longValue();
         } catch (Exception e) {
             return def;

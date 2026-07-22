@@ -4,6 +4,17 @@ server:
     encoding:
       charset: UTF-8
       force-response: true
+  # Tomcat thread pool tuning. Default threads.max=200 is too low for a backend
+  # that holds long-lived SSE connections (/api/sse/subscribe, timeout 86400s):
+  # each online SSE client occupies one Tomcat thread for its entire lifetime,
+  # so 200 concurrent SSE users would starve all API requests.
+  tomcat:
+    threads:
+      max: 400
+      min-spare: 25
+    accept-count: 100
+    max-connections: 8192
+    connection-timeout: 20s
 
 spring:
   application:
@@ -29,16 +40,35 @@ spring:
     hibernate:
       ddl-auto: none
     show-sql: false
+    properties:
+      hibernate:
+        # Batch INSERT/UPDATE to reduce round trips for bulk operations.
+        jdbc:
+          batch_size: 50
+          batch_versioned_data: true
+        order_inserts: true
+        order_updates: true
+        # Batch fetch lazy associations to avoid N+1 select queries.
+        default_batch_fetch_size: 25
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/xianyu_assistant_admin?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    # rewriteBatchedStatements=true rewrites multiple INSERT VALUES into a
+    # single multi-row INSERT, required for Hibernate batch_size to take effect.
+    url: jdbc:mysql://localhost:3306/xianyu_assistant_admin?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
     username: root
     password: 123456
     hikari:
       minimum-idle: 2
       maximum-pool-size: 20
+      # connection-timeout here is HikariCP's wait-for-connection timeout
+      # (NOT Tomcat's; see server.tomcat.connection-timeout above).
       connection-timeout: 10000
       max-lifetime: 1800000
+      # Reclaim idle connections before MySQL wait_timeout closes them.
+      idle-timeout: 600000
+      # Log a warning when a connection is held longer than 30s; helps spot
+      # long transactions that hold connections while doing HTTP calls.
+      leak-detection-threshold: 30000
   data:
     redis:
       host: ${REDIS_HOST:localhost}

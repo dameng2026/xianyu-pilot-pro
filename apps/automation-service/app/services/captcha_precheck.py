@@ -49,6 +49,14 @@ LEVEL_PRIORITY_MAP = {
     "normal": 0,
 }
 
+# 手动求解优先级提升值：手动求解（manual/manual_retry）比自动求解优先级高
+# 在基础会员等级优先级（SVIP=2/VIP=1/normal=0）上叠加此值
+# 最终优先级：手动 SVIP=102 > 手动 VIP=101 > 手动 normal=100 > 自动 SVIP=2 > 自动 VIP=1 > 自动 normal=0
+MANUAL_PRIORITY_BOOST = 100
+
+# 手动触发场景集合：用户在前台主动点击求解按钮的场景
+MANUAL_TRIGGER_SCENES = {"manual", "manual_retry"}
+
 
 async def precheck_cookie_status(account_id: int, tenant_id: int) -> tuple[bool, str, str]:
     """Cookie 状态预校验：调用 hasLogin API 验证 Cookie 是否有效。
@@ -234,49 +242,169 @@ async def precheck_account_active(account_id: int, tenant_id: int) -> tuple[bool
 
 
 async def lookup_account_priority(account_id: int, tenant_id: int) -> int:
-    """查询账号的会员等级并映射为优先级权重。
+    """查询账号的会员等级并映射为优先级权重（已弃用，改为 lookup_user_level）。
+
+    历史遗留：查询 xianyu_account_membership（账号级会员）。
+    现已合并到用户级会员（sys_user.vip_level），新代码应使用 lookup_user_level。
+    保留此函数仅为向前兼容，永远返回 0（避免历史调用方报错）。
 
     Args:
-        account_id: 账号 ID
-        tenant_id: 租户 ID
+        account_id: 账号 ID（已忽略）
+        tenant_id: 租户 ID（已忽略）
 
     Returns:
-        优先级权重：2=SVIP/SVP, 1=VIP, 0=普通。查询失败时返回 0。
+        永远返回 0（普通用户优先级）。新代码请用 lookup_user_level。
+    """
+    logger.debug(
+        "lookup_account_priority 已弃用，请改用 lookup_user_level accountId=%d",
+        account_id,
+    )
+    return 0
+
+
+async def lookup_user_level(tenant_id: int) -> tuple[str, int]:
+    """查询用户级会员等级与求解优先级权重。
+
+    优先级（基于 sys_user.vip_level，与 FeatureSwitchService 一致）：
+    - vip_level >= 2 → ('svp', 2) 最高优先级
+    - vip_level == 1 → ('vip', 1)
+    - 其他            → ('normal', 0) 最低优先级
+
+    一个用户的所有闲鱼账号共享同一等级。
+
+    Args:
+        tenant_id: 租户 ID（即用户 ID）
+
+    Returns:
+        (level_code, priority) - 查询失败时降级为 ('normal', 0)
     """
     try:
         async with async_session() as db:
             row = (await db.execute(
                 text("""
-                    SELECT m.level, m.membership_level, m.membership_type, m.status, m.is_expired
-                    FROM xianyu_account_membership m
-                    WHERE m.account_id = :aid AND m.tenant_id = :tid
-                    ORDER BY m.id DESC LIMIT 1
+                    SELECT vip_level
+                    FROM sys_user
+                    WHERE id = :uid AND COALESCE(deleted, 0) = 0
+                    LIMIT 1
                 """),
-                {"aid": account_id, "tid": tenant_id},
+                {"uid": tenant_id},
             )).mappings().first()
 
         if not row:
-            return 0
+            return ("normal", 0)
 
-        # 检查会员是否已过期
-        status = str(row.get("status") or "1")
-        is_expired = int(row.get("is_expired") or 0)
-        if status == "0" or is_expired == 1:
-            return 0
-
-        # 优先用 level 字段，fallback 到 membership_level / membership_type
-        level = str(row.get("level") or row.get("membership_level") or row.get("membership_type") or "normal").lower().strip()
-        priority = LEVEL_PRIORITY_MAP.get(level, 0)
+        vip_level = int(row.get("vip_level") or 0)
+        if vip_level >= 2:
+            level_code, priority = "svp", 2
+        elif vip_level == 1:
+            level_code, priority = "vip", 1
+        else:
+            level_code, priority = "normal", 0
 
         logger.debug(
-            "账号优先级查询 accountId=%d level=%s priority=%d",
-            account_id, level, priority,
+            "用户级会员查询 tenantId=%d vipLevel=%d level=%s priority=%d",
+            tenant_id, vip_level, level_code, priority,
         )
-        return priority
+        return (level_code, priority)
 
     except Exception as e:
         log_service_failure(
-            logger, e, operation="lookup_account_priority",
-            tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
+            logger, e, operation="lookup_user_level",
+            tenant_id=tenant_id, level=logging.WARNING,
         )
-        return 0
+        return ("normal", 0)
+
+
+async def compute_solve_priority(tenant_id: int, trigger_scene: str = "manual") -> tuple[str, int]:
+    """查询用户级会员等级并根据触发场景计算最终求解优先级。
+
+    优先级策略：
+    1. 基础优先级由会员等级决定：SVIP=2 > VIP=1 > normal=0
+    2. 手动触发场景（manual/manual_retry）在基础优先级上叠加 MANUAL_PRIORITY_BOOST
+    3. 最终排序：手动 SVIP > 手动 VIP > 手动 normal > 自动 SVIP > 自动 VIP > 自动 normal
+
+    Args:
+        tenant_id: 租户 ID（即用户 ID）
+        trigger_scene: 触发场景（manual/manual_retry/ws_connect/cookie_keepalive/token_refresh）
+
+    Returns:
+        (level_code, priority) - level_code 为用户会员等级，priority 为排序优先级
+    """
+    level_code, base_priority = await lookup_user_level(tenant_id)
+    priority = base_priority
+    if trigger_scene in MANUAL_TRIGGER_SCENES:
+        priority = base_priority + MANUAL_PRIORITY_BOOST
+    logger.debug(
+        "求解优先级计算 tenantId=%d scene=%s level=%s basePriority=%d finalPriority=%d",
+        tenant_id, trigger_scene, level_code, base_priority, priority,
+    )
+    return (level_code, priority)
+
+
+# 功能开关默认值（与 Java FeatureSwitchService.DEFAULT_FEATURES 一致）
+# 仅同步 auto-slider-solve 的默认值，用于 admin_module_record 无配置时降级
+_FEATURE_DEFAULT_AUTO_SLIDER_SOLVE = {
+    "normal": False,
+    "vip": True,
+    "svp": True,
+}
+
+
+async def is_auto_slider_solve_allowed(tenant_id: int) -> tuple[bool, str]:
+    """查询当前用户的「自动滑块求解」功能开关是否开启。
+
+    数据来源：
+    1. sys_user.vip_level → 用户等级
+    2. admin_module_record (module_key='user_feature_switch') → 功能开关 JSON
+    3. 合并默认值（_FEATURE_DEFAULT_AUTO_SLIDER_SOLVE）
+
+    Args:
+        tenant_id: 租户 ID（即用户 ID）
+
+    Returns:
+        (allowed, level_code)
+        - allowed: True=允许自动求解, False=应静默跳过
+        - level_code: 用户等级（normal/vip/svp）
+        查询失败时降级为 (True, 'normal') 避免锁死用户主流程。
+    """
+    level_code, _priority = await lookup_user_level(tenant_id)
+
+    try:
+        async with async_session() as db:
+            row = (await db.execute(
+                text("""
+                    SELECT json_text
+                    FROM admin_module_record
+                    WHERE module_key = 'user_feature_switch'
+                      AND status = 'config'
+                      AND COALESCE(deleted, 0) = 0
+                    ORDER BY id ASC LIMIT 1
+                """),
+            )).mappings().first()
+
+        if not row or not row.get("json_text"):
+            # 无配置记录：使用默认值
+            allowed = _FEATURE_DEFAULT_AUTO_SLIDER_SOLVE.get(level_code, False)
+            return (bool(allowed), level_code)
+
+        import json
+        config = json.loads(str(row.get("json_text")))
+        features = config.get("features") or {}
+        auto_switch = features.get("auto-slider-solve") or {}
+
+        # 合并默认值：存储配置优先，缺失字段用默认值
+        level_on = bool(auto_switch.get(level_code, _FEATURE_DEFAULT_AUTO_SLIDER_SOLVE.get(level_code, False)))
+
+        logger.debug(
+            "自动滑块求解开关查询 tenantId=%d level=%s allowed=%s",
+            tenant_id, level_code, level_on,
+        )
+        return (level_on, level_code)
+
+    except Exception as e:
+        log_service_failure(
+            logger, e, operation="is_auto_slider_solve_allowed",
+            tenant_id=tenant_id, level=logging.WARNING,
+        )
+        # 查询失败降级放行，避免锁死 WS 主流程
+        return (True, level_code)

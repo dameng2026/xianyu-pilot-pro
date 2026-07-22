@@ -157,7 +157,8 @@
             >
               <ElOption label="成功" value="success" />
               <ElOption label="失败" value="fail" />
-              <ElOption label="进行中" value="retrying" />
+              <ElOption label="求解中" value="retrying" />
+              <ElOption label="排队中" value="queued" />
             </ElSelect>
             <ElSelect
               v-model="listQuery.triggerScene"
@@ -341,7 +342,8 @@
   const statusLabel = (status?: string) => {
     if (status === 'success') return '成功'
     if (status === 'fail') return '失败'
-    if (status === 'retrying') return '进行中'
+    if (status === 'retrying') return '求解中'
+    if (status === 'queued') return '排队中'
     return status || '—'
   }
 
@@ -349,6 +351,7 @@
     if (status === 'success') return 'success'
     if (status === 'fail') return 'danger'
     if (status === 'retrying') return 'warning'
+    if (status === 'queued') return 'primary'
     return 'info'
   }
 

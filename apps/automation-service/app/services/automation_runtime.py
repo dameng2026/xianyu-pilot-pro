@@ -59,6 +59,11 @@ from app.services.upload_governance import store_governed_image
 
 logger = logging.getLogger(__name__)
 
+# 生图模型配置缓存（60s TTL，避免每个生图节点都查库）
+# 缓存中间结果（general_cfg + img_cfgs 列表），node_model_key 排序仍每次执行
+_image_model_cache: dict = {}
+_IMAGE_MODEL_TTL = 60
+
 _SCHEDULED_TASK_LEASE_SECONDS = 5 * 60
 _SCHEDULED_TASK_EXECUTOR_ID = f"{settings.app_name}:{uuid.uuid4().hex}"[:120]
 
@@ -1514,11 +1519,16 @@ def _workflow_search_with_fallback(
     复用商机发掘已验证的搜索降级机制（auto 智能模式先快后慢自动降级），
     遵守硬约束：不刷新 _m_h5_tk，直接使用原始 Cookie。
     返回 (items, searchMode)。
+
+    ★ 当 auto 模式下 fast 触发 Baxia 风控（PRODUCT_SEARCH_RATE_LIMITED）且 slow 也失败时，
+      抛出 PublicRuntimeError(PRODUCT_SEARCH_RATE_LIMITED)，让上层 PRODUCT_FETCH 能检测到
+      风控信号并切换后续关键词为 slow 模式，避免继续撞 MTOP 风控墙。
     """
     mode = (mode or "auto").lower().strip()
     if mode not in ("fast", "slow", "auto"):
         mode = "auto"
 
+    fast_rate_limited = False
     if mode in ("fast", "auto"):
         try:
             items = _workflow_search_fast(keyword, page, page_size, cookie_str)
@@ -1526,15 +1536,33 @@ def _workflow_search_with_fallback(
                 logger.info("[PRODUCT_FETCH] 快速搜索成功 keyword=%s count=%d", keyword, len(items))
                 return items, "fast"
             logger.info("[PRODUCT_FETCH] 快速搜索无结果 keyword=%s，尝试慢速搜索", keyword)
+        except PublicRuntimeError as e:
+            _log_runtime_failure("workflow_search_fast", e)
+            if mode == "fast":
+                raise
+            # auto 模式：记录是否为 Baxia 风控，用于后续策略切换
+            if e.error_code == "PRODUCT_SEARCH_RATE_LIMITED":
+                fast_rate_limited = True
         except Exception as e:
             _log_runtime_failure("workflow_search_fast", e)
             if mode == "fast":
                 raise
 
     # 慢速搜索（Playwright 浏览器）
-    items = _workflow_search_slow(keyword, page, page_size, tenant_id, cookie_str)
-    logger.info("[PRODUCT_FETCH] 慢速搜索成功 keyword=%s count=%d", keyword, len(items))
-    return items, "slow"
+    try:
+        items = _workflow_search_slow(keyword, page, page_size, tenant_id, cookie_str)
+        logger.info("[PRODUCT_FETCH] 慢速搜索成功 keyword=%s count=%d", keyword, len(items))
+        return items, "slow"
+    except Exception as slow_err:
+        # ★ 如果 fast 触发了 Baxia 风控，且 slow 也失败，
+        #   抛出风控异常让上层 PRODUCT_FETCH 切换后续关键词为 slow 模式
+        if fast_rate_limited:
+            logger.warning("[PRODUCT_FETCH] keyword=%s fast 触发风控且 slow 也失败，向上抛出风控信号", keyword)
+            raise PublicRuntimeError(
+                "PRODUCT_SEARCH_RATE_LIMITED",
+                f"快速搜索触发平台验证，慢速搜索也失败：{slow_err}",
+            )
+        raise
 
 
 # ---- crawler-service HTTP 内部调用头 ----
@@ -3424,7 +3452,8 @@ async def _run_redelivery_task(db: AsyncSession, tenant_id: int, task: dict[str,
         is_bargain_for_confirm = _safe_int(row.get("is_bargain")) == 1
         try:
             from .xianyu_api_service import confirm_order_shipment
-            confirm_result = confirm_order_shipment(
+            confirm_result = await asyncio.to_thread(
+                confirm_order_shipment,
                 account_id,
                 external_order_id_for_confirm,
                 is_bargain=is_bargain_for_confirm,
@@ -4961,7 +4990,8 @@ async def execute_delivery_for_order(db: AsyncSession, order: dict[str, Any]) ->
         try:
             from .xianyu_api_service import confirm_order_shipment
             is_bargain = _safe_int(order.get("is_bargain")) == 1
-            confirm_result = confirm_order_shipment(
+            confirm_result = await asyncio.to_thread(
+                confirm_order_shipment,
                 account_id,
                 external_order_id,
                 is_bargain=is_bargain,
@@ -8313,20 +8343,56 @@ async def _execute_workflow_node(
                      current_page, len(previous_items), target_count)
 
         # 5) 逐关键词搜索，收集所有商品到池中（不再每词只取1个）
-        #    搜索完所有关键词后，从池中随机打乱选取 target_count 个
+        #    搜索完所有关键词后，从池中按关键词均衡选取 target_count 个
         #    遵守硬约束：不刷新 _m_h5_tk，直接使用原始 Cookie
+        #    ★ 修复：连续 MTOP 调用会触发 Baxia 风控（第2次起即被拦截），
+        #      需在关键词之间增加间隔；检测到风控后，后续关键词直接走 slow 模式；
+        #      慢速搜索之间也增加间隔，避免 crawler-service 并发资源争用导致 500。
         new_items: list[dict] = []
         steps: list[dict] = []
-        search_mode = _text(config.get("fetchMode") or config.get("searchMode") or "auto")
-        for kw in selected_keywords:
+        user_search_mode = _text(config.get("fetchMode") or config.get("searchMode") or "auto")
+        # 运行期模式：检测到风控后切换为 slow，避免继续撞 MTOP 风控墙
+        runtime_search_mode = user_search_mode
+        baxia_triggered = False
+        # 每个关键词搜索后的间隔（秒）：fast 成功后小间隔，slow/失败后大间隔
+        FAST_OK_INTERVAL = 1.5
+        SLOW_INTERVAL = 2.0
+
+        for kw_idx, kw in enumerate(selected_keywords):
+            # 关键词之间的间隔：从第2个关键词开始等待，降低 Baxia 风控触发概率
+            if kw_idx > 0:
+                _interval = SLOW_INTERVAL if baxia_triggered else FAST_OK_INTERVAL
+                await asyncio.sleep(_interval)
+
             try:
                 raw_items_list, used_mode = await asyncio.to_thread(
                     _workflow_search_with_fallback,
-                    kw, current_page, 20, tenant_id, cookie_str, search_mode,
+                    kw, current_page, 20, tenant_id, cookie_str, runtime_search_mode,
                 )
+            except PublicRuntimeError as e:
+                _log_runtime_failure("search_workflow_products", e)
+                # ★ 检测到 Baxia 风控：后续关键词直接走 slow 模式，不再撞 MTOP
+                if e.error_code == "PRODUCT_SEARCH_RATE_LIMITED" and not baxia_triggered:
+                    baxia_triggered = True
+                    runtime_search_mode = "slow"
+                    logger.warning("[PRODUCT_FETCH] keyword=%s 触发风控，后续关键词切换为 slow 模式", kw)
+                    steps.append({
+                        "step": f"搜索[{kw}]",
+                        "status": "error",
+                        "errorCode": "PRODUCT_SEARCH_RATE_LIMITED",
+                        "detail": f"快速搜索触发平台验证，已切换后续关键词为慢速搜索",
+                    })
+                else:
+                    steps.append({
+                        "step": f"搜索[{kw}]",
+                        "status": "error",
+                        "errorCode": e.error_code,
+                        "detail": f"搜索失败：{e.public_message}",
+                    })
+                continue
             except Exception as e:
                 _log_runtime_failure("search_workflow_products", e)
-                steps.append({"step": "商品搜索", "status": "error", "errorCode": "PRODUCT_SEARCH_UNAVAILABLE", "detail": "商品搜索服务暂时不可用"})
+                steps.append({"step": f"搜索[{kw}]", "status": "error", "errorCode": "PRODUCT_SEARCH_UNAVAILABLE", "detail": "商品搜索服务暂时不可用"})
                 continue
 
             logger.info("[PRODUCT_FETCH] 搜索 keyword=%s page=%d mode=%s 原始商品数=%d",
@@ -8395,25 +8461,66 @@ async def _execute_workflow_node(
         state["all_fetched_items"] = combined_pool  # 保留完整池供重试追加
         state["product_fetch_page"] = current_page + 1  # 下次获取下一页
 
-        # 随机打乱整个池，选取 target_count 个作为最终结果
+        # ★ 按关键词均衡选取 target_count 个商品，避免全部商品来自单一关键词。
+        #   策略：按 keyword 分组，每组内部随机打乱，然后 round-robin 轮询选取，
+        #   确保每个成功关键词至少贡献 1 个商品（当 target_count >= 关键词数时）。
+        #   仅当 combined_pool 数量 > target_count 时才需要选取；否则全部保留。
         if len(combined_pool) > target_count:
-            # 复制后打乱，不修改原始池（保留池供重试使用）
-            pool_copy = list(combined_pool)
-            random.shuffle(pool_copy)
-            selected = pool_copy[:target_count]
+            # 按 keyword 分组（previous_items 中的商品可能没有 keyword 字段，归入 "历史" 组）
+            kw_buckets: dict[str, list[dict]] = {}
+            for _item in combined_pool:
+                _kw = _text(_item.get("keyword", "")) if isinstance(_item, dict) else ""
+                if not _kw:
+                    _kw = "历史商品"
+                kw_buckets.setdefault(_kw, []).append(_item)
+            # 每组内部随机打乱，保证同关键词内商品多样性
+            for _bucket in kw_buckets.values():
+                random.shuffle(_bucket)
+            # round-robin 轮询选取：从每个关键词组依次取1个，循环直到填满 target_count
+            selected: list[dict] = []
+            _bucket_keys = list(kw_buckets.keys())
+            # 按组数量降序排列，优先从大组取，避免小组提前耗尽后轮空
+            _bucket_keys.sort(key=lambda k: len(kw_buckets[k]), reverse=True)
+            _exhausted: set[str] = set()
+            while len(selected) < target_count and len(_exhausted) < len(_bucket_keys):
+                for _bk in _bucket_keys:
+                    if len(selected) >= target_count:
+                        break
+                    if _bk in _exhausted:
+                        continue
+                    _bucket = kw_buckets[_bk]
+                    if not _bucket:
+                        _exhausted.add(_bk)
+                        continue
+                    selected.append(_bucket.pop(0))
         else:
             selected = list(combined_pool)
 
-        logger.info("[PRODUCT_FETCH] 完成 池大小=%d 选取=%d 目标=%d page=%d",
-                     len(combined_pool), len(selected), target_count, current_page)
+        # 统计实际选中的关键词分布
+        _selected_kw_dist: dict[str, int] = {}
+        for _s in selected:
+            _kw = _text(_s.get("keyword", "")) if isinstance(_s, dict) else ""
+            _kw = _kw or "历史商品"
+            _selected_kw_dist[_kw] = _selected_kw_dist.get(_kw, 0) + 1
+        _kw_dist_str = ", ".join(f"{k}={v}" for k, v in _selected_kw_dist.items())
+
+        logger.info("[PRODUCT_FETCH] 完成 池大小=%d 选取=%d 目标=%d page=%d 关键词分布=[%s]",
+                     len(combined_pool), len(selected), target_count, current_page, _kw_dist_str)
 
         # 实际使用的关键词（用于前端展示，避免显示固定第一个关键词产生误导）
         used_keywords_display = ", ".join(selected_keywords) if selected_keywords else ""
 
+        # ★ 当多个关键词搜索失败、结果集中来自单一关键词时，明确告知用户
+        _success_kw_count = len([k for k, v in _selected_kw_dist.items() if v > 0 and k != "历史商品"])
+        if _success_kw_count <= 1 and len(selected_keywords) > 1 and len(selected) > 0:
+            _warning_msg = f"成功获取 {len(selected)} 个商品，但仅 {_success_kw_count} 个关键词搜索成功（共 {len(selected_keywords)} 个），建议稍后重试或检查账号风控状态"
+        else:
+            _warning_msg = f"成功获取 {len(selected)} 个商品（商品池 {len(combined_pool)} 个，按关键词均衡选取 {len(selected)} 个）"
+
         return {
             "ok": len(selected) > 0,
             "errorCode": "" if selected else "PRODUCT_SEARCH_EMPTY",
-            "message": f"成功获取 {len(selected)} 个商品（商品池 {len(combined_pool)} 个，随机选取 {len(selected)} 个）" if selected else "未获取到商品",
+            "message": _warning_msg if selected else "未获取到商品",
             "items": selected, "count": len(selected),
             "keyword": used_keywords_display,
             "artifactType": "goods", "artifactTitle": "商品获取",
@@ -8421,6 +8528,7 @@ async def _execute_workflow_node(
                 "count": len(selected), "items": selected,
                 "keyword": used_keywords_display,
                 "poolSize": len(combined_pool),
+                "keywordDistribution": _selected_kw_dist,
             },
             "steps": steps,
         }
@@ -8605,33 +8713,45 @@ async def _execute_workflow_node(
         node_model_key = _text(config.get("modelKey") or "").strip()
         image_configs: list[dict] = []
         try:
-            rows = (await db.execute(text("""
-                SELECT module_key, status, json_text FROM admin_module_record
-                WHERE module_key IN ('model-config-general', 'model-config-image', 'model-config-image-2', 'model-config-image-3')
-                  AND deleted=0
-                ORDER BY id ASC
-            """))).mappings().all()
-            general_cfg = {}
-            img_cfgs = []
-            for r in rows:
-                mk = _text(r.get("module_key"))
-                try:
-                    cfg = json.loads(r.get("json_text") or "{}")
-                except Exception:
-                    cfg = {}
-                # ★ 与 Java isEnabled() 一致：检查 JSON 内的 enabled/status 字段
-                cfg_enabled = _text(cfg.get("enabled", "")).strip()
-                cfg_status = _text(cfg.get("status", "")).strip()
-                if cfg_enabled in ("false", "0") or cfg_enabled.lower() == "false":
-                    continue
-                if cfg_status in ("禁用", "0") or cfg_status.lower() == "false":
-                    continue
-                if mk == "model-config-general":
-                    general_cfg = cfg
-                else:
-                    # 标记该配置的 module_key，用于后续按 modelKey 排序
-                    cfg["__module_key__"] = mk
-                    img_cfgs.append(cfg)
+            # 缓存中间结果（general_cfg + img_cfgs）60s，避免每个生图节点都查库
+            # node_model_key 排序每次都执行，因为不同节点可能指定不同 modelKey
+            import time as _time
+            now = _time.time()
+            cached = _image_model_cache.get("data")
+            cached_ts = _image_model_cache.get("ts", 0)
+            if cached and (now - cached_ts) < _IMAGE_MODEL_TTL:
+                general_cfg = cached.get("general_cfg", {})
+                img_cfgs = cached.get("img_cfgs", [])
+            else:
+                rows = (await db.execute(text("""
+                    SELECT module_key, status, json_text FROM admin_module_record
+                    WHERE module_key IN ('model-config-general', 'model-config-image', 'model-config-image-2', 'model-config-image-3')
+                      AND deleted=0
+                    ORDER BY id ASC
+                """))).mappings().all()
+                general_cfg = {}
+                img_cfgs = []
+                for r in rows:
+                    mk = _text(r.get("module_key"))
+                    try:
+                        cfg = json.loads(r.get("json_text") or "{}")
+                    except Exception:
+                        cfg = {}
+                    # ★ 与 Java isEnabled() 一致：检查 JSON 内的 enabled/status 字段
+                    cfg_enabled = _text(cfg.get("enabled", "")).strip()
+                    cfg_status = _text(cfg.get("status", "")).strip()
+                    if cfg_enabled in ("false", "0") or cfg_enabled.lower() == "false":
+                        continue
+                    if cfg_status in ("禁用", "0") or cfg_status.lower() == "false":
+                        continue
+                    if mk == "model-config-general":
+                        general_cfg = cfg
+                    else:
+                        # 标记该配置的 module_key，用于后续按 modelKey 排序
+                        cfg["__module_key__"] = mk
+                        img_cfgs.append(cfg)
+                _image_model_cache["data"] = {"general_cfg": general_cfg, "img_cfgs": img_cfgs}
+                _image_model_cache["ts"] = now
             # 生图配置继承 general 的 baseUrl/apiKey（若自身未设置）
             for cfg in img_cfgs:
                 merged = dict(general_cfg)

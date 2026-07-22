@@ -19,6 +19,7 @@ public class XianyuTradeOrderVO {
     private LocalDateTime payTime;
     private LocalDateTime shipTime;
     private String itemSummary;
+    private String sellerRemark;
     private Integer quantityTotal;
     private String deliveryMethod;
     private String deliveryStatus;
@@ -55,6 +56,8 @@ public class XianyuTradeOrderVO {
     public void setShipTime(LocalDateTime shipTime) { this.shipTime = shipTime; }
     public String getItemSummary() { return itemSummary; }
     public void setItemSummary(String itemSummary) { this.itemSummary = itemSummary; }
+    public String getSellerRemark() { return sellerRemark; }
+    public void setSellerRemark(String sellerRemark) { this.sellerRemark = sellerRemark; }
     public Integer getQuantityTotal() { return quantityTotal; }
     public void setQuantityTotal(Integer quantityTotal) { this.quantityTotal = quantityTotal; }
     public String getDeliveryMethod() { return deliveryMethod; }

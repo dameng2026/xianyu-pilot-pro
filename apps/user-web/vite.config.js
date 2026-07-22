@@ -19,10 +19,27 @@ export default defineConfig({
   build: {
     minify: 'oxc',
     sourcemap: false,
+    // ES2018 target drops legacy polyfills and shrinks bundle size.
+    target: 'es2018',
+    // Split CSS per route so opening the products page does not load order CSS.
+    cssCodeSplit: true,
+    // Inline assets below 8KB as base64 to cut HTTP request count (icons, small SVGs).
+    assetsInlineLimit: 8192,
+    // Larger warning threshold to avoid noise from echarts vendor chunk.
+    chunkSizeWarningLimit: 1200,
     // Keep Vite 8's native Oxc minifier and remove production diagnostics
     // that may otherwise retain account/event objects in the browser bundle.
     rolldownOptions: {
       output: {
+        // Split vendor bundles so that app code changes do not invalidate
+        // the long-lived cache for stable third-party libraries (echarts/vue).
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (id.includes('echarts') || id.includes('zrender')) return 'vendor-echarts'
+          if (id.includes('vue') || id.includes('pinia') || id.includes('vue-router')) return 'vendor-vue'
+          if (id.includes('axios') || id.includes('crypto-js') || id.includes('qrcode') || id.includes('file-saver')) return 'vendor-utils'
+          return 'vendor'
+        },
         minify: {
           compress: {
             // 保留 console.error / console.warn 用于线上排障；仅移除 log/info/debug/trace 等纯诊断输出
