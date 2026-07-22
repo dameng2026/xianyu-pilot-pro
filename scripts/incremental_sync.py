@@ -138,10 +138,12 @@ def collect_remote_files(
 
 
 def _ensure_remote_dir_sftp(sftp, remote_path: str) -> None:
-    """通过 SFTP 递归创建远端目录（类似于 mkdir -p）。"""
-    # 取 parent 目录
+    """通过 SFTP 递归创建远端目录（类似于 mkdir -p）。
+
+    并发安全：多个线程可能同时创建同一目录，mkdir 失败时
+    如果目录已存在（stat 成功）则忽略错误。
+    """
     parent = str(PurePosixPath(remote_path).parent)
-    # 逐级创建
     parts = parent.split("/")
     cur = ""
     for part in parts:
@@ -152,7 +154,14 @@ def _ensure_remote_dir_sftp(sftp, remote_path: str) -> None:
         try:
             sftp.stat(cur)
         except FileNotFoundError:
-            sftp.mkdir(cur)
+            try:
+                sftp.mkdir(cur)
+            except OSError:
+                # 并发竞态：另一个线程可能已创建此目录，确认存在即可
+                try:
+                    sftp.stat(cur)
+                except FileNotFoundError:
+                    raise
 
 
 def _concurrent_upload(
