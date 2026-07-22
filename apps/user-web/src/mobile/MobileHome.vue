@@ -393,10 +393,9 @@ const trendValues = computed(() => {
   if (trendTab.value === 'order') {
     return trendData.value?.orderCount || []
   }
-  return orderMsgTrend.value?.messageCount || orderMsgTrend.value?.orderCount || []
+  // 消息趋势：优先用 order-message-trend 接口的 messageCount，回退到 sales-trend 的 messageCount
+  return orderMsgTrend.value?.messageCount || trendData.value?.messageCount || []
 })
-
-const trendDates = computed(() => trendData.value?.dates || orderMsgTrend.value?.dates || [])
 
 const trendTotal = computed(() => trendValues.value.reduce((a, b) => a + Number(b || 0), 0))
 
