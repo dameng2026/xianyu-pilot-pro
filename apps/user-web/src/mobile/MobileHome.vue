@@ -845,4 +845,195 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 .m-stats-amount { font-weight: var(--m-font-weight-semibold); }
-.m-stats-se
+.m-stats-sep { opacity: 0.5; }
+
+/* ============ 经营指标网格 ============ */
+.m-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--m-space-3);
+}
+.m-stat-cell {
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3);
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-3);
+  cursor: pointer;
+  transition: transform 0.15s;
+  box-shadow: var(--m-shadow-card);
+}
+.m-stat-cell:active { transform: scale(0.98); }
+.m-stat-cell-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--m-radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.m-stat-cell-icon--warning { background: var(--m-color-warning-bg); color: var(--m-color-warning); }
+.m-stat-cell-icon--success { background: var(--m-color-success-bg); color: var(--m-color-success); }
+.m-stat-cell-icon--info { background: var(--m-color-info-bg); color: var(--m-color-info); }
+.m-stat-cell-icon--primary { background: var(--m-color-primary-bg); color: var(--m-color-primary); }
+.m-stat-cell-body { flex: 1; min-width: 0; }
+.m-stat-cell-label {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+}
+.m-stat-cell-value {
+  margin-top: 2px;
+  font-size: var(--m-font-size-h2);
+  font-weight: var(--m-font-weight-bold);
+  color: var(--m-color-text-primary);
+  line-height: 1.1;
+}
+.m-stat-cell-value.is-warn { color: var(--m-color-warning-text); }
+.m-stat-cell-desc {
+  margin-top: 2px;
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-tertiary);
+}
+
+/* ============ 骨架屏 ============ */
+.m-stats-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--m-space-3);
+}
+.m-skel-card {
+  height: 92px;
+  border-radius: var(--m-radius-xl);
+  background: linear-gradient(90deg, var(--m-color-bg-subtle) 25%, var(--m-color-bg-card) 50%, var(--m-color-bg-subtle) 75%);
+  background-size: 200% 100%;
+  animation: m-skel 1.4s ease infinite;
+}
+@keyframes m-skel {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ============ 快捷入口 ============ */
+.m-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: var(--m-space-2);
+}
+.m-quick-item {
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3) var(--m-space-1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--m-space-2);
+  cursor: pointer;
+  transition: transform 0.15s;
+  font: inherit;
+  box-shadow: var(--m-shadow-card);
+}
+.m-quick-item:active { transform: scale(0.96); }
+.m-quick-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--m-radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.m-quick-icon--green { background: var(--m-color-success-bg); color: var(--m-color-success); }
+.m-quick-icon--orange { background: var(--m-color-warning-bg); color: var(--m-color-warning); }
+.m-quick-icon--blue { background: var(--m-color-info-bg); color: var(--m-color-info); }
+.m-quick-icon--purple { background: var(--m-color-purple-bg); color: var(--m-color-purple); }
+.m-quick-icon--cyan { background: var(--m-color-primary-bg); color: var(--m-color-primary); }
+.m-quick-label {
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-secondary);
+  text-align: center;
+  line-height: 1.2;
+}
+
+/* ============ 数据趋势 ============ */
+.m-trend-card {
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-xl);
+  padding: var(--m-space-4);
+  box-shadow: var(--m-shadow-card);
+  color: var(--m-color-primary);
+}
+.m-trend-svg-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--m-space-2);
+}
+.m-trend-svg {
+  width: 100%;
+  height: 120px;
+  display: block;
+}
+.m-trend-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-secondary);
+}
+.m-trend-current { font-weight: var(--m-font-weight-semibold); }
+.m-trend-trend.is-up { color: var(--m-color-success); }
+.m-trend-trend.is-down { color: var(--m-color-danger); }
+.m-trend-loading,
+.m-trend-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--m-space-2);
+  height: 120px;
+  color: var(--m-color-text-tertiary);
+  font-size: var(--m-font-size-caption);
+  cursor: default;
+}
+.m-trend-error { cursor: pointer; color: var(--m-color-danger-text); }
+
+/* ============ 异常提醒 ============ */
+.m-alert-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--m-space-2);
+}
+.m-alert-row {
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-3);
+  padding: var(--m-space-3);
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-left-width: 3px;
+  border-radius: var(--m-radius-lg);
+  cursor: pointer;
+  transition: transform 0.15s;
+  box-shadow: var(--m-shadow-card);
+}
+.m-alert-row:active { transform: scale(0.99); }
+.m-alert-row--warning { border-left-color: var(--m-color-warning); background: var(--m-color-warning-bg); }
+.m-alert-row--warning .m-alert-row-icon { color: var(--m-color-warning); }
+.m-alert-row--danger { border-left-color: var(--m-color-danger); background: var(--m-color-danger-bg); }
+.m-alert-row--danger .m-alert-row-icon { color: var(--m-color-danger); }
+.m-alert-row-icon { flex-shrink: 0; }
+.m-alert-row-body { flex: 1; min-width: 0; }
+.m-alert-row-title {
+  font-size: var(--m-font-size-body-sm);
+  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-text-primary);
+}
+.m-alert-row-desc {
+  margin-top: 2px;
+  font-size: var(--m-font-size-tiny);
+  color: var(--m-color-text-tertiary);
+}
+.m-alert-row-count {
+  font-size: var(--m
