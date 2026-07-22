@@ -12,7 +12,7 @@ services:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
       MYSQL_USER: ${MYSQL_APP_USER:?MYSQL_APP_USER must be set}
       MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?MYSQL_APP_PASSWORD must be set}
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-time-zone=+08:00 --sort-buffer-size=4194304 --tmp-table-size=67108864 --max-heap-table-size=67108864 --binlog-expire-logs-seconds=172800 --max-binlog-size=256M
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-time-zone=+08:00 --sort-buffer-size=4194304 --tmp-table-size=67108864 --max-heap-table-size=67108864 --binlog-expire-logs-seconds=172800 --max-binlog-size=256M --innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-512M} --innodb-log-file-size=${MYSQL_INNODB_LOG_FILE_SIZE:-256M} --max-connections=${MYSQL_MAX_CONNECTIONS:-300} --innodb-flush-method=O_DIRECT --innodb-buffer-pool-instances=4
     logging:
       driver: json-file
       options:
@@ -27,7 +27,7 @@ services:
     stop_grace_period: 1m
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}", "--maxmemory", "${REDIS_MAXMEMORY:-512mb}", "--maxmemory-policy", "volatile-lru"]
     logging:
       driver: json-file
       options:
@@ -85,7 +85,7 @@ services:
       OPEN_SOURCE_BRIDGE_TOKEN: ${OPEN_SOURCE_BRIDGE_TOKEN:-}
       OPEN_SOURCE_BRIDGE_SITE_CODE: ${OPEN_SOURCE_BRIDGE_SITE_CODE:-open-source}
       OPEN_SOURCE_BRIDGE_SITE_NAME: ${OPEN_SOURCE_BRIDGE_SITE_NAME:-开源版}
-      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+      JAVA_TOOL_OPTIONS: "-XX:InitialRAMPercentage=75 -XX:MaxRAMPercentage=75 -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+ParallelRefProc -XX:+ExitOnOutOfMemoryError"
     healthcheck:
       test: ["CMD-SHELL", "curl --fail --silent --show-error http://127.0.0.1:18080/api/ops/readiness | grep -q '\"UP\"'"]
       interval: 15s

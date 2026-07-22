@@ -263,7 +263,7 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=256m
     environment:
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/xianyu_assistant_admin?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/xianyu_assistant_admin?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
       SPRING_DATASOURCE_USERNAME: ${MYSQL_APP_USER:-xianyu_app}
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_APP_PASSWORD:-dev-only-mysql-app-password-change-me}
       ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET must be set}
