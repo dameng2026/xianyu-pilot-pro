@@ -118,6 +118,7 @@ required=(
   ADMIN_JWT_SECRET
   JWT_SECRET
   COOKIE_CRYPTO_SECRET
+  API_KEY_CRYPTO_SECRET
   INTERNAL_API_TOKEN
   OPS_METRICS_TOKEN
   IMAGE_PROXY_ALLOWED_HOSTS
@@ -353,7 +354,7 @@ ok "Migration manifest and recovery evidence passed"
 declare -A seen_production_credentials=()
 for credential_key in \
   MYSQL_ROOT_PASSWORD MYSQL_APP_PASSWORD CRAWLER_DB_PASSWORD REDIS_PASSWORD \
-  ADMIN_JWT_SECRET JWT_SECRET COOKIE_CRYPTO_SECRET INTERNAL_API_TOKEN OPS_METRICS_TOKEN; do
+  ADMIN_JWT_SECRET JWT_SECRET COOKIE_CRYPTO_SECRET API_KEY_CRYPTO_SECRET INTERNAL_API_TOKEN OPS_METRICS_TOKEN; do
   credential_value="${!credential_key}"
   [[ -z "${seen_production_credentials[$credential_value]+x}" ]] \
     || fail "Production credentials must be distinct"
