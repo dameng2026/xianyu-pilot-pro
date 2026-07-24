@@ -31,7 +31,9 @@ logger = logging.getLogger(__name__)
 SCANNER_INTERVAL_SECONDS = 3600
 
 # 不活跃阈值（天）：超过此天数未登录前台则视为不活跃
-ACCOUNT_INACTIVE_DAYS = 3
+# 通过环境变量覆盖，默认 30 天（原 3 天过于激进，导致活跃用户被误排除）
+import os as _os
+ACCOUNT_INACTIVE_DAYS = int(_os.environ.get("INACTIVE_ACCOUNT_DAYS", "30"))
 
 
 async def scan_and_exclude_inactive_accounts() -> int:
