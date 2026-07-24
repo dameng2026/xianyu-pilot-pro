@@ -46,6 +46,9 @@ export interface CaptchaSolveKpi {
   total: number
   success: number
   fail: number
+  timeout: number
+  precheckRejected: number
+  serviceUnavailable: number
   successRate: number // 0~1
 }
 
@@ -55,6 +58,9 @@ export interface CaptchaSolveTrendPoint {
   total: number
   success: number
   fail: number
+  timeout: number
+  precheckRejected: number
+  serviceUnavailable: number
   successRate: number
 }
 
@@ -65,6 +71,9 @@ export interface CaptchaSolveAccountGroup {
   total: number
   success: number
   fail: number
+  timeout: number
+  precheckRejected: number
+  serviceUnavailable: number
   successRate: number
   lastSolveTime?: string
 }
@@ -87,6 +96,21 @@ export interface CaptchaStatsQuery {
 export function getCaptchaSolveStats(params: CaptchaStatsQuery = {}) {
   return request.get<any>({ url: '/admin/captcha-records/stats', params })
     .then(value => requireRecordPayload<Record<string, any>>(value, '滑块求解统计') as CaptchaSolveStats)
+}
+
+/** 队列实时状态 */
+export interface CaptchaQueueStatus {
+  queued: number
+  retrying: number
+  timeout: number
+  precheckRejected: number
+  workers: number
+}
+
+/** 查询队列实时状态（排队中/求解中任务数） */
+export function getCaptchaQueueStatus() {
+  return request.get<any>({ url: '/admin/captcha-records/queue-status' })
+    .then(value => requireRecordPayload<Record<string, any>>(value, '队列实时状态') as CaptchaQueueStatus)
 }
 
 /** 分页查询明细记录 */

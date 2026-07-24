@@ -62,6 +62,8 @@
       </button>
     </header>
 
+    <MaintenanceBanner />
+
     <div v-if="drawerOpen" class="m-drawer-mask" @click="drawerOpen = false"></div>
     <aside v-if="drawerOpen" class="m-drawer">
       <div class="m-drawer-header">
@@ -262,6 +264,12 @@
         @navigate="onSubNavigate"
         @force-desktop="goDesktop"
       />
+      <MobileApiSliderSolve
+        v-else-if="subPage === 'api-slider-solve'"
+        @navigate="onSubNavigate"
+        @force-desktop="goDesktop"
+        @back="backToMain"
+      />
     </main>
 
     <button
@@ -298,6 +306,7 @@
 <script setup>
 import { ref, onBeforeUnmount, onMounted, computed, nextTick } from 'vue'
 import MIcon from '../mobile/MIcon.vue'
+import MaintenanceBanner from './MaintenanceBanner.vue'
 import MobileHome from '../mobile/MobileHome.vue'
 import MobileMessages from '../mobile/MobileMessages.vue'
 import MobileNotifications from '../mobile/MobileNotifications.vue'
@@ -321,6 +330,7 @@ import MobileOrders from '../mobile/MobileOrders.vue'
 import MobileOrderDetail from '../mobile/MobileOrderDetail.vue'
 import MobileOpportunity from '../mobile/MobileOpportunity.vue'
 import MobileChatDetail from '../mobile/MobileChatDetail.vue'
+import MobileApiSliderSolve from '../mobile/MobileApiSliderSolve.vue'
 import MToast from '../mobile/components/MToast.vue'
 import { getCachedUsername } from '../utils/auth.js'
 import { currentUser } from '../api/system.js'
@@ -379,7 +389,8 @@ const drawerGroups = [
     items: [
       { key: 'profile-security', label: '安全设置', icon: 'shield', iconBg: 'rgba(51,128,255,0.1)', iconColor: '#3380ff' },
       { key: 'profile-ledger', label: 'Token 流水', icon: 'coins', iconBg: 'rgba(255,159,34,0.1)', iconColor: '#ff9f22' },
-      { key: 'profile-recharge', label: '充值记录', icon: 'dollar', iconBg: 'rgba(22,191,120,0.1)', iconColor: '#16bf78' }
+      { key: 'profile-recharge', label: '充值记录', icon: 'dollar', iconBg: 'rgba(22,191,120,0.1)', iconColor: '#16bf78' },
+      { key: 'api-slider-solve', label: 'API滑块求解', icon: 'link', iconBg: 'rgba(51,128,255,0.1)', iconColor: '#3380ff' }
     ]
   }
 ]
@@ -402,7 +413,8 @@ const mobileSubPages = {
   'order-detail': '订单详情',
   'profile-security': '账号安全',
   'profile-ledger': 'Token 流水',
-  'profile-recharge': '充值记录'
+  'profile-recharge': '充值记录',
+  'api-slider-solve': 'API滑块求解'
 }
 
 const activeTab = ref('home')
@@ -670,6 +682,8 @@ function handleSubBack() {
     backToMain()
   } else if (subPage.value === 'profile-security' || subPage.value === 'profile-ledger' || subPage.value === 'profile-recharge') {
     backToProfile()
+  } else if (subPage.value === 'api-slider-solve') {
+    backToMain()
   } else if (subPage.value === 'products' || subPage.value === 'accounts' || subPage.value === 'opportunity') {
     backToMain()
   } else {

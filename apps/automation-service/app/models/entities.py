@@ -229,6 +229,10 @@ class CardGroup(Base):
     group_type = Column(String(50), default="kami")
     total_count = Column(Integer, default=0)
     used_count = Column(Integer, default=0)
+    # remain_count 与 available_count 语义相同（均 = status=0 的未使用卡密数），
+    # 但 Java 端 CardGroupMapper.refreshCounts 和前端（卡密仓库/货源库页面）读取的是 remain_count，
+    # 因此 Python 端必须同时维护两个字段，否则前端显示的"可用/库存"数量会停留在旧值。
+    remain_count = Column(Integer, default=0)
     available_count = Column(Integer, default=0)
     remark = Column(Text, nullable=True)
     status = Column(SmallInteger, default=1)
@@ -797,4 +801,35 @@ class XianyuCaptchaSolveRecord(Base):
     queued_at = Column(DateTime, nullable=True, comment="入队时间")
     started_at = Column(DateTime, nullable=True, comment="开始处理时间")
     finished_at = Column(DateTime, nullable=True, comment="完成处理时间")
+
+
+class ApiCaptchaSolveRecord(Base):
+    """API 对接滑块求解记录（与内部 xianyu_captcha_solve_record 物理隔离）"""
+    __tablename__ = "xianyu_api_captcha_solve_record"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id = Column(BigInteger, nullable=False, comment="调用方租户")
+    api_key_prefix = Column(String(8), nullable=False, comment="调用方密钥前 8 位")
+    client_ip = Column(String(45), nullable=True, comment="调用方 IP")
+    request_id = Column(String(32), nullable=False, unique=True, comment="请求唯一 ID")
+    event_desc = Column(String(255), nullable=True, comment="事件描述")
+    trigger_scene = Column(String(64), nullable=False, default="api", comment="触发场景，固定 api")
+    result = Column(String(32), nullable=True, comment="处理结果")
+    status = Column(String(32), nullable=False, default="queued",
+                    comment="queued/retrying/success/fail/timeout/precheck_rejected/stale_terminated")
+    engine = Column(String(64), nullable=False, default="Playwright")
+    retry_count = Column(Integer, nullable=False, default=0)
+    error_message = Column(Text, nullable=True, comment="错误详情（cookie 已脱敏）")
+    priority = Column(Integer, nullable=False, default=0)
+    failure_reason = Column(String(64), nullable=False, default="", comment="失败原因分类")
+    queued_at = Column(DateTime, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    open_reason = Column(String(255), nullable=True)
+    solve_reason = Column(String(255), nullable=True)
+    token_charged = Column(Integer, nullable=False, default=0, comment="实际扣费 Token 数")
+    token_charge_failed = Column(SmallInteger, nullable=False, default=0, comment="1=扣费失败需对账")
+    duration_ms = Column(Integer, nullable=True, comment="求解耗时毫秒")
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    deleted = Column(SmallInteger, nullable=False, default=0)
 

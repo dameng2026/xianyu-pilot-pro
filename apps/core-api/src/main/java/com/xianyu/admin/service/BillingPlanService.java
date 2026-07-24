@@ -358,7 +358,10 @@ public class BillingPlanService {
         // 2. 再读元值（如 priceMonth）
         Object yuanValue = data.get(displayKey);
         if (yuanValue == null || String.valueOf(yuanValue).isBlank() || "免费".equals(String.valueOf(yuanValue))) return def;
-        if (yuanValue instanceof Number) return ((Number) yuanValue).longValue() * 100;
+        if (yuanValue instanceof Number) {
+            // 用 BigDecimal 处理，避免 longValue() 先截断小数再乘 100（如 9.99 元 → 9 元的 bug）
+            return new BigDecimal(((Number) yuanValue).toString()).multiply(BigDecimal.valueOf(100)).longValue();
+        }
         try {
             String clean = String.valueOf(yuanValue).replace("¥", "").replace("元", "").trim();
             return new BigDecimal(clean).multiply(BigDecimal.valueOf(100)).longValue();

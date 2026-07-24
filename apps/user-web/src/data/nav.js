@@ -30,6 +30,7 @@ export const navGroups = [
   { title: '系统', items: [
     { key: 'logs', label: '操作日志', icon: 'log' },
     { key: 'slider-solve-records', label: '滑块求解', icon: 'log' },
+    { key: 'api-slider-solve', label: 'API滑块求解', icon: 'log' },
     { key: 'feedback', label: '反馈建议', icon: 'reply' },
     { key: 'settings-notify', label: '通知设置', icon: 'bell' },
     { key: 'settings-ai-cs', label: '系统设置', icon: 'settings' }
@@ -72,6 +73,7 @@ export const pageTitles = {
   'auto-reply': ['', ''],
   logs: ['操作日志', '查看系统操作与关键行为记录'],
   'slider-solve-records': ['滑块求解', '查看滑块自动求解的触发场景、处理结果与验证状态'],
+  'api-slider-solve': ['API滑块求解', '开放滑块求解能力，对接外部系统，独立记录 API 求解与 Token 消费情况'],
   feedback: ['反馈建议', '提交产品建议、Bug 反馈与功能诉求'],
   'settings-ai-cs': ['系统设置 / AI客服配置', '管理 AI 客服相关配置'],
   'settings-product': ['系统设置 / 商品操作', '管理商品相关系统级配置'],

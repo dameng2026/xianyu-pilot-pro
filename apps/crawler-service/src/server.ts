@@ -99,13 +99,18 @@ function parseQueryInteger(value: unknown, fallback: number, minimum: number, ma
 const PORT = boundedConfigInteger(process.env.PORT, 3001, 1, 65535);
 const RATE_LIMIT_WINDOW_MS = boundedConfigInteger(process.env.CRAWLER_RATE_LIMIT_WINDOW_MS, 60000, 1000, 3600000);
 const RATE_LIMIT_MAX = boundedConfigInteger(process.env.CRAWLER_RATE_LIMIT_MAX, 120, 1, 10000);
-const MAX_BROWSER_CONCURRENCY = boundedConfigInteger(process.env.CRAWLER_BROWSER_CONCURRENCY, 4, 1, 16);
+// 默认并发 2（原 4）：大量账号涌入时避免同时启动过多 Chrome 导致 PIDS/内存耗尽。
+// 可通过环境变量 CRAWLER_BROWSER_CONCURRENCY 调整（1-16）。
+const MAX_BROWSER_CONCURRENCY = boundedConfigInteger(process.env.CRAWLER_BROWSER_CONCURRENCY, 2, 1, 16);
 const MAX_BROWSER_CONCURRENCY_PER_TENANT = boundedConfigInteger(
   process.env.CRAWLER_BROWSER_CONCURRENCY_PER_TENANT,
   Math.min(2, MAX_BROWSER_CONCURRENCY),
   1,
   MAX_BROWSER_CONCURRENCY,
 );
+// API 对接独立并发槽位（与内部任务互不抢占）
+const MAX_API_CONCURRENCY = boundedConfigInteger(process.env.CRAWLER_API_CONCURRENCY, 2, 1, 16);
+let activeApiOperations = 0;
 const QR_SESSION_TTL_MS = boundedConfigInteger(process.env.CRAWLER_QR_SESSION_TTL_MS, 180000, 60000, 600000);
 const rateBuckets = new Map<string, { count: number; resetAt: number }>();
 let rateLimitChecks = 0;
@@ -119,14 +124,66 @@ function tryAcquireBrowserSlot(tenantId: string): (() => void) | undefined {
   activeBrowserOperations += 1;
   activeBrowserOperationsByTenant.set(tenantId, tenantActive + 1);
   let released = false;
-  return () => {
+  // 关键修复：槽位超时强制释放（5 分钟）
+  // 原先若求解过程中浏览器崩溃/异常导致 release() 未被调用，槽位会永久占用，
+  // 最终并发槽位耗尽，所有新请求都返回 503"浏览器任务繁忙"。
+  // 现在设置 5 分钟超时（正常求解最多 2-3 分钟），超时未释放则自动释放并告警。
+  const slotAcquiredAt = Date.now();
+  const SLOT_TIMEOUT_MS = 5 * 60 * 1000;
+  const timeoutId = setTimeout(() => {
+    if (!released) {
+      console.warn(`[BrowserSlot] 槽位超时未释放，强制释放 tenantId=${tenantId} 占用时长=${Date.now() - slotAcquiredAt}ms activeBefore=${activeBrowserOperations}`);
+      release();
+    }
+  }, SLOT_TIMEOUT_MS);
+  timeoutId.unref();
+  const release = () => {
     if (released) return;
     released = true;
+    clearTimeout(timeoutId);
     activeBrowserOperations = Math.max(0, activeBrowserOperations - 1);
     const remaining = Math.max(0, (activeBrowserOperationsByTenant.get(tenantId) || 1) - 1);
     if (remaining === 0) activeBrowserOperationsByTenant.delete(tenantId);
     else activeBrowserOperationsByTenant.set(tenantId, remaining);
   };
+  return release;
+}
+
+/**
+ * API 对接独立并发槽位。
+ * 与内部 tryAcquireBrowserSlot 互不抢占，避免 API 流量突增影响内部账号保活链路。
+ * slotType='api' 时调用此函数。
+ */
+function tryAcquireApiSlot(): (() => void) | undefined {
+  if (activeApiOperations >= MAX_API_CONCURRENCY) return undefined;
+  activeApiOperations += 1;
+  let released = false;
+  const slotAcquiredAt = Date.now();
+  const SLOT_TIMEOUT_MS = 5 * 60 * 1000;
+  const timeoutId = setTimeout(() => {
+    if (!released) {
+      console.warn(`[ApiSlot] 槽位超时未释放，强制释放 占用时长=${Date.now() - slotAcquiredAt}ms activeBefore=${activeApiOperations}`);
+      release();
+    }
+  }, SLOT_TIMEOUT_MS);
+  timeoutId.unref();
+  const release = () => {
+    if (released) return;
+    released = true;
+    clearTimeout(timeoutId);
+    activeApiOperations = Math.max(0, activeApiOperations - 1);
+  };
+  return release;
+}
+
+/**
+ * 根据 slotType 选择槽位获取函数。
+ * - slotType='api' → 走 API 独立槽位池
+ * - 其他/未传 → 走原内部槽位池
+ */
+function acquireSlot(tenantId: string, slotType?: string): (() => void) | undefined {
+  if (slotType === 'api') return tryAcquireApiSlot();
+  return tryAcquireBrowserSlot(tenantId);
 }
 
 function browserCapacityUnavailable(res: Response) {
@@ -739,7 +796,8 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
       `[SliderSolver] requestId=${(req as RequestWithTrace).requestId} tenantId=${tenantId} hasCookie=${!!cookieStr} hasProxy=${!!safeProxy} targetHost=${safeTargetUrl ? new URL(safeTargetUrl).hostname : 'default'}`,
     );
 
-    const releaseBrowser = tryAcquireBrowserSlot(tenantId);
+    const slotType = req.body?.slotType;
+    const releaseBrowser = acquireSlot(tenantId, slotType);
     if (!releaseBrowser) return browserCapacityUnavailable(res);
     const result = await (async () => {
       try {
@@ -1081,30 +1139,89 @@ async function start() {
 
   // 定期清理孤儿 Chrome 进程：Chrome 崩溃后 Playwright 连接断开，close() 失败导致子进程残留。
   // 这些进程被 init 收养（PPID=1），累积会耗尽资源导致新 Chrome 无法启动（恶性循环）。
-  // 每 5 分钟清理一次，只杀 PPID=1 的 chrome 进程；正常 Chrome 的父进程是 Node/Playwright，不受影响。
+  //
+  // 清理策略（四路并发）：
+  //   1. PPID=1 的 Chrome 进程：被 init 收养的孤儿，直接 SIGKILL
+  //   2. 父进程已退出（PPID 不在存活进程集合中）的 Chrome 进程：真正的孤儿定义，比仅匹配 PPID=1 更全面
+  //   3. Z 状态（僵尸）的 Chrome 进程：父进程已退出但 waitpid 未调用，SIGKILL 无效需用 kill -9
+  //   4. 运行时间超过 STALE_CHROME_TTL_SEC 的 Chrome 主进程：即使父进程存活也清理
+  //      （解决 Playwright 崩溃后 Chrome 残留但 PPID 仍为主进程的情况，原逻辑无法清理）
+  //
+  // 间隔：30 秒（原 2 分钟太长，洪峰期间 30 秒内孤儿就可能累积到 PIDS 耗尽）
+  // 安全：只匹配 /opt/google/chrome/chrome 路径，不影响其他 Node/Playwright 父进程的 Chrome
+  const STALE_CHROME_TTL_SEC = 300; // 5 分钟：正常求解最多 2-3 分钟，超过 5 分钟视为泄漏
   let orphanCleanerTimer: NodeJS.Timeout | undefined;
   if (process.platform !== 'win32' && process.platform !== 'darwin') {
+    let orphanCleanerRunCount = 0;
     const cleanOrphanChrome = () => {
+      orphanCleanerRunCount += 1;
       try {
-        const { execSync } = require('child_process');
-        const output = execSync(
-          "ps -eo pid,ppid,cmd | grep '/opt/google/chrome/chrome' | grep -v grep | awk '$2==1{print $1}'",
-          { encoding: 'utf-8', timeout: 5000 }
+        const { execSync } = require('child_process') as { execSync: (cmd: string, opts?: { encoding?: string; timeout?: number }) => string };
+        // 获取所有存活进程的 PID 集合（用于判断 Chrome 进程的父进程是否还存活）
+        const allPidsOutput = execSync('ps -eo pid --no-headers', { encoding: 'utf-8', timeout: 5000 });
+        const alivePidSet = new Set(
+          allPidsOutput.trim().split('\n').map((s: string) => Number(s.trim())).filter((n: number) => n > 0),
         );
-        const pids = output.trim().split('\n').map((s: string) => s.trim()).filter(Boolean);
-        if (pids.length === 0) return;
-        console.log(`[OrphanCleaner] 发现 ${pids.length} 个孤儿 Chrome 进程，正在清理: ${pids.join(', ')}`);
-        for (const pidStr of pids) {
-          const pid = Number(pidStr);
-          if (Number.isSafeInteger(pid) && pid > 0) {
-            try { process.kill(pid, 'SIGKILL'); } catch { /* ignore */ }
+
+        // 获取所有 Chrome 进程的 pid,ppid,stat,etimes(运行秒数),cmd
+        // etimes 是整数秒数，比 etime（[[DD-]hh:]mm:ss 格式）更容易解析
+        const chromeOutput = execSync(
+          "ps -eo pid,ppid,stat,etimes,cmd --no-headers | grep '/opt/google/chrome/chrome' | grep -v grep",
+          { encoding: 'utf-8', timeout: 5000 },
+        );
+
+        const orphanPids: number[] = [];
+        const zombiePids: number[] = [];
+        const stalePids: number[] = []; // 运行时间超过阈值的 Chrome 主进程
+        for (const line of chromeOutput.trim().split('\n')) {
+          if (!line.trim()) continue;
+          const parts = line.trim().split(/\s+/);
+          const pid = Number(parts[0]);
+          const ppid = Number(parts[1]);
+          const stat = parts[2] || '';
+          const etimes = Number(parts[3] || 0);
+          if (!Number.isSafeInteger(pid) || pid < 100) continue; // 系统进程保护
+          // Z 状态（僵尸）
+          if (stat.startsWith('Z')) {
+            zombiePids.push(pid);
+            continue;
+          }
+          // PPID=1（被 init 收养）或父进程已退出（PPID 不在存活集合中）→ 孤儿
+          if (ppid === 1 || !alivePidSet.has(ppid)) {
+            orphanPids.push(pid);
+            continue;
+          }
+          // 运行时间超过阈值的 Chrome 主进程（不含 --type=renderer 等子进程）
+          // 关键修复：原逻辑只清理 PPID=1 的孤儿，但 Playwright 崩溃后 Chrome 的 PPID 仍为 crawler-service 主进程
+          // 这些进程永远不会被清理，导致 PIDS 耗尽。现在按运行时间兜底清理。
+          if (etimes >= STALE_CHROME_TTL_SEC && !line.includes('--type=')) {
+            stalePids.push(pid);
           }
         }
+
+        if (orphanPids.length === 0 && zombiePids.length === 0 && stalePids.length === 0) {
+          // 每 60 次（约 30 分钟）输出一次无孤儿确认日志，便于诊断清理器在运行
+          if (orphanCleanerRunCount % 60 === 0) {
+            console.log(`[OrphanCleaner] 第 ${orphanCleanerRunCount} 次扫描：无孤儿/僵尸/超时 Chrome 进程`);
+          }
+          return;
+        }
+
+        const allPids = [...new Set([...orphanPids, ...zombiePids, ...stalePids])];
+        console.log(
+          `[OrphanCleaner] 第 ${orphanCleanerRunCount} 次扫描：孤儿=${orphanPids.length} 僵尸=${zombiePids.length} 超时=${stalePids.length}，正在清理: ${allPids.join(', ')}`,
+        );
+        for (const pid of allPids) {
+          // 僵尸/孤儿/超时都用 SIGKILL
+          try { process.kill(pid, 'SIGKILL'); } catch { /* 进程已退出或权限不足，忽略 */ }
+        }
       } catch {
-        // ps 失败（无孤儿进程或命令不可用）时静默
+        // ps 失败（无 chrome 进程或命令不可用）时静默
       }
     };
-    orphanCleanerTimer = setInterval(cleanOrphanChrome, 5 * 60 * 1000);
+    // 启动后立即执行一次清理（重启时可能残留上次未清理的进程）
+    cleanOrphanChrome();
+    orphanCleanerTimer = setInterval(cleanOrphanChrome, 30 * 1000);
     orphanCleanerTimer.unref();
   }
 

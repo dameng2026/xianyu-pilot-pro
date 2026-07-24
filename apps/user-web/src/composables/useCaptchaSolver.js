@@ -8,12 +8,14 @@ import { handleCaptcha, getCaptchaQueuePosition } from '../api/captcha.js'
  * 提供 isAccountSolving / isAccountQueued / getAccountSolveStatus / solveManually 方法。
  *
  * 状态字段: { status, result, reason, accountName, timestamp, recordId, queuePosition, queueTotal }
- *   status: 'queued' | 'retrying' | 'success' | 'fail'
+ *   status: 'queued' | 'retrying' | 'success' | 'fail' | 'timeout' | 'precheck_rejected'
  *     - queued: 任务已入队，等待 worker 处理（不触发 5 分钟超时）
  *     - retrying: worker 已取出任务，正在执行滑块求解（适用 5 分钟超时）
  *     - success: 求解成功
- *     - fail: 求解失败
- *   result: 'slider_success' | 'slider_fail' | ''
+ *     - fail: 求解失败（滑块通过失败）
+ *     - timeout: 求解超时
+ *     - precheck_rejected: 预校验拒绝（Cookie 失效/账号不活跃/hasLogin 服务不可用）
+ *   result: 'slider_success' | 'slider_fail' | 'precheck_fail' | ''
  *   queuePosition: number (排队位置，1=下一个出队，0=不在排队中/已开始处理)
  *   queueTotal: number (排队中总数)
  *
@@ -90,8 +92,26 @@ function startQueuePolling(accountId, recordId) {
       const position = Number(data.position || 0)
       const total = Number(data.total || 0)
       const status = data.status || ''
-      // 后端返回的状态已变更（不再是 queued），停止轮询
+      // 后端返回的状态已变更（不再是 queued），停止轮询并同步更新前端状态
+      // 关键：必须同步更新 solveStates，否则 SSE 事件丢失时前端会一直显示"排队中"
+      // 而实际后端已经处理完成（success/fail）
       if (status && status !== 'queued') {
+        const prev = solveStates[key]
+        if (prev) {
+          const reasonByStatus = {
+            retrying: '求解中',
+            success: '求解成功',
+            fail: '求解失败',
+            timeout: '求解超时',
+            precheck_rejected: '预校验拒绝（Cookie 失效或服务不可用）',
+          }
+          solveStates[key] = {
+            ...prev,
+            status,
+            reason: reasonByStatus[status] || prev.reason,
+            timestamp: Date.now(),
+          }
+        }
         stopQueuePolling(key)
         return
       }
@@ -180,15 +200,34 @@ async function solveManually(accountId, triggerScene = 'manual', extra = {}) {
     const recordId = data.recordId || null
     const queuePosition = Number(data.queuePosition || 0)
     const queueTotal = Number(data.queueTotal || 0)
-    solveStates[key] = {
-      status: 'queued',
-      result: '',
-      reason: data.message || `任务已入队，排队中（第 ${queuePosition} 位，共 ${queueTotal} 个任务）`,
-      accountName: solveStates[key]?.accountName || '',
-      timestamp: Date.now(),
-      recordId,
-      queuePosition,
-      queueTotal,
+
+    // === 关键：防止竞态覆盖 ===
+    // 后端预校验（排除表/Cookie 失效/hasLogin 服务不可用）可能在毫秒级完成，
+    // 此时 SSE 已先于 HTTP 响应到达并把状态更新为 precheck_rejected/fail/timeout/success。
+    // 若无条件用 API 响应的 queued 覆盖，会冲掉已正确的终态，导致前端卡在"排队中"。
+    // 解决：若当前已是终态（success/fail/timeout/precheck_rejected），保留 SSE 已更新的状态，仅补充 recordId/位置信息。
+    const currentState = solveStates[key]
+    const TERMINAL_STATUSES = ['success', 'fail', 'timeout', 'precheck_rejected']
+    if (currentState && TERMINAL_STATUSES.includes(currentState.status)) {
+      // SSE 已送达终态：仅补充 recordId 和排队位置（若缺失），不覆盖 status/reason
+      solveStates[key] = {
+        ...currentState,
+        recordId: currentState.recordId || recordId,
+        queuePosition: currentState.queuePosition || queuePosition,
+        queueTotal: currentState.queueTotal || queueTotal,
+        timestamp: Date.now(),
+      }
+    } else {
+      solveStates[key] = {
+        status: 'queued',
+        result: '',
+        reason: data.message || `任务已入队，排队中（第 ${queuePosition} 位，共 ${queueTotal} 个任务）`,
+        accountName: solveStates[key]?.accountName || '',
+        timestamp: Date.now(),
+        recordId,
+        queuePosition,
+        queueTotal,
+      }
     }
 
     // 启动排队位置轮询（SSE 可能因网络延迟未及时到达，轮询作为兜底）

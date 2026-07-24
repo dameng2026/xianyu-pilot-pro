@@ -355,12 +355,11 @@ public class XianyuAccountService {
             throw new BizException(500, "Cookie 安全处理失败，请检查服务端加密配置后重试");
         } catch (org.springframework.dao.DataAccessException e) {
             // 数据库操作异常
-            log.error("数据库操作失败: tenantId={}, errorType={}",
-                    tenantId, e.getClass().getSimpleName());
+            log.error("数据库操作失败: tenantId={}, errorType={}", tenantId, e.getClass().getSimpleName(), e);
             throw new BizException(500, "账号保存失败，数据库异常，请稍后重试");
         } catch (Exception e) {
             // 兜底：记录详细日志后转为BizException
-            log.error("手动添加账号未知异常: tenantId={}, errorType={}", tenantId, e.getClass().getSimpleName());
+            log.error("手动添加账号未知异常: tenantId={}, errorType={}", tenantId, e.getClass().getSimpleName(), e);
             throw new BizException(500, "账号保存失败，请检查Cookie格式或稍后重试");
         }
     }

@@ -29,7 +29,8 @@ const routeStates = Object.freeze({
   profile: { tab: 'profile', subPage: null },
   'profile-security': { tab: 'profile', subPage: 'profile-security' },
   'profile-ledger': { tab: 'profile', subPage: 'profile-ledger' },
-  'profile-recharge': { tab: 'profile', subPage: 'profile-recharge' }
+  'profile-recharge': { tab: 'profile', subPage: 'profile-recharge' },
+  'api-slider-solve': { tab: 'home', subPage: 'api-slider-solve' }
 })
 
 const tabPages = Object.freeze({

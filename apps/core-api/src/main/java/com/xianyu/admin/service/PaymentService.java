@@ -303,15 +303,20 @@ public class PaymentService {
         String targetType = text(first(data, "targetType", "target_type"));
         Long targetId = parseNullableLong(first(data, "targetId", "target_id"));
         if (!StringUtils.hasText(targetType)) targetType = "user_account";
+        // VIP 订单的计费周期（month/quarter/year），仅 VIP 分支使用，用于按周期取对应价格并保存到订单
+        String vipPeriodType = null;
 
         if ("vip".equals(orderType)) {
             targetType = normalizeSubscriptionTarget(targetType);
             targetId = validateSubscriptionTarget(targetType, targetId, tenantId, userId);
             planId = parseNullableLong(first(data, "planId", "plan_id"));
             if (planId == null) throw new BizException(400, "请选择会员套餐");
-            Map<String, Object> plan = queryOne("SELECT id, plan_name, plan_code, price_cent, duration_days FROM billing_plan WHERE id=? AND deleted=0 AND status=1", planId);
+            vipPeriodType = normalizePeriodType(first(data, "periodType", "period_type"));
+            Map<String, Object> plan = queryOne(
+                    "SELECT id, plan_name, plan_code, price_month_cent, price_quarter_cent, price_year_cent FROM billing_plan WHERE id=? AND deleted=0 AND status=1", planId);
             if (plan == null) throw new BizException(404, "套餐不存在或已下架");
-            amountCent = storedPositiveLong(plan.get("price_cent"), "会员套餐价格");
+            amountCent = resolveVipPriceCent(plan, vipPeriodType);
+            if (amountCent <= 0) throw new BizException(400, "该套餐未配置" + periodLabel(vipPeriodType) + "价格，请联系管理员");
             if (amountCent > MAX_PAYMENT_AMOUNT_CENT) throw new BizException(503, "会员套餐价格配置超出系统允许范围");
             title = boundedText("会员充值-" + text(plan.get("plan_name")), MAX_TITLE_LENGTH);
         } else if ("mall_product".equals(orderType)) {
@@ -348,10 +353,10 @@ public class PaymentService {
         LocalDateTime expireAt = LocalDateTime.now().plusMinutes(15);
         Map<String, Object> payPayload = buildPayPayload(orderNo, title, amountCent, paymentMethod, providerType, config, expireAt);
         requireSingleWrite("创建支付订单失败",
-                "INSERT INTO payment_order(tenant_id, user_id, order_no, order_type, target_type, target_id, plan_id, token_plan_id, title, amount_cent, token_amount, payment_method, provider_type, payment_config_id, status, client_ip, qr_content, pay_url, expire_time, created_time, updated_time, deleted) " +
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,NOW(),NOW(),0)",
+                "INSERT INTO payment_order(tenant_id, user_id, order_no, order_type, target_type, target_id, plan_id, token_plan_id, title, amount_cent, token_amount, payment_method, provider_type, payment_config_id, status, client_ip, qr_content, pay_url, expire_time, created_time, updated_time, deleted, period_type) " +
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,NOW(),NOW(),0,?)",
                 tenantId, userId, orderNo, orderType, targetType, targetId, planId, tokenPlanId, title, amountCent, tokenAmount, paymentMethod, providerType, paymentConfigId,
-                boundedText(clientIp, 80), payPayload.get("qrContent"), payPayload.get("payUrl"), expireAt);
+                boundedText(clientIp, 80), payPayload.get("qrContent"), payPayload.get("payUrl"), expireAt, vipPeriodType);
         return orderDetail(orderNo);
     }
 
@@ -611,22 +616,21 @@ public class PaymentService {
         long planId = storedPositiveLong(order.get("plan_id"), "会员套餐 ID");
         String targetType = normalizeSubscriptionTarget(text(order.get("target_type")));
         Long targetId = storedNullablePositiveLong(order.get("target_id"), "订阅目标 ID");
-        Map<String, Object> plan = queryOne("SELECT duration_days FROM billing_plan WHERE id=? AND deleted=0 AND status=1", planId);
-        if (plan == null) throw new BizException(409, "订单对应的会员套餐已不可用，请人工核验支付订单");
-        long daysValue = storedNonNegativeLong(plan.get("duration_days"), "会员有效期");
-        if (daysValue > 36_500) throw new BizException(503, "会员有效期配置超出系统允许范围");
-        int days = (int) daysValue;
+        // 按订单 period_type 推导会员有效期天数：month=30, quarter=90, year=365
+        // NULL 视为 month（兼容 V1.30 之前的历史订单，旧订单的 duration_days 已不再读取）
+        String periodType = normalizePeriodType(order.get("period_type"));
+        int days = daysForPeriod(periodType);
         safeUpdate("停用旧会员权益失败",
                 "UPDATE billing_subscription SET status=0, updated_time=NOW() WHERE tenant_id=? AND user_id=? AND status=1 AND target_type=? AND ((? IS NULL AND target_id IS NULL) OR target_id=?)",
                 tenantId, userId, targetType, targetId, targetId);
         if (days <= 0) {
             requireSingleWrite("发放会员权益失败",
-                    "INSERT INTO billing_subscription(tenant_id, user_id, plan_id, target_type, target_id, start_time, end_time, status, source, created_time, updated_time) VALUES(?,?,?,?,?,NOW(),NULL,1,?,NOW(),NOW())",
-                    tenantId, userId, planId, targetType, targetId, boundedText(source, 50));
+                "INSERT INTO billing_subscription(tenant_id, user_id, plan_id, target_type, target_id, start_time, end_time, status, source, created_time, updated_time) VALUES(?,?,?,?,?,NOW(),NULL,1,?,NOW(),NOW())",
+                tenantId, userId, planId, targetType, targetId, boundedText(source, 50));
         } else {
             requireSingleWrite("发放会员权益失败",
-                    "INSERT INTO billing_subscription(tenant_id, user_id, plan_id, target_type, target_id, start_time, end_time, status, source, created_time, updated_time) VALUES(?,?,?,?,?,NOW(),DATE_ADD(NOW(), INTERVAL ? DAY),1,?,NOW(),NOW())",
-                    tenantId, userId, planId, targetType, targetId, days, boundedText(source, 50));
+                "INSERT INTO billing_subscription(tenant_id, user_id, plan_id, target_type, target_id, start_time, end_time, status, source, created_time, updated_time) VALUES(?,?,?,?,?,NOW(),DATE_ADD(NOW(), INTERVAL ? DAY),1,?,NOW(),NOW())",
+                tenantId, userId, planId, targetType, targetId, days, boundedText(source, 50));
         }
     }
 
@@ -1263,6 +1267,45 @@ public class PaymentService {
         if ("ad".equals(t) || "advertisement".equals(t) || "advertising".equals(t)) return "ad";
         if ("mall_product".equals(t) || "mallproduct".equals(t)) return "mall_product";
         throw new BizException(400, "非法订单类型");
+    }
+
+    /**
+     * 标准化 VIP 订单的计费周期。NULL/空/未知值统一视为 month（兼容历史订单与默认行为）。
+     */
+    private String normalizePeriodType(Object value) {
+        if (value == null) return "month";
+        String s = String.valueOf(value).trim().toLowerCase(Locale.ROOT);
+        if ("quarter".equals(s) || "season".equals(s)) return "quarter";
+        if ("year".equals(s) || "annual".equals(s)) return "year";
+        return "month";
+    }
+
+    /**
+     * 按计费周期推导会员有效期天数：月=30天，季=90天，年=365天。
+     */
+    private int daysForPeriod(String periodType) {
+        if ("quarter".equals(periodType)) return 90;
+        if ("year".equals(periodType)) return 365;
+        return 30;
+    }
+
+    private String periodLabel(String periodType) {
+        if ("quarter".equals(periodType)) return "季度";
+        if ("year".equals(periodType)) return "年度";
+        return "月度";
+    }
+
+    /**
+     * 按计费周期从套餐记录中取对应价格（分）。month→price_month_cent，quarter→price_quarter_cent，year→price_year_cent。
+     */
+    private long resolveVipPriceCent(Map<String, Object> plan, String periodType) {
+        if ("quarter".equals(periodType)) {
+            return storedNonNegativeLong(plan.get("price_quarter_cent"), "季度价格");
+        }
+        if ("year".equals(periodType)) {
+            return storedNonNegativeLong(plan.get("price_year_cent"), "年度价格");
+        }
+        return storedNonNegativeLong(plan.get("price_month_cent"), "月度价格");
     }
 
     private String normalizeChannel(String channel) {

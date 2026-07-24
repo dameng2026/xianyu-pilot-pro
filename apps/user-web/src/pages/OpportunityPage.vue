@@ -239,7 +239,7 @@
                     <label>生图模型
                       <select v-model="selectedModelKey" class="input tiny-select" :disabled="!availableImageModels.length">
                         <option v-for="m in availableImageModels" :key="m.moduleKey" :value="m.moduleKey">
-                          {{ m.name || m.moduleKey }}
+                          {{ m.model || m.name || m.moduleKey }}
                         </option>
                       </select>
                     </label>

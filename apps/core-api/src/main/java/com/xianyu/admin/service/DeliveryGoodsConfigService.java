@@ -357,9 +357,13 @@ public class DeliveryGoodsConfigService {
             String json = objectMapper.writeValueAsString(config);
             if (json.length() > 100_000) throw new BizException(422, "商品发货配置内容过大，请精简后重试");
             if (stored == null) {
+                // 唯一约束 uk_dgc_tenant_goods(tenant_id, goods_id) 不含 deleted 字段，
+                // 当存在 deleted=1 的软删除记录时，普通 INSERT 会触发 DuplicateKeyException。
+                // 使用 INSERT ... ON DUPLICATE KEY UPDATE 将软删除记录恢复为 deleted=0 并更新配置。
                 jdbcTemplate.update(
                         "INSERT INTO delivery_goods_config(tenant_id, goods_id, config_json, created_time, updated_time, deleted) "
-                                + "VALUES(?,?,?,NOW(),NOW(),0)",
+                                + "VALUES(?,?,?,NOW(),NOW(),0) "
+                                + "ON DUPLICATE KEY UPDATE config_json=VALUES(config_json), updated_time=NOW(), deleted=0",
                         tenantId, goodsId, json
                 );
             } else {
@@ -373,7 +377,7 @@ public class DeliveryGoodsConfigService {
         } catch (BizException error) {
             throw error;
         } catch (Exception error) {
-            log.error("保存商品发货配置失败 goodsId={}, errorType={}", goodsId, error.getClass().getSimpleName());
+            log.error("保存商品发货配置失败 goodsId={}, errorType={}", goodsId, error.getClass().getSimpleName(), error);
             throw new BizException(503, "商品发货配置保存失败，所有变更均未确认，请稍后重试");
         }
     }

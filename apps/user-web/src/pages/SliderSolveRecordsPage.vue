@@ -8,6 +8,67 @@
         <StatCard title="失败数" :value="failedCount" change="本页统计" icon="warning" color="red" />
         <StatCard title="求解中数" :value="retryingCount" change="本页统计" icon="refresh" color="orange" />
       </div>
+      <div class="queue-status-bar">
+        <div class="queue-status-item">
+          <span class="queue-dot" :class="{ 'dot-active': queueStatus.queued > 0 }"></span>
+          <span class="queue-text">当前排队中 <b :class="{ 'num-active': queueStatus.queued > 0 }">{{ queueStatus.queued }}</b> 个任务</span>
+        </div>
+        <div class="queue-status-item">
+          <span class="queue-dot dot-solving" :class="{ 'dot-active': queueStatus.retrying > 0 }"></span>
+          <span class="queue-text">当前求解中 <b :class="{ 'num-active': queueStatus.retrying > 0 }">{{ queueStatus.retrying }}</b> 个任务</span>
+        </div>
+        <div class="queue-status-item">
+          <span class="queue-dot dot-timeout" :class="{ 'dot-active': queueStatus.timeout > 0 }"></span>
+          <span class="queue-text">超时 <b :class="{ 'num-active': queueStatus.timeout > 0 }">{{ queueStatus.timeout || 0 }}</b> 条</span>
+        </div>
+        <div class="queue-status-item">
+          <span class="queue-dot dot-rejected" :class="{ 'dot-active': queueStatus.precheckRejected > 0 }"></span>
+          <span class="queue-text">预检验拒绝 <b :class="{ 'num-active': queueStatus.precheckRejected > 0 }">{{ queueStatus.precheckRejected || 0 }}</b> 条</span>
+        </div>
+        <span v-if="queueStatus.queued === 0 && queueStatus.retrying === 0" class="queue-empty-hint">
+          队列为空（排队中/求解中是瞬态状态，通常在 1 秒内完成）
+        </span>
+      </div>
+      <!-- 滑块求解规则说明：统计卡片与队列状态下方常驻展示 -->
+      <div class="rules-card">
+        <div class="rules-head">
+          <span class="rules-title">滑块求解规则说明</span>
+          <span class="rules-sub">了解求解机制，便于判断预期</span>
+        </div>
+        <div class="rules-callout">
+          <span class="rules-badge badge-blue">i</span>
+          <div>
+            <strong>预检测与能力范围</strong>
+            <span>每次求解前预检 Cookie 有效性，失效则不予求解。本功能主要解决 WS 掉线引起的滑块问题；Cookie 失效表示登录态已被闲鱼拒绝，需重新扫码登录。</span>
+          </div>
+        </div>
+        <div class="rules-grid">
+          <div class="rule-item">
+            <span class="rules-dot dot-red"></span>
+            <span><strong>僵尸账号拦截</strong>：3 天未登录前台的用户，旗下闲鱼账号视为不活跃，不予求解。</span>
+          </div>
+          <div class="rule-item">
+            <span class="rules-dot dot-purple"></span>
+            <span><strong>求解优先级</strong>：SVIP &gt; VIP &gt; 普通用户，同级按入队顺序处理。</span>
+          </div>
+          <div class="rule-item">
+            <span class="rules-dot dot-orange"></span>
+            <span><strong>手动优先</strong>：手动触发求解优先于自动触发求解。</span>
+          </div>
+          <div class="rule-item">
+            <span class="rules-dot dot-blue"></span>
+            <span><strong>排队容量</strong>：无固定上限，按优先级与入队顺序依次处理。</span>
+          </div>
+          <div class="rule-item">
+            <span class="rules-dot dot-green"></span>
+            <span><strong>并行求解</strong>：同时并行 2 个滑块求解任务。</span>
+          </div>
+          <div class="rule-item">
+            <span class="rules-dot dot-gray"></span>
+            <span><strong>求解耗时</strong>：单次约需 30～120 秒。</span>
+          </div>
+        </div>
+      </div>
       <CardPanel title="滑块求解记录" desc="点击表格行查看完整详情">
         <div class="toolbar">
           <select v-model="filters.status" class="input" @change="search">
@@ -16,6 +77,8 @@
             <option value="fail">失败</option>
             <option value="retrying">求解中</option>
             <option value="queued">排队中</option>
+            <option value="timeout">超时</option>
+            <option value="precheck_rejected">预检验拒绝</option>
           </select>
           <select v-model="filters.triggerScene" class="input" @change="search">
             <option value="">全部触发场景</option>
@@ -38,6 +101,8 @@
             <Badge v-if="row.status === 'fail'" type="red">失败</Badge>
             <Badge v-else-if="row.status === 'success'" type="green">成功</Badge>
             <Badge v-else-if="row.status === 'queued'" type="blue">排队中</Badge>
+            <Badge v-else-if="row.status === 'timeout'" type="gray">超时</Badge>
+            <Badge v-else-if="row.status === 'precheck_rejected'" type="yellow">预检验拒绝</Badge>
             <Badge v-else type="orange">求解中</Badge>
           </template>
           <template #failReason="{row}">
@@ -46,7 +111,15 @@
             <span v-else-if="row.status === 'fail'" class="cell-truncate fail-text">{{ row.result === 'slider_success' ? '滑块已通过但 Cookie Session 已过期' : '滑块验证未通过' }}</span>
             <span v-else>-</span>
           </template>
-          <template #empty><EmptyState icon="🧩" title="暂无滑块求解记录" description="滑块验证记录将在此显示。" /></template>
+          <template #empty>
+            <EmptyState
+              v-if="isTransientStatus"
+              icon="⏱️"
+              title="当前没有处于此状态的记录"
+              :description="`${statusText(filters.status)}是瞬态状态，任务通常在 1 秒内完成。请查看上方实时队列状态了解当前情况`"
+            />
+            <EmptyState v-else icon="🧩" title="暂无滑块求解记录" description="滑块验证记录将在此显示。" />
+          </template>
         </BaseTable>
         <Pagination :total="total" :current="current" :page-size="size" @page-change="goPage" />
       </CardPanel>
@@ -62,10 +135,13 @@
           <div class="metric-tile"><span>账号ID</span><b :title="detail.accountId">{{ detail.accountId || '-' }}</b></div>
           <div class="metric-tile"><span>账号名称</span><b :title="detail.accountName">{{ detail.accountName || '-' }}</b></div>
           <div class="metric-tile"><span>处理状态</span><Badge :type="statusBadge(detail.status)">{{ statusText(detail.status) }}</Badge></div>
-          <div class="metric-tile"><span>是否失败</span>
+          <div class="metric-tile">
+            <span>是否失败</span>
             <Badge v-if="detail.status === 'fail'" type="red">失败</Badge>
             <Badge v-else-if="detail.status === 'success'" type="green">成功</Badge>
             <Badge v-else-if="detail.status === 'queued'" type="blue">排队中</Badge>
+            <Badge v-else-if="detail.status === 'timeout'" type="gray">超时</Badge>
+            <Badge v-else-if="detail.status === 'precheck_rejected'" type="yellow">预检验拒绝</Badge>
             <Badge v-else type="orange">求解中</Badge>
           </div>
           <div class="metric-tile"><span>处理结果</span><Badge :type="resultBadge(detail.result)">{{ resultText(detail.result) }}</Badge></div>
@@ -113,7 +189,7 @@ import AppButton from '../components/AppButton.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Pagination from '../components/Pagination.vue'
 import Icon from '../components/Icon.vue'
-import { getCaptchaRecords } from '../api/captcha.js'
+import { getCaptchaRecords, getCaptchaQueueStatus } from '../api/captcha.js'
 
 const loading = ref(false)
 const loadError = ref('')
@@ -123,6 +199,27 @@ const current = ref(1)
 const size = ref(20)
 const detail = ref(null)
 const filters = reactive({ status: '', triggerScene: '' })
+
+// 队列实时状态
+const queueStatus = reactive({ queued: 0, retrying: 0, timeout: 0, precheckRejected: 0, workers: 2 })
+let queueTimer = null
+
+async function loadQueueStatus() {
+  try {
+    const res = await getCaptchaQueueStatus()
+    const payload = res && res.data ? res.data : (res || {})
+    queueStatus.queued = Number(payload.queued) || 0
+    queueStatus.retrying = Number(payload.retrying) || 0
+    queueStatus.timeout = Number(payload.timeout) || 0
+    queueStatus.precheckRejected = Number(payload.precheckRejected) || 0
+    queueStatus.workers = Number(payload.workers) || 2
+  } catch {
+    // 静默失败，不影响主列表
+  }
+}
+
+// 排队中/求解中是瞬态状态，空结果时给用户友好提示
+const isTransientStatus = computed(() => filters.status === 'queued' || filters.status === 'retrying')
 
 const cols = [
   { key: 'createdAt', title: '记录时间' },
@@ -162,6 +259,8 @@ function statusText(status) {
   if (status === 'fail') return '失败'
   if (status === 'retrying') return '求解中'
   if (status === 'queued') return '排队中'
+  if (status === 'timeout') return '超时'
+  if (status === 'precheck_rejected') return '预检验拒绝'
   return status || '-'
 }
 function statusBadge(status) {
@@ -169,6 +268,8 @@ function statusBadge(status) {
   if (status === 'fail') return 'red'
   if (status === 'retrying') return 'orange'
   if (status === 'queued') return 'blue'
+  if (status === 'timeout') return 'gray'
+  if (status === 'precheck_rejected') return 'yellow'
   return 'gray'
 }
 function triggerSceneText(scene) {
@@ -288,6 +389,9 @@ function onSseCaptchaSolve(event) {
 
 onMounted(() => {
   load()
+  loadQueueStatus()
+  // 队列状态定时刷新（15 秒）
+  queueTimer = setInterval(loadQueueStatus, 15000)
   window.addEventListener('xya-sse-event', onSseCaptchaSolve)
 })
 
@@ -296,6 +400,10 @@ onUnmounted(() => {
   if (refreshTimer) {
     clearTimeout(refreshTimer)
     refreshTimer = null
+  }
+  if (queueTimer) {
+    clearInterval(queueTimer)
+    queueTimer = null
   }
 })
 </script>
@@ -308,6 +416,201 @@ onUnmounted(() => {
   .slider-layout :deep(.stat-grid) {
     grid-template-columns: repeat(2, 1fr);
   }
+}
+.queue-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 12px 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.queue-status-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.queue-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #cbd5e1;
+}
+.queue-dot.dot-solving {
+  background: #fbbf24;
+}
+.queue-dot.dot-timeout {
+  background: #94a3b8;
+}
+.queue-dot.dot-rejected {
+  background: #eab308;
+}
+.queue-dot.dot-active {
+  background: #3b82f6;
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.5);
+  animation: pulse 1.5s infinite;
+}
+.queue-dot.dot-solving.dot-active {
+  background: #f59e0b;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.5);
+}
+.queue-dot.dot-timeout.dot-active {
+  background: #64748b;
+  box-shadow: 0 0 6px rgba(100, 116, 139, 0.5);
+}
+.queue-dot.dot-rejected.dot-active {
+  background: #ca8a04;
+  box-shadow: 0 0 6px rgba(202, 138, 4, 0.5);
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.queue-text {
+  font-size: 13px;
+  color: #475569;
+}
+.queue-text b {
+  font-size: 16px;
+  color: #94a3b8;
+}
+.queue-text b.num-active {
+  color: #2563eb;
+}
+.queue-empty-hint {
+  font-size: 12px;
+  color: #94a3b8;
+}
+.rules-card {
+  padding: 16px 18px;
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  margin: 4px 0 14px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.rules-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed #e2e8f0;
+}
+.rules-head::before {
+  content: '';
+  width: 3px;
+  height: 14px;
+  background: linear-gradient(180deg, #3b82f6, #6366f1);
+  border-radius: 2px;
+}
+.rules-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e293b;
+  letter-spacing: 0.3px;
+}
+.rules-sub {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-left: auto;
+}
+.rules-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, #eff6ff 0%, #e0f2fe 100%);
+  border: 1px solid #bfdbfe;
+  border-left: 3px solid #3b82f6;
+  border-radius: 8px;
+  margin-bottom: 14px;
+  transition: box-shadow 0.2s;
+}
+.rules-callout:hover {
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.12);
+}
+.rules-callout strong {
+  display: block;
+  font-size: 13px;
+  color: #1e40af;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.rules-callout span {
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: #475569;
+}
+.rules-badge {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  font-style: italic;
+  color: #fff;
+  margin-top: 1px;
+  background: linear-gradient(135deg, #3b82f6, #6366f1);
+  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.3);
+}
+.badge-blue { background: linear-gradient(135deg, #3b82f6, #6366f1); }
+.rules-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px 22px;
+}
+.rule-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 12.5px;
+  line-height: 1.85;
+  color: #475569;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+.rule-item:hover {
+  background: rgba(255, 255, 255, 0.6);
+}
+.rule-item strong {
+  color: #1e293b;
+  font-weight: 600;
+}
+.rules-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 7px;
+  position: relative;
+}
+.rules-dot::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  background: inherit;
+  opacity: 0.18;
+  z-index: -1;
+}
+.dot-red { background: #ef4444; }
+.dot-purple { background: #8b5cf6; }
+.dot-orange { background: #f59e0b; }
+.dot-blue { background: #3b82f6; }
+.dot-green { background: #10b981; }
+.dot-gray { background: #94a3b8; }
+@media (max-width: 768px) {
+  .rules-grid { grid-template-columns: 1fr; }
+  .rules-card { padding: 14px; }
 }
 .slider-layout :deep(.base-table tbody tr) {
   cursor: pointer;

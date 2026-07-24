@@ -103,7 +103,10 @@ public interface XianyuGoodsMapper {
     List<Map<String, Object>> countByCategory(@Param("tenantId") Long tenantId);
 
     @Select("<script>" +
-            "SELECT goods_id, delivery_type, status FROM delivery_rule " +
+            "SELECT goods_id, " +
+            "  JSON_UNQUOTE(JSON_EXTRACT(config_json, '$.payDelivery.mode')) AS delivery_type, " +
+            "  IF(JSON_UNQUOTE(JSON_EXTRACT(config_json, '$.payDelivery.enabled')) IN ('1', 'true'), 1, 0) AS status " +
+            "FROM delivery_goods_config " +
             "WHERE tenant_id = #{tenantId} AND deleted = 0 AND goods_id IS NOT NULL " +
             "AND goods_id IN " +
             "<foreach collection='goodsIds' item='gid' open='(' separator=',' close=')'>" +
@@ -154,13 +157,15 @@ public interface XianyuGoodsMapper {
     Map<String, Object> countStatusStats(@Param("tenantId") Long tenantId, @Param("accountId") Long accountId);
 
     /**
-     * 统计已开启自动发货的商品数（delivery_rule status=1）
+     * 统计已开启自动发货的商品数（delivery_goods_config.payDelivery.enabled=1）
+     * 与实际发货逻辑同源（ws_delivery_handler._load_goods_delivery_rule）。
      */
     @Select("<script>" +
             "SELECT COUNT(DISTINCT g.id) " +
             "FROM xianyu_goods g " +
-            "INNER JOIN delivery_rule dr ON dr.goods_id = g.id AND dr.tenant_id = g.tenant_id AND dr.deleted = 0 AND dr.status = 1 " +
+            "INNER JOIN delivery_goods_config dgc ON dgc.goods_id = g.id AND dgc.tenant_id = g.tenant_id AND dgc.deleted = 0 " +
             "WHERE g.tenant_id = #{tenantId} AND g.deleted = 0 " +
+            "AND JSON_UNQUOTE(JSON_EXTRACT(dgc.config_json, '$.payDelivery.enabled')) IN ('1', 'true') " +
             "<if test='accountId != null'>" +
             "  AND g.account_id = #{accountId} " +
             "</if>" +

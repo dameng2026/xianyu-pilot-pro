@@ -9,9 +9,11 @@
    - Cookie 失效/Session 过期 → 拒绝，提示用户重新扫码
    - 调用失败 → 拒绝（避免无效求解）
 
-2. **账号活跃度检查**：连续 3 天无操作的账号禁止求解
-   - 基于 xianyu_account_runtime.last_online_time 判断
+2. **账号活跃度检查**：用户在前台最近登录时间超过 3 天则禁止求解
+   - 基于 sys_user.last_login_time 判断（前台用户登录时间，非闲鱼账号在线时间）
+   - 若用户登录时间在 3 天内，其旗下所有闲鱼账号均为活跃账号
    - 账号被禁用（status != 1 或 disabled_by_admin = 1）也禁止
+   - 排除表 xianyu_account_solve_exclusion 中的账号直接拒绝（快速路径）
 
 3. **会员等级查询**：用于优先级队列排序
    - SVIP/SVP = 2（最高优先级）
@@ -111,8 +113,19 @@ async def precheck_cookie_status(account_id: int, tenant_id: int) -> tuple[bool,
             )
             return False, "cookie_invalid", "Cookie Session 已过期，请重新扫码登录闲鱼账号"
 
-        # HAS_LOGIN_UNCONFIRMED / HAS_LOGIN_REJECTED → Cookie 被平台拒绝
-        if "HAS_LOGIN" in error_code:
+        # HAS_LOGIN_UNCONFIRMED → hasLogin 返回 200 但响应体无明确登录成功字段
+        # 这通常是接口风控/响应格式变化/临时网络问题，不代表 Cookie 真的失效。
+        # 归类为 service_unavailable（可重试），避免误判为 cookie_invalid 导致错误标记 cookie_status=0。
+        # 与"统一登录校验"（page.head API）的判断保持一致：page.head 能成功即视为 Cookie 有效。
+        if "HAS_LOGIN_UNCONFIRMED" in error_code:
+            logger.warning(
+                "Cookie 预校验：hasLogin 响应未明确确认登录状态（可能为接口风控/格式变化，Cookie 可能仍有效）accountId=%d",
+                account_id,
+            )
+            return False, "service_unavailable", "Cookie 校验服务暂时不可用（hasLogin 响应未确认），请稍后重试"
+
+        # HAS_LOGIN_REJECTED → Cookie 被平台明确拒绝（非 200 状态），归类为 cookie_invalid
+        if "HAS_LOGIN_REJECTED" in error_code:
             logger.warning(
                 "Cookie 预校验失败：hasLogin 拒绝 accountId=%d errorCode=%s",
                 account_id, error_code,
@@ -148,8 +161,11 @@ async def precheck_account_active(account_id: int, tenant_id: int) -> tuple[bool
     """账号活跃度与状态检查。
 
     检查规则：
-    1. 账号被禁用（status != 1 或 disabled_by_admin = 1）→ 拒绝
-    2. 账号连续 3 天无操作（last_online_time 超过 3 天前）→ 拒绝
+    1. 排除表快速检查：账号在 xianyu_account_solve_exclusion 表中 → 直接拒绝
+    2. 账号被禁用（status != 1 或 disabled_by_admin = 1）→ 拒绝
+    3. 用户前台最近登录时间超过 3 天 → 拒绝（所有闲鱼账号均视为不活跃）
+       判断依据：sys_user.last_login_time（前台用户登录时间），非闲鱼账号在线时间
+       若用户登录时间在 3 天内，其旗下所有闲鱼账号均为活跃账号
 
     Args:
         account_id: 账号 ID
@@ -161,13 +177,33 @@ async def precheck_account_active(account_id: int, tenant_id: int) -> tuple[bool
     """
     try:
         async with async_session() as db:
+            # 1. 排除表快速检查（3天未登录用户的闲鱼账号会被定时扫描录入排除表）
+            exclusion_row = (await db.execute(
+                text(
+                    "SELECT id FROM xianyu_account_solve_exclusion "
+                    "WHERE account_id = :aid LIMIT 1"
+                ),
+                {"aid": account_id},
+            )).mappings().first()
+            if exclusion_row:
+                logger.info(
+                    "活跃度检查拒绝：账号在排除表中 accountId=%d（用户3天未登录前台）",
+                    account_id,
+                )
+                return False, "account_inactive", (
+                    "用户已连续超过 3 天未登录前台，账号已暂停自动滑块求解功能。"
+                    "请登录前台后恢复活跃状态。"
+                )
+
+            # 2. 查询账号状态 + 用户前台最近登录时间
+            # JOIN sys_user 获取 last_login_time（前台用户登录时间）
+            # user_id 字段关联 xianyu_account.user_id → sys_user.id
             row = (await db.execute(
                 text("""
-                    SELECT a.status, a.disabled_by_admin,
-                           r.last_online_time, r.last_heartbeat_time
+                    SELECT a.status, a.disabled_by_admin, a.user_id,
+                           u.last_login_time
                     FROM xianyu_account a
-                    LEFT JOIN xianyu_account_runtime r
-                      ON r.account_id = a.id AND r.tenant_id = a.tenant_id
+                    LEFT JOIN sys_user u ON u.id = a.user_id
                     WHERE a.id = :aid AND a.tenant_id = :tid
                       AND COALESCE(a.deleted, 0) = 0
                     LIMIT 1
@@ -194,41 +230,42 @@ async def precheck_account_active(account_id: int, tenant_id: int) -> tuple[bool
             )
             return False, "account_disabled", "账号已被管理员禁用，无法进行滑块求解"
 
-        # 检查账号活跃度：last_online_time 超过 3 天则视为不活跃
-        # 优先用 last_online_time，fallback 到 last_heartbeat_time
-        last_online = row.get("last_online_time")
-        last_heartbeat = row.get("last_heartbeat_time")
-        reference_time = last_online or last_heartbeat
+        # 3. 检查用户前台登录活跃度：sys_user.last_login_time 超过 3 天则视为不活跃
+        # 注意：判断依据是用户在前台的登录时间，不是闲鱼账号在线时间
+        # 若用户登录时间在 3 天内，其旗下所有闲鱼账号均为活跃账号
+        last_login_time = row.get("last_login_time")
 
-        if reference_time is None:
-            # 从未有在线记录 → 视为不活跃（可能是从未连接过的账号）
+        if last_login_time is None:
+            # 从未登录过前台 → 视为不活跃
             logger.info(
-                "活跃度检查拒绝：账号从未在线 accountId=%d", account_id,
-            )
-            return False, "account_inactive", "账号从未在线，请先手动连接一次闲鱼账号"
-
-        # 确保 reference_time 是 datetime 对象
-        if isinstance(reference_time, str):
-            try:
-                reference_time = datetime.fromisoformat(reference_time)
-            except ValueError:
-                logger.warning(
-                    "活跃度检查：last_online_time 格式异常 accountId=%d val=%s",
-                    account_id, reference_time,
-                )
-                return False, "account_inactive", "账号活跃时间格式异常"
-
-        inactive_threshold = datetime.now() - timedelta(days=ACCOUNT_INACTIVE_DAYS)
-        if reference_time < inactive_threshold:
-            days_inactive = (datetime.now() - reference_time).days
-            logger.info(
-                "活跃度检查拒绝：账号 %d 天未在线 accountId=%d lastOnline=%s",
-                days_inactive, account_id, reference_time,
+                "活跃度检查拒绝：用户从未登录前台 accountId=%d", account_id,
             )
             return False, "account_inactive", (
-                f"账号已连续 {days_inactive} 天无操作，"
+                "用户从未登录前台，请先登录前台后再使用滑块求解功能。"
+            )
+
+        # 确保 last_login_time 是 datetime 对象
+        if isinstance(last_login_time, str):
+            try:
+                last_login_time = datetime.fromisoformat(last_login_time)
+            except ValueError:
+                logger.warning(
+                    "活跃度检查：last_login_time 格式异常 accountId=%d val=%s",
+                    account_id, last_login_time,
+                )
+                return False, "account_inactive", "用户登录时间格式异常"
+
+        inactive_threshold = datetime.now() - timedelta(days=ACCOUNT_INACTIVE_DAYS)
+        if last_login_time < inactive_threshold:
+            days_inactive = (datetime.now() - last_login_time).days
+            logger.info(
+                "活跃度检查拒绝：用户 %d 天未登录前台 accountId=%d lastLogin=%s",
+                days_inactive, account_id, last_login_time,
+            )
+            return False, "account_inactive", (
+                f"用户已连续 {days_inactive} 天未登录前台，"
                 f"超过 {ACCOUNT_INACTIVE_DAYS} 天限制，已暂停自动滑块求解功能。"
-                "请先手动连接账号或进行其他操作以恢复活跃状态。"
+                "请登录前台后恢复活跃状态。"
             )
 
         return True, "", "账号活跃度正常"

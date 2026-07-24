@@ -283,6 +283,129 @@ public class AiBillingService {
         return m;
     }
 
+    /**
+     * 管理端：分页查询统一充值记录（会员充值 + Token 充值）。
+     * 数据源：payment_order 表，order_type IN ('vip','token') AND status=1（已支付成功）。
+     * 支持按 userId 严格过滤、关键词模糊匹配（用户名/订单号/套餐名）、orderType 过滤（vip/token）。
+     */
+    public PageResult<Map<String, Object>> pageUnifiedRechargeRecords(int current, int size, Long userId, String keyword, String orderType) {
+        int safeCurrent = PageUtils.normalizeCurrent(current);
+        int safeSize = PageUtils.normalizeSize(size, 200);
+        int offset = (safeCurrent - 1) * safeSize;
+        List<Object> args = new ArrayList<>();
+        StringBuilder where = new StringBuilder(" WHERE o.deleted=0 AND o.status=1 AND o.order_type IN ('vip','token')");
+        if (userId != null) {
+            where.append(" AND o.user_id=?");
+            args.add(userId);
+        }
+        String normalizedOrderType = normalizeUnifiedOrderType(orderType);
+        if (normalizedOrderType != null) {
+            where.append(" AND o.order_type=?");
+            args.add(normalizedOrderType);
+        }
+        if (StringUtils.hasText(keyword)) {
+            where.append(" AND (u.username LIKE ? OR o.order_no LIKE ? OR o.title LIKE ? OR bp.plan_name LIKE ? OR trp.plan_name LIKE ?)");
+            String kw = "%" + keyword.trim() + "%";
+            args.add(kw); args.add(kw); args.add(kw); args.add(kw); args.add(kw);
+        }
+        Long total = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM payment_order o LEFT JOIN sys_user u ON u.id=o.user_id " +
+                        "LEFT JOIN billing_plan bp ON bp.id=o.plan_id LEFT JOIN token_recharge_plan trp ON trp.id=o.token_plan_id" + where,
+                Long.class, args.toArray());
+        List<Object> pageArgs = new ArrayList<>(args);
+        pageArgs.add(safeSize); pageArgs.add(offset);
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT o.id, o.tenant_id AS tenantId, o.user_id AS userId, u.username, o.order_no AS orderNo, o.order_type AS orderType, " +
+                        "o.target_type AS targetType, o.target_id AS targetId, o.plan_id AS planId, o.token_plan_id AS tokenPlanId, o.title, " +
+                        "o.amount_cent AS amountCent, ROUND(o.amount_cent/100,2) AS amountYuan, o.token_amount AS tokenAmount, " +
+                        "o.payment_method AS paymentMethod, o.provider_type AS providerType, o.period_type AS periodType, o.status, " +
+                        "o.paid_time AS paidTime, o.created_time AS createdTime, " +
+                        "bp.plan_name AS vipPlanName, trp.plan_name AS tokenPlanName " +
+                        "FROM payment_order o LEFT JOIN sys_user u ON u.id=o.user_id " +
+                        "LEFT JOIN billing_plan bp ON bp.id=o.plan_id LEFT JOIN token_recharge_plan trp ON trp.id=o.token_plan_id" + where +
+                        " ORDER BY o.id DESC LIMIT ? OFFSET ?", pageArgs.toArray());
+        for (Map<String, Object> row : rows) {
+            decorateUnifiedRecord(row);
+        }
+        return new PageResult<>(rows, safeCurrent, safeSize, total == null ? 0 : total);
+    }
+
+    /**
+     * 管理端：统一充值记录汇总（今日收入 + 累计统计，含会员充值与 Token 充值）。
+     * 今日收入基于 paid_time（实际支付时间）统计，仅统计 status=1（已支付成功）的订单。
+     * 若 userId 不为空，则只统计该用户。
+     */
+    public Map<String, Object> unifiedRechargeSummary(Long userId) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        StringBuilder whereUser = new StringBuilder(" WHERE deleted=0 AND status=1 AND order_type IN ('vip','token')");
+        List<Object> args = new ArrayList<>();
+        if (userId != null) {
+            whereUser.append(" AND user_id=?");
+            args.add(userId);
+        }
+        Object[] allArgs = args.toArray();
+        // 今日收入模块（基于 paid_time）
+        String todayWhere = whereUser + " AND DATE(paid_time)=CURRENT_DATE()";
+        Map<String, Object> todayRevenue = new LinkedHashMap<>();
+        todayRevenue.put("totalCount", optionalLong("SELECT COUNT(*) FROM payment_order" + todayWhere, allArgs));
+        todayRevenue.put("totalAmountCent", optionalLong("SELECT COALESCE(SUM(amount_cent),0) FROM payment_order" + todayWhere, allArgs));
+        todayRevenue.put("vipCount", optionalLong("SELECT COUNT(*) FROM payment_order" + todayWhere + " AND order_type='vip'", allArgs));
+        todayRevenue.put("vipAmountCent", optionalLong("SELECT COALESCE(SUM(amount_cent),0) FROM payment_order" + todayWhere + " AND order_type='vip'", allArgs));
+        todayRevenue.put("tokenCount", optionalLong("SELECT COUNT(*) FROM payment_order" + todayWhere + " AND order_type='token'", allArgs));
+        todayRevenue.put("tokenAmountCent", optionalLong("SELECT COALESCE(SUM(amount_cent),0) FROM payment_order" + todayWhere + " AND order_type='token'", allArgs));
+        m.put("todayRevenue", todayRevenue);
+        // 累计统计
+        Map<String, Object> cumulative = new LinkedHashMap<>();
+        cumulative.put("totalRecords", optionalLong("SELECT COUNT(*) FROM payment_order" + whereUser, allArgs));
+        cumulative.put("totalAmountCent", optionalLong("SELECT COALESCE(SUM(amount_cent),0) FROM payment_order" + whereUser, allArgs));
+        cumulative.put("vipTotalRecords", optionalLong("SELECT COUNT(*) FROM payment_order" + whereUser + " AND order_type='vip'", allArgs));
+        cumulative.put("vipTotalAmountCent", optionalLong("SELECT COALESCE(SUM(amount_cent),0) FROM payment_order" + whereUser + " AND order_type='vip'", allArgs));
+        cumulative.put("tokenTotalRecords", optionalLong("SELECT COUNT(*) FROM payment_order" + whereUser + " AND order_type='token'", allArgs));
+        cumulative.put("tokenTotalAmountCent", optionalLong("SELECT COALESCE(SUM(amount_cent),0) FROM payment_order" + whereUser + " AND order_type='token'", allArgs));
+        cumulative.put("tokenTotalTokens", optionalLong("SELECT COALESCE(SUM(token_amount),0) FROM payment_order" + whereUser + " AND order_type='token'", allArgs));
+        m.put("cumulative", cumulative);
+        return m;
+    }
+
+    /**
+     * 装饰统一充值记录行：统一字段名、补充文案。
+     */
+    private void decorateUnifiedRecord(Map<String, Object> row) {
+        String ot = text(row.get("orderType"));
+        String planName = "vip".equals(ot) ? text(row.get("vipPlanName")) : text(row.get("tokenPlanName"));
+        row.put("planName", planName);
+        row.put("recordType", ot);
+        row.put("recordTypeText", "vip".equals(ot) ? "会员充值" : "Token 充值");
+        String pt = text(row.get("periodType"));
+        row.put("periodText", pt.isEmpty() ? "" : switch (pt) {
+            case "month" -> "月付";
+            case "quarter" -> "季付";
+            case "year" -> "年付";
+            default -> pt;
+        });
+        String pm = text(row.get("paymentMethod"));
+        row.put("paymentMethodText", switch (pm) {
+            case "wechat" -> "微信支付";
+            case "alipay" -> "支付宝";
+            default -> pm.isEmpty() ? "—" : pm;
+        });
+        String tt = text(row.get("targetType"));
+        row.put("targetTypeText", "xianyu_account".equals(tt) ? "闲鱼账号" : "用户账号");
+    }
+
+    /**
+     * 归一化统一充值记录的 orderType 过滤值。
+     * 返回 null 表示不过滤（展示全部会员+Token）。
+     */
+    private String normalizeUnifiedOrderType(String type) {
+        if (type == null) return null;
+        String t = type.trim().toLowerCase(Locale.ROOT);
+        if (t.isEmpty()) return null;
+        if ("vip".equals(t) || "member".equals(t)) return "vip";
+        if ("token".equals(t) || "tokens".equals(t)) return "token";
+        return null;
+    }
+
     public Map<String, Object> summary() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("todayChargeTokens", optionalLong("SELECT COALESCE(SUM(charge_tokens),0) FROM ai_usage_log WHERE deleted=0 AND status=1 AND DATE(created_time)=CURRENT_DATE()"));

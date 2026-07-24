@@ -46,7 +46,7 @@
       <ElCard shadow="never">
         <div class="metric-label">求解总次数</div>
         <div class="metric-value">{{ formatNumber(stats.kpi.total) }}</div>
-        <div class="metric-sub">{{ rangeLabel }}</div>
+        <div class="metric-sub">{{ rangeLabel }}（已排除服务不可用/预检验/超时）</div>
       </ElCard>
       <ElCard shadow="never">
         <div class="metric-label">成功次数</div>
@@ -56,14 +56,71 @@
       <ElCard shadow="never">
         <div class="metric-label">失败次数</div>
         <div class="metric-value text-danger">{{ formatNumber(stats.kpi.fail) }}</div>
-        <div class="metric-sub">status=fail</div>
+        <div class="metric-sub">不含服务不可用/预检验/超时</div>
       </ElCard>
       <ElCard shadow="never">
         <div class="metric-label">成功率</div>
         <div class="metric-value" :class="successRateClass">{{ formatPercent(stats.kpi.successRate) }}</div>
-        <div class="metric-sub">成功 / 总数</div>
+        <div class="metric-sub">成功 / (成功+失败)</div>
       </ElCard>
     </div>
+
+    <!-- 统计口径说明 -->
+    <ElAlert type="info" :closable="false" class="stats-scope-alert" show-icon>
+      <template #title>
+        <span>
+          统计口径：失败原因为「服务不可用」「预检验拒绝」「超时」的请求不计入成功率与失败次数统计。
+          当前范围已排除：
+          <b>服务不可用 {{ stats.kpi.serviceUnavailable || 0 }}</b> 次、
+          <b>预检验拒绝 {{ stats.kpi.precheckRejected || 0 }}</b> 次、
+          <b>超时 {{ stats.kpi.timeout || 0 }}</b> 次。
+          此三类记录可在下方明细列表按状态筛选查看。
+        </span>
+      </template>
+    </ElAlert>
+
+    <!-- 队列实时状态徽标 -->
+    <ElCard shadow="never" class="queue-status-card">
+      <div class="queue-status-row">
+        <div class="queue-status-item">
+          <span class="queue-label">当前排队中</span>
+          <ElBadge :value="queueStatus.queued" :max="999" type="primary" class="queue-badge">
+            <span class="queue-num" :class="{ 'num-active': queueStatus.queued > 0 }">{{ queueStatus.queued }}</span>
+          </ElBadge>
+          <span class="queue-hint">内存队列中等待处理</span>
+        </div>
+        <div class="queue-status-item">
+          <span class="queue-label">当前求解中</span>
+          <ElBadge :value="queueStatus.retrying" :max="999" type="warning" class="queue-badge">
+            <span class="queue-num" :class="{ 'num-active': queueStatus.retrying > 0 }">{{ queueStatus.retrying }}</span>
+          </ElBadge>
+          <span class="queue-hint">worker 已取出正在处理</span>
+        </div>
+        <div class="queue-status-item">
+          <span class="queue-label">超时记录</span>
+          <ElBadge :value="queueStatus.timeout" :max="999" type="info" class="queue-badge">
+            <span class="queue-num" :class="{ 'num-active': queueStatus.timeout > 0 }">{{ queueStatus.timeout }}</span>
+          </ElBadge>
+          <span class="queue-hint">求解超时自动终止</span>
+        </div>
+        <div class="queue-status-item">
+          <span class="queue-label">预检验拒绝</span>
+          <ElBadge :value="queueStatus.precheckRejected" :max="999" type="warning" class="queue-badge">
+            <span class="queue-num" :class="{ 'num-active': queueStatus.precheckRejected > 0 }">{{ queueStatus.precheckRejected }}</span>
+          </ElBadge>
+          <span class="queue-hint">不活跃/无效账号拒绝</span>
+        </div>
+        <div class="queue-status-item">
+          <span class="queue-label">worker 并发</span>
+          <span class="queue-num">{{ queueStatus.workers }}</span>
+          <span class="queue-hint">最大并行求解数</span>
+        </div>
+        <ElButton :loading="queueLoading" size="small" @click="loadQueueStatus">刷新</ElButton>
+      </div>
+      <div v-if="queueStatus.queued === 0 && queueStatus.retrying === 0" class="queue-empty-hint">
+        当前队列无活跃任务（排队中/求解中是瞬态状态，通常在 1 秒内完成）
+      </div>
+    </ElCard>
 
     <!-- 趋势折线图 -->
     <ElCard shadow="never" class="section-card">
@@ -159,6 +216,8 @@
               <ElOption label="失败" value="fail" />
               <ElOption label="求解中" value="retrying" />
               <ElOption label="排队中" value="queued" />
+              <ElOption label="超时" value="timeout" />
+              <ElOption label="预检验拒绝" value="precheck_rejected" />
             </ElSelect>
             <ElSelect
               v-model="listQuery.triggerScene"
@@ -187,7 +246,15 @@
       />
       <template v-else>
         <ElTable :data="list.records" border stripe>
-          <template #empty><div class="empty-state">暂无求解记录</div></template>
+          <template #empty>
+            <div class="empty-state">
+              <div v-if="isTransientStatus">当前没有{{ statusLabel(listQuery.status) }}的记录</div>
+              <div v-else>暂无求解记录</div>
+              <div v-if="isTransientStatus" class="empty-hint-sub">
+                "{{ statusLabel(listQuery.status) }}"是瞬态状态，任务通常在 1 秒内完成。请查看上方"队列实时状态"了解当前队列情况
+              </div>
+            </div>
+          </template>
           <ElTableColumn label="ID" prop="id" width="80" />
           <ElTableColumn label="账号" min-width="150">
             <template #default="{ row }">
@@ -303,7 +370,7 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, reactive, ref, watch } from 'vue'
+  import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
   import { useRoute, useRouter } from 'vue-router'
   import { ElTag, ElIcon } from 'element-plus'
   import { Loading } from '@element-plus/icons-vue'
@@ -313,7 +380,9 @@
   import {
     getCaptchaSolveStats,
     getCaptchaSolveRecords,
+    getCaptchaQueueStatus,
     type CaptchaSolveStats,
+    type CaptchaQueueStatus,
     type CaptchaRecordRow
   } from '@/api/captcha-records'
 
@@ -344,6 +413,8 @@
     if (status === 'fail') return '失败'
     if (status === 'retrying') return '求解中'
     if (status === 'queued') return '排队中'
+    if (status === 'timeout') return '超时'
+    if (status === 'precheck_rejected') return '预检验拒绝'
     return status || '—'
   }
 
@@ -352,6 +423,8 @@
     if (status === 'fail') return 'danger'
     if (status === 'retrying') return 'warning'
     if (status === 'queued') return 'primary'
+    if (status === 'timeout') return 'info'
+    if (status === 'precheck_rejected') return 'warning'
     return 'info'
   }
 
@@ -419,10 +492,30 @@
   const daysRange = ref<number>(7)
   const statsLoading = ref(false)
   const stats = reactive<CaptchaSolveStats>({
-    kpi: { total: 0, success: 0, fail: 0, successRate: 0 },
+    kpi: { total: 0, success: 0, fail: 0, timeout: 0, precheckRejected: 0, serviceUnavailable: 0, successRate: 0 },
     trend: [],
     accounts: []
   })
+
+  // ==================== 队列实时状态 ====================
+  const queueLoading = ref(false)
+  const queueStatus = reactive<CaptchaQueueStatus>({ queued: 0, retrying: 0, timeout: 0, precheckRejected: 0, workers: 2 })
+  let queueTimer: ReturnType<typeof setInterval> | null = null
+
+  async function loadQueueStatus() {
+    queueLoading.value = true
+    try {
+      const data = await getCaptchaQueueStatus()
+      Object.assign(queueStatus, data || { queued: 0, retrying: 0, timeout: 0, precheckRejected: 0, workers: 2 })
+    } catch (error: any) {
+      console.warn('队列状态加载失败:', error?.message)
+    } finally {
+      queueLoading.value = false
+    }
+  }
+
+  // 排队中/求解中是瞬态状态，空结果时给用户友好提示
+  const isTransientStatus = computed(() => listQuery.status === 'queued' || listQuery.status === 'retrying')
 
   const rangeLabel = computed(() => {
     if (daysRange.value === 0) return '全部历史'
@@ -461,7 +554,7 @@
       if (accountIdFilter.value) params.accountId = accountIdFilter.value
       else if (userIdFilter.value) params.userId = userIdFilter.value
       const data = await getCaptchaSolveStats(params)
-      Object.assign(stats, data || { kpi: { total: 0, success: 0, fail: 0, successRate: 0 }, trend: [], accounts: [] })
+      Object.assign(stats, data || { kpi: { total: 0, success: 0, fail: 0, timeout: 0, precheckRejected: 0, serviceUnavailable: 0, successRate: 0 }, trend: [], accounts: [] })
       // 从账号分组提取账号名提示
       if (accountIdFilter.value && stats.accounts && stats.accounts.length > 0) {
         accountNameHint.value = stats.accounts[0].accountName || ''
@@ -470,7 +563,6 @@
       }
     } catch (error: any) {
       // 静默处理，仅控制台告警
-      // eslint-disable-next-line no-console
       console.warn('求解统计加载失败:', error?.message)
     } finally {
       statsLoading.value = false
@@ -610,12 +702,26 @@
       listQuery.accountName = ''
       listQuery.status = ''
       listQuery.triggerScene = ''
-      // 同时刷新统计和列表
+      // 同时刷新统计、队列状态和列表
       loadStats()
+      loadQueueStatus()
       loadList()
     },
     { immediate: true }
   )
+
+  // 队列实时状态定时刷新（15 秒一次，覆盖典型求解周期 2-30 秒）
+  onMounted(() => {
+    loadQueueStatus()
+    queueTimer = setInterval(loadQueueStatus, 15000)
+  })
+
+  onUnmounted(() => {
+    if (queueTimer) {
+      clearInterval(queueTimer)
+      queueTimer = null
+    }
+  })
 </script>
 
 <style scoped lang="scss">
@@ -708,6 +814,10 @@
   border-radius: 12px;
 }
 
+.stats-scope-alert {
+  border-radius: 12px;
+}
+
 .section-card {
   border-radius: 18px;
 }
@@ -735,6 +845,63 @@
 .empty-state {
   padding: 32px;
   color: #9ca3af;
+  text-align: center;
+}
+
+.empty-hint-sub {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #d1d5db;
+  line-height: 1.6;
+}
+
+.queue-status-card {
+  border-radius: 14px;
+}
+
+.queue-status-row {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  flex-wrap: wrap;
+}
+
+.queue-status-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.queue-label {
+  font-size: 13px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.queue-num {
+  font-size: 28px;
+  font-weight: 800;
+  color: #9ca3af;
+  line-height: 1.1;
+}
+
+.queue-num.num-active {
+  color: #2563eb;
+}
+
+.queue-hint {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.queue-empty-hint {
+  margin-top: 12px;
+  padding: 8px 14px;
+  background: #f3f4f6;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #6b7280;
   text-align: center;
 }
 

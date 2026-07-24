@@ -516,8 +516,15 @@ export const processMonitor = new ProcessMonitor({
 
 /**
  * 生成唯一 sessionId
+ *
+ * 关键修复：原实现使用 require('crypto')，但本项目是 ESM 模块，
+ * 编译后 require 在 ESM 运行时不可用，抛出 ReferenceError: require is not defined。
+ * 这导致 sliderSolver.ts 方案A的 processRegistry.register 调用永远失败，
+ * 进而方案A被 catch 块捕获后回退到方案B。
+ * 改用 globalThis.crypto.randomUUID()（Node 15.6+ 内置，无需 import）。
  */
 export function generateSessionId(): string {
-  const { randomUUID } = require('crypto');
-  return `slider-${Date.now()}-${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+  const uuid = globalThis.crypto?.randomUUID?.()
+    ?? `fallback-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return `slider-${Date.now()}-${uuid.replace(/-/g, '').slice(0, 8)}`;
 }

@@ -12,6 +12,7 @@ from .routes import auto_reply_scope as auto_reply_scope_module
 from .routes import captcha as captcha_module
 from .routes import feishu as feishu_module
 from .routes import mall_category as mall_category_module
+from .routes import slider_api as slider_api_module
 
 api_router = APIRouter()
 api_router.include_router(ai_transaction_engine.router, tags=['aiTransaction'])
@@ -56,3 +57,4 @@ api_router.include_router(knowledge_base_module.router, tags=["knowledgeBase"])
 api_router.include_router(auto_reply_scope_module.router, tags=["autoReplyScope"])
 api_router.include_router(feishu_module.router, tags=["feishu"])
 api_router.include_router(mall_category_module.router, tags=["mallCategory"])
+api_router.include_router(slider_api_module.router, tags=["slider-api"])

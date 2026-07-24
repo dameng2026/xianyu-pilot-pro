@@ -6,6 +6,7 @@ and start their WebSocket connections.
 """
 import asyncio
 import logging
+import time
 from typing import Any
 
 from sqlalchemy import text
@@ -23,6 +24,12 @@ AI_AUTO_REPLY_DEBOUNCE_SECONDS = 1.0
 _ai_auto_reply_batch_lock = asyncio.Lock()
 _ai_auto_reply_batches: dict[str, dict[str, Any]] = {}
 _ai_auto_reply_tasks: dict[str, asyncio.Task] = {}
+
+# 付款兜底节流：同一 account_id+pnmId 在此窗口内只触发一次付款兜底，
+# 防止闲鱼 WS 对同一笔付款推送的多条卡片更新消息全部触发重复发货。
+# 60 秒足以覆盖一次付款连发的全部消息，避免 78 次重复触发的灾难。
+PAYMENT_FALLBACK_THROTTLE_SECONDS = 60.0
+_payment_fallback_last_run: dict[str, float] = {}
 
 
 async def _run_delivery_after_message_saved(tenant_id: int, account_id: int, msg: dict) -> None:
@@ -337,9 +344,23 @@ async def on_message_callback(tenant_id: int, account_id: int, msg: dict) -> Non
     if saved_message_id is None:
         # 消息已存在（去重命中）。但对于付款消息（contentType=26 且含"等待你发货"），
         # 仍需触发自动发货作为兜底，避免因去重逻辑或 pnm_id 复用导致付款通知被跳过。
+        # 但必须节流：闲鱼 WS 对同一笔付款会推送多条卡片更新消息（pnmId 相同），
+        # 若每条都触发兜底会导致同一订单重复发货（实测 78 次重复触发）。
+        # 节流策略：同一 account_id+pnmId 在 60 秒内只触发一次兜底。
         try:
             from .ws_delivery_handler import is_payment_message
             if is_payment_message(msg):
+                pnm_id = str(msg.get("pnmId") or "")
+                throttle_key = f"{account_id}:{pnm_id}"
+                now = time.monotonic()
+                last_run = _payment_fallback_last_run.get(throttle_key, 0.0)
+                if now - last_run < PAYMENT_FALLBACK_THROTTLE_SECONDS:
+                    logger.debug(
+                        "付款兜底节流跳过 accountId=%d pnmId=%s 距上次触发 %.1fs（防止重复发货）",
+                        account_id, pnm_id, now - last_run,
+                    )
+                    return
+                _payment_fallback_last_run[throttle_key] = now
                 logger.info(
                     "消息已存在但为付款消息，仍触发自动发货兜底: accountId=%d sId=%s pnmId=%s",
                     account_id, msg.get("sId", ""), msg.get("pnmId", ""),

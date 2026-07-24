@@ -124,12 +124,14 @@ async def auto_solve_captcha(
 
         # 查询用户级优先级（手动>自动 + SVIP>VIP>普通）
         from ....services.captcha_precheck import compute_solve_priority
-        from ....services.captcha_queue import enqueue_solve, get_queue_position
+        from ....services.captcha_queue import enqueue_solve_with_position
         _level, priority = await compute_solve_priority(tenant_id, trigger_scene)
 
         # 入队优先级队列，由 worker 异步处理
         # manual_retry（失败后重试）跳过同账号去重，对齐前端"失败后可立即重试"设计
-        record_id = await enqueue_solve(
+        # 使用 enqueue_solve_with_position 直接获取入队瞬间的排队位置，
+        # 避免入队后二次查询 get_queue_position 时 worker 已取出任务返回 (0, 0)
+        enqueued = await enqueue_solve_with_position(
             account_id=account_id,
             tenant_id=tenant_id,
             trigger_scene=trigger_scene,
@@ -139,7 +141,7 @@ async def auto_solve_captcha(
             skip_dedup=(trigger_scene == "manual_retry"),
         )
 
-        if not record_id:
+        if not enqueued:
             # 被去重跳过（同账号 60 秒内已入队）
             return ResultObject.success({
                 "queued": False,
@@ -147,8 +149,7 @@ async def auto_solve_captcha(
                 "message": "该账号近期已触发过求解，请稍后再试",
             })
 
-        # 查询排队位置
-        position, total = await get_queue_position(record_id)
+        record_id, position, total = enqueued
 
         return ResultObject.success({
             "queued": True,
@@ -210,11 +211,13 @@ async def handle_captcha(
 
         # 自动求解模式：入队优先级队列
         from ....services.captcha_precheck import compute_solve_priority
-        from ....services.captcha_queue import enqueue_solve, get_queue_position
+        from ....services.captcha_queue import enqueue_solve_with_position
         _level, priority = await compute_solve_priority(tenant_id, trigger_scene)
 
         # manual_retry（失败后重试）跳过同账号去重，对齐前端"失败后可立即重试"设计
-        record_id = await enqueue_solve(
+        # 使用 enqueue_solve_with_position 直接获取入队瞬间的排队位置，
+        # 避免入队后二次查询 get_queue_position 时 worker 已取出任务返回 (0, 0)
+        enqueued = await enqueue_solve_with_position(
             account_id=account_id,
             tenant_id=tenant_id,
             trigger_scene=trigger_scene,
@@ -224,7 +227,7 @@ async def handle_captcha(
             skip_dedup=(trigger_scene == "manual_retry"),
         )
 
-        if not record_id:
+        if not enqueued:
             # 被去重跳过（同账号 60 秒内已入队）
             return ResultObject.success({
                 "queued": False,
@@ -232,8 +235,7 @@ async def handle_captcha(
                 "message": "该账号近期已触发过求解，请稍后再试",
             })
 
-        # 查询排队位置
-        position, total = await get_queue_position(record_id)
+        record_id, position, total = enqueued
 
         return ResultObject.success({
             "queued": True,
@@ -325,6 +327,103 @@ async def get_captcha_queue_position(
         })
     except Exception as e:
         return safe_route_failure(logger, e, operation="get queue position", user_message="查询排队位置失败")
+
+
+@router.get("/queue-status", response_model=ResultObject[dict])
+async def get_captcha_queue_status(
+    summary: bool = False,
+    current_user: dict = Depends(get_current_user),
+):
+    """查询滑块求解队列的实时状态（内存态 + DB 求解中数）。
+
+    查询参数:
+        summary: 为 True 时返回全租户汇总（仅管理员可用）；默认按当前用户 tenant_id 过滤
+
+    返回:
+        {
+            "queued": int,            # 当前排队中任务数（内存队列 _pending_tasks）
+            "retrying": int,          # 当前求解中任务数（DB status='retrying'）
+            "timeout": int,           # 超时记录数（DB status='timeout'）
+            "precheckRejected": int,  # 预检验拒绝记录数（DB status='precheck_rejected'）
+            "workers": int,           # worker 并发数
+            "tenantId": int|null      # summary=False 时返回当前租户 ID
+        }
+
+    说明：
+    - queued 来源于内存队列 _pending_tasks，反映未被 worker 取出的任务数
+    - retrying 来源于 DB，反映 worker 已取出但尚未完成的任务数
+    - timeout / precheckRejected 来源于 DB，反映历史累计的终态记录数
+    - queued / retrying 是瞬态的，任一时刻通常为 0 或很小的数值
+    """
+    try:
+        tenant_id = int(current_user.get("tenant_id") or 0)
+        if not tenant_id:
+            return ResultObject.validate_failed("租户上下文不能为空")
+
+        # summary 模式仅允许 Java 网关内部调用（auth_type=internal，Java 侧已做 admin 鉴权）
+        # 前台用户 JWT 调用（auth_type=user）强制按 tenant_id 过滤，忽略 summary
+        auth_type = str(current_user.get("auth_type") or "")
+        target_summary = bool(summary) and auth_type == "internal"
+
+        from ....services.captcha_queue import get_queue_manager
+        from sqlalchemy import text as sql_text
+        from ....core.database import async_session
+
+        manager = await get_queue_manager()
+
+        # 从内存队列统计排队中任务数
+        queued_count = 0
+        async with manager._pending_lock:
+            for task in manager._pending_tasks.values():
+                if target_summary or task.tenant_id == tenant_id:
+                    queued_count += 1
+
+        # 从 DB 统计求解中 / 超时 / 预检验拒绝任务数（一条 SQL 条件聚合）
+        retrying_count = 0
+        timeout_count = 0
+        precheck_rejected_count = 0
+        try:
+            async with async_session() as db:
+                if target_summary:
+                    row = (await db.execute(
+                        sql_text(
+                            "SELECT "
+                            "COALESCE(SUM(status = 'retrying'), 0) AS retrying, "
+                            "COALESCE(SUM(status = 'timeout'), 0) AS timeout, "
+                            "COALESCE(SUM(status = 'precheck_rejected'), 0) AS precheck_rejected "
+                            "FROM xianyu_captcha_solve_record "
+                            "WHERE COALESCE(deleted, 0) = 0"
+                        ),
+                    )).mappings().first()
+                else:
+                    row = (await db.execute(
+                        sql_text(
+                            "SELECT "
+                            "COALESCE(SUM(status = 'retrying'), 0) AS retrying, "
+                            "COALESCE(SUM(status = 'timeout'), 0) AS timeout, "
+                            "COALESCE(SUM(status = 'precheck_rejected'), 0) AS precheck_rejected "
+                            "FROM xianyu_captcha_solve_record "
+                            "WHERE tenant_id = :tid AND COALESCE(deleted, 0) = 0"
+                        ),
+                        {"tid": tenant_id},
+                    )).mappings().first()
+                if row:
+                    retrying_count = int(row["retrying"] or 0)
+                    timeout_count = int(row["timeout"] or 0)
+                    precheck_rejected_count = int(row["precheck_rejected"] or 0)
+        except Exception as e:
+            safe_route_failure(logger, e, operation="count db status in queue-status")
+
+        return ResultObject.success({
+            "queued": queued_count,
+            "retrying": retrying_count,
+            "timeout": timeout_count,
+            "precheckRejected": precheck_rejected_count,
+            "workers": 2,  # SOLVE_WORKER_CONCURRENCY
+            "tenantId": None if target_summary else tenant_id,
+        })
+    except Exception as e:
+        return safe_route_failure(logger, e, operation="get captcha queue status", user_message="查询队列状态失败")
 
 
 @router.get("/records", response_model=ResultObject[dict])

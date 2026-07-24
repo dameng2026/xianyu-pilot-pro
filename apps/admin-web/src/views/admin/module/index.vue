@@ -691,13 +691,12 @@
             <ElOption label="拦截" value="拦截" />
             <ElOption label="审核" value="审核" />
           </ElSelect>
-          <ElInputNumber
+          <ElInput
             v-else-if="isPriceField(col.prop)"
             v-model="drawer.form[col.prop]"
-            :min="0"
-            :precision="2"
-            :step="1"
-            :controls="false"
+            type="number"
+            step="0.01"
+            min="0"
             style="width: 100%"
             :placeholder="`请输入${col.label}（元），0 表示未配置`"
           />
@@ -967,6 +966,10 @@ function normalizeDrawerForm(form: Record<string, any>) {
       } else {
         next[prop] = 0
       }
+      // 删除后端会优先读取的冗余分值/元值字段，确保用户在表单中编辑的 priceMonth 等元值能真正生效
+      // 否则后端 parsePeriodMoneyCentWithDefault 会优先读到旧 priceMonthCent，导致编辑后价格保持原样
+      delete next[yuanKey]
+      delete next[`${prop}Cent`]
     }
     return next
   }
@@ -1363,7 +1366,9 @@ function openEdit(row: any) {
   async function save() {
     const allowed = drawer.mode === 'create' ? canAdd.value : drawer.mode === 'edit' && canEdit.value
     if (!allowed) return denyUnauthorizedAction()
-    await saveModuleRecord(moduleKey.value, drawer.form)
+    // 套餐价格使用 ElInput type=number 绑定字符串，保存前需经 normalizeDrawerForm 转为数字并清理冗余字段
+    const payload = moduleKey.value === 'plans' ? normalizeDrawerForm(drawer.form) : drawer.form
+    await saveModuleRecord(moduleKey.value, payload)
     drawer.visible = false
     reload()
   }

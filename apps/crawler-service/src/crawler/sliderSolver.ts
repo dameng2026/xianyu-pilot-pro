@@ -1049,7 +1049,7 @@ async function clickRetryToResetSlider(page: Page, frame: any, target: any): Pro
  * 本函数检测 URL 和页面文本特征，用于在"未检测到滑块"时再次确认。
  */
 async function checkLoginPage(page: Page): Promise<boolean> {
-  // 1. 检测 URL 跳转
+  // 1. 检测主页面 URL 跳转
   const currentUrl = page.url();
   if (/login\.taobao\.com|login\.goofish\.com|\/login\b|\/uiLogin\b/i.test(currentUrl)) {
     return true;
@@ -1064,6 +1064,34 @@ async function checkLoginPage(page: Page): Promise<boolean> {
       return false;
     }).catch(() => false);
     if (hasLoginIndicator) return true;
+  } catch {
+    // ignore
+  }
+  // 3. 关键修复：检测 iframe 内的 login.token 接口 URL
+  // Cookie 失效时，闲鱼 SPA 主页面 URL 仍是 /im（不会被重定向到登录页），
+  // 但 iframe 会加载 mtop.taobao.idlemessage.pc.login.token 接口刷新 token，
+  // 该接口因风控返回 punish 页（URL 含 login.token + _____tmd_____/punish）。
+  // 原先只检测主页面 URL，导致 Cookie 失效时误判为"已通过验证"。
+  try {
+    const frames = page.frames();
+    for (const frame of frames) {
+      try {
+        const frameUrl = frame.url();
+        if (!frameUrl) continue;
+        // 检测 login.token 接口 URL（Cookie 失效时的 token 刷新接口）
+        if (/login\.token|mtop\.taobao\.idlemessage\.pc\.login/i.test(frameUrl)) {
+          console.warn(`[SliderSolver] 检测到 login.token iframe URL，Cookie Session 已失效: ${frameUrl.substring(0, 150)}`);
+          return true;
+        }
+        // 检测 login.taobao.com 等登录域（iframe 内的重定向）
+        if (/login\.taobao\.com|login\.goofish\.com|\/uiLogin\b/i.test(frameUrl)) {
+          console.warn(`[SliderSolver] 检测到登录页 iframe URL: ${frameUrl.substring(0, 150)}`);
+          return true;
+        }
+      } catch {
+        // frame 可能已销毁，忽略
+      }
+    }
   } catch {
     // ignore
   }
@@ -1362,7 +1390,11 @@ async function navigateToMessagePage(homePage: Page, timeoutMs: number): Promise
     },
   ];
 
+  // 跟踪本次策略循环中打开的所有 popup，便于失败后统一清理
+  const openedPopups: Page[] = [];
+
   for (const strategy of strategies) {
+    let popup: Page | null = null;
     try {
       // 每次策略点击前重新设置 popup 监听（5 秒超时）
       // 关键：popupPromise 是一次性的，一旦 resolve/reject 就不能再用。
@@ -1371,8 +1403,9 @@ async function navigateToMessagePage(homePage: Page, timeoutMs: number): Promise
       const ok = await strategy.run();
       if (!ok) continue;
       // 点击后等待 popup（新窗口）打开
-      const popup = await popupPromise;
+      popup = await popupPromise;
       if (popup) {
+        openedPopups.push(popup); // 跟踪以便失败后清理
         // 等待新窗口加载完成
         await popup.waitForLoadState('domcontentloaded', { timeout: timeoutMs }).catch(() => {});
         console.log(`[SliderSolver] 策略 "${strategy.name}" 成功打开消息页新窗口，URL: ${popup.url()}`);
@@ -1381,17 +1414,54 @@ async function navigateToMessagePage(homePage: Page, timeoutMs: number): Promise
         return popup;
       }
       console.warn(`[SliderSolver] 策略 "${strategy.name}" 点击后未捕获到新窗口，尝试下一策略`);
-    } catch {
-      // ignore，尝试下一策略
+    } catch (e: any) {
+      // 关键修复：不再静默吞掉异常，打印真实错误便于诊断
+      // 场景：popup 打开后渲染进程崩溃（Page crashed），异常被吞掉后
+      // 回退路径在已崩溃的 homePage 上 goto，必然再次崩溃
+      console.warn(`[SliderSolver] 策略 "${strategy.name}" 执行异常: ${safeErrorType(e)}`);
+      // 关键修复：策略失败后关闭已打开的 popup，避免泄漏页面累积导致内存压力
+      // 泄漏的 popup 会占用渲染进程，多个求解请求叠加会触发 OOM → Page crashed
+      if (popup) {
+        try {
+          if (!popup.isClosed()) {
+            await popup.close().catch(() => {});
+            console.log(`[SliderSolver] 策略 "${strategy.name}" 失败后已关闭泄漏的 popup`);
+          }
+        } catch { /* ignore close error */ }
+      }
     }
+  }
+
+  // 关键修复：回退路径前，关闭所有策略打开但未返回的 popup
+  // 这些 popup 是泄漏源，不关闭会导致每次求解累积 1-3 个渲染进程
+  for (const p of openedPopups) {
+    try {
+      if (!p.isClosed()) {
+        await p.close().catch(() => {});
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 关键修复：回退路径前检查 homePage 是否仍然健康
+  // 如果 homePage 已崩溃（Page crashed），直接 goto 必然抛出异常
+  if (homePage.isClosed()) {
+    console.warn('[SliderSolver] homePage 已关闭，无法回退到直接访问 /im');
+    return undefined;
   }
 
   // 所有策略都失败，回退到直接访问 /im（在原窗口操作）
   console.warn('[SliderSolver] 所有策略均未打开新窗口，回退到直接访问 /im');
-  await homePage.goto('https://www.goofish.com/im', {
-    waitUntil: 'domcontentloaded',
-    timeout: timeoutMs,
-  });
+  try {
+    await homePage.goto('https://www.goofish.com/im', {
+      waitUntil: 'domcontentloaded',
+      timeout: timeoutMs,
+    });
+  } catch (e: any) {
+    // 关键修复：回退 goto 失败时返回 undefined，让外层重试循环处理
+    // 而不是让异常传播导致整个求解失败
+    console.warn(`[SliderSolver] 回退路径 goto /im 失败: ${safeErrorType(e)}`);
+    return undefined;
+  }
   await homePage.waitForTimeout(1500);
   return homePage;
 }
@@ -1774,6 +1844,13 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
             await warmupPage.reload({ waitUntil: 'domcontentloaded', timeout: 45000 });
           } catch { /* ignore */ }
         }
+        // 关键修复：预热+Cookie 注入完成后立即关闭 warmupPage，避免页面泄漏
+        // 泄漏的 warmupPage 会持续占用一个渲染进程，多个求解请求叠加会加剧内存压力
+        // 导致 Page crashed（渲染进程被 OOM killer 杀掉）
+        try {
+          await warmupPage.close();
+          console.log('[SliderSolver] 预热页已关闭，释放渲染进程');
+        } catch { /* ignore close error */ }
         usingCDP = true;
         console.log('[SliderSolver] 已启动持久化 Chrome 并注入反检测脚本 + 预热 Cookie');
 
@@ -1793,9 +1870,16 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
           description: `launchPersistentContext chrome=${chromePath} userDataDir=${userDataDirForCleanup}`,
         });
       } catch (e: any) {
-        console.warn(`[SliderSolver] 持久化 Chrome 启动失败，回退: ${safeErrorType(e)}`);
+        // 关键修复：打印完整错误信息（name + message + stack），定位 ReferenceError 根因
+        // 原先只打印 safeErrorType(e) 只显示错误类型名，无法定位具体哪个变量未定义
+        console.warn(`[SliderSolver] 持久化 Chrome 启动失败，回退: ${safeErrorType(e)} | message=${e?.message || 'N/A'} | stack=${e?.stack?.split('\n').slice(0, 5).join(' | ') || 'N/A'}`);
         if (browser) { await browser.close().catch(() => {}); browser = null; }
         context = null;
+        // 关键修复：方案A失败后清理 userDataDir，避免磁盘残留累积
+        if (userDataDirForCleanup) {
+          try { await fs.rm(userDataDirForCleanup, { recursive: true, force: true }); } catch { /* ignore */ }
+          userDataDirForCleanup = null;
+        }
       }
     }
 
@@ -1804,12 +1888,31 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       // Linux 优先使用 channel:'chrome' 调用系统 google-chrome-stable，避免 Chrome for Testing 149 崩溃
       // Windows 不指定 channel，沿用 Playwright 自带 Chromium（本地 Windows 跑自带 Chromium 已验证可用）
       const isLinux = process.platform !== 'win32' && process.platform !== 'darwin';
-      browser = await chromium.launch({
+      // 关键修复：手动指定 userDataDir，避免 Playwright 自动创建 /tmp/playwright_chromiumdev_profile-xxx
+      // 原先方案B未设置 userDataDirForCleanup，导致 finally 块跳过清理，Chrome 进程堆积。
+      // 现在显式指定 userDataDir，finally 块能通过 pkill -f userDataDir 清理残留进程。
+      const playwrightUserDataDir = path.join(
+        process.env.TEMP || '/tmp',
+        `playwright-slider-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      );
+      userDataDirForCleanup = playwrightUserDataDir;
+      await fs.mkdir(playwrightUserDataDir, { recursive: true });
+      // 关键修复：必须用 launchPersistentContext 而非 launch + args 中的 --user-data-dir。
+      // Playwright 明确禁止在 launch() 的 args 中传 --user-data-dir，会抛出：
+      // "Pass userDataDir parameter to 'browserType.launchPersistentContext(userDataDir, options)' instead of specifying '--user-data-dir' argument"
+      console.log(`[SliderSolver] chromium.launchPersistentContext 使用自定义 userDataDir: ${playwrightUserDataDir}`);
+      context = await chromium.launchPersistentContext(playwrightUserDataDir, {
         headless,
         ...(isLinux ? { channel: 'chrome' as const } : {}),
         chromiumSandbox: !isLinux,
         // 去掉 Playwright 默认 --enable-automation，显著降低「自动化窗口」被标记概率
         ignoreDefaultArgs: ['--enable-automation'],
+        viewport: { width: 1280, height: 800 },
+        locale: 'zh-CN',
+        timezoneId: 'Asia/Shanghai',
+        userAgent:
+          contextOptions.userAgent ||
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
         ...(options.proxy?.server
           ? {
               proxy: {
@@ -1838,15 +1941,42 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
               ]
             : []),
         ],
+        timeout: 30000, // 启动超时 30 秒，避免无限等待导致槽位泄漏
       });
-      context = await browser.newContext({
-        ...contextOptions,
-        userAgent:
-          contextOptions.userAgent ||
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
-        locale: 'zh-CN',
-        timezoneId: 'Asia/Shanghai',
+      // launchPersistentContext 返回 BrowserContext，其 browser() 可用于关闭
+      browser = context.browser();
+      // 关键修复：注册到 processRegistry，让 ProcessMonitor 能监测和清理
+      // 原先方案B从未注册，导致 ProcessMonitor 扫描空注册表，无法清理超时进程
+      browserSessionId = generateSessionId();
+      // launchPersistentContext 的 Chrome 主 PID 不直接可知（Playwright 不暴露），
+      // 注册一个"逻辑会话"，监测器通过 userDataDir 精确清理（pkill -f userDataDir）
+      processRegistry.register({
+        sessionId: browserSessionId,
+        kind: 'chromium',
+        pid: 0,
+        childPids: [],
+        userDataDir: playwrightUserDataDir,
+        tenantId: '',
+        startedAt: Date.now(),
+        deadlineAt: browserDeadlineAt,
+        description: `chromium.launchPersistentContext userDataDir=${playwrightUserDataDir}`,
       });
+      console.log(`[SliderSolver] 已注册到 processRegistry: sessionId=${browserSessionId} userDataDir=${playwrightUserDataDir}`);
+      // 注入 Cookie（launchPersistentContext 不支持 storageState，需手动 addCookies）
+      if (options.cookieStr) {
+        const cleanCookieStr = stripRiskCookies(options.cookieStr);
+        const goofishCookies = parseCookieString(cleanCookieStr, '.goofish.com');
+        const wwwCookies = parseCookieString(cleanCookieStr, 'www.goofish.com');
+        const allCookies = [...goofishCookies, ...wwwCookies];
+        if (allCookies.length > 0) {
+          try {
+            await context.addCookies(allCookies);
+            console.log(`[SliderSolver] 方案B 注入 ${allCookies.length} 条 cookies`);
+          } catch (e: any) {
+            console.warn(`[SliderSolver] 方案B 注入 cookies 警告: ${safeErrorType(e)}`);
+          }
+        }
+      }
       await context.route('**/*', async (route: any) => {
         const request = route.request();
         if (!isSafeBrowserResourceUrl(request.url())) {
@@ -2062,6 +2192,18 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       // 获取最终检测结果
       const detected = stable.detected ? stable : await detectCaptcha(page);
       if (!detected.detected) {
+        // 关键修复：此处也可能 Cookie 已失效（login.token iframe），需再次检测
+        if (await checkLoginPage(page)) {
+          console.warn('[SliderSolver] 最终检测时发现登录页，Cookie Session 已过期');
+          return {
+            ok: false,
+            solved: false,
+            captchaDetected: false,
+            attempts,
+            error: 'Cookie Session 已过期，页面被重定向到登录页，请重新扫码登录闲鱼账号获取新 Cookie',
+            durationMs: Date.now() - startTime,
+          };
+        }
         {
           const cookies = await exportContextCookies(context);
           return {
@@ -2351,11 +2493,27 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       // ignore
     }
     // 兜底清理：Chrome 崩溃后 Playwright 连接断开，close() 会失败且子进程残留为孤儿。
-    // 按 userDataDir 精确 kill 残留 Chrome 进程（每次请求 userDataDir 含唯一 timestamp，不会误杀并发请求）。
+    // 两步清理确保进程树完整终止：
+    //   1. pkill -f userDataDir：杀命令行含该路径的 Chrome 主进程（每次请求 userDataDir 含唯一 timestamp，不会误杀并发请求）
+    //   2. 清理所有 Chrome 孤儿子进程：主进程被杀后，zygote/gpu/utility 等子进程被 init 收养（PPID=1），
+    //      它们的命令行不含 userDataDir，pkill -f 匹配不到，需额外按 PPID=1 清理。
+    //      （仅限 Linux，Windows/macOS 依赖 Playwright close()）
     if (userDataDirForCleanup) {
       try {
         const { execSync } = await import('child_process');
+        // 1. 杀命令行含 userDataDir 的 Chrome 主进程
         execSync(`pkill -9 -f '${userDataDirForCleanup}' 2>/dev/null || true`, { stdio: 'ignore', timeout: 5000 });
+        // 2. 清理被 init 收养的 Chrome 孤儿子进程（PPID=1 的 /opt/google/chrome/chrome 进程）
+        if (process.platform !== 'win32' && process.platform !== 'darwin') {
+          const orphanOutput = execSync(
+            "ps -eo pid,ppid,cmd --no-headers | grep '/opt/google/chrome/chrome' | grep -v grep | awk '$2==1{print $1}'",
+            { encoding: 'utf-8', timeout: 5000 },
+          );
+          const orphanPids = orphanOutput.trim().split('\n').map((s: string) => Number(s.trim())).filter((n: number) => n >= 100);
+          for (const pid of orphanPids) {
+            try { process.kill(pid, 'SIGKILL'); } catch { /* 进程已退出，忽略 */ }
+          }
+        }
       } catch {
         // ignore
       }

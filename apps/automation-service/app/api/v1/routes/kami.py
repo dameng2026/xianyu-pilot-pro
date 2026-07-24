@@ -40,13 +40,19 @@ async def _refresh_group_counts(db: AsyncSession, group_id: int):
         select(func.count()).select_from(CardItem).where(CardItem.group_id == group_id, CardItem.deleted == 0)
     )).scalar() or 0
     used = (await db.execute(
-        select(func.count()).select_from(CardItem).where(CardItem.group_id == group_id, CardItem.deleted == 0, CardItem.is_used == 1)
+        select(func.count()).select_from(CardItem).where(CardItem.group_id == group_id, CardItem.deleted == 0, CardItem.status == 2)
+    )).scalar() or 0
+    remain = (await db.execute(
+        select(func.count()).select_from(CardItem).where(CardItem.group_id == group_id, CardItem.deleted == 0, CardItem.status == 0)
     )).scalar() or 0
     group = (await db.execute(select(CardGroup).where(CardGroup.id == group_id))).scalar_one_or_none()
     if group:
         group.total_count = total
         group.used_count = used
-        group.available_count = max(total - used, 0)
+        # 同时更新 remain_count 和 available_count：前端（卡密仓库/货源库）读取的是 remain_count，
+        # 漏更新 remain_count 会导致前端显示的"可用/库存"数量不随卡密使用而减少。
+        group.remain_count = remain
+        group.available_count = remain
 
 
 @router.post("/config/list", response_model=ResultObject[list])

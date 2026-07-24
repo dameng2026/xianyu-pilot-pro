@@ -246,6 +246,54 @@
           "sha256": "01507fbb99d821d998a234b1e66aac5e1a6902d455d9dcf585efb87876c12ca2",
           "risk": "expand",
           "rollback": "restore"
+        },
+        {
+          "version": "1.30",
+          "description": "payment_order 表新增 period_type 字段，保存 VIP 订单计费周期",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.30__add_payment_order_period_type.sql",
+          "sha256": "a8d2623d5b289fe8c1d20a5e251e24ba766225aaf3896b2b9030e688d9f277ac",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.31",
+          "description": "delivery_goods_config 表添加唯一约束、JSON 列类型、辅助索引，修复软删除记录导致保存失败",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.31__delivery_goods_config_unique_constraint.sql",
+          "sha256": "277f238b3323936d6b4d17a6ee85e13da94b25396725df404dfb8c4167ada8a2",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.32",
+          "description": "delivery_record 表补齐 receiver_info JSON 列并加复合索引，修复实时自动发货因缺列导致 OperationalError 全部失败",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.32__add_delivery_record_receiver_info.sql",
+          "sha256": "39431ead26893c7c32804ae591a8b8e37fb67a8837c81041a7f54ca9a2ab35b3",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.33",
+          "description": "add api credential table and default price config for api-slider-solve module",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.33__add_api_credential.sql",
+          "sha256": "aad36921714519b0afc514be49813fbb9d346a958d802bb0cc8c874f88efeb11",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.34",
+          "description": "fix sent card items soft-deleted by _safe_mark_cards_used, restore visibility in stats/usage/details",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.34__fix_card_item_sent_visibility.sql",
+          "sha256": "82a7b681e1d57d4f8306443d372cb9d927ac7595097a1a029739606e7294532f",
+          "risk": "backfill",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.35",
+          "description": "change delivery_record.order_id from bigint to varchar(64) to fix xianyu orderId overflow causing NULL writes and false duplicate-suppression on multi-item orders",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.35__fix_delivery_record_order_id_to_varchar.sql",
+          "sha256": "005126521e9738840ebb3a44a5173acc9cbf4cdf8b70e9671684a7a24d8d2413",
+          "risk": "contract",
+          "rollback": "restore"
         }
       ],
       "quarantined": [
@@ -383,6 +431,22 @@
           "description": "add priority, failure_reason, queued_at, started_at, finished_at to captcha_solve_record for priority queue scheduling",
           "path": "apps/automation-service/migrations/V1.15__add_captcha_solve_record_priority_and_tracking.sql",
           "sha256": "44fd236b1b57368e79a8d73730c46efa9adf9d4fd49f0bdfe7020b1b4cc19338",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.16",
+          "description": "add account solve exclusion table for inactive users (3 days no login)",
+          "path": "apps/automation-service/migrations/V1.16__add_account_solve_exclusion_table.sql",
+          "sha256": "0c879447050a9a99ba13eb37369513aa73f8484663aab569c5954d0adc22cc91",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.17",
+          "description": "add api captcha solve record table for external slider solve api",
+          "path": "apps/automation-service/migrations/V1.17__add_api_captcha_solve_record.sql",
+          "sha256": "edf41c4eb8adf5091b5117bb53011c72e64c3f1f0e5f3f40eb59e9f63a143b44",
           "risk": "expand",
           "rollback": "restore"
         }

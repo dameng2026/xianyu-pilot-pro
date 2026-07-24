@@ -10,7 +10,7 @@ public class ModuleCatalog {
 
     public ModuleCatalog() {
         add("users", "用户管理", "管理平台注册用户信息，包括用户ID、用户账户、手机号、邮箱、用户等级及状态", cols("userId:用户ID:90", "account:用户账户:150", "phone:手机号:130", "email:邮箱:180", "userLevelName:用户等级:110:tag", "status:状态:100:tag", "lastLoginTime:最近登录:170", "createdTime:创建时间:170"));
-        add("plans", "套餐管理", "配置与用户前台 VIP 会员中心共用的套餐权益、价格、周期与上下架", cols("id:ID:80", "planName:套餐名称:160", "planCode:套餐编码:120", "priceMonth:月价:100", "priceQuarter:季价:100", "priceYear:年价:100", "durationDays:天数:90", "featuresText:套餐介绍:320:textarea", "status:状态:100:tag"));
+        add("plans", "套餐管理", "配置与用户前台 VIP 会员中心共用的套餐权益、价格、周期与上下架", cols("id:ID:80", "planName:套餐名称:160", "planCode:套餐编码:120", "priceMonth:月价:100", "priceQuarter:季价:100", "priceYear:年价:100", "featuresText:套餐介绍:320:textarea", "status:状态:100:tag"));
         add("licenses", "授权码管理", "生成授权码、兑换记录和禁用", cols("id:ID:80", "code:授权码:220", "planName:套餐:120", "durationDays:天数:90", "status:状态:100:tag", "usedBy:使用用户:140", "usedTime:使用时间:170"));
         add("model-config-general", "通用模型配置", "配置平台默认模型、Base URL 与 API Key", cols("id:ID:80", "providerName:提供商名称:180", "baseUrl:Base URL:260", "status:状态:100:tag", "updatedTime:更新时间:170"));
         add("model-config-chat", "对话模型配置", "对话模型名称、参数及连接信息", cols("id:ID:80", "modelName:模型名称:180", "baseUrl:Base URL:260", "maxTokens:最大Token:110", "temperature:温度:100", "status:状态:100:tag", "updatedTime:更新时间:170"));

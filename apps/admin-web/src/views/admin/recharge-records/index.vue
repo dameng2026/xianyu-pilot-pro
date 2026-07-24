@@ -6,7 +6,7 @@
         <div>
           <h2>用户充值记录</h2>
           <p>
-            查询所有用户的 Token 充值记录。默认显示全部用户，可通过用户名/订单号搜索，或通过用户 ID 精确过滤单个用户；
+            查询所有用户的充值记录（会员充值 + Token 充值）。默认显示全部用户，可通过用户名/订单号/套餐名搜索，或通过用户 ID 精确过滤；
             也可在「用户管理」中点击某用户的「充值记录」按钮直接跳转查看。
           </p>
         </div>
@@ -16,32 +16,54 @@
       </div>
     </ElCard>
 
-    <!-- 概览统计卡片 -->
+    <!-- 今日收入模块 -->
+    <ElCard shadow="never" class="today-card">
+      <template #header>
+        <div class="section-title">
+          <span class="title-text">今日收入</span>
+          <span class="title-sub">今日 0 点至今已支付成功的订单流水</span>
+        </div>
+      </template>
+      <div class="today-grid">
+        <div class="today-item today-total">
+          <div class="today-label">今日合计</div>
+          <div class="today-value">¥{{ formatAmount(todayRevenue.totalAmountCent) }}</div>
+          <div class="today-sub">{{ formatNumber(todayRevenue.totalCount) }} 笔</div>
+        </div>
+        <div class="today-item">
+          <div class="today-label">会员充值</div>
+          <div class="today-value text-vip">¥{{ formatAmount(todayRevenue.vipAmountCent) }}</div>
+          <div class="today-sub">{{ formatNumber(todayRevenue.vipCount) }} 笔</div>
+        </div>
+        <div class="today-item">
+          <div class="today-label">Token 充值</div>
+          <div class="today-value text-token">¥{{ formatAmount(todayRevenue.tokenAmountCent) }}</div>
+          <div class="today-sub">{{ formatNumber(todayRevenue.tokenCount) }} 笔</div>
+        </div>
+      </div>
+    </ElCard>
+
+    <!-- 累计统计卡片 -->
     <div class="summary-grid">
       <ElCard shadow="never">
         <div class="metric-label">累计充值笔数</div>
-        <div class="metric-value">{{ formatNumber(summary.totalRecords) }}</div>
+        <div class="metric-value">{{ formatNumber(cumulative.totalRecords) }}</div>
         <div class="metric-sub">{{ userIdFilter ? '当前用户' : '全部用户' }}</div>
       </ElCard>
       <ElCard shadow="never">
-        <div class="metric-label">累计充值 Token</div>
-        <div class="metric-value text-success">{{ formatNumber(summary.totalTokens) }}</div>
-        <div class="metric-sub">≈ ¥{{ formatNumber((Number(summary.totalTokens) || 0) / 100) }}</div>
+        <div class="metric-label">累计充值金额</div>
+        <div class="metric-value text-success">¥{{ formatAmount(cumulative.totalAmountCent) }}</div>
+        <div class="metric-sub">会员 ¥{{ formatAmount(cumulative.vipTotalAmountCent) }} ｜ Token ¥{{ formatAmount(cumulative.tokenTotalAmountCent) }}</div>
       </ElCard>
       <ElCard shadow="never">
-        <div class="metric-label">今日充值笔数</div>
-        <div class="metric-value">{{ formatNumber(summary.todayRecords) }}</div>
-        <div class="metric-sub">今日 0 点至今</div>
+        <div class="metric-label">会员充值笔数</div>
+        <div class="metric-value">{{ formatNumber(cumulative.vipTotalRecords) }}</div>
+        <div class="metric-sub">¥{{ formatAmount(cumulative.vipTotalAmountCent) }}</div>
       </ElCard>
       <ElCard shadow="never">
-        <div class="metric-label">今日充值 Token</div>
-        <div class="metric-value text-success">{{ formatNumber(summary.todayTokens) }}</div>
-        <div class="metric-sub">≈ ¥{{ formatNumber((Number(summary.todayTokens) || 0) / 100) }}</div>
-      </ElCard>
-      <ElCard shadow="never">
-        <div class="metric-label">本月充值 Token</div>
-        <div class="metric-value text-success">{{ formatNumber(summary.monthTokens) }}</div>
-        <div class="metric-sub">本月 1 日至今</div>
+        <div class="metric-label">Token 充值笔数</div>
+        <div class="metric-value">{{ formatNumber(cumulative.tokenTotalRecords) }}</div>
+        <div class="metric-sub">¥{{ formatAmount(cumulative.tokenTotalAmountCent) }} ｜ {{ formatNumber(cumulative.tokenTotalTokens) }} Token</div>
       </ElCard>
     </div>
 
@@ -66,9 +88,20 @@
         <div class="table-header">
           <span>充值记录明细</span>
           <div class="actions small">
+            <ElSelect
+              v-model="query.orderType"
+              placeholder="充值类型"
+              clearable
+              style="width: 140px"
+              @change="onSearch"
+            >
+              <ElOption label="全部" value="" />
+              <ElOption label="会员充值" value="vip" />
+              <ElOption label="Token 充值" value="token" />
+            </ElSelect>
             <ElInput
               v-model="query.keyword"
-              placeholder="用户名 / 订单号 / 备注"
+              placeholder="用户名 / 订单号 / 套餐名"
               clearable
               style="width: 240px"
               @keyup.enter="onSearch"
@@ -79,14 +112,6 @@
               placeholder="用户 ID 精确过滤"
               clearable
               style="width: 160px"
-              @keyup.enter="onSearch"
-              @clear="onSearch"
-            />
-            <ElInput
-              v-model="query.source"
-              placeholder="来源（如 payment）"
-              clearable
-              style="width: 180px"
               @keyup.enter="onSearch"
               @clear="onSearch"
             />
@@ -110,7 +135,14 @@
         <ElTable :data="list.records" border stripe>
           <template #empty><div class="empty-state">暂无充值记录</div></template>
           <ElTableColumn prop="id" label="ID" width="80" />
-          <ElTableColumn label="用户" min-width="160">
+          <ElTableColumn label="类型" width="110">
+            <template #default="{ row }">
+              <ElTag size="small" :type="row.orderType === 'vip' ? 'danger' : 'success'">
+                {{ row.recordTypeText || (row.orderType === 'vip' ? '会员充值' : 'Token 充值') }}
+              </ElTag>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="用户" min-width="140">
             <template #default="{ row }">
               <div class="user-cell">
                 <span class="user-name">{{ row.username || '—' }}</span>
@@ -123,33 +155,42 @@
               <span class="order-no">{{ row.orderNo || '—' }}</span>
             </template>
           </ElTableColumn>
-          <ElTableColumn label="充值 Token" width="130">
+          <ElTableColumn label="套餐 / 周期" min-width="160">
             <template #default="{ row }">
-              <span class="token-amount">+{{ formatNumber(row.tokenAmount) }}</span>
+              <div class="plan-cell">
+                <span class="plan-name">{{ row.planName || row.title || '—' }}</span>
+                <ElTag v-if="row.periodText" size="small" type="info" effect="plain">{{ row.periodText }}</ElTag>
+              </div>
             </template>
           </ElTableColumn>
-          <ElTableColumn label="充值前余额" width="120">
+          <ElTableColumn label="金额" width="120">
             <template #default="{ row }">
-              <span class="muted">{{ formatNumber(row.beforeBalance) }}</span>
+              <span class="amount-text">¥{{ formatYuan(row.amountYuan) }}</span>
             </template>
           </ElTableColumn>
-          <ElTableColumn label="充值后余额" width="120">
+          <ElTableColumn label="Token 数量" width="120">
             <template #default="{ row }">
-              <span class="num-text">{{ formatNumber(row.afterBalance) }}</span>
+              <span v-if="row.orderType === 'token'" class="token-amount">+{{ formatNumber(row.tokenAmount) }}</span>
+              <span v-else class="muted">—</span>
             </template>
           </ElTableColumn>
-          <ElTableColumn label="来源" width="110">
+          <ElTableColumn label="支付方式" width="110">
             <template #default="{ row }">
-              <ElTag size="small" type="warning">{{ row.source || '—' }}</ElTag>
+              <span>{{ row.paymentMethodText || '—' }}</span>
             </template>
           </ElTableColumn>
-          <ElTableColumn label="备注" min-width="160" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.remark || '—' }}</template>
+          <ElTableColumn label="绑定账号" width="140">
+            <template #default="{ row }">
+              <div class="target-cell">
+                <span class="muted">{{ row.targetTypeText || '—' }}</span>
+                <span v-if="row.targetId" class="user-id">#{{ row.targetId }}</span>
+              </div>
+            </template>
           </ElTableColumn>
-          <ElTableColumn label="充值时间" width="170">
-            <template #default="{ row }">{{ formatDateTime(row.createdTime) }}</template>
+          <ElTableColumn label="支付时间" width="170">
+            <template #default="{ row }">{{ formatDateTime(row.paidTime || row.createdTime) }}</template>
           </ElTableColumn>
-          <ElTableColumn label="操作" width="140" fixed="right">
+          <ElTableColumn label="操作" width="120" fixed="right">
             <template #default="{ row }">
               <router-link
                 :to="{ name: 'AdminAiUsage', query: { userId: row.userId } }"
@@ -179,7 +220,10 @@
 <script setup lang="ts">
   import { computed, reactive, ref, watch } from 'vue'
   import { useRoute, useRouter } from 'vue-router'
-  import { getRechargeRecordsPage, getRechargeRecordsSummary } from '@/api/recharge-records'
+  import {
+    getUnifiedRechargeRecordsPage,
+    getUnifiedRechargeRecordsSummary
+  } from '@/api/recharge-records'
   import AdminDataState from '@/components/business/admin-data-state/index.vue'
 
   defineOptions({ name: 'AdminRechargeRecordsPage' })
@@ -199,16 +243,28 @@
     current: 1,
     size: 20,
     keyword: '',
-    source: ''
+    orderType: ''
   })
   // 用户 ID 单独管理：来源可以是路由 query，也可以是搜索栏输入
   const userIdInput = ref<string>('')
-  const summary = reactive<any>({
+
+  const todayRevenue = reactive<any>({
+    totalCount: 0,
+    totalAmountCent: 0,
+    vipCount: 0,
+    vipAmountCent: 0,
+    tokenCount: 0,
+    tokenAmountCent: 0
+  })
+
+  const cumulative = reactive<any>({
     totalRecords: 0,
-    totalTokens: 0,
-    todayRecords: 0,
-    todayTokens: 0,
-    monthTokens: 0
+    totalAmountCent: 0,
+    vipTotalRecords: 0,
+    vipTotalAmountCent: 0,
+    tokenTotalRecords: 0,
+    tokenTotalAmountCent: 0,
+    tokenTotalTokens: 0
   })
 
   // 当前生效的 userId 过滤值（优先路由 query，否则取输入框）
@@ -229,6 +285,20 @@
     const n = Number(value)
     if (!Number.isFinite(n)) return '0'
     return n.toLocaleString('zh-CN')
+  }
+
+  /** 分（cent）转元并格式化 */
+  function formatAmount(cent: any): string {
+    const n = Number(cent)
+    if (!Number.isFinite(n)) return '0.00'
+    return (n / 100).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  }
+
+  /** 元直接格式化 */
+  function formatYuan(yuan: any): string {
+    const n = Number(yuan)
+    if (!Number.isFinite(n)) return '0.00'
+    return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   }
 
   function formatDateTime(value: any): string {
@@ -253,9 +323,9 @@
     try {
       const params: any = { current: query.current, size: query.size }
       if (query.keyword) params.keyword = query.keyword
-      if (query.source) params.source = query.source
+      if (query.orderType) params.orderType = query.orderType
       if (userIdFilter.value) params.userId = userIdFilter.value
-      const data = await getRechargeRecordsPage(params)
+      const data = await getUnifiedRechargeRecordsPage(params)
       if (!data || !Array.isArray(data.records)) throw new Error('充值记录接口返回格式异常')
       Object.assign(list, data)
       // 提取首条记录的用户名作为过滤提示
@@ -279,8 +349,26 @@
     try {
       const params: any = {}
       if (userIdFilter.value) params.userId = userIdFilter.value
-      const data = await getRechargeRecordsSummary(params)
-      Object.assign(summary, data || {})
+      const data = await getUnifiedRechargeRecordsSummary(params)
+      const today = data?.todayRevenue || {}
+      const cum = data?.cumulative || {}
+      Object.assign(todayRevenue, {
+        totalCount: Number(today.totalCount) || 0,
+        totalAmountCent: Number(today.totalAmountCent) || 0,
+        vipCount: Number(today.vipCount) || 0,
+        vipAmountCent: Number(today.vipAmountCent) || 0,
+        tokenCount: Number(today.tokenCount) || 0,
+        tokenAmountCent: Number(today.tokenAmountCent) || 0
+      })
+      Object.assign(cumulative, {
+        totalRecords: Number(cum.totalRecords) || 0,
+        totalAmountCent: Number(cum.totalAmountCent) || 0,
+        vipTotalRecords: Number(cum.vipTotalRecords) || 0,
+        vipTotalAmountCent: Number(cum.vipTotalAmountCent) || 0,
+        tokenTotalRecords: Number(cum.tokenTotalRecords) || 0,
+        tokenTotalAmountCent: Number(cum.tokenTotalAmountCent) || 0,
+        tokenTotalTokens: Number(cum.tokenTotalTokens) || 0
+      })
     } catch (error: any) {
       // 汇总失败不阻塞列表，仅静默
       // eslint-disable-next-line no-console
@@ -308,7 +396,7 @@
     const routeChanged = syncUserIdToRoute()
     query.current = 1
     if (!routeChanged) {
-      // 路由未变化（仅 keyword/source 变化），直接加载
+      // 路由未变化（仅 keyword/orderType 变化），直接加载
       loadList()
     }
     // 若路由变化，watch 会触发 loadList
@@ -316,7 +404,7 @@
 
   function onReset() {
     query.keyword = ''
-    query.source = ''
+    query.orderType = ''
     userIdInput.value = ''
     const routeChanged = syncUserIdToRoute()
     query.current = 1
@@ -387,6 +475,75 @@
 
 .actions.small {
   flex-wrap: wrap;
+}
+
+/* 今日收入模块 */
+.today-card {
+  border-radius: 18px;
+  background: linear-gradient(135deg, #fff 0%, #f0f9ff 100%);
+}
+
+.section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.title-text {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.title-sub {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.today-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: 14px;
+}
+
+.today-item {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid #f0f0f0;
+}
+
+.today-total {
+  background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
+  border-color: #fed7aa;
+}
+
+.today-label {
+  font-size: 13px;
+  color: #6b7280;
+  margin-bottom: 8px;
+}
+
+.today-value {
+  font-size: 28px;
+  font-weight: 800;
+  color: #1f2937;
+  line-height: 1.1;
+  margin-bottom: 4px;
+  letter-spacing: -0.5px;
+}
+
+.today-value.text-vip {
+  color: #dc2626;
+}
+
+.today-value.text-token {
+  color: #16a34a;
+}
+
+.today-sub {
+  font-size: 12px;
+  color: #9ca3af;
 }
 
 .summary-grid {
@@ -477,9 +634,32 @@
   word-break: break-all;
 }
 
+.plan-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.plan-name {
+  font-weight: 600;
+  color: #1f2937;
+  font-size: 13px;
+}
+
+.amount-text {
+  font-weight: 700;
+  color: #dc2626;
+  font-family: 'JetBrains Mono', Consolas, Menlo, monospace;
+}
+
 .token-amount {
   font-weight: 700;
   color: #16a34a;
+}
+
+.target-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .num-text {
@@ -502,6 +682,9 @@
 }
 
 @media (max-width: 768px) {
+  .today-grid {
+    grid-template-columns: 1fr;
+  }
   .summary-grid {
     grid-template-columns: repeat(2, 1fr);
   }

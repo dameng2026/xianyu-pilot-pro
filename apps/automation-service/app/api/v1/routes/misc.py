@@ -298,6 +298,69 @@ async def _precheck_ws_token(db: AsyncSession, tenant_id: int, account_id: int, 
         return False, ("error", "Token 预检服务暂时不可用，请稍后重试")
 
 
+async def _enqueue_auto_solve_after_precheck_failure(
+    tenant_id: int, account_id: int, fail_type: str
+) -> None:
+    """websocket_start 预检失败后自动触发滑块求解入队。
+
+    预检路径与后台 WS 客户端的 Token 刷新路径（ws_client._refresh_token）不同：
+    预检失败时后台 WS 客户端不会启动，因此 _refresh_token 中的自动求解逻辑
+    永远不会被执行。这里补一次入队，保证新账号首次添加/恢复时遇到滑块也能
+    自动求解，与后台 WS 客户端路径行为一致。
+
+    仅对 captcha / expired 失败类型入队；其他类型（creds_error/token_missing/
+    unknown/error）不由滑块求解解决，跳过。
+
+    异常不影响主流程：入队失败时仅记录日志，不抛出。
+    """
+    if fail_type not in ("captcha", "expired"):
+        return
+    try:
+        from app.services.captcha_queue import enqueue_solve
+        from app.services.captcha_precheck import is_auto_slider_solve_allowed, lookup_user_level
+
+        allowed, level_code = await is_auto_slider_solve_allowed(tenant_id)
+        if not allowed:
+            logger.info(
+                "预检失败后自动滑块求解被开关拦截（静默跳过）"
+                "accountId=%d tenantId=%d level=%s failType=%s",
+                account_id, tenant_id, level_code, fail_type,
+            )
+            return
+
+        _level, priority = await lookup_user_level(tenant_id)
+
+        if fail_type == "expired":
+            solve_reason = "WS Token 预检失败：Cookie Session 已过期，尝试通过滑块求解恢复"
+        else:
+            solve_reason = "WS Token 预检失败：Cookie 触发滑块验证（FAIL_SYS_USER_VALIDATE）"
+
+        record_id = await enqueue_solve(
+            account_id=account_id,
+            tenant_id=tenant_id,
+            trigger_scene="precheck",
+            open_reason="websocket_start 预检失败自动触发",
+            solve_reason=solve_reason,
+            priority=priority,
+        )
+
+        if record_id is None:
+            logger.info(
+                "预检失败后自动滑块求解入队去重跳过 accountId=%d failType=%s（30 分钟内已入队）",
+                account_id, fail_type,
+            )
+        else:
+            logger.info(
+                "预检失败后自动滑块求解已入队 accountId=%d failType=%s priority=%d recordId=%d",
+                account_id, fail_type, priority, record_id,
+            )
+    except Exception:
+        logger.exception(
+            "预检失败后自动滑块求解入队异常 accountId=%d failType=%s",
+            account_id, fail_type,
+        )
+
+
 async def _wait_ws_connect_result(account_id: int, timeout_seconds: float = 12.0):
     deadline = asyncio.get_event_loop().time() + timeout_seconds
     last_status = ws_manager.get_status(account_id)
@@ -1239,6 +1302,10 @@ async def websocket_start(
         if not precheck_ok:
             fail_type, fail_message = precheck_fail
             logger.warning("websocket_start 预检失败 accountId=%d failType=%s", account_id, fail_type)
+            # 预检失败时后台 WS 客户端不会启动，_refresh_token 中的自动求解逻辑
+            # 永远不会被执行。这里补一次入队，保证新账号首次添加/恢复时遇到滑块
+            # 也能自动求解（仅 captcha/expired 类型，异常不影响主流程）。
+            await _enqueue_auto_solve_after_precheck_failure(tenant_id, account_id, fail_type)
             return ResultObject.success({
                 "connected": False,
                 "optimistic": False,

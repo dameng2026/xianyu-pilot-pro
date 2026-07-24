@@ -439,23 +439,43 @@ async def _update_cookie_status_for_captcha(
     """
     try:
         async with async_session() as db:
-            for table in ("xianyu_account_auth", "xianyu_account_runtime"):
-                await db.execute(
-                    text(
-                        f"UPDATE {table} SET cookie_status = :cs, "
-                        f"last_login_status_code = :sc, "
-                        f"last_login_status_message = :sm, "
-                        f"last_login_check_time = NOW(), updated_time = NOW() "
-                        f"WHERE account_id = :aid AND tenant_id = :tid"
-                    ),
-                    {
-                        "cs": cookie_status,
-                        "sc": status_code,
-                        "sm": status_message,
-                        "aid": account_id,
-                        "tid": tenant_id,
-                    },
-                )
+            # xianyu_account_auth：只更新 cookie 相关字段
+            await db.execute(
+                text(
+                    "UPDATE xianyu_account_auth SET cookie_status = :cs, "
+                    "last_login_status_code = :sc, last_login_status_message = :sm, "
+                    "last_login_check_time = NOW(), updated_time = NOW() "
+                    "WHERE account_id = :aid AND tenant_id = :tid"
+                ),
+                {
+                    "cs": cookie_status,
+                    "sc": status_code,
+                    "sm": status_message,
+                    "aid": account_id,
+                    "tid": tenant_id,
+                },
+            )
+            # xianyu_account_runtime：cookie_status=0 时联动置 ws_status=0、online_status=0
+            # 关键修复：原先只更新 cookie_status，导致 Cookie 失效后 ws_status 仍为 1，
+            # 前端显示"WS 已连接"但实际无法收消息（Cookie 都失效了，WS 必然连不上）。
+            await db.execute(
+                text(
+                    "UPDATE xianyu_account_runtime SET cookie_status = :cs, "
+                    "ws_status = CASE WHEN :cs = 0 THEN 0 ELSE ws_status END, "
+                    "online_status = CASE WHEN :cs = 0 THEN 0 ELSE online_status END, "
+                    "last_login_status_code = :sc, "
+                    "last_login_status_message = :sm, "
+                    "last_login_check_time = NOW(), updated_time = NOW() "
+                    "WHERE account_id = :aid AND tenant_id = :tid"
+                ),
+                {
+                    "cs": cookie_status,
+                    "sc": status_code,
+                    "sm": status_message,
+                    "aid": account_id,
+                    "tid": tenant_id,
+                },
+            )
             await db.commit()
     except Exception as e:
         log_service_failure(
@@ -524,18 +544,32 @@ async def _verify_cookie_via_token_api(account_id: int, tenant_id: int) -> bool:
         # 调用 ws_token 模块的完整 Token 获取流程
         # （会自动尝试 cookie 中的 _m_h5_tk、DB 中的 _m_h5_tk、刷新 _m_h5_tk 三种路径）
         from .ws_token import get_ws_token_with_refreshed_m_h5_tk
-        access_token, _, error_type, _ = await asyncio.to_thread(
-            get_ws_token_with_refreshed_m_h5_tk, cookie_str, m_h5_tk
-        )
-        if access_token:
-            logger.info(
-                "_verify_cookie_via_token_api: Cookie 验证通过 accountId=%d, accessToken长度=%d",
-                account_id, len(access_token),
+        # 关键修复：添加重试机制（最多 3 次，间隔 3 秒）
+        # 场景：滑块刚通过时，闲鱼服务端 Baxia 风控状态可能还没更新，
+        # Token API 暂时返回 FAIL_SYS_SESSION_EXPIRED，但这不是真正的 Cookie 过期。
+        # 等待几秒后重试就能通过（已由 01:12 误判→01:35 成功的生产案例证实）。
+        max_verify_retries = 3
+        last_error_type = None
+        for attempt in range(1, max_verify_retries + 1):
+            access_token, _, error_type, _ = await asyncio.to_thread(
+                get_ws_token_with_refreshed_m_h5_tk, cookie_str, m_h5_tk
             )
-            return True
+            if access_token:
+                logger.info(
+                    "_verify_cookie_via_token_api: Cookie 验证通过 accountId=%d, accessToken长度=%d, attempt=%d/%d",
+                    account_id, len(access_token), attempt, max_verify_retries,
+                )
+                return True
+            last_error_type = error_type
+            logger.warning(
+                "_verify_cookie_via_token_api: Cookie 验证失败 accountId=%d, error_type=%s, attempt=%d/%d",
+                account_id, error_type, attempt, max_verify_retries,
+            )
+            if attempt < max_verify_retries:
+                await asyncio.sleep(3)  # 等待 3 秒让 Baxia 风控状态更新
         logger.warning(
-            "_verify_cookie_via_token_api: Cookie 不可用 accountId=%d, error_type=%s",
-            account_id, error_type,
+            "_verify_cookie_via_token_api: Cookie 不可用 accountId=%d, error_type=%s (重试 %d 次均失败)",
+            account_id, last_error_type, max_verify_retries,
         )
         return False
     except Exception as e:
@@ -544,6 +578,52 @@ async def _verify_cookie_via_token_api(account_id: int, tenant_id: int) -> bool:
             tenant_id=tenant_id, account_id=account_id,
         )
         return False
+
+
+# ============================================================
+# 浏览器启动/崩溃错误识别
+# ============================================================
+# 这类错误表明 crawler-service 资源耗尽或 Chrome 进程异常，
+# 不是滑块求解本身的问题，应归类为 service_unavailable（不可重试），
+# 避免 slider_fail 重试 3 次放大记录数。
+# 匹配 sliderSolver.ts catch 块返回的原始异常消息。
+_BROWSER_LAUNCH_FAILURE_PATTERNS = (
+    "browserType.launch",                # Playwright launch 方法名
+    "Target page, context or browser",    # Playwright 经典报错
+    "browser has been closed",            # 浏览器已关闭
+    "spawn /opt/google/chrome/chrome",    # Chrome 二进制 spawn 失败
+    "spawn EAGAIN",                       # 资源不足无法 spawn
+    "pthread_create",                     # 线程创建失败（资源耗尽）
+    "Target closed",                      # 目标已关闭
+    "Protocol error",                     # CDP 协议错误
+    "Browser logs:",                      # sliderSolver 日志前缀
+    "Max listeners",                      # 监听器上限
+    "浏览器任务繁忙",                      # crawler-service 并发槽位满返回 503
+    "Failed to start BrowserThread",      # Chrome BrowserThread 启动失败
+    "Failed to start",                    # Chrome 启动失败通用错误
+    "Page crashed",                       # Chrome 页面崩溃（内存/资源不足导致 tab 进程死亡）
+    "page.goto",                          # Playwright 导航错误（Page crashed/Target closed 等的包装层）
+    "Target page already closed",         # 目标页面已关闭
+    "Navigation failed because",          # 导航失败（浏览器崩溃/资源不足）
+    "has been closed",                    # 通用关闭错误（browser/context/page has been closed）
+    "page.waitForTimeout",                # 等待超时（通常伴随 Target page closed）
+)
+
+
+def _is_browser_launch_failure(error_msg: str) -> bool:
+    """判断错误消息是否为浏览器启动失败/崩溃/资源耗尽类错误。
+
+    Args:
+        error_msg: sliderSolver 返回的原始错误消息
+
+    Returns:
+        True 表示这是浏览器层面错误（应归类为 service_unavailable 不可重试），
+        False 表示可能是滑块求解本身失败（保持 slider_fail 可重试）
+    """
+    if not error_msg:
+        return False
+    msg_lower = error_msg.lower() if isinstance(error_msg, str) else str(error_msg).lower()
+    return any(pattern.lower() in msg_lower for pattern in _BROWSER_LAUNCH_FAILURE_PATTERNS)
 
 
 async def handle_captcha_for_account(
@@ -639,7 +719,7 @@ async def handle_captcha_for_account(
                 )
             if solve_record_id:
                 await update_solve_record(
-                    solve_record_id, status="fail", result="precheck_fail",
+                    solve_record_id, status="precheck_rejected", result="precheck_fail",
                     error_message=active_msg,
                     engine="Precheck",
                 )
@@ -659,7 +739,7 @@ async def handle_captcha_for_account(
                     log_service_failure(logger, e, operation="update_precheck_record", level=logging.WARNING)
                 await broadcast_captcha_solve(
                     tenant_id, account_id, account_name,
-                    status="fail", result="precheck_fail",
+                    status="precheck_rejected", result="precheck_fail",
                     reason=active_msg,
                     record_id=solve_record_id,
                 )
@@ -717,7 +797,7 @@ async def handle_captcha_for_account(
                 )
             if solve_record_id:
                 await update_solve_record(
-                    solve_record_id, status="fail", result="precheck_fail",
+                    solve_record_id, status="precheck_rejected", result="precheck_fail",
                     error_message=cookie_msg,
                     engine="Precheck",
                 )
@@ -736,7 +816,7 @@ async def handle_captcha_for_account(
                     log_service_failure(logger, e, operation="update_precheck_record", level=logging.WARNING)
                 await broadcast_captcha_solve(
                     tenant_id, account_id, account_name,
-                    status="fail", result="precheck_fail",
+                    status="precheck_rejected", result="precheck_fail",
                     reason=cookie_msg,
                     record_id=solve_record_id,
                 )
@@ -932,6 +1012,58 @@ async def handle_captcha_for_account(
                         tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
                     )
 
+                # 关键修复：求解成功后强制重启 WS 客户端，确保使用新 Cookie 建立 WS 连接
+                # 原先只刷新 m_h5_tk 但不重启 WS，若 WS 客户端处于 token_failed/closed 状态，
+                # 重连循环仍在用旧 cookie，即使 cookie_status=1 也无法真正建立 WS 连接，
+                # 导致前端显示"WS 状态已连接"但实际收不到新消息。
+                # 现在主动重启 WS 客户端，让 _persist_ws_online() 在真正建立连接后才更新 ws_status=1。
+                try:
+                    from .ws_client import ws_manager
+                    from .ws_token import extract_m_h5_tk_from_cookie
+                    # 读取最新 cookie 和 m_h5_tk（已被 force_refresh_account 更新到 DB）
+                    async with async_session() as db:
+                        cred_row = (await db.execute(
+                            text(
+                                "SELECT encrypted_cookie, encrypted_token "
+                                "FROM xianyu_account_auth "
+                                "WHERE account_id = :aid AND tenant_id = :tid AND deleted = 0 LIMIT 1"
+                            ),
+                            {"aid": account_id, "tid": tenant_id},
+                        )).mappings().first()
+                    if cred_row:
+                        fresh_cookie = decrypt_cookie_if_needed(cred_row["encrypted_cookie"])
+                        fresh_token = decrypt_cookie_if_needed(cred_row["encrypted_token"]) if cred_row["encrypted_token"] else None
+                        # 优先用 DB 中的 token，若为空则从 cookie 中提取
+                        if not fresh_token:
+                            fresh_token = extract_m_h5_tk_from_cookie(fresh_cookie)
+                        # 从 cookie 字符串中提取 unb（与 ws_client.py 的 _ensure_cookie_has_mh5tk 同款逻辑）
+                        unb_value = ""
+                        if fresh_cookie:
+                            import re as _re
+                            _unb_match = _re.search(r'\bunb=([^;]+)', fresh_cookie)
+                            if _unb_match:
+                                unb_value = _unb_match.group(1)
+                        if fresh_cookie and fresh_token and unb_value:
+                            # 关键：先停止旧客户端，再启动新客户端（使用最新 cookie + token）
+                            await ws_manager.stop_client(account_id)
+                            await ws_manager.start_client(
+                                account_id, tenant_id, fresh_cookie, fresh_token, unb_value
+                            )
+                            logger.info(
+                                "滑块求解成功后已强制重启 WS 客户端 accountId=%d cookieLen=%d tokenLen=%d",
+                                account_id, len(fresh_cookie), len(fresh_token),
+                            )
+                        else:
+                            logger.warning(
+                                "滑块求解成功但缺少 WS 重启所需凭据 accountId=%d hasCookie=%s hasToken=%s hasUnb=%s",
+                                account_id, bool(fresh_cookie), bool(fresh_token), bool(unb_value),
+                            )
+                except Exception as e:
+                    log_service_failure(
+                        logger, e, operation="restart_ws_after_captcha_solve",
+                        tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
+                    )
+
                 # 更新求解记录为成功 + 广播成功事件
                 await update_solve_record(
                     solve_record_id, status="success", result="slider_success",
@@ -967,19 +1099,45 @@ async def handle_captcha_for_account(
             error_msg = auto_solve_result.get("error") or "滑块验证未通过"
             error_code = auto_solve_result.get("errorCode") or ""
 
-            # 根据错误码细分失败原因
+            # 根据错误码/错误消息细分失败原因
             if error_code == "CAPTCHA_SOLVER_UNAVAILABLE":
                 failure_reason = "service_unavailable"
             elif "Cookie" in error_msg or "cookie" in error_msg:
                 failure_reason = "cookie_invalid"
+            elif _is_browser_launch_failure(error_msg):
+                # Chrome 启动失败/浏览器崩溃/资源耗尽 → service_unavailable
+                # 原因：sliderSolver.ts 返回的这类错误无 errorCode，仅含 error 消息，
+                # 原先默认归为 slider_fail（会重试 3 次），每次重试又立即失败，
+                # 配合 WS 频繁重连导致记录数爆炸增长（曾出现单账号 13000+ 条失败记录）。
+                # 归为 service_unavailable 后：不可重试 + token_refresh 场景 10 分钟冷却，
+                # 避免无效重试放大问题。
+                failure_reason = "service_unavailable"
+                logger.warning(
+                    "账号 %d 滑块求解失败：浏览器启动/崩溃错误，归类为 service_unavailable（不可重试）error=%s",
+                    account_id, error_msg[:200],
+                )
 
-            # 同步更新 Cookie 状态为"不可用"
-            await _update_cookie_status_for_captcha(
-                account_id, tenant_id,
-                cookie_status=0,
-                status_code="CAPTCHA_FAILED",
-                status_message=f"滑块求解失败：{error_msg}",
-            )
+            # Cookie 状态更新策略：
+            # - cookie_invalid: Cookie 真失效，设 cookie_status=0
+            # - service_unavailable / slider_fail: 滑块求解失败但 Cookie 可能仍有效
+            #   （Chrome EARGIN/Playwright 错误/滑块识别失败等非 Cookie 原因），
+            #   恢复 cookie_status=1，避免有效 Cookie 的账号被跳过保活和后续求解。
+            #   预校验已通过 hasLogin 验证 Cookie 有效，求解失败不代表 Cookie 失效。
+            if failure_reason == "cookie_invalid":
+                await _update_cookie_status_for_captcha(
+                    account_id, tenant_id,
+                    cookie_status=0,
+                    status_code="SESSION_EXPIRED",
+                    status_message=f"滑块求解失败（Cookie 失效）：{error_msg}",
+                )
+            else:
+                # 恢复 cookie_status=1（求解失败但 Cookie 仍有效，避免误标记）
+                await _update_cookie_status_for_captcha(
+                    account_id, tenant_id,
+                    cookie_status=1,
+                    status_code="OK",
+                    status_message=f"滑块求解失败但 Cookie 仍有效（{failure_reason}），等待重试",
+                )
             await update_solve_record(
                 solve_record_id, status="fail", result="slider_fail",
                 error_message=error_msg,

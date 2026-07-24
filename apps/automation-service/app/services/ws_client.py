@@ -395,6 +395,15 @@ class XianyuWebSocketClient:
 
         logger.info("WS 客户端停止 accountId=%d", self.account_id)
 
+        # 关键修复：主动停止时必须持久化 ws_status=0，否则 DB 中 ws_status
+        # 仍保持旧值 1，前端显示"WS 已连接"但实际收不到消息。
+        # 场景：滑块求解成功但 Cookie Session 过期时，captcha_solver 调用
+        # stop_client() 断开 WS，若不写 ws_status=0，用户会看到 WS 状态
+        # 异常显示为连接、但实际无法接收最新消息。
+        # 注意：若紧接着 start_client()，连接成功后 _persist_ws_online()
+        # 会覆盖为 1，所以这里设 0 是安全的。
+        await self._persist_ws_offline("stopped: 客户端主动停止")
+
     async def send_text_message(
         self, cid: str, to_id: str, text: str, persist: bool = False,
         is_auto_reply: int = 0,
@@ -810,6 +819,8 @@ class XianyuWebSocketClient:
             self.last_error = "获取 WebSocket Token 失败，Cookie/_m_h5_tk 可能已过期或触发滑块验证"
             self.phase = "token_failed"
             logger.error("获取 WebSocket Token 失败 accountId=%d", self.account_id)
+            # 关键修复：Token 获取失败时持久化离线状态，避免 ws_status 保持旧值 1 误导前端
+            await self._persist_ws_offline("token_failed: 获取 WebSocket Token 失败")
             await asyncio.sleep(RECONNECT_DELAY)
             return
 
@@ -909,6 +920,8 @@ class XianyuWebSocketClient:
         except ConnectionError as e:
             self.last_error = "WebSocket 连接已关闭，正在重连"
             self.phase = "closed"
+            # 关键修复：连接异常时持久化离线状态，避免 ws_status 保持旧值 1 误导前端
+            await self._persist_ws_offline("closed: WebSocket 连接已关闭")
             log_service_failure(
                 logger, e, operation="ws_connection_closed",
                 tenant_id=self.tenant_id, account_id=self.account_id, level=logging.WARNING,
@@ -916,6 +929,8 @@ class XianyuWebSocketClient:
         except Exception as e:
             self.last_error = "WebSocket 连接异常，正在重连"
             self.phase = "error"
+            # 关键修复：连接异常时持久化离线状态，避免 ws_status 保持旧值 1 误导前端
+            await self._persist_ws_offline("error: WebSocket 连接异常")
             log_service_failure(
                 logger, e, operation="ws_connection",
                 tenant_id=self.tenant_id, account_id=self.account_id,
@@ -1034,6 +1049,40 @@ class XianyuWebSocketClient:
             log_service_failure(
                 logger, e, operation="persist_ws_online",
                 tenant_id=self.tenant_id, account_id=self.account_id, level=logging.WARNING,
+            )
+
+    async def _persist_ws_offline(self, reason: str = "WS 连接失败"):
+        """关键修复：WS 连接失败时主动持久化离线状态到 DB。
+
+        原先 _persist_ws_online() 只在连接成功时设 ws_status=1，
+        连接失败时不会设 ws_status=0，导致 ws_status 保持旧值（仍为 1），
+        前端显示"WS 已连接"但实际未连接，收不到新消息。
+
+        现在在 token_failed / closed / error 阶段调用此方法，
+        将 ws_status 和 online_status 设为 0，让前端显示真实状态。
+        注意：不修改 cookie_status（Cookie 可能仍有效，只是 WS 未连接）。
+        """
+        try:
+            from ..core.database import async_session
+            from sqlalchemy import text
+            async with async_session() as db:
+                await db.execute(
+                    text(
+                        "UPDATE xianyu_account_runtime "
+                        "SET ws_status = 0, online_status = 0, updated_time = NOW() "
+                        "WHERE account_id = :aid AND tenant_id = :tid AND deleted = 0"
+                    ),
+                    {"aid": self.account_id, "tid": self.tenant_id},
+                )
+                await db.commit()
+            logger.info(
+                "已持久化 WS 离线状态: accountId=%d reason=%s",
+                self.account_id, reason,
+            )
+        except Exception as e:
+            log_service_failure(
+                logger, e, operation="persist_ws_offline",
+                tenant_id=self.tenant_id, account_id=self.account_id, level=logging.DEBUG,
             )
 
     async def _persist_heartbeat(self):
@@ -1213,13 +1262,17 @@ class XianyuWebSocketClient:
             await self._restore_cookie_status_if_needed()
             return True
 
-        # 如果是滑块验证，更新 cookie_status 为失效
+        # 如果是滑块验证，不立即标记 cookie_status=0：
+        # WS Token API（mtop.taobao.idlemessage.pc.login.token）需要完整的 bx-ua / bx-umidtoken / bx_et
+        # 反爬令牌，Python/Java 直接 POST 不带这些令牌，容易被 Baxia 风控判定为异常请求返回
+        # FAIL_SYS_USER_VALIDATE。这是"调用方式缺陷"导致的误判，不代表 Cookie 真的失效。
+        # 改为只触发滑块求解，由求解器内部通过 hasLogin / page.head 二次验证判断 Cookie 是否真的失效。
+        # 只有求解器确认 Cookie 失效时才更新 cookie_status=0（在 captcha_solver.py 中处理）。
         if error_type == "captcha":
             logger.warning(
-                "WS Token 获取遇到滑块验证，标记 cookie_status=0: accountId=%d",
+                "WS Token 获取遇到滑块验证（Cookie 可能仍有效，等待求解器二次验证）: accountId=%d",
                 self.account_id
             )
-            await self._update_cookie_status(0, "COOKIE_EXPIRED", "WS Token 获取触发滑块验证，请重新登录闲鱼账号")
             try:
                 from .notify_dispatcher import notify_captcha_required
                 await notify_captcha_required(self.tenant_id, self.account_id, "WS Token 获取触发滑块验证")

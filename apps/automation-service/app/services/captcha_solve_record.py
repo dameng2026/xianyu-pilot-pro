@@ -368,7 +368,8 @@ async def cleanup_stale_records() -> int:
     只有 worker 正式开始处理的任务（status='retrying' 且 started_at 非空）才适用 5 分钟超时。
 
     超时后执行三步动作：
-    1. 标记为 stale_terminated（status=fail, result=stale_terminated, failure_reason=stale_terminated）
+    1. 标记为 timeout（status=timeout, result=stale_terminated, failure_reason=stale_terminated）
+       timeout 是独立的终态状态，与 fail（求解失败）区分，便于运维分析
     2. 广播 SSE captcha_solve 事件，让前后台实时看到状态变化
     3. 触发重新入队（cookie 预校验由 worker 自动处理，cookie 无效则不重试）
 
@@ -408,7 +409,7 @@ async def cleanup_stale_records() -> int:
                 text(
                     f"""
                     UPDATE xianyu_captcha_solve_record
-                    SET status = 'fail',
+                    SET status = 'timeout',
                         result = 'stale_terminated',
                         failure_reason = 'stale_terminated',
                         error_message = CONCAT(COALESCE(error_message, ''),
@@ -424,7 +425,7 @@ async def cleanup_stale_records() -> int:
 
             affected = len(rows)
             logger.warning(
-                "僵尸滑块求解记录清理：已将 %d 条超时 retrying 记录标记为 stale_terminated（超时=%d分钟）",
+                "僵尸滑块求解记录清理：已将 %d 条超时 retrying 记录标记为 timeout（超时=%d分钟）",
                 affected, STALE_RECORD_TIMEOUT_MINUTES,
             )
 
@@ -440,7 +441,7 @@ async def cleanup_stale_records() -> int:
                 open_reason = str(row.get("open_reason") or "")
                 solve_reason = str(row.get("solve_reason") or "")
 
-                # 3a. 广播 SSE 事件（前端实时看到状态从"进行中"变为"超时终止"）
+                # 3a. 广播 SSE 事件（前端实时看到状态从"求解中"变为"超时"）
                 try:
                     await broadcaster.broadcast(
                         tenant_id,
@@ -448,7 +449,7 @@ async def cleanup_stale_records() -> int:
                         {
                             "accountId": account_id,
                             "accountName": account_name,
-                            "status": "fail",
+                            "status": "timeout",
                             "result": "stale_terminated",
                             "engine": "Playwright",
                             "reason": f"求解超时（{STALE_RECORD_TIMEOUT_MINUTES}分钟无响应），已自动终止",
@@ -511,7 +512,8 @@ async def _reenqueue_after_stale(
         from .captcha_queue import get_queue_manager
         manager = await get_queue_manager()
         # 直接调用 manager.enqueue，skip_dedup=True 跳过30分钟去重
-        record_id = await manager.enqueue(
+        # manager.enqueue 返回 (record_id, position, total)，此处仅需 record_id
+        record_id, _position, _total = await manager.enqueue(
             account_id=account_id,
             tenant_id=tenant_id,
             trigger_scene=trigger_scene,

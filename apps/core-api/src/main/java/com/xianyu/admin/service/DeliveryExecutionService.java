@@ -113,6 +113,14 @@ public class DeliveryExecutionService {
 
     /**
      * 执行单个发货
+     *
+     * 重复发货防护（事故级修复）：
+     * 1. 入口检查：该订单是否已有 status=2 的成功发货记录 → 有则跳过（双向验证）
+     * 2. 状态判断修复：消息发送成功 + 卡密标记后立即标记 status=2，
+     *    确认发货失败不影响 delivery_record 成功状态（避免被 retryFailedDeliveries 重置后再次认领新卡密）
+     * 3. 补发逻辑修复：重试时若 delivery_record 已有 delivery_content（首次发送的卡密内容），
+     *    直接重发该内容，不再认领新卡密
+     * 4. 鱼小铺 vs 普通用户：fishShopUser=true 调用闲鱼 API 确认发货；false 只发 WS 消息
      */
     @Transactional
     public void executeDelivery(Map<String, Object> record) {
@@ -139,6 +147,26 @@ public class DeliveryExecutionService {
                 throw new BizException(409, "订单缺少可用的闲鱼账号，无法发货");
             }
 
+            // === 重复发货最后防线：检查该订单是否已有成功的发货记录 ===
+            // 背景：用户反馈一个订单发了7张卡密，根因是确认发货失败导致 status=3 →
+            // retryFailedDeliveries 重置 → 再次认领新卡密。此处防止任何路径的重复发货。
+            Integer existingSuccessCount = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM delivery_record " +
+                            "WHERE tenant_id=? AND order_id=? AND deleted=0 AND status=2 " +
+                            "AND id<>? LIMIT 1",
+                    Integer.class, tenantId, orderId, recordId);
+            if (existingSuccessCount != null && existingSuccessCount > 0) {
+                log.warn("重复发货最后防线拦截: tenantId={} orderId={} recordId={}（该订单已有成功发货记录，跳过）",
+                        tenantId, orderId, recordId);
+                // 直接将当前记录标记为成功（已通过其他记录发货），避免后续重试
+                jdbcTemplate.update(
+                        "UPDATE delivery_record SET status=2, delivery_status='success', " +
+                                "error_message=NULL, fail_reason=NULL, " +
+                                "updated_time=NOW() WHERE id=? AND tenant_id=?",
+                        recordId, tenantId);
+                return;
+            }
+
             // 2. 获取订单商品
             List<XianyuTradeOrderItem> items = orderItemMapper.findByOrderId(tenantId, orderId);
             if (items == null || items.isEmpty()) {
@@ -161,6 +189,14 @@ public class DeliveryExecutionService {
                     : "";
             boolean isManualWithContent = "text".equals(recordMode) && !recordContent.isBlank();
 
+            // === 补发货识别：检查 delivery_record 是否已有首次发送的 delivery_content ===
+            // 如果已有 delivery_content（首次发送的卡密/文本内容），说明之前已发送过，
+            // 本次是重试/补发，应直接重发首次内容，不再认领新卡密。
+            String existingDeliveryContent = record.get("delivery_content") != null
+                    ? String.valueOf(record.get("delivery_content"))
+                    : "";
+            boolean isRedeliveryWithContent = !existingDeliveryContent.isBlank();
+
             String mode = recordMode;
             String header = "";
             String content = recordContent;
@@ -172,8 +208,17 @@ public class DeliveryExecutionService {
             String cardLink = null;
             String cardCode = null;
 
-            if (!isManualWithContent) {
-                // 3. 非手动发货：获取商品发货配置
+            if (isRedeliveryWithContent) {
+                // === 补发逻辑：重发首次发送的内容，不再认领新卡密 ===
+                // 背景：用户要求"补发货需要发送首次发送的卡密，将首次卡密记录，补发货时不要发送新卡密"
+                log.info("补发货：重发首次内容 recordId={} tenantId={} orderId={}（不再认领新卡密）",
+                        recordId, tenantId, orderId);
+                // 直接使用首次发送的 delivery_content 作为消息内容
+                // mode 保持 recordMode（可能是 card 或 text），但不再走认领逻辑
+                content = existingDeliveryContent;
+                cardContent = existingDeliveryContent;
+            } else if (!isManualWithContent) {
+                // 3. 非手动发货且非补发：获取商品发货配置
                 // 注意：xianyu_trade_order_item.goods_id 可能存储的是闲鱼 external_goods_id
                 // （Python sync_sold_orders 直接将 MTOP 返回的 itemId 写入 goods_id 字段）。
                 // 需要先尝试用 goods_id 查 xianyu_goods.id；若查不到，尝试用 external_goods_id 映射。
@@ -207,7 +252,7 @@ public class DeliveryExecutionService {
                     }
                 }
 
-                // 4. 卡密模式：原子认领一张未使用卡密
+                // 4. 卡密模式：原子认领一张未使用卡密（仅首次发货时执行）
                 if ("card".equals(mode)) {
                     Object cardGroupIdObj = timingConfig.get("cardGroupId");
                     if (cardGroupIdObj == null) {
@@ -299,9 +344,15 @@ public class DeliveryExecutionService {
             }
 
             // 7. 构建消息内容
-            String resolvedContent = resolveContent(mode, header, content, footer, cardContent,
-                    buyerName, orderIdStr, goodsTitle, String.valueOf(firstItem.getGoodsId()),
-                    shopName, null, tenantId);
+            // 补发场景（isRedeliveryWithContent=true）：直接使用首次的 delivery_content，不重新解析
+            String resolvedContent;
+            if (isRedeliveryWithContent) {
+                resolvedContent = existingDeliveryContent;
+            } else {
+                resolvedContent = resolveContent(mode, header, content, footer, cardContent,
+                        buyerName, orderIdStr, goodsTitle, String.valueOf(firstItem.getGoodsId()),
+                        shopName, null, tenantId);
+            }
 
             // 8. 发送消息（支持分段发送）
             boolean segmented = segmentSend != null && (Boolean.TRUE.equals(segmentSend) || "true".equals(String.valueOf(segmentSend)));
@@ -312,53 +363,73 @@ public class DeliveryExecutionService {
                 sendMessage(tenantId, accountId, target, msg.trim());
             }
 
-            if (claimedCardItemId != null && claimedCardGroupId != null) {
+            // === 关键修复：消息发送成功后立即标记 delivery_record 为 status=2 ===
+            // 背景：原逻辑在发送成功后调用 confirm-shipment，失败会抛异常导致整条记录被标记为 status=3，
+            // 然后 retryFailedDeliveries 60s 后重置为 status=0，再次认领新卡密 → 重复发送。
+            // 修复：消息发送成功即表示买家已收到卡密，delivery_record 必须标记为成功。
+            // 卡密标记为已使用（仅首次发货时，补发不重复标记）
+            if (!isRedeliveryWithContent && claimedCardItemId != null && claimedCardGroupId != null) {
                 markCardUsed(tenantId, claimedCardGroupId, claimedCardItemId, orderId);
                 cardConsumed = true;
             }
 
-            // 9. 调用闲鱼确认发货 API，只有平台真正标记为已发货后才更新本地 order_status=3
-            // 避免本地标记 3 但闲鱼平台实际未发货的状态不一致问题
-            Map<String, Object> confirmPayload = new LinkedHashMap<>();
-            confirmPayload.put("tenantId", tenantId);
-            confirmPayload.put("accountId", accountId);
-            confirmPayload.put("externalOrderId", order.getExternalOrderId());
-            confirmPayload.put("isBargain", Boolean.TRUE.equals(order.getIsBargain()));
-            String itemId = firstItem.getExternalGoodsId() != null && !firstItem.getExternalGoodsId().isBlank()
-                    ? firstItem.getExternalGoodsId()
-                    : String.valueOf(firstItem.getGoodsId());
-            confirmPayload.put("itemId", itemId);
-            confirmPayload.put("buyerId", buyerId);
-
-            Map<String, Object> confirmResult;
-            try {
-                confirmResult = automationClient.postInternalForData(
-                        "/api/internal/orders/confirm-shipment", confirmPayload, 30, tenantId);
-            } catch (Exception e) {
-                log.warn("确认发货调用失败 orderId={}, errorType={}, message={}",
-                        orderId, e.getClass().getSimpleName(), e.getMessage());
-                throw new BizException(503, "确认发货服务暂时不可用，请稍后重试");
-            }
-
-            boolean confirmSuccess = confirmResult != null
-                    && (Boolean.TRUE.equals(confirmResult.get("success"))
-                        || "true".equals(String.valueOf(confirmResult.get("success"))));
-            if (!confirmSuccess) {
-                String confirmError = confirmResult != null
-                        ? String.valueOf(confirmResult.getOrDefault("message", "确认发货失败"))
-                        : "确认发货失败";
-                log.warn("确认发货失败 orderId={}, error={}", orderId, confirmError);
-                throw new BizException(503, "发货消息已发送，但确认发货失败：" + confirmError);
-            }
-
-            // 10. 确认发货成功，更新订单发货状态
-            orderMapper.updateDeliveryStatus(tenantId, orderId, 1, 3);
-
-            // 11. 更新发货记录为成功
+            // 立即更新发货记录为成功（消息已发送给买家，用户感知已发货）
             jdbcTemplate.update(
                     "UPDATE delivery_record SET account_id=?, status=2, delivery_status='success', delivery_type=?, delivery_mode=?, delivery_content=?, content=?, delivery_timing=?, " +
                             "delivery_time=NOW(), completed_time=NOW(), card_item_id=?, updated_time=NOW() WHERE id=? AND tenant_id=?",
-                    accountId, mode, mode, resolvedContent, resolvedContent, timing, claimedCardItemId, recordId, tenantId);
+                    accountId, mode, mode, resolvedContent, resolvedContent, timing,
+                    isRedeliveryWithContent ? null : claimedCardItemId,
+                    recordId, tenantId);
+
+            log.info("发货消息发送成功，delivery_record 已标记为成功 recordId={}, orderId={}, mode={}, timing={}, isRedelivery={}",
+                    recordId, orderId, mode, timing, isRedeliveryWithContent);
+
+            // 9. 调用闲鱼确认发货 API（区分鱼小铺/普通用户）
+            // - 鱼小铺用户（fishShopUser=true）：调用闲鱼 API 确认发货（平台标记为已发货）
+            // - 普通用户（fishShopUser=false）：不调用 API，仅发送 WS 消息（闲鱼 WS 会推送待发货通知，
+            //   买家点击"无需寄件"按钮即可完成发货）
+            // 确认发货失败不影响 delivery_record 成功状态（消息已发给买家）
+            Boolean isFishShopUser = isFishShopUser(tenantId, accountId);
+            if (Boolean.TRUE.equals(isFishShopUser)) {
+                try {
+                    Map<String, Object> confirmPayload = new LinkedHashMap<>();
+                    confirmPayload.put("tenantId", tenantId);
+                    confirmPayload.put("accountId", accountId);
+                    confirmPayload.put("externalOrderId", order.getExternalOrderId());
+                    confirmPayload.put("isBargain", Boolean.TRUE.equals(order.getIsBargain()));
+                    String itemId = firstItem.getExternalGoodsId() != null && !firstItem.getExternalGoodsId().isBlank()
+                            ? firstItem.getExternalGoodsId()
+                            : String.valueOf(firstItem.getGoodsId());
+                    confirmPayload.put("itemId", itemId);
+                    confirmPayload.put("buyerId", buyerId);
+
+                    Map<String, Object> confirmResult = automationClient.postInternalForData(
+                            "/api/internal/orders/confirm-shipment", confirmPayload, 30, tenantId);
+
+                    boolean confirmSuccess = confirmResult != null
+                            && (Boolean.TRUE.equals(confirmResult.get("success"))
+                                || "true".equals(String.valueOf(confirmResult.get("success"))));
+                    if (confirmSuccess) {
+                        // 确认发货成功，更新订单状态为已发货
+                        orderMapper.updateDeliveryStatus(tenantId, orderId, 1, 3);
+                        log.info("鱼小铺用户确认发货成功 orderId={}", orderId);
+                    } else {
+                        String confirmError = confirmResult != null
+                                ? String.valueOf(confirmResult.getOrDefault("message", "确认发货失败"))
+                                : "确认发货失败";
+                        log.warn("鱼小铺用户确认发货失败（delivery_record 已成功，不影响）orderId={} error={}",
+                                orderId, confirmError);
+                    }
+                } catch (Exception e) {
+                    // 确认发货失败不影响 delivery_record 成功状态，仅记录日志
+                    log.warn("鱼小铺用户确认发货异常（delivery_record 已成功，不影响）orderId={}, errorType={}, message={}",
+                            orderId, e.getClass().getSimpleName(), e.getMessage());
+                }
+            } else {
+                // 普通用户：不调用闲鱼 API，仅通过 WS 发送消息已完成发货
+                // 闲鱼 WS 会推送待发货通知给买家，买家点击"无需寄件"按钮即可完成发货
+                log.info("普通用户发货完成（仅 WS 消息，不调闲鱼 API）orderId={}", orderId);
+            }
 
             log.info("发货成功 recordId={}, orderId={}, mode={}, timing={}", recordId, orderId, mode, timing);
         } catch (Exception e) {
@@ -366,6 +437,22 @@ public class DeliveryExecutionService {
                 releaseClaimedCard(tenantId, claimedCardGroupId, claimedCardItemId);
             }
             throw e;
+        }
+    }
+
+    /**
+     * 判断账号是否为鱼小铺用户
+     * - fishShopUser=true：鱼小铺用户，需调用闲鱼 API 确认发货
+     * - fishShopUser=false/null：普通用户，仅通过 WS 消息发货
+     */
+    private Boolean isFishShopUser(Long tenantId, Long accountId) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    "SELECT COALESCE(fish_shop_user, 0) FROM xianyu_account WHERE id=? AND tenant_id=? AND deleted=0",
+                    Boolean.class, accountId, tenantId);
+        } catch (Exception e) {
+            log.debug("查询鱼小铺用户标识失败 accountId={} errorType={}", accountId, e.getClass().getSimpleName());
+            return false;
         }
     }
 

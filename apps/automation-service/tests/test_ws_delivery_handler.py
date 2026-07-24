@@ -102,7 +102,8 @@ def test_is_payment_message_accepts_paid_waiting_shipment_reminder():
 @pytest.mark.asyncio
 async def test_process_delivery_uses_goods_level_text_source_when_payment_message_has_no_real_order_id(monkeypatch):
     db = _RealtimeDeliveryDB()
-    send_delivery = AsyncMock(return_value=True)
+    # _send_delivery_message 返回 (success, is_transient) 元组，mock 需匹配签名
+    send_delivery = AsyncMock(return_value=(True, False))
     insert_record = AsyncMock()
 
     monkeypatch.setattr(ws_delivery_handler, "_send_delivery_message", send_delivery)
@@ -148,11 +149,15 @@ async def test_has_existing_realtime_delivery_matches_full_receiver_info_payload
             sql = str(statement)
             if "AND order_id = :order_id" in sql:
                 return _FakeResult(row=None)
-            if "JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.sid')) = :sid" in sql:
-                assert params["sid"] == "62965262020@goofish"
+            # 交叉维度去重 SQL（移除 pnmId 条件后）：用 REPLACE 归一化匹配
+            if "REPLACE(JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.sid'))" in sql:
+                # sid 传入值为 "62965262020"（不带 @goofish），SQL 中 REPLACE 归一化
+                assert params["sid"] == "62965262020"
                 assert params["buyer_user_id"] == "4182068955155@goofish"
                 assert params["xy_goods_id"] == "1060794911332"
                 assert params["delivery_content"] == "same content"
+                # 确认 pnm_id 不再参与去重 SQL（移除后不应出现在参数中）
+                assert "pnm_id" not in params, "pnmId 不应参与去重判断"
                 return _FakeResult(row={"id": 99})
             raise AssertionError(f"unexpected SQL: {sql}")
 
@@ -174,7 +179,8 @@ async def test_has_existing_realtime_delivery_matches_full_receiver_info_payload
 @pytest.mark.asyncio
 async def test_process_delivery_skips_duplicate_same_order(monkeypatch):
     db = _RealtimeDeliveryDB()
-    send_delivery = AsyncMock(return_value=True)
+    # _send_delivery_message 返回 (success, is_transient) 元组，mock 需匹配签名
+    send_delivery = AsyncMock(return_value=(True, False))
     insert_record = AsyncMock()
 
     monkeypatch.setattr(ws_delivery_handler, "_send_delivery_message", send_delivery)
@@ -214,7 +220,8 @@ async def test_execute_text_delivery_updates_local_state_without_calling_xianyu_
             return _FakeResult(row=None)
 
     db = _UpdateOrderDB()
-    monkeypatch.setattr(ws_delivery_handler, "_send_delivery_message", AsyncMock(return_value=True))
+    # _send_delivery_message 返回 (success, is_transient) 元组，mock 需匹配签名
+    monkeypatch.setattr(ws_delivery_handler, "_send_delivery_message", AsyncMock(return_value=(True, False)))
     monkeypatch.setattr(ws_delivery_handler, "_insert_delivery_record", AsyncMock())
     auto_confirm = AsyncMock(return_value={"success": True})
     monkeypatch.setattr(ws_delivery_handler, "_auto_confirm_shipment", auto_confirm)

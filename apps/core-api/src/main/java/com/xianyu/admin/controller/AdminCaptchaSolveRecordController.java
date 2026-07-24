@@ -50,6 +50,16 @@ public class AdminCaptchaSolveRecordController {
     }
 
     /**
+     * 队列实时状态：当前排队中 / 求解中任务数（跨租户汇总）。
+     * 用于列表页实时徽标，让管理员一眼看到队列瞬时状态。
+     */
+    @GetMapping("/queue-status")
+    public Result<java.util.Map<String, Object>> queueStatus() {
+        requireAdmin();
+        return Result.ok(recordService.queueStatus());
+    }
+
+    /**
      * 分页查询明细记录。
      */
     @GetMapping

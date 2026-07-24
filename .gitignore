@@ -84,6 +84,7 @@ temp/
 .uv-tools-bin/
 .yarn-cache/
 .deploy-prod-artifacts/
+.staging/
 output/
 dogfood-output/
 screenshots/

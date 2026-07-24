@@ -66,13 +66,80 @@ export const VERSION_BUMP_RULES = [
  */
 
 /** 当前最新版本号（应与 package.json 的 version 字段保持一致） */
-export const CURRENT_VERSION = '1.8.0'
+export const CURRENT_VERSION = '2.0.0'
 
 /**
  * 更新日志数据，最新在前。
  * @type {ReleaseNote[]}
  */
 export const releaseNotes = [
+  {
+    version: '2.0.0',
+    date: '2026-07-24',
+    type: RELEASE_TYPES.MAJOR,
+    title: 'API 滑块求解 SaaS 对外对接、维护模式横幅、VIP 多周期套餐、卡密发货多层去重',
+    summary: '商业版滑块求解能力以 SaaS API 形式对外开放（X-Api-Key 鉴权、独立并发槽位、独立记录表、按成功次数计费 Token）；上线维护模式横幅覆盖 PC/移动/登录页，避免更新期间用户困惑；VIP 套餐支持月/季/年三档价格；卡密发货实现六层去重防护，根治同一会话重复发送卡密问题；修复 delivery_record.order_id 溢出导致多单误判重复发货；修复已发送卡密被软删除导致统计不可见；crawler-service 新增进程监测机制清理孤儿 Chrome 进程。',
+    changes: [
+      {
+        label: '新增',
+        items: [
+          'API 滑块求解 SaaS 对外对接：第三方系统（含开源版）可通过 POST /api/v1/slider/solve 调用商业版滑块求解能力，X-Api-Key 鉴权（sha256 哈希存储，一租户一密钥），独立并发槽位不与前台用户抢占资源，按成功次数计费 Token（默认 0.05 元/次 = 5 Token/次）；前台新增 PC 端与移动端管理页面，支持凭证生成/重置、记录查询、统计概览、对接文档；后台新增 API 对接管理页面管理所有租户凭证与计费；5 分钟对账定时任务校准漏单/多扣',
+          '维护模式横幅：上线期间前台所有页面（PC 端、移动端、登录页）顶部显示「项目正在更新中」持久横幅，Redis 存储维护状态，前端 60 秒轮询 GET /api/maintenance/status，路由切换立即刷新；Redis 不可达时降级为未维护（不锁死前台）；部署操作方通过 redis-cli 切换，上线开始必须开启，上线结束（无论成功失败）必须关闭并验证',
+          'VIP 会员套餐多周期价格：套餐支持月/季/年三档价格（price_month_cent / price_quarter_cent / price_year_cent），下单时订单记录 period_type，支付成功后按周期推导会员有效期（月=30天，季=90天，年=365天），历史订单 NULL 视为月度兼容',
+          '滑块求解记录统计口径调整：成功率统计排除 timeout（超时）和 precheck_rejected（预检验拒绝）记录，避免不可重试场景污染成功率；后端 selectKpi / selectTrend / selectAccountGroups 通过 CASE WHEN 过滤指定状态与失败原因；前端管理端新增排除口径说明与徽标',
+          'crawler-service 进程监测机制：新增 ProcessRegistry + ProcessMonitor，每个求解会话注册到 registry，每 30 秒扫描清理超过 deadline+30s 的进程（SIGTERM → 5s → SIGKILL），PID < 100 不清理保护系统进程；新增 /api/health/processes 端点查看活跃会话与清理日志',
+          '滑块求解排队位置原子化：captcha_queue.py 的 enqueue 方法持锁原子加入 _pending_tasks 并直接返回排队位置，修复异步竞态导致前端显示「排队中第0位，共0个任务」'
+        ]
+      },
+      {
+        label: '优化',
+        items: [
+          '卡密发货多层去重防护：60 秒窗口去重（同 account+pnmId 只触发一次）、会话 ID 归一化（移除 @goofish 后缀确保同一把锁）、内存级并发去重（_delivery_in_flight set）、数据库去重查询、锁内事务提交（消除 TOCTOU 竞态与 MySQL REPEATABLE READ 事务快照问题）、delivery_timing 兼容历史 NULL 记录',
+          'delivery_record 接收人信息持久化：补齐 receiver_info JSON 列存储 {sid,pnmId,buyerUserId,xyGoodsId,buyerUserName} 用于并发去重，新增 (tenant_id, account_id, delivery_timing) 复合索引加速查询'
+        ]
+      },
+      {
+        label: '修复',
+        items: [
+          'delivery_record.order_id 溢出导致多单误判重复发货：闲鱼 orderId 为超长字符串，写入 bigint 列时 MySQL 静默写入 NULL，导致基于 order_id 的去重失效，同一会话同商品的多单被误判为重复发货跳过；V1.35 迁移将 order_id 改为 varchar(64)，历史 bigint 数值安全转换为字符串',
+          'delivery_goods_config 唯一约束冲突：线上手动添加的唯一约束不含 deleted 字段，软删除记录阻止新记录 INSERT 触发 DuplicateKeyException；V1.31 迁移清理软删除记录、统一 config_json 为 JSON 类型、添加 uk_dgc_tenant_goods 唯一约束与 idx_dgc_deleted 索引',
+          '已发送卡密被软删除导致统计不可见：_safe_mark_cards_used 原先设置 status=2, deleted=1，导致已发送卡密从所有统计和查询中消失；V1.34 迁移恢复 status=2 AND deleted=1 的卡密为 deleted=0, is_used=1，并刷新所有卡密组统计计数',
+          '滑块求解错误分类：新增 _is_browser_launch_failure() 识别 Chrome 启动失败/崩溃错误，归类为 service_unavailable（不可重试+10分钟冷却）而非默认 slider_fail（重试3次），修复 Chrome 资源耗尽时单账号累积 13000+ 失败记录',
+          '前后端发货模式术语统一：前端与 Java 后端使用 card 表示卡密发货，Python 服务常量为 kami，_load_goods_delivery_rule 增加 card → kami 别名归一化，修复 delivery_mode 判断不命中导致发货流程终止',
+          'BillingPlanService 价格计算精度：longValue() * 100 会先截断小数再乘（9.99 元 → 9 元的 bug），改用 BigDecimal.multiply 保证精度'
+        ]
+      }
+    ],
+    remark: '本次涉及 8 个数据库迁移脚本（core-api V1.30-V1.35 + automation V1.16-V1.17），其中 V1.31 含清理软删除记录与去重（risk=backfill）、V1.35 含 bigint→varchar 类型变更（risk=contract），均已通过 information_schema 检查实现幂等可重入；上线前会完整备份三个数据库并产出 migration-evidence.json，过程中开启维护模式横幅。'
+  },
+  {
+    version: '1.9.0',
+    date: '2026-07-22',
+    type: RELEASE_TYPES.MINOR,
+    title: '滑块求解系统综合改造：账号活跃度判断、6 状态系统、队列进程去重',
+    summary: '滑块求解账号活跃度判断改为基于前台用户登录时间（sys_user.last_login_time），3 天未登录用户的闲鱼账号自动录入排除表并禁止求解；求解记录状态从 2 种扩展为 6 种（成功/失败/求解中/排队中/超时/预检验拒绝）；队列进程去重避免同一账号重复入队；新增不活跃账号定时扫描器每小时自动维护排除表。',
+    changes: [
+      {
+        label: '新增',
+        items: [
+          '不活跃账号排除表 xianyu_account_solve_exclusion：3 天未登录前台的用户的闲鱼账号会被自动录入，求解入队时直接跳过，避免占用排队序列产生脏数据',
+          '不活跃账号定时扫描器：每小时扫描 sys_user.last_login_time，将超过 3 天未登录的用户旗下闲鱼账号录入排除表；用户登录前台时自动从排除表移除其所有闲鱼账号',
+          '滑块求解记录状态扩展为 6 种：success / fail / retrying（求解中）/ queued（排队中）/ timeout（超时）/ precheck_rejected（预检验拒绝），前端与管理端同步展示',
+          '队列进程去重：入队前检查内存队列与数据库 retrying 状态，同一账号同时只会有一个求解任务在排队或处理'
+        ]
+      },
+      {
+        label: '优化',
+        items: [
+          '账号活跃度判断逻辑修正：从原 xianyu_account_runtime.last_online_time（闲鱼账号在线时间）改为 sys_user.last_login_time（前台用户登录时间），更准确反映用户是否在主动使用平台',
+          '滑块求解超时状态独立：原本超时记录为 fail，现独立为 timeout 状态，便于区分"预检验拒绝"与"真正求解超时"',
+          '预检验拒绝状态独立：原本预检验失败记录为 fail，现独立为 precheck_rejected 状态，前端可针对性提示用户 Cookie 已过期需重新扫码',
+          'Java 网关 KPI 与队列状态查询扩展：管理端可查看 6 种状态的求解统计'
+        ]
+      }
+    ],
+    remark: '本次涉及 V1.16 数据库迁移（automation_mysql 新增 xianyu_account_solve_exclusion 表），纯 CREATE TABLE IF NOT EXISTS，非破坏性，无数据丢失风险。'
+  },
   {
     version: '1.8.0',
     date: '2026-07-22',

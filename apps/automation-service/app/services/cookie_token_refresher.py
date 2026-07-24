@@ -283,19 +283,65 @@ def _notify_ws_client_credentials_updated(
 # 三个刷新任务
 # ============================================================
 def _is_has_login_confirmed(body_text: str) -> bool:
-    """只接受结构化响应中的明确登录成功证据。"""
+    """只接受结构化响应中的明确登录成功证据。
+
+    支持的响应格式：
+    1. 旧格式：顶层 hasLogin / data.hasLogin / 顶层 success
+    2. 新格式（passport.goofish.com/newlogin/hasLogin.do 实际响应）：
+       {content: {data: {loginResult: "success", st: "success", ...}, success: true}, hasError: false}
+
+    注意：content.success==true 和 resultCode==100 在登录成功和失效两种状态下都出现，
+    不能作为登录成功判据，必须检查 content.data.loginResult 或 content.data.st。
+    """
     try:
         payload = json.loads(body_text or "")
     except (TypeError, json.JSONDecodeError):
         return False
     if not isinstance(payload, dict):
         return False
+    # 旧格式兼容：顶层 hasLogin / data.hasLogin / 顶层 success
     if "hasLogin" in payload:
         return payload.get("hasLogin") is True
     data = payload.get("data")
     if isinstance(data, dict) and "hasLogin" in data:
         return data.get("hasLogin") is True
-    return payload.get("success") is True
+    if payload.get("success") is True:
+        return True
+    # 新格式支持：content.data.loginResult == "success"
+    content = payload.get("content")
+    if isinstance(content, dict):
+        content_data = content.get("data")
+        if isinstance(content_data, dict):
+            if content_data.get("loginResult") == "success":
+                return True
+            if content_data.get("st") == "success":
+                return True
+    return False
+
+
+def _is_cookie_expired_response(body_text: str) -> bool:
+    """检测 hasLogin 响应是否表示 Cookie 已失效（需重新登录）。
+
+    passport.goofish.com/newlogin/hasLogin.do 在 Cookie 失效时返回：
+    {content: {data: {titleMsg: "您的登录态已失效，请重新登录", changeView: "default", ...}, ...}, ...}
+
+    Returns:
+        True 表示 Cookie 已失效，需用户重新扫码登录
+    """
+    try:
+        payload = json.loads(body_text or "")
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    content = payload.get("content")
+    if isinstance(content, dict):
+        content_data = content.get("data")
+        if isinstance(content_data, dict):
+            title_msg = str(content_data.get("titleMsg") or "")
+            if "已失效" in title_msg or "重新登录" in title_msg:
+                return True
+    return False
 
 
 async def _do_cookie_keepalive(state: AccountRefreshState) -> bool:
@@ -339,24 +385,18 @@ async def _do_cookie_keepalive(state: AccountRefreshState) -> bool:
             state.last_error = "Cookie 保活失败，请检查账号状态"
             err_str = error_code
             if "CAPTCHA_NEEDED" in err_str or "FAIL_SYS_USER_VALIDATE" in err_str or "RGV587" in err_str:
-                await _update_cookie_status(
-                    state.account_id, state.tenant_id, 0,
-                    "COOKIE_EXPIRED", "Cookie 保活触发滑块验证，需要人工处理",
+                # hasLogin 接口触发滑块验证，不代表 Cookie 真的失效：
+                # hasLogin API 缺少 bx-ua / bx-umidtoken / bx_et 反爬令牌，容易被 Baxia 风控
+                # 误判为需要滑块验证。改为不标记 cookie_status=0，只触发滑块求解，
+                # 由求解器内部通过 hasLogin / page.head 二次验证判断 Cookie 是否真的失效。
+                logger.warning(
+                    "Cookie 保活触发滑块验证（Cookie 可能仍有效，等待求解器二次验证）accountId=%d errCode=%s",
+                    state.account_id, err_str,
                 )
                 try:
                     await notify_captcha_required(state.tenant_id, state.account_id, err_str)
                 except Exception:
                     logger.warning("保活触发滑块后发送通知失败 accountId=%d", state.account_id)
-                # Cookie 已失效，主动断开 WS 连接，避免"WS 在线但 Cookie 失败"的矛盾状态
-                try:
-                    from .ws_client import ws_manager
-                    await ws_manager.stop_client(state.account_id)
-                    logger.info("Cookie 保活触发滑块，已断开 WS 连接 accountId=%d", state.account_id)
-                except Exception as ws_err:
-                    log_service_failure(
-                        logger, ws_err, operation="stop_ws_after_captcha",
-                        tenant_id=state.tenant_id, account_id=state.account_id, level=logging.WARNING,
-                    )
                 # 自动触发滑块求解（cookie_keepalive 场景），通过优先级队列处理
                 try:
                     from .captcha_queue import enqueue_solve
@@ -585,6 +625,14 @@ async def _call_has_login(account_id: int, tenant_id: int) -> dict:
     if login_confirmed:
         return {"success": True, "cookieUpdated": cookie_changed}
     if resp.status_code == 200:
+        # 检查是否是 Cookie 真失效（响应体含 titleMsg="您的登录态已失效，请重新登录"）
+        # 真失效时返回 SESSION_EXPIRED，precheck 会归类为 cookie_invalid 提示用户重新扫码
+        if _is_cookie_expired_response(body_text):
+            return {
+                "success": False,
+                "errorCode": "SESSION_EXPIRED",
+                "error": "Cookie 会话已失效，请重新扫码登录",
+            }
         return {
             "success": False,
             "errorCode": "HAS_LOGIN_UNCONFIRMED",
@@ -675,19 +723,33 @@ async def _do_ws_token_refresh(state: AccountRefreshState, cookie_str: str, m_h5
             )
             state.last_ws_token_refresh_ok = False
             state.last_error = f"WS Token 刷新失败: {error_type}"
-            # 滑块验证：标记账号需要人工处理
+            # 滑块验证：不标记 cookie_status=0（Cookie 可能仍有效，只是 WS Token API 触发了 Baxia 风控）
+            # WS Token API（mtop.taobao.idlemessage.pc.login.token）需要完整的 bx-ua / bx-umidtoken 反爬令牌，
+            # Python 直接 POST 不带这些令牌容易被风控判定为异常请求返回 FAIL_SYS_USER_VALIDATE。
+            # 这是"调用方式缺陷"导致的误判，不代表 Cookie 真的失效。
+            # 改为只触发滑块求解，由求解器内部通过 hasLogin 二次验证判断 Cookie 是否真的失效。
             if error_type == "captcha":
-                await _update_cookie_status(
-                    state.account_id, state.tenant_id, 0,
-                    "COOKIE_EXPIRED", "WS Token 刷新触发滑块验证，需要人工处理",
+                logger.warning(
+                    "WS Token 刷新遇到滑块验证（Cookie 可能仍有效，不标记失效，触发求解器二次验证）: accountId=%d",
+                    state.account_id,
                 )
                 try:
                     await notify_captcha_required(
                         state.tenant_id, state.account_id,
-                        "WS Token 刷新触发滑块验证，请到闲鱼完成验证后重试",
+                        "WS Token 刷新触发滑块验证",
                     )
                 except Exception:
                     logger.warning("WS Token 刷新触发滑块后发送通知失败 accountId=%d", state.account_id)
+                # 自动触发滑块求解（通过优先级队列）
+                try:
+                    from .captcha_queue import captcha_queue_manager
+                    await captcha_queue_manager.enqueue(
+                        account_id=state.account_id,
+                        tenant_id=state.tenant_id,
+                        trigger_scene="token_refresh",
+                    )
+                except Exception as exc:
+                    logger.warning("WS Token 刷新触发滑块后入队求解失败 accountId=%d: %s", state.account_id, exc)
             elif error_type == "expired":
                 await _update_cookie_status(
                     state.account_id, state.tenant_id, 0,
@@ -826,22 +888,219 @@ async def _dispatcher_loop() -> None:
 
 
 # ============================================================
+# 定期恢复：检查 cookie_status=0 的账号是否实际有效
+# ============================================================
+RECOVERY_CHECK_INTERVAL_SECONDS = 30 * 60  # 每 30 分钟检查一次
+_recovery_task: Optional[asyncio.Task] = None
+
+
+async def _recover_misclassified_cookies() -> int:
+    """检查所有 cookie_status=0 的账号，如果 hasLogin 返回成功则恢复 cookie_status=1。
+
+    场景：WS Token 刷新触发 Baxia 滑块验证时，旧代码会错误标记 cookie_status=0。
+    虽然 ws_client.py 和 cookie_token_refresher.py 已修复（不再标记），但历史误标记
+    的账号需要通过此恢复机制纠正，避免有效 cookie 的账号被跳过保活和滑块求解。
+    """
+    import httpx
+
+    try:
+        async with async_session() as db:
+            rows = (await db.execute(
+                text("""
+                    SELECT a.id AS account_id, a.tenant_id, a.external_uid AS unb,
+                           auth.encrypted_cookie
+                    FROM xianyu_account a
+                    JOIN xianyu_account_auth auth
+                      ON auth.account_id = a.id AND auth.tenant_id = a.tenant_id
+                     AND auth.deleted = 0
+                     AND auth.id = (
+                        SELECT auth2.id FROM xianyu_account_auth auth2
+                        WHERE auth2.account_id = a.id AND auth2.tenant_id = a.tenant_id
+                          AND auth2.deleted = 0
+                        ORDER BY COALESCE(auth2.updated_time, auth2.created_time) DESC, auth2.id DESC
+                        LIMIT 1
+                     )
+                    WHERE a.deleted = 0
+                      AND auth.cookie_status = 0
+                      AND auth.encrypted_cookie IS NOT NULL
+                      AND auth.encrypted_cookie != ''
+                    ORDER BY a.id ASC
+                """),
+            )).mappings().all()
+    except Exception as e:
+        log_service_failure(logger, e, operation="recover_misclassified_load")
+        return 0
+
+    if not rows:
+        return 0
+
+    restored = 0
+    for row in rows:
+        aid = int(row["account_id"])
+        tid = int(row["tenant_id"])
+        unb = str(row["unb"] or "")
+        cookie_str = decrypt_cookie_if_needed(row["encrypted_cookie"])
+        if not cookie_str:
+            continue
+
+        # 解析 cookie 为 dict
+        cookie_dict: dict[str, str] = {}
+        for part in cookie_str.split(";"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                cookie_dict[k.strip()] = v.strip()
+
+        form_data = {
+            "appName": "xianyu",
+            "fromSite": "77",
+            "hid": unb,
+            "ltl": "true",
+            "appEntrance": "web",
+            "_csrf_token": cookie_dict.get("XSRF-TOKEN", ""),
+            "umidToken": "",
+            "hsiz": cookie_dict.get("cookie2", ""),
+            "bizParams": "taobaoBizLoginFrom=web",
+            "mainPage": "false",
+            "isMobile": "false",
+            "lang": "zh_CN",
+            "returnUrl": "",
+            "isIframe": "true",
+            "documentReferer": "https://www.goofish.com/",
+            "defaultView": "hasLogin",
+            "umidTag": "SERVER",
+            "deviceId": cookie_dict.get("cna", ""),
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Referer": "https://passport.goofish.com/",
+            "Origin": "https://passport.goofish.com",
+            "Cookie": cookie_str,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+                resp = await client.post(
+                    "https://passport.goofish.com/newlogin/hasLogin.do",
+                    data=form_data,
+                    headers=headers,
+                )
+        except Exception:
+            continue
+
+        body_text = resp.text or ""
+        if not _is_has_login_confirmed(body_text):
+            continue
+
+        # hasLogin 确认成功 → 恢复 cookie_status=1
+        # 同时合并 Set-Cookie 中的新 cookie
+        set_cookies = resp.headers.get_list("set-cookie") if hasattr(resp.headers, "get_list") else []
+        if not set_cookies and "set-cookie" in resp.headers:
+            set_cookies = [resp.headers["set-cookie"]]
+
+        new_cookie_parts: list[str] = []
+        for sc in set_cookies:
+            first = sc.split(";")[0].strip()
+            if "=" in first:
+                new_cookie_parts.append(first)
+
+        merged = dict(cookie_dict)
+        for part in new_cookie_parts:
+            k, v = part.split("=", 1)
+            merged[k.strip()] = v.strip()
+        new_cookie_str = "; ".join(f"{k}={v}" for k, v in merged.items())
+
+        try:
+            async with async_session() as db:
+                if new_cookie_str != cookie_str:
+                    await db.execute(
+                        text("""
+                            UPDATE xianyu_account_auth
+                            SET cookie_status = 1,
+                                last_login_status_code = 'OK',
+                                last_login_status_message = 'Cookie 恢复有效（定期恢复检查）',
+                                encrypted_cookie = :cookie,
+                                last_login_check_time = NOW(),
+                                updated_time = NOW()
+                            WHERE account_id = :aid AND tenant_id = :tid
+                              AND COALESCE(deleted, 0) = 0
+                        """),
+                        {"cookie": encrypt_cookie_for_storage(new_cookie_str), "aid": aid, "tid": tid},
+                    )
+                else:
+                    await db.execute(
+                        text("""
+                            UPDATE xianyu_account_auth
+                            SET cookie_status = 1,
+                                last_login_status_code = 'OK',
+                                last_login_status_message = 'Cookie 恢复有效（定期恢复检查）',
+                                last_login_check_time = NOW(),
+                                updated_time = NOW()
+                            WHERE account_id = :aid AND tenant_id = :tid
+                              AND COALESCE(deleted, 0) = 0
+                        """),
+                        {"aid": aid, "tid": tid},
+                    )
+                await db.execute(
+                    text("""
+                        UPDATE xianyu_account_runtime
+                        SET cookie_status = 1,
+                            last_login_status_code = 'OK',
+                            last_login_status_message = 'Cookie 恢复有效（定期恢复检查）',
+                            last_login_check_time = NOW(),
+                            updated_time = NOW()
+                        WHERE account_id = :aid AND tenant_id = :tid
+                    """),
+                    {"aid": aid, "tid": tid},
+                )
+                await db.commit()
+            restored += 1
+            logger.info("Cookie 恢复检查：恢复 cookie_status=1 accountId=%d", aid)
+        except Exception as e:
+            log_service_failure(
+                logger, e, operation="recover_misclassified_update",
+                tenant_id=tid, account_id=aid, level=logging.WARNING,
+            )
+
+    return restored
+
+
+async def _recovery_loop() -> None:
+    """定期恢复循环：每 30 分钟检查一次 cookie_status=0 的账号"""
+    logger.info("Cookie 恢复检查循环已启动，间隔 %d 秒", RECOVERY_CHECK_INTERVAL_SECONDS)
+    # 启动后延迟 60 秒再首次执行，避免与启动初始化冲突
+    await asyncio.sleep(60)
+    while _dispatcher_running:
+        try:
+            restored = await _recover_misclassified_cookies()
+            if restored > 0:
+                logger.info("Cookie 恢复检查：恢复 %d 个误标记账号", restored)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            log_service_failure(logger, e, operation="cookie_recovery_loop")
+        await asyncio.sleep(RECOVERY_CHECK_INTERVAL_SECONDS)
+    logger.info("Cookie 恢复检查循环已停止")
+
+
+# ============================================================
 # 公共 API
 # ============================================================
 async def start_dispatcher() -> None:
     """启动 Cookie/Token 刷新调度器（在 FastAPI lifespan 中调用）"""
-    global _dispatcher_task, _dispatcher_running
+    global _dispatcher_task, _dispatcher_running, _recovery_task
     if _dispatcher_task is not None and not _dispatcher_task.done():
         logger.warning("Cookie/Token 刷新调度器已在运行，跳过")
         return
     _dispatcher_running = True
     _dispatcher_task = asyncio.create_task(_dispatcher_loop())
-    logger.info("Cookie/Token 刷新调度器已启动")
+    _recovery_task = asyncio.create_task(_recovery_loop())
+    logger.info("Cookie/Token 刷新调度器已启动（含定期恢复检查）")
 
 
 async def stop_dispatcher() -> None:
     """停止 Cookie/Token 刷新调度器"""
-    global _dispatcher_task, _dispatcher_running
+    global _dispatcher_task, _dispatcher_running, _recovery_task
     _dispatcher_running = False
     if _dispatcher_task is not None:
         _dispatcher_task.cancel()
@@ -850,6 +1109,13 @@ async def stop_dispatcher() -> None:
         except asyncio.CancelledError:
             pass
         _dispatcher_task = None
+    if _recovery_task is not None:
+        _recovery_task.cancel()
+        try:
+            await _recovery_task
+        except asyncio.CancelledError:
+            pass
+        _recovery_task = None
     logger.info("Cookie/Token 刷新调度器已停止")
 
 

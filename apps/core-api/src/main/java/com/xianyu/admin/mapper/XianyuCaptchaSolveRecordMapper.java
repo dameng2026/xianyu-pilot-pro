@@ -23,15 +23,30 @@ import java.util.Map;
 public interface XianyuCaptchaSolveRecordMapper {
 
     /**
-     * KPI 聚合：总次数、成功次数、失败次数。
-     * startTime 为空时统计全量。
-     * userId 不为空时按子查询过滤该用户名下账号。
-     * accountId 不为空时直接按账号过滤（与 userId 互斥，accountId 优先）。
-     */
+ * KPI 聚合：总次数、成功次数、失败次数。
+ * startTime 为空时统计全量。
+ * userId 不为空时按子查询过滤该用户名下账号。
+ * accountId 不为空时直接按账号过滤（与 userId 互斥，accountId 优先）。
+ *
+ * 统计口径说明（2026-07-24 调整）：
+ * 以下记录不计入成功率与失败次数统计：
+ * - 超时：status='timeout' 或 failure_reason='stale_terminated'（retrying 超 15 分钟被清理）
+ * - 预检验拒绝：status='precheck_rejected' 或 failure_reason IN ('precheck_rejected','cookie_invalid','account_inactive','account_disabled')
+ *   （Cookie 过期 / 账号不活跃 / 账号禁用 均属预检验阶段拒绝，非求解本身失败）
+ * - 服务不可用：failure_reason='service_unavailable'（hasLogin 不可用 / Chrome 启动失败）
+ * 因此：
+ * - total（求解总次数）= 排除上述记录后的有效记录数（用于成功率分母）
+ * - fail（失败次数）= status='fail' 且 failure_reason 不属于上述排除类的记录数
+ * - timeout_count / precheck_rejected_count / service_unavailable_count 仍单独统计供徽标展示
+ */
     @Select("<script>" +
-            "SELECT COUNT(*) AS total, " +
+            "SELECT " +
+            "SUM(CASE WHEN NOT (status IN ('timeout', 'precheck_rejected') OR COALESCE(failure_reason, '') IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled')) THEN 1 ELSE 0 END) AS total, " +
             "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count, " +
-            "SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END) AS fail_count " +
+            "SUM(CASE WHEN status = 'fail' AND COALESCE(failure_reason, '') NOT IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled') THEN 1 ELSE 0 END) AS fail_count, " +
+            "SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) AS timeout_count, " +
+            "SUM(CASE WHEN status = 'precheck_rejected' THEN 1 ELSE 0 END) AS precheck_rejected_count, " +
+            "SUM(CASE WHEN COALESCE(failure_reason, '') = 'service_unavailable' THEN 1 ELSE 0 END) AS service_unavailable_count " +
             "FROM xianyu_captcha_solve_record " +
             "WHERE COALESCE(deleted, 0) = 0 " +
             "<if test='startTime != null'> AND created_at &gt;= #{startTime} </if>" +
@@ -46,12 +61,16 @@ public interface XianyuCaptchaSolveRecordMapper {
 
     /**
      * 按日聚合趋势：返回每天的总数、成功、失败。
+     * 统计口径与 selectKpi 一致：排除超时/预检验拒绝/服务不可用记录。
      */
     @Select("<script>" +
             "SELECT DATE(created_at) AS date, " +
-            "COUNT(*) AS total, " +
+            "SUM(CASE WHEN NOT (status IN ('timeout', 'precheck_rejected') OR COALESCE(failure_reason, '') IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled')) THEN 1 ELSE 0 END) AS total, " +
             "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count, " +
-            "SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END) AS fail_count " +
+            "SUM(CASE WHEN status = 'fail' AND COALESCE(failure_reason, '') NOT IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled') THEN 1 ELSE 0 END) AS fail_count, " +
+            "SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) AS timeout_count, " +
+            "SUM(CASE WHEN status = 'precheck_rejected' THEN 1 ELSE 0 END) AS precheck_rejected_count, " +
+            "SUM(CASE WHEN COALESCE(failure_reason, '') = 'service_unavailable' THEN 1 ELSE 0 END) AS service_unavailable_count " +
             "FROM xianyu_captcha_solve_record " +
             "WHERE COALESCE(deleted, 0) = 0 " +
             "<if test='startTime != null'> AND created_at &gt;= #{startTime} </if>" +
@@ -69,13 +88,17 @@ public interface XianyuCaptchaSolveRecordMapper {
     /**
      * 按账号分组聚合：返回每个账号的总数、成功、失败、最近求解时间。
      * 仅返回最近 N 天内有记录的账号，按总数倒序。
+     * 统计口径与 selectKpi 一致：排除超时/预检验拒绝/服务不可用记录。
      */
     @Select("<script>" +
             "SELECT account_id, " +
             "MAX(account_name) AS account_name, " +
-            "COUNT(*) AS total, " +
+            "SUM(CASE WHEN NOT (status IN ('timeout', 'precheck_rejected') OR COALESCE(failure_reason, '') IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled')) THEN 1 ELSE 0 END) AS total, " +
             "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count, " +
-            "SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END) AS fail_count, " +
+            "SUM(CASE WHEN status = 'fail' AND COALESCE(failure_reason, '') NOT IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled') THEN 1 ELSE 0 END) AS fail_count, " +
+            "SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) AS timeout_count, " +
+            "SUM(CASE WHEN status = 'precheck_rejected' THEN 1 ELSE 0 END) AS precheck_rejected_count, " +
+            "SUM(CASE WHEN COALESCE(failure_reason, '') = 'service_unavailable' THEN 1 ELSE 0 END) AS service_unavailable_count, " +
             "MAX(created_at) AS last_solve_time " +
             "FROM xianyu_captcha_solve_record " +
             "WHERE COALESCE(deleted, 0) = 0 " +
@@ -122,6 +145,14 @@ public interface XianyuCaptchaSolveRecordMapper {
                                          @Param("endTime") LocalDateTime endTime,
                                          @Param("offset") int offset,
                                          @Param("limit") int limit);
+
+    /**
+     * 按状态统计记录数（用于队列实时状态徽标）。
+     * status 传 'queued' 或 'retrying'，返回当前处于该瞬态的记录数。
+     */
+    @Select("SELECT COUNT(*) FROM xianyu_captcha_solve_record " +
+            "WHERE status = #{status} AND COALESCE(deleted, 0) = 0")
+    int countByStatus(@Param("status") String status);
 
     /**
      * 明细总数。

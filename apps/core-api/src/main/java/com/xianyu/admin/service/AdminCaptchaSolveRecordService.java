@@ -67,6 +67,10 @@ public class AdminCaptchaSolveRecordService {
         kpi.setTotal(total);
         kpi.setSuccess(success);
         kpi.setFail(fail);
+        kpi.setTimeout(getLong(kpiRow, "timeout_count"));
+        kpi.setPrecheckRejected(getLong(kpiRow, "precheck_rejected_count"));
+        kpi.setServiceUnavailable(getLong(kpiRow, "service_unavailable_count"));
+        // total 已排除服务不可用/预检验拒绝/超时三类记录，successRate = success / effective_total
         kpi.setSuccessRate(total > 0 ? (double) success / total : 0.0);
         vo.setKpi(kpi);
 
@@ -89,6 +93,9 @@ public class AdminCaptchaSolveRecordService {
             point.setTotal(dayTotal);
             point.setSuccess(daySuccess);
             point.setFail(getLong(row, "fail_count"));
+            point.setTimeout(getLong(row, "timeout_count"));
+            point.setPrecheckRejected(getLong(row, "precheck_rejected_count"));
+            point.setServiceUnavailable(getLong(row, "service_unavailable_count"));
             point.setSuccessRate(dayTotal > 0 ? (double) daySuccess / dayTotal : 0.0);
             trend.add(point);
         }
@@ -106,6 +113,9 @@ public class AdminCaptchaSolveRecordService {
             group.setTotal(accTotal);
             group.setSuccess(accSuccess);
             group.setFail(getLong(row, "fail_count"));
+            group.setTimeout(getLong(row, "timeout_count"));
+            group.setPrecheckRejected(getLong(row, "precheck_rejected_count"));
+            group.setServiceUnavailable(getLong(row, "service_unavailable_count"));
             group.setSuccessRate(accTotal > 0 ? (double) accSuccess / accTotal : 0.0);
             group.setLastSolveTime(formatDateTime(row.get("last_solve_time")));
             accounts.add(group);
@@ -113,6 +123,24 @@ public class AdminCaptchaSolveRecordService {
         vo.setAccounts(accounts);
 
         return vo;
+    }
+
+    /**
+     * 队列实时状态：当前排队中 / 求解中任务数（跨租户汇总，直接查 DB）。
+     * 用于列表页实时徽标，让管理员一眼看到队列瞬时状态。
+     */
+    public java.util.Map<String, Object> queueStatus() {
+        int queued = recordMapper.countByStatus("queued");
+        int retrying = recordMapper.countByStatus("retrying");
+        int timeout = recordMapper.countByStatus("timeout");
+        int precheckRejected = recordMapper.countByStatus("precheck_rejected");
+        java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("queued", queued);
+        result.put("retrying", retrying);
+        result.put("timeout", timeout);
+        result.put("precheckRejected", precheckRejected);
+        result.put("workers", 2); // SOLVE_WORKER_CONCURRENCY
+        return result;
     }
 
     /**

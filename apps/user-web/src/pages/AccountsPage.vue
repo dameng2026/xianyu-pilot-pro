@@ -960,6 +960,8 @@ function captchaSolveBadge(accountId) {
   if (state.status === 'retrying') return { text: '滑块求解中', color: 'orange' }
   if (state.status === 'success') return { text: '求解成功', color: 'green' }
   if (state.status === 'fail') return { text: '求解失败', color: 'red' }
+  if (state.status === 'timeout') return { text: '求解超时', color: 'red' }
+  if (state.status === 'precheck_rejected') return { text: '预校验拒绝', color: 'red' }
   return null
 }
 
@@ -995,9 +997,9 @@ async function handleManualSolve(accountId) {
     await showManualSolveBlockedDialog(fsStatus)
     return
   }
-  // 根据当前求解状态判断场景：已有失败状态时为"重试求解"，否则为"手动触发"
+  // 根据当前求解状态判断场景：已有失败/超时/预校验拒绝状态时为"重试求解"，否则为"手动触发"
   const state = getAccountSolveStatus(accountId)
-  const isRetry = !!(state && state.status === 'fail')
+  const isRetry = !!(state && (state.status === 'fail' || state.status === 'timeout' || state.status === 'precheck_rejected'))
   // 仅"主动求解"（非重试）受 1 分钟冷却限制
   if (!isRetry) {
     const remaining = manualSolveCooldownRemaining(accountId)
@@ -1130,6 +1132,34 @@ const captchaAlerts = computed(() => {
         nextAction = '可点击重试求解；若持续失败请手动处理'
         canRetry = true
       }
+    } else if (state.status === 'timeout') {
+      type = 'fail'
+      statusText = '求解超时'
+      reason = state.reason || '滑块求解超时'
+      nextAction = '可点击重试求解；若持续超时请检查网络或联系管理员'
+      canRetry = true
+    } else if (state.status === 'precheck_rejected') {
+      type = 'fail'
+      statusText = '预校验拒绝'
+      reason = state.reason || '滑块求解预校验未通过'
+      // 根据 reason 文案细化下一步操作
+      const reasonLower = reason.toLowerCase()
+      if (reasonLower.includes('session') || reasonLower.includes('过期') || reasonLower.includes('重新扫码') || reasonLower.includes('登录') || reasonLower.includes('cookie')) {
+        nextAction = 'Cookie 已失效，需点击"重新扫码"登录获取新 Cookie'
+        canRetry = false
+      } else if (reasonLower.includes('不活跃') || reasonLower.includes('inactive') || reasonLower.includes('未登录') || reasonLower.includes('3天')) {
+        nextAction = '账号已超过 3 天未登录前台，已暂停自动求解；请登录前台后恢复活跃状态'
+        canRetry = false
+      } else if (reasonLower.includes('禁用') || reasonLower.includes('disabled')) {
+        nextAction = '账号已被禁用，无法进行滑块求解'
+        canRetry = false
+      } else if (reasonLower.includes('服务暂时不可用') || reasonLower.includes('unavailable') || reasonLower.includes('haslogin')) {
+        nextAction = 'Cookie 校验服务暂时不可用，请稍后重试'
+        canRetry = true
+      } else {
+        nextAction = '预校验未通过，请检查账号状态或 Cookie 后重试'
+        canRetry = true
+      }
     }
 
     // 成功状态 5 秒后自动消失（通过时间戳判断）
@@ -1182,6 +1212,8 @@ function solveOpBtnText(accountId) {
   }
   if (state.status === 'success') return '已求解'
   if (state.status === 'fail') return '重试求解'
+  if (state.status === 'timeout') return '重试求解'
+  if (state.status === 'precheck_rejected') return '重试求解'
   return '滑块求解'
 }
 
@@ -1199,16 +1231,18 @@ function solveOpBtnClass(accountId) {
   }
   if (state.status === 'success') return 'success'
   if (state.status === 'fail') return 'fail'
+  if (state.status === 'timeout') return 'fail'
+  if (state.status === 'precheck_rejected') return 'fail'
   return ''
 }
 
-// 操作列滑块求解按钮是否禁用：求解中或冷却中（且非失败重试状态）禁用
+// 操作列滑块求解按钮是否禁用：求解中或冷却中（且非失败/超时/预校验拒绝重试状态）禁用
 function solveOpBtnDisabled(accountId) {
   if (manualRetryBusy.value === accountId || isAccountSolving(accountId)) return true
   void cooldownTick.value  // 响应冷却倒计时刷新
   const state = getAccountSolveStatus(accountId)
-  // 失败重试状态不受冷却限制
-  if (state && state.status === 'fail') return false
+  // 失败/超时/预校验拒绝重试状态不受冷却限制
+  if (state && (state.status === 'fail' || state.status === 'timeout' || state.status === 'precheck_rejected')) return false
   // 其他状态（含无状态/成功）受冷却限制
   return manualSolveCooldownRemaining(accountId) > 0
 }
@@ -1222,7 +1256,9 @@ function solveOpBtnTitle(accountId) {
     if (remaining > 0) return `该账号 ${Math.ceil(remaining / 1000)} 秒内已主动求解过，请稍后再试`
     return '手动触发滑块求解'
   }
-  if (state.status === 'fail') return state.reason || '点击重试求解'
+  if (state.status === 'fail' || state.status === 'timeout' || state.status === 'precheck_rejected') {
+    return state.reason || '点击重试求解'
+  }
   return state.reason || state.status || '滑块求解'
 }
 

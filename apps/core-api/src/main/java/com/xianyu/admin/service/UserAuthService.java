@@ -36,6 +36,7 @@ public class UserAuthService {
     private final UserProfileService userProfileService;
     private final UserAuthCapabilityService capabilityService;
     private final EmailSenderService emailSenderService;
+    private final ApiCredentialService apiCredentialService;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
     private final String dummyPasswordHash = encoder.encode(UUID.randomUUID().toString());
     private final SecureRandom secureRandom = new SecureRandom();
@@ -58,6 +59,7 @@ public class UserAuthService {
                            UserProfileService userProfileService,
                            UserAuthCapabilityService capabilityService,
                            EmailSenderService emailSenderService,
+                           ApiCredentialService apiCredentialService,
                            @Value("${admin.seed.enabled:false}") boolean seedEnabled) {
         this.jdbcTemplate = jdbcTemplate;
         this.jwtUtil = jwtUtil;
@@ -66,6 +68,7 @@ public class UserAuthService {
         this.userProfileService = userProfileService;
         this.capabilityService = capabilityService;
         this.emailSenderService = emailSenderService;
+        this.apiCredentialService = apiCredentialService;
         this.seedEnabled = seedEnabled;
     }
 
@@ -136,6 +139,17 @@ public class UserAuthService {
                     id, username, tenantId, securityVersion(matchedUser.get("security_version")));
 
             jdbcTemplate.update("UPDATE sys_user SET last_login_time=NOW() WHERE id=?", id);
+
+            // 登录钩子：从滑块求解排除表中移除该用户的所有闲鱼账号
+            // 用户登录前台后，其所有闲鱼账号恢复活跃，可正常进入滑块求解队列
+            try {
+                jdbcTemplate.update(
+                    "DELETE FROM xianyu_account_solve_exclusion WHERE user_id = ?",
+                    id
+                );
+            } catch (Exception ex) {
+                log.warn("登录时清理滑块求解排除表失败 userId={}：{}", id, ex.getMessage());
+            }
 
             if (needsUpgrade) {
                 jdbcTemplate.update("UPDATE sys_user SET password_hash=? WHERE id=?",
@@ -226,6 +240,17 @@ public class UserAuthService {
 
         // 代登也记录最后登录时间，便于审计追溯；不动 security_version 以免吊销用户已有会话
         jdbcTemplate.update("UPDATE sys_user SET last_login_time=NOW() WHERE id=?", id);
+
+        // 登录钩子：从滑块求解排除表中移除该用户的所有闲鱼账号
+        // 用户登录前台后，其所有闲鱼账号恢复活跃，可正常进入滑块求解队列
+        try {
+            jdbcTemplate.update(
+                "DELETE FROM xianyu_account_solve_exclusion WHERE user_id = ?",
+                id
+            );
+        } catch (Exception ex) {
+            log.warn("登录时清理滑块求解排除表失败 userId={}：{}", id, ex.getMessage());
+        }
         log.warn("管理员代登已签发前台用户 token: userId={}, username={}, tenantId={}",
                 id, maskTarget(username), tenantId);
 
@@ -418,6 +443,8 @@ public class UserAuthService {
         if (created.isEmpty()) {
             throw new BizException(500, "注册失败，请重试");
         }
+        // 注册时自动生成 API 对接密钥，避免用户首次进入「API滑块求解」页面时显示「尚未生成」
+        ensureApiCredential(tenantId);
         log.info("新用户注册成功: email={}, tenantId={}", maskTarget(email), tenantId);
         return buildLoginResult(created.get(0));
     }
@@ -625,8 +652,24 @@ public class UserAuthService {
         List<Map<String, Object>> created = jdbcTemplate.queryForList(
                 "SELECT * FROM sys_user WHERE email=? AND deleted=0 LIMIT 1", email);
         if (created.isEmpty()) throw new BizException(500, "自动创建用户失败");
+        // 自动创建用户时同样预生成 API 对接密钥
+        ensureApiCredential(tenantId);
         log.info("邮箱验证码登录自动创建用户: {}, tenantId={}", maskTarget(email), tenantId);
         return created.get(0);
+    }
+
+    /**
+     * 为租户预生成 API 对接密钥。
+     * 注册与自动创建用户时调用，确保用户进入「API滑块求解」页面前已有密钥。
+     * 幂等：已存在则跳过，失败仅记录日志不影响注册主流程。
+     */
+    private void ensureApiCredential(Long tenantId) {
+        if (tenantId == null || tenantId <= 0) return;
+        try {
+            apiCredentialService.getOrCreateCredential(tenantId);
+        } catch (Exception e) {
+            log.warn("注册时预生成 API 对接密钥失败 tenantId={}：{}", tenantId, e.getMessage());
+        }
     }
 
     private Map<String, Object> buildLoginResult(Map<String, Object> user) {
@@ -638,6 +681,17 @@ public class UserAuthService {
         String token = jwtUtil.createUserToken(
                 id, username, tenantId, securityVersion(user.get("security_version")));
         jdbcTemplate.update("UPDATE sys_user SET last_login_time=NOW() WHERE id=?", id);
+
+        // 登录钩子：从滑块求解排除表中移除该用户的所有闲鱼账号
+        // 用户登录前台后，其所有闲鱼账号恢复活跃，可正常进入滑块求解队列
+        try {
+            jdbcTemplate.update(
+                "DELETE FROM xianyu_account_solve_exclusion WHERE user_id = ?",
+                id
+            );
+        } catch (Exception ex) {
+            log.warn("登录时清理滑块求解排除表失败 userId={}：{}", id, ex.getMessage());
+        }
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("token", token);

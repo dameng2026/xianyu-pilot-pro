@@ -80,6 +80,20 @@ public class AiBillingController {
         return Result.ok(aiBillingService.rechargeRecordsSummary(userId));
     }
 
+    @GetMapping("/admin-api/ai-billing/unified-recharge-records/page")
+    public Result<PageResult<Map<String, Object>>> unifiedRechargeRecordsPage(@RequestParam(defaultValue = "1") int current,
+                                                                             @RequestParam(defaultValue = "20") int size,
+                                                                             @RequestParam(required = false) Long userId,
+                                                                             @RequestParam(required = false) String keyword,
+                                                                             @RequestParam(required = false) String orderType) {
+        return Result.ok(aiBillingService.pageUnifiedRechargeRecords(current, size, userId, keyword, orderType));
+    }
+
+    @GetMapping("/admin-api/ai-billing/unified-recharge-records/summary")
+    public Result<Map<String, Object>> unifiedRechargeRecordsSummary(@RequestParam(required = false) Long userId) {
+        return Result.ok(aiBillingService.unifiedRechargeSummary(userId));
+    }
+
     @GetMapping("/api/ai-billing/balance")
     public Result<Map<String, Object>> balance() {
         return Result.ok(aiBillingService.balance());

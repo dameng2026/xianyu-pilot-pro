@@ -253,6 +253,33 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log_service_failure(logger, e, operation="start_stale_cleanup_loop")
 
+    # 启动不活跃账号扫描循环
+    # 每小时扫描 sys_user.last_login_time 超过 3 天的用户，
+    # 将其闲鱼账号录入 xianyu_account_solve_exclusion 排除表，
+    # 避免不活跃账号进入滑块求解队列占用资源。
+    # 用户在前台登录时会自动从排除表移出（由 UserAuthService 登录钩子处理）。
+    inactive_scanner_task = None
+    try:
+        from .services.inactive_account_scanner import run_inactive_account_scanner_loop
+        inactive_scanner_task = asyncio.create_task(run_inactive_account_scanner_loop())
+        logger.info("不活跃账号扫描循环已启动")
+    except Exception as e:
+        log_service_failure(logger, e, operation="start_inactive_account_scanner")
+
+    # 启动 WS 连接健康检查循环
+    # 每 2 分钟扫描 cookie_status=1 但 ws_status=0 且无心跳超过 5 分钟的账号，
+    # 触发滑块求解入队（trigger_scene="ws_health_check"）。
+    # 修复场景：滑块求解成功但 WS 实际未连上，或 WS 运行中又遇到滑块验证，
+    # 导致用户看到"WS 未连接"且无法接收最新消息。captcha_queue 的去重机制
+    # 会自动防止重复入队。
+    ws_health_check_task = None
+    try:
+        from .services.ws_health_check import run_ws_health_check_loop
+        ws_health_check_task = asyncio.create_task(run_ws_health_check_loop())
+        logger.info("WS 连接健康检查循环已启动")
+    except Exception as e:
+        log_service_failure(logger, e, operation="start_ws_health_check")
+
     yield
 
     storage_reconcile_task.cancel()
@@ -266,6 +293,22 @@ async def lifespan(app: FastAPI):
         stale_cleanup_task.cancel()
         try:
             await stale_cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+    # 停止不活跃账号扫描循环
+    if inactive_scanner_task is not None:
+        inactive_scanner_task.cancel()
+        try:
+            await inactive_scanner_task
+        except asyncio.CancelledError:
+            pass
+
+    # 停止 WS 连接健康检查循环
+    if ws_health_check_task is not None:
+        ws_health_check_task.cancel()
+        try:
+            await ws_health_check_task
         except asyncio.CancelledError:
             pass
 

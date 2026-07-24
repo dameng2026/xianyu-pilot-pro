@@ -431,8 +431,12 @@ async function createOrder() {
       targetType: props.targetType,
       targetId: props.targetId
     }
-    if (props.orderType === 'vip') payload.planId = props.plan.id
-    else payload.tokenPlanId = selectedTokenPlanId.value
+    if (props.orderType === 'vip') {
+      payload.planId = props.plan.id
+      payload.periodType = props.plan.periodType  // 传递用户选择的计费周期 month/quarter/year
+    } else {
+      payload.tokenPlanId = selectedTokenPlanId.value
+    }
     currentOrder.value = validateOrderSnapshot(await createPaymentOrder(payload))
     if (!currentOrder.value.qrImage && !sandboxPayEnabled.value) {
       error.value = '订单已创建，但服务端未返回可扫描的支付二维码；请取消订单并联系管理员检查支付配置。'

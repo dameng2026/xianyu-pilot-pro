@@ -21,6 +21,9 @@ public class CaptchaSolveStatsVO {
         private long total;
         private long success;
         private long fail;
+        private long timeout;
+        private long precheckRejected;
+        private long serviceUnavailable;
         /** 成功率 0~1 */
         private double successRate;
 
@@ -30,6 +33,12 @@ public class CaptchaSolveStatsVO {
         public void setSuccess(long success) { this.success = success; }
         public long getFail() { return fail; }
         public void setFail(long fail) { this.fail = fail; }
+        public long getTimeout() { return timeout; }
+        public void setTimeout(long timeout) { this.timeout = timeout; }
+        public long getPrecheckRejected() { return precheckRejected; }
+        public void setPrecheckRejected(long precheckRejected) { this.precheckRejected = precheckRejected; }
+        public long getServiceUnavailable() { return serviceUnavailable; }
+        public void setServiceUnavailable(long serviceUnavailable) { this.serviceUnavailable = serviceUnavailable; }
         public double getSuccessRate() { return successRate; }
         public void setSuccessRate(double successRate) { this.successRate = successRate; }
     }
@@ -39,6 +48,9 @@ public class CaptchaSolveStatsVO {
         private long total;
         private long success;
         private long fail;
+        private long timeout;
+        private long precheckRejected;
+        private long serviceUnavailable;
         private double successRate;
 
         public String getDate() { return date; }
@@ -49,6 +61,12 @@ public class CaptchaSolveStatsVO {
         public void setSuccess(long success) { this.success = success; }
         public long getFail() { return fail; }
         public void setFail(long fail) { this.fail = fail; }
+        public long getTimeout() { return timeout; }
+        public void setTimeout(long timeout) { this.timeout = timeout; }
+        public long getPrecheckRejected() { return precheckRejected; }
+        public void setPrecheckRejected(long precheckRejected) { this.precheckRejected = precheckRejected; }
+        public long getServiceUnavailable() { return serviceUnavailable; }
+        public void setServiceUnavailable(long serviceUnavailable) { this.serviceUnavailable = serviceUnavailable; }
         public double getSuccessRate() { return successRate; }
         public void setSuccessRate(double successRate) { this.successRate = successRate; }
     }
@@ -59,6 +77,9 @@ public class CaptchaSolveStatsVO {
         private long total;
         private long success;
         private long fail;
+        private long timeout;
+        private long precheckRejected;
+        private long serviceUnavailable;
         private double successRate;
         private String lastSolveTime;
 
@@ -72,6 +93,12 @@ public class CaptchaSolveStatsVO {
         public void setSuccess(long success) { this.success = success; }
         public long getFail() { return fail; }
         public void setFail(long fail) { this.fail = fail; }
+        public long getTimeout() { return timeout; }
+        public void setTimeout(long timeout) { this.timeout = timeout; }
+        public long getPrecheckRejected() { return precheckRejected; }
+        public void setPrecheckRejected(long precheckRejected) { this.precheckRejected = precheckRejected; }
+        public long getServiceUnavailable() { return serviceUnavailable; }
+        public void setServiceUnavailable(long serviceUnavailable) { this.serviceUnavailable = serviceUnavailable; }
         public double getSuccessRate() { return successRate; }
         public void setSuccessRate(double successRate) { this.successRate = successRate; }
         public String getLastSolveTime() { return lastSolveTime; }

@@ -1479,6 +1479,12 @@ public class AutomationProxyController {
         return Result.ok(automationClient.getInternalForData("/api/captcha/queue-position", query));
     }
 
+    @GetMapping("/captcha/queue-status")
+    public Result<Object> captchaQueueStatus() {
+        // 查询滑块求解队列实时状态（排队中/求解中任务数），用于列表页实时徽标
+        return Result.ok(automationClient.getInternalForData("/api/captcha/queue-status", java.util.Collections.emptyMap()));
+    }
+
     /** 判断是否为手动触发场景（受 manual-slider-solve 开关控制） */
     private static boolean isManualSolveScene(String scene) {
         return "manual".equals(scene) || "manual_retry".equals(scene);

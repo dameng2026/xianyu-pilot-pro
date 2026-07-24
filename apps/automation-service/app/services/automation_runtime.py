@@ -4622,7 +4622,7 @@ async def process_pending_deliveries(
             WHERE d.tenant_id = o.tenant_id
               AND d.order_id = o.id
               AND d.deleted = 0
-              AND d.status = 1
+              AND d.status IN (1, 2)
           )
         ORDER BY COALESCE(o.pay_time, o.created_time) ASC
         LIMIT :limit
@@ -4846,11 +4846,37 @@ async def execute_delivery_for_order(db: AsyncSession, order: dict[str, Any]) ->
 
     existing_delivery = (await db.execute(text("""
         SELECT id, card_item_id FROM delivery_record
-        WHERE tenant_id = :tenant_id AND order_id = :order_id AND deleted = 0 AND status = 1
+        WHERE tenant_id = :tenant_id AND order_id = :order_id AND deleted = 0
+          AND status IN (1, 2)
         ORDER BY id DESC LIMIT 1
     """), {"tenant_id": tenant_id, "order_id": order_id})).mappings().first()
     if existing_delivery:
         return {"ok": True, "orderId": order_id, "deliveryRecordId": existing_delivery.get("id"), "cardItemId": existing_delivery.get("card_item_id"), "message": "订单已发货，跳过重复处理"}
+
+    # === 交叉维度去重：按 买家ID + 商品ID 检查实时路径是否已发货 ===
+    # 背景：实时路径（ws_delivery_handler）在付款消息 reminder_url 不含 orderId 时，
+    # delivery_record.order_id 为 NULL，上面的 order_id 维度检查无法命中。
+    # 此时通过 receiver_info 中的 buyerUserId + xyGoodsId 交叉匹配，防止批量路径重复发货。
+    # 归一化 @goofish 后缀，与实时路径 _has_existing_realtime_delivery 保持一致。
+    if buyer_id and xy_goods_id:
+        cross_existing = (await db.execute(text("""
+            SELECT id FROM delivery_record
+            WHERE tenant_id = :tenant_id AND account_id = :account_id AND deleted = 0
+              AND status IN (1, 2)
+              AND delivery_timing = 'after_payment'
+              AND REPLACE(JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.buyerUserId')), '@goofish', '') = REPLACE(:buyer_id, '@goofish', '')
+              AND JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.xyGoodsId')) = :xy_goods_id
+            ORDER BY id DESC LIMIT 1
+        """), {
+            "tenant_id": tenant_id, "account_id": account_id,
+            "buyer_id": buyer_id, "xy_goods_id": xy_goods_id,
+        })).mappings().first()
+        if cross_existing:
+            logger.info(
+                "批量路径交叉去重命中：订单 %s 买家 %s 商品 %s 已被实时路径发货，跳过（deliveryRecordId=%s）",
+                order_id, buyer_id, xy_goods_id, cross_existing.get("id"),
+            )
+            return {"ok": True, "orderId": order_id, "deliveryRecordId": cross_existing.get("id"), "message": "订单已被实时路径发货，跳过重复处理"}
 
     # === 重试节流：检查最近一条失败记录的时间，避免每分钟都重试 ===
     # 距离上次失败不足 RETRY_INTERVAL_SECONDS 秒的订单跳过重试，等待下一周期

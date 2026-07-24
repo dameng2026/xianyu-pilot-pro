@@ -983,6 +983,20 @@ def _merge_detail_info(goods_dict: dict, detail_data: dict):
     goods_dict["raw_payload"] = detail_data
 
 
+def _upgrade_image_url_to_https(url: Any) -> str:
+    """把图片 URL 的 http:// 升级为 https://。
+
+    闲鱼 MTOP API 返回的 picUrl 常为 http://img.alicdn.com/...，
+    前端 resolveTrustedMediaUrl 出于安全只放行 https，http 图片会被过滤成空，
+    导致商品封面图显示占位图。alicdn/tbcdn/taobaocdn 全站支持 https，
+    这里在存储前统一升级协议。
+    """
+    s = str(url or "").strip()
+    if s.lower().startswith("http://"):
+        return "https://" + s[len("http://"):]
+    return s
+
+
 def _normalize_image_urls(image_urls: Any) -> list[str]:
     if not isinstance(image_urls, list):
         return []
@@ -991,7 +1005,7 @@ def _normalize_image_urls(image_urls: Any) -> list[str]:
     for item in image_urls:
         if item is None:
             continue
-        url = str(item).strip()
+        url = _upgrade_image_url_to_https(item)
         if not url or url in seen:
             continue
         seen.add(url)
@@ -1051,6 +1065,11 @@ def _build_goods_insert_values(goods_dict: dict) -> dict:
             values["cover_pic"] = values["image_url"]
     if not values.get("image_url") and values.get("cover_pic"):
         values["image_url"] = values["cover_pic"]
+    # 协议升级：http:// → https://（前端安全过滤只放行 https）
+    if "cover_pic" in values:
+        values["cover_pic"] = _upgrade_image_url_to_https(values["cover_pic"])
+    if "image_url" in values:
+        values["image_url"] = _upgrade_image_url_to_https(values["image_url"])
     values["deleted"] = 0
     values["created_time"] = datetime.now()
     values["updated_time"] = datetime.now()
@@ -1103,6 +1122,12 @@ def _build_goods_update_values(existing, goods_dict: dict, *, partial: bool) -> 
         candidate_image = values.get("cover_pic") or getattr(existing, "image_url", None)
         if candidate_image:
             values["image_url"] = candidate_image
+
+    # 协议升级：http:// → https://（前端安全过滤只放行 https）
+    if "cover_pic" in values:
+        values["cover_pic"] = _upgrade_image_url_to_https(values["cover_pic"])
+    if "image_url" in values:
+        values["image_url"] = _upgrade_image_url_to_https(values["image_url"])
 
     if "detail_info" in values and "description" not in values:
         values["description"] = values["detail_info"]

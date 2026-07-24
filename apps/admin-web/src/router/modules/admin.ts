@@ -49,7 +49,8 @@ export const adminRoutes: AppRouteRecord[] = [
       { path: 'delivery', name: 'AdminDelivery', component: moduleComponent, meta: { title: '自动发货监管', icon: 'ri:truck-line', moduleKey: 'delivery', roles: ADMIN_OPERATORS } as any },
       { path: 'auto-reply', name: 'AdminAutoReply', component: moduleComponent, meta: { title: '自动回复监管', icon: 'ri:robot-2-line', moduleKey: 'auto-reply', roles: ADMIN_OPERATORS } as any },
       { path: 'kami', name: 'AdminKami', component: moduleComponent, meta: { title: '卡密监管', icon: 'ri:coupon-3-line', moduleKey: 'kami', roles: ADMIN_OPERATORS } as any },
-      { path: 'captcha-records', name: 'AdminCaptchaRecords', component: '/admin/captcha-records/index', meta: { title: '滑块求解记录', icon: 'ri:shield-keyhole-line', roles: ADMIN_OPERATORS } as any }
+      { path: 'captcha-records', name: 'AdminCaptchaRecords', component: '/admin/captcha-records/index', meta: { title: '滑块求解记录', icon: 'ri:shield-keyhole-line', roles: ADMIN_OPERATORS } as any },
+      { path: 'api-integration', name: 'AdminApiIntegration', component: '/admin/api-integration/index', meta: { title: 'API对接', icon: 'ri:links-line', roles: ADMIN_OPERATORS } as any }
     ]
   },
   {

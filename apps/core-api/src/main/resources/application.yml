@@ -190,6 +190,14 @@ xianyu:
     # 数据保留策略定时清理 cron（每日凌晨 04:00）
     # 与 UploadStorageCleanupService 03:30 错开，避免抖动
     cleanup-cron: ${DATA_RETENTION_CLEANUP_CRON:0 0 4 * * ?}
+  # API 滑块求解对接：对外 X-Api-Key 鉴权的滑块求解服务
+  # automation-base-url 复用 xianyu.automation.base-url 同源的 automation-service
+  # internal-token 必须与 automation-service 端 INTERNAL_API_TOKEN 一致
+  api-slider:
+    automation-base-url: ${AUTOMATION_SERVICE_URL:http://localhost:12401}
+    internal-token: ${INTERNAL_API_TOKEN:dev-only-internal-api-token-change-me-32-chars}
+    solve-timeout-ms: 120000
+    reconcile-cron: 0 */5 * * * ?
 
 ---
 spring:

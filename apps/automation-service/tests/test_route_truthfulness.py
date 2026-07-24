@@ -539,6 +539,10 @@ async def test_captcha_routes_only_use_authenticated_tenant(monkeypatch):
         captured.append({"tenant_id": tenant_id, "_source": "enqueue", "account_id": account_id})
         return 42
 
+    async def enqueue_with_pos(account_id, tenant_id, **kwargs):
+        captured.append({"tenant_id": tenant_id, "_source": "enqueue", "account_id": account_id})
+        return (42, 1, 1)
+
     async def get_pos(record_id):
         return (1, 1)
 
@@ -550,6 +554,9 @@ async def test_captcha_routes_only_use_authenticated_tenant(monkeypatch):
     # 需要在源模块上 monkeypatch 才能生效
     from app.services import captcha_precheck, captcha_queue
     monkeypatch.setattr(captcha_precheck, "compute_solve_priority", compute_priority)
+    # auto_solve_captcha / handle_captcha 使用 enqueue_solve_with_position 获取入队瞬间位置，
+    # 不再二次调用 get_queue_position（避免 worker 已取出任务返回 (0, 0) 的竞态）
+    monkeypatch.setattr(captcha_queue, "enqueue_solve_with_position", enqueue_with_pos)
     monkeypatch.setattr(captcha_queue, "enqueue_solve", enqueue)
     monkeypatch.setattr(captcha_queue, "get_queue_position", get_pos)
     # handle_captcha 在 autoSolve=False 时仍直接调用 handle_captcha_for_account

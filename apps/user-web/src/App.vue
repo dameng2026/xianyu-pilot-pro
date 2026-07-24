@@ -8,6 +8,7 @@
   </div>
 
   <div v-else-if="authPages.includes(active)" class="auth-page-boundary">
+    <MaintenanceBanner />
     <div v-if="authNotice" class="auth-boundary-notice" role="alert">{{ authNotice }}</div>
     <component
       :is="pageComponent"
@@ -42,6 +43,7 @@
     />
     <main class="main">
       <Topbar :user="currentUserInfo" :sse-status="displaySseStatus" @logout="handleLogout" @open-profile-center="openProfileCenter" />
+      <MaintenanceBanner />
       <PageHeader v-if="shouldRenderPageHeader" :title="pageHeaderTitle" :subtitle="pageHeaderSubtitle">
         <div v-if="headerActions.length" class="head-actions">
           <AppButton v-for="action in headerActions" :key="action.text" :type="action.type" @click="onHeaderAction(action)">{{ action.text }}</AppButton>
@@ -79,6 +81,7 @@ import ConfirmModal from './components/ConfirmModal.vue'
 import DraftGuardModal from './components/DraftGuardModal.vue'
 import PaymentModal from './components/PaymentModal.vue'
 import MobileLite from './components/MobileLite.vue'
+import MaintenanceBanner from './components/MaintenanceBanner.vue'
 import { pageTitles } from './data/nav.js'
 import { createMediaSession, logout as logoutApi } from './api/auth.js'
 import { currentUser, invalidateCurrentUserCache } from './api/system.js'
@@ -144,6 +147,7 @@ const pageMap = {
   'auto-reply': asyncPage(() => import('./pages/AutoReplyPage.vue')),
   logs: asyncPage(() => import('./pages/LogsPage.vue')),
   'slider-solve-records': asyncPage(() => import('./pages/SliderSolveRecordsPage.vue')),
+  'api-slider-solve': asyncPage(() => import('./pages/ApiSliderSolvePage.vue')),
   feedback: asyncPage(() => import('./pages/FeedbackPage.vue')),
   'settings-notify': asyncPage(() => import('./pages/settings/NotifySettings.vue')),
   vip: asyncPage(() => import('./pages/VipPage.vue')),
@@ -182,7 +186,8 @@ const mobileLitePages = new Set([
   'auto-delivery',
   'product-publish',
   'orders',
-  'profile'
+  'profile',
+  'api-slider-solve'
 ])
 
 const isKnownPage = key => {

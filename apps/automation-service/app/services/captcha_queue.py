@@ -12,7 +12,11 @@
    - cookie_invalid（Cookie 失效）→ 不重试，通知用户重新扫码
    - account_inactive/account_disabled → 不重试
    - precheck_rejected → 不重试
-4. **任务去重**：同账号 60 秒内只入队一次（对齐产品设计"每分钟可主动求解一次"；manual_retry 失败重试场景由调用方传 skip_dedup=True 跳过）
+4. **任务去重**：
+   - 手动触发（manual/manual_retry）：60 秒冷却（限制用户频繁点击）+ 队列进程去重（检查 queued/retrying 状态避免重复求解）
+   - 自动触发：队列进程去重（检查 queued/retrying 状态避免重复求解）
+   - 排除表检查：3天未登录前台用户的闲鱼账号直接创建 precheck_rejected 记录但不入队
+   - manual_retry 失败重试场景由调用方传 skip_dedup=True 跳过
 
 设计说明：
 - 使用 asyncio.PriorityQueue 实现优先级排序
@@ -46,19 +50,27 @@ SOLVE_WORKER_CONCURRENCY = 2
 # 同账号去重冷却时间（秒）：60 秒内同账号只入队一次（对齐产品设计"每分钟可主动求解一次"）
 SOLVE_DEDUP_COOLDOWN_SEC = 60
 
+# service_unavailable 冷却时间（秒）：hasLogin 服务不可用失败后，
+# WS token_refresh 触发的自动求解在此冷却期内不再重复入队，避免高频循环
+SERVICE_UNAVAILABLE_COOLDOWN_SEC = 600  # 10 分钟
+
 # 最大重试次数（按失败原因分类）
+# 注意：service_unavailable 已移除重试机制（原 2 次）
+# 原因：hasLogin 接口风控返回 HAS_LOGIN_UNCONFIRMED 时，立即重试只会加剧风控，
+# 且 WS 会自然重连触发新的求解，无需队列内重试。
+# 失败后仅更新原记录为 precheck_rejected/fail，不创建新记录，不重新入队。
 MAX_RETRY_BY_REASON = {
     "slider_fail": 3,          # 滑块通过失败，可重试
-    "service_unavailable": 2,  # 服务暂时不可用，可重试
     "timeout": 1,              # 超时，重试 1 次
 }
 
-# 不可重试的失败原因（需人工介入）
+# 不可重试的失败原因（需人工介入或服务恢复后由 WS 自然重连触发）
 NON_RETRYABLE_REASONS = {
     "cookie_invalid",
     "account_inactive",
     "account_disabled",
     "precheck_rejected",
+    "service_unavailable",  # hasLogin 服务不可用：不重试，等 WS 下次自然重连触发
 }
 
 
@@ -133,12 +145,125 @@ class CaptchaQueueManager:
         # worker 取出任务时从此表移除
         self._pending_tasks: dict[int, SolveTask] = {}
         self._pending_lock = asyncio.Lock()
+        # service_unavailable 冷却表：account_id -> 上次因服务不可用失败的时间戳
+        # WS 重连触发 token_refresh 时检查此表，冷却期内（默认 10 分钟）不再重复入队
+        # 原因：hasLogin 接口风控返回 HAS_LOGIN_UNCONFIRMED 时，立即重试只会加剧风控，
+        # 等 WS 下次自然重连触发即可，无需高频重复入队
+        self._service_unavailable_ts: dict[int, float] = {}
+
+    async def _cleanup_orphaned_queued_records(self) -> int:
+        """清理容器重启导致的孤儿 queued 记录。
+
+        容器重启后内存队列丢失，旧容器中已入队但未处理的 queued 任务成为孤儿，
+        永远不会被新容器的 worker 处理。此方法在 start() 中调用，
+        将这些孤儿记录标记为 timeout/stale_terminated，避免前端误判"队列卡住"。
+
+        判定条件：
+        - status = 'queued'
+        - created_at < NOW() - INTERVAL 1 MINUTE（排除刚入队正在被处理的任务）
+
+        Returns:
+            被清理的记录数
+        """
+        try:
+            async with async_session() as db:
+                # 1. 先查询孤儿记录详情（用于广播）
+                rows = (await db.execute(
+                    text(
+                        """
+                        SELECT id, account_id, tenant_id
+                        FROM xianyu_captcha_solve_record
+                        WHERE status = 'queued'
+                          AND COALESCE(deleted, 0) = 0
+                          AND created_at < DATE_SUB(NOW(), INTERVAL 1 MINUTE)
+                        """
+                    ),
+                )).mappings().all()
+
+                if not rows:
+                    return 0
+
+                # 2. 批量更新为 timeout/stale_terminated
+                record_ids = [int(r["id"]) for r in rows]
+                id_params = {f"rid{i}": rid for i, rid in enumerate(record_ids)}
+                in_clause = ",".join(f":rid{i}" for i in range(len(record_ids)))
+                await db.execute(
+                    text(
+                        f"""
+                        UPDATE xianyu_captcha_solve_record
+                        SET status = 'timeout',
+                            result = 'stale_terminated',
+                            failure_reason = 'stale_terminated',
+                            error_message = CONCAT(COALESCE(error_message, ''),
+                                '[系统清理] 容器重启后孤儿 queued 记录，已自动终止'),
+                            finished_at = NOW(),
+                            updated_at = NOW()
+                        WHERE id IN ({in_clause})
+                        """
+                    ),
+                    id_params,
+                )
+                await db.commit()
+
+                affected = len(rows)
+                logger.warning(
+                    "孤儿 queued 记录清理：已将 %d 条 queued 孤儿记录标记为 timeout/stale_terminated",
+                    affected,
+                )
+
+                # 3. 广播状态变更（让前端实时看到状态从 queued → timeout）
+                try:
+                    from .captcha_solve_record import _lookup_account_name
+                    from .ws_sse import broadcaster
+                    for r in rows:
+                        account_id = int(r["account_id"])
+                        tenant_id = int(r["tenant_id"])
+                        record_id = int(r["id"])
+                        account_name = await _lookup_account_name(tenant_id, account_id)
+                        await broadcaster.broadcast(
+                            tenant_id,
+                            "captcha_solve",
+                            {
+                                "accountId": account_id,
+                                "accountName": account_name,
+                                "status": "timeout",
+                                "result": "stale_terminated",
+                                "engine": "Playwright",
+                                "reason": "容器重启导致任务丢失，已自动终止",
+                                "recordId": record_id,
+                            },
+                        )
+                except Exception as e:
+                    log_service_failure(
+                        logger, e, operation="broadcast_orphan_cleanup",
+                        level=logging.DEBUG,
+                    )
+
+                return affected
+        except Exception as e:
+            log_service_failure(
+                logger, e, operation="cleanup_orphaned_queued_records",
+                level=logging.WARNING,
+            )
+            return 0
 
     async def start(self) -> None:
-        """启动 worker 协程（幂等，重复调用安全）"""
+        """启动 worker 协程（幂等，重复调用安全）。
+
+        启动流程：
+        1. 清理容器重启导致的孤儿 queued 记录（避免前端误判"队列卡住"）
+        2. 启动 worker 协程消费内存队列
+        """
         if self._started:
             return
         self._started = True
+
+        # 1. 清理孤儿 queued 记录（容器重启前的旧任务，内存队列已丢失）
+        orphan_count = await self._cleanup_orphaned_queued_records()
+        if orphan_count > 0:
+            logger.info("启动前清理孤儿 queued 记录 %d 条", orphan_count)
+
+        # 2. 启动 worker 协程
         for i in range(SOLVE_WORKER_CONCURRENCY):
             task = asyncio.create_task(self._worker_loop(i))
             self._workers.append(task)
@@ -171,7 +296,7 @@ class CaptchaQueueManager:
         priority: int = 0,
         retry_count: int = 0,
         skip_dedup: bool = False,
-    ) -> Optional[int]:
+    ) -> tuple[Optional[int], int, int]:
         """入队一个滑块求解任务。
 
         Args:
@@ -182,22 +307,105 @@ class CaptchaQueueManager:
             solve_reason: 求解原因
             priority: 优先级（2=SVIP, 1=VIP, 0=普通）
             retry_count: 重试次数（首次入队为 0）
-            skip_dedup: 是否跳过去重检查（重试入队时传 True）
+            skip_dedup: 是否跳过 60 秒冷却检查（重试入队时传 True）。
+                注意：skip_dedup=True 仅跳过手动触发的 60 秒冷却，
+                队列进程去重（queued/retrying 状态检查）仍会执行，避免重试场景重复求解
 
         Returns:
-            record_id（入队成功）或 None（被去重跳过）
+            (record_id, queue_position, queue_total)
+            - 入队成功：record_id 为 int，queue_position/queue_total 为入队瞬间的排队位置
+            - 被去重跳过：record_id 为 None，queue_position/queue_total 为 0
+
+        注意：位置信息在入队瞬间计算（持 _pending_lock），避免 worker 在 broadcast
+        期间取出任务导致后续查询返回 (0, 0)。调用方应直接使用返回的位置信息，
+        不要再调用 get_queue_position 二次查询（此时 worker 可能已取出任务）。
         """
-        # 同账号去重检查
-        if not skip_dedup:
+        # === 0. service_unavailable 冷却检查（仅 token_refresh 场景） ===
+        # hasLogin 接口风控返回 HAS_LOGIN_UNCONFIRMED 后，短期内不会恢复，
+        # WS 会自然重连触发新的求解，无需高频重复入队。
+        # 手动触发（manual/manual_retry）不受此限制，用户主动点击应立即处理。
+        if trigger_scene == "token_refresh":
+            last_fail_ts = self._service_unavailable_ts.get(account_id, 0)
+            if last_fail_ts and (time.time() - last_fail_ts) < SERVICE_UNAVAILABLE_COOLDOWN_SEC:
+                remaining = int(SERVICE_UNAVAILABLE_COOLDOWN_SEC - (time.time() - last_fail_ts))
+                logger.info(
+                    "滑块求解入队跳过：service_unavailable 冷却中 accountId=%d 剩余 %d 秒",
+                    account_id, remaining,
+                )
+                return (None, 0, 0)
+
+        # === 1. 排除表检查（所有场景，硬阻断，静默跳过不创建记录） ===
+        # 3 天未登录前台用户的闲鱼账号已被定时扫描录入排除表，直接拒绝入队
+        # 避免脏数据占用排队序列（排除表本身即为记录，不额外创建 solve_record）
+        try:
+            async with async_session() as db:
+                exclusion_row = (await db.execute(
+                    text(
+                        "SELECT id FROM xianyu_account_solve_exclusion "
+                        "WHERE account_id = :aid LIMIT 1"
+                    ),
+                    {"aid": account_id},
+                )).mappings().first()
+            if exclusion_row:
+                logger.info(
+                    "滑块求解入队排除：账号在排除表中 accountId=%d（用户3天未登录前台），静默跳过",
+                    account_id,
+                )
+                return (None, 0, 0)
+        except Exception as e:
+            # 排除表不存在或查询失败时降级为放行（不影响正常流程）
+            log_service_failure(
+                logger, e, operation="exclusion_table_check_enqueue",
+                level=logging.DEBUG,
+            )
+
+        # === 2. 队列进程去重（所有场景都检查，包括 skip_dedup=True 的重试场景） ===
+        # 避免同账号重复入队：检查 queued（内存队列）和 retrying（DB）状态
+        # 2a. 检查内存队列 _pending_tasks（queued 状态）
+        async with self._pending_lock:
+            for task in self._pending_tasks.values():
+                if task.account_id == account_id:
+                    logger.info(
+                        "滑块求解入队去重跳过 accountId=%d（队列中已有排队任务 recordId=%d）",
+                        account_id, task.record_id,
+                    )
+                    return (None, 0, 0)
+        # 2b. 检查 DB 中是否有 retrying 状态的同账号任务（worker 正在处理）
+        try:
+            async with async_session() as db:
+                row = (await db.execute(
+                    text(
+                        "SELECT id FROM xianyu_captcha_solve_record "
+                        "WHERE account_id = :aid AND status = 'retrying' "
+                        "AND COALESCE(deleted, 0) = 0 LIMIT 1"
+                    ),
+                    {"aid": account_id},
+                )).mappings().first()
+                if row:
+                    logger.info(
+                        "滑块求解入队去重跳过 accountId=%d（已有求解中任务 recordId=%s）",
+                        account_id, row["id"],
+                    )
+                    return (None, 0, 0)
+        except Exception as e:
+            log_service_failure(
+                logger, e, operation="dedup_check_retrying",
+                level=logging.WARNING,
+            )
+
+        # === 3. 手动触发 60 秒冷却（仅 manual/manual_retry 且非 skip_dedup） ===
+        # 60 秒冷却仅限制用户前台频繁点击，不影响重试场景
+        # 重试场景（skip_dedup=True）已通过上方队列进程去重保证不重复求解
+        if not skip_dedup and trigger_scene in ("manual", "manual_retry"):
             async with self._dedup_lock:
                 last_ts = self._enqueued_ts.get(account_id, 0)
                 now_ts = time.time()
                 if now_ts - last_ts < SOLVE_DEDUP_COOLDOWN_SEC:
                     logger.info(
-                        "滑块求解入队去重跳过 accountId=%d（%d 秒前刚入队，间隔需 >= %d 秒）",
+                        "滑块求解入队去重跳过 accountId=%d（%d 秒前刚入队，冷却需 >= %d 秒）",
                         account_id, int(now_ts - last_ts), SOLVE_DEDUP_COOLDOWN_SEC,
                     )
-                    return None
+                    return (None, 0, 0)
                 self._enqueued_ts[account_id] = now_ts
 
         # 生成序列号保证同优先级 FIFO
@@ -248,15 +456,32 @@ class CaptchaQueueManager:
             record_id=record_id,
             enqueued_at=time.time(),
         )
-        await self._queue.put(task)
-
-        # 加入排队跟踪表（用于查询排队位置）
+        # 加入排队跟踪表并在持锁状态下计算排队位置（原子操作）。
+        # 关键：必须在持锁状态下计算位置，避免以下竞态：
+        #   1. put 入队后 worker 被 await 唤醒取出任务
+        #   2. worker 从 _pending_tasks 移除该 record
+        #   3. enqueue 后续 get_queue_position 查不到任务返回 (0, 0)
+        # 持锁期间 worker 的 _process_task 会等待锁，无法在加入 _pending_tasks
+        # 与计算位置之间插入 pop 操作。
+        queue_position = 0
+        queue_total = 0
         if record_id:
             async with self._pending_lock:
                 self._pending_tasks[record_id] = task
+                # 在持锁状态下直接计算位置（不调用 get_queue_position 以避免重入锁）
+                pending = list(self._pending_tasks.values())
+                pending.sort(key=lambda t: (t.sort_priority, t.enqueued_seq))
+                queue_total = len(pending)
+                for i, t in enumerate(pending):
+                    if t.record_id == record_id:
+                        queue_position = i + 1
+                        break
 
-        # 计算排队位置并广播 queued 状态（让前端即时看到"排队中"）
-        queue_position, queue_total = await self.get_queue_position(record_id)
+        # put 到队列（让 worker 可以取出）。此时位置已计算完毕，即使 worker
+        # 立即取出任务，返回给调用方的位置信息仍是正确的入队瞬间位置。
+        await self._queue.put(task)
+
+        # 广播 queued 状态（让前端即时看到"排队中"）
         try:
             from .captcha_solve_record import broadcast_captcha_solve, _lookup_account_name
             from .ws_sse import broadcaster
@@ -287,7 +512,7 @@ class CaptchaQueueManager:
             account_id, tenant_id, priority, trigger_scene, retry_count,
             record_id, self._queue.qsize(), queue_position, queue_total,
         )
-        return record_id
+        return (record_id, queue_position, queue_total)
 
     async def _worker_loop(self, worker_id: int) -> None:
         """worker 协程主循环：从队列取出任务并处理"""
@@ -415,6 +640,9 @@ class CaptchaQueueManager:
                 "滑块求解成功，无需重试 accountId=%d recordId=%s",
                 task.account_id, task.record_id,
             )
+            # === 求解成功：清除 service_unavailable 冷却 ===
+            # 下次失败重新计数，避免一次失败后 10 分钟内即使恢复也无法自动求解
+            self._service_unavailable_ts.pop(task.account_id, None)
             # === 求解成功后的后处理：对自动触发场景立即重启 WS 连接 ===
             # handle_captcha_for_account 已恢复 cookie_status=1 并刷新 _m_h5_tk，
             # 这里立即触发 WS 重连，避免等待下一次重连周期
@@ -444,6 +672,14 @@ class CaptchaQueueManager:
                 "滑块求解失败且不可重试 accountId=%d reason=%s recordId=%s",
                 task.account_id, failure_reason, task.record_id,
             )
+            # === service_unavailable 冷却：记录失败时间戳，10 分钟内 token_refresh 不再入队 ===
+            # hasLogin 接口风控返回 HAS_LOGIN_UNCONFIRMED 后，立即重试只会加剧风控
+            if failure_reason == "service_unavailable":
+                self._service_unavailable_ts[task.account_id] = time.time()
+                logger.info(
+                    "已记录 service_unavailable 冷却 accountId=%d 冷却 %d 秒",
+                    task.account_id, SERVICE_UNAVAILABLE_COOLDOWN_SEC,
+                )
             # === Cookie 失效后处理：对自动触发场景发送 Session 过期通知 ===
             # handle_captcha_for_account 已更新 cookie_status=0 并断开 WS，
             # 这里补充发送飞书通知（dispatch_notification 已在 solver 内触发）
@@ -574,19 +810,24 @@ async def enqueue_solve(
     retry_count: int = 0,
     skip_dedup: bool = False,
 ) -> Optional[int]:
-    """便捷接口：入队一个滑块求解任务。
+    """便捷接口：入队一个滑块求解任务（仅返回 record_id）。
+
+    向后兼容包装：解包 manager.enqueue 返回的 (record_id, position, total) 元组，
+    仅返回 record_id。需要排队位置信息的调用方请使用 enqueue_solve_with_position。
 
     Args:
         retry_count: 重试次数（首次入队为 0，超时自动重试时传入递增后的值）
-        skip_dedup: 是否跳过同账号去重检查（manual_retry 失败重试场景传 True，
+        skip_dedup: 是否跳过 60 秒冷却检查（manual_retry 失败重试场景传 True，
             对齐前端"失败后可立即重试"设计；前端已保证重试仅在 status=fail 时触发、
-            求解中不可重复点击，不会导致滥用）
+            求解中不可重复点击，不会导致滥用）。
+            注意：skip_dedup=True 仅跳过 60 秒冷却，队列进程去重（queued/retrying 检查）
+            仍会执行，避免同账号重复求解
 
     Returns:
         record_id 或 None（被去重跳过）
     """
     manager = await get_queue_manager()
-    return await manager.enqueue(
+    record_id, _position, _total = await manager.enqueue(
         account_id=account_id,
         tenant_id=tenant_id,
         trigger_scene=trigger_scene,
@@ -596,6 +837,44 @@ async def enqueue_solve(
         retry_count=retry_count,
         skip_dedup=skip_dedup,
     )
+    return record_id
+
+
+async def enqueue_solve_with_position(
+    account_id: int,
+    tenant_id: int,
+    trigger_scene: str = "manual",
+    open_reason: str = "",
+    solve_reason: str = "",
+    priority: int = 0,
+    retry_count: int = 0,
+    skip_dedup: bool = False,
+) -> Optional[tuple[int, int, int]]:
+    """便捷接口：入队一个滑块求解任务，返回排队位置信息。
+
+    与 enqueue_solve 的区别：返回 (record_id, queue_position, queue_total) 而非仅 record_id。
+    用于 HTTP 路由层（handle_captcha / auto_solve_captcha）直接获取入队瞬间的排队位置，
+    避免入队后二次调用 get_queue_position 时因 worker 已取出任务而返回 (0, 0)。
+
+    Returns:
+        (record_id, queue_position, queue_total) 或 None（被去重跳过）
+        - queue_position: 入队瞬间的排队位置（1=下一个出队）
+        - queue_total: 入队瞬间的排队中总数
+    """
+    manager = await get_queue_manager()
+    record_id, position, total = await manager.enqueue(
+        account_id=account_id,
+        tenant_id=tenant_id,
+        trigger_scene=trigger_scene,
+        open_reason=open_reason,
+        solve_reason=solve_reason,
+        priority=priority,
+        retry_count=retry_count,
+        skip_dedup=skip_dedup,
+    )
+    if record_id is None:
+        return None
+    return (record_id, position, total)
 
 
 async def get_queue_position(record_id: Optional[int]) -> tuple[int, int]:

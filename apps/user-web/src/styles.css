@@ -612,6 +612,11 @@ input {
   color: #7c3aed
 }
 
+.badge.yellow {
+  background: #fef9c3;
+  color: #ca8a04
+}
+
 .switch {
   width: 42px;
   height: 22px;

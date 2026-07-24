@@ -67,18 +67,33 @@ public class DeliverySchedulerService {
      * 每 60 秒扫描失败的发货记录，重置为待处理以触发自动重发。
      * 限制：retry_count < 5，且距上次更新 > 60 秒（退避，避免立即重试导致雪崩）。
      * 排除永久性错误（未配置发货规则等），避免无效重试堵塞队列。
+     *
+     * 重复发货防护（事故级修复）：
+     * - 排除已有 delivery_content 的记录：这些记录已经发送过卡密/文本内容，
+     *   重置后会被 executeDelivery 的补发逻辑处理（重发首次内容而非新卡密）。
+     *   但为避免重复发送，这些记录只在 autoReplenishStuckDeliveries 中按更长的退避时间处理。
+     * - 排除该订单已有 status=2 成功记录的情况：避免对已成功发货的订单重复发货。
      * 重置后由 processPendingDeliveries（30s 间隔）自动拾取并重试执行。
      */
     @Scheduled(fixedRate = 60000)
     public void retryFailedDeliveries() {
         try {
+            // 只重置没有 delivery_content 的失败记录（未发送过内容的记录可以安全重试）
+            // 已有 delivery_content 的记录由 autoReplenishStuckDeliveries 按 1 小时退避处理
             int reset = jdbcTemplate.update(
                     "UPDATE delivery_record SET status=0, delivery_status='pending', updated_time=NOW() " +
                             "WHERE deleted=0 AND status=3 AND retry_count < 5 " +
                             "AND updated_time < DATE_SUB(NOW(), INTERVAL 60 SECOND) " +
+                            "AND (delivery_content IS NULL OR delivery_content='') " +
                             "AND fail_reason NOT LIKE '%未配置自动发货规则%' " +
                             "AND fail_reason NOT LIKE '%未配置发货规则%' " +
-                            "AND fail_reason NOT LIKE '%等待买家确认发货声明%'");
+                            "AND fail_reason NOT LIKE '%等待买家确认发货声明%' " +
+                            "AND order_id NOT IN (" +
+                            "  SELECT order_id FROM (" +
+                            "    SELECT order_id FROM delivery_record " +
+                            "    WHERE deleted=0 AND status=2 AND order_id IS NOT NULL" +
+                            "  ) AS successful_orders" +
+                            ")");
             if (reset > 0) {
                 log.info("自动重发: 重置 {} 个失败发货记录为待处理（将在下个周期重试）", reset);
             }
@@ -102,6 +117,10 @@ public class DeliverySchedulerService {
      *   - 货源仍可用：text 模式 source 存在；card 模式 group 有 status=0 库存
      *   - 声明已确认：声明开启时必须有 confirmed 会话
      *
+     * 重复发货防护（事故级修复）：
+     *   - 排除已有 status=2 成功记录的订单：避免对已成功发货的订单重复补发
+     *   - 已有 delivery_content 的记录：由 executeDelivery 补发逻辑重发首次内容（不认领新卡密）
+     *
      * 退避：
      *   - 处理中卡死：保留 retry_count（避免无限重试），仅重置 status=0
      *   - 死信复活：重置 retry_count=0（给一次新机会），要求 updated_time < NOW() - 1 小时
@@ -110,9 +129,11 @@ public class DeliverySchedulerService {
     @Scheduled(fixedRate = 300000, initialDelay = 120000)
     public void autoReplenishStuckDeliveries() {
         // 一次查询捞取两类候选记录，避免多次扫表
+        // 排除已有 status=2 成功记录的订单（重复发货防护）
         String sql =
                 "SELECT dr.id AS record_id, dr.tenant_id, dr.account_id, dr.order_id, dr.status, " +
                 "dr.retry_count, dr.fail_reason, dr.delivery_mode, dr.card_item_id, dr.delivery_timing, " +
+                "dr.delivery_content, " +
                 "dr.updated_time AS record_updated, " +
                 "o.order_status, o.external_order_id, o.account_id AS order_account_id, " +
                 "oi.goods_id AS item_goods_id, oi.external_goods_id AS item_external_goods_id " +
@@ -120,6 +141,12 @@ public class DeliverySchedulerService {
                 "JOIN xianyu_trade_order o ON o.id = dr.order_id AND o.deleted = 0 " +
                 "LEFT JOIN xianyu_trade_order_item oi ON oi.order_id = dr.order_id AND oi.deleted = 0 " +
                 "WHERE dr.deleted = 0 AND dr.tenant_id IS NOT NULL " +
+                // 重复发货防护：排除已有 status=2 成功记录的订单
+                "AND NOT EXISTS (" +
+                "  SELECT 1 FROM delivery_record dr2 " +
+                "  WHERE dr2.tenant_id=dr.tenant_id AND dr2.order_id=dr.order_id " +
+                "  AND dr2.deleted=0 AND dr2.status=2 AND dr2.id<>dr.id" +
+                ") " +
                 "AND ( " +
                 // 1) 处理中卡死：status=1 超 5 分钟未更新
                 "  (dr.status = 1 AND dr.updated_time < DATE_SUB(NOW(), INTERVAL 5 MINUTE)) " +

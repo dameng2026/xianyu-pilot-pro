@@ -10,6 +10,12 @@ export const handleCaptcha = data => request.post('/captcha/handle', data, { tim
 export const getCaptchaRecords = (params = {}) => request.get('/captcha/records', { params })
 
 /**
+ * 查询滑块求解队列实时状态（排队中/求解中任务数）。
+ * 用于列表页实时徽标，让用户一眼看到当前队列状态。
+ */
+export const getCaptchaQueueStatus = () => request.get('/captcha/queue-status')
+
+/**
  * 查询滑块求解任务的排队位置（前端轮询用）。
  * @param {Object} params - { recordId?: number, accountId?: number }
  */

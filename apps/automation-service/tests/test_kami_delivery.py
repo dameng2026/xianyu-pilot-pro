@@ -81,19 +81,41 @@ class _KamiDeliveryDB:
         sql = str(statement)
         self.execute_calls.append((sql, params or {}))
 
+        # Step 0: 自愈机制 - 回收孤儿卡密
+        # 特征：UPDATE card_item SET status = 0, used_order_id = NULL, used_time = NULL
+        #       WHERE status = 1 AND used_order_id IS NULL AND used_time < (NOW() - INTERVAL 5 MINUTE)
+        # 测试默认无孤儿卡密（reclaimed_count=0），不触发统计刷新
+        if (
+            "UPDATE card_item" in sql
+            and "SET status = 0" in sql
+            and "used_order_id IS NULL" in sql
+            and "INTERVAL 5 MINUTE" in sql
+        ):
+            return _FakeResult(rowcount=0)
+
         # Step 1: 原子认领卡密
         if "UPDATE card_item" in sql and "SET status = 1" in sql:
             if self.claim_exception is not None:
                 raise self.claim_exception
             return _FakeResult(rowcount=self.claimed_rowcount)
 
-        # Step 2: 读取已认领卡密
+        # Step 1.5: 认领后按 used_time >= :claim_before 精确获取被认领的 card_item id
+        # 特征：SELECT id FROM card_item WHERE ... status = 1 AND used_time >= :claim_before
+        if (
+            "SELECT id FROM card_item" in sql
+            and "used_time >= :claim_before" in sql
+        ):
+            id_rows = [{"id": item["id"]} for item in self.claimed_items]
+            return _FakeResult(rows=id_rows)
+
+        # Step 2: 读取已认领卡密（按 id IN :ids 精确读取）
         if "SELECT id, card_key, card_value, extra_info" in sql and "FROM card_item" in sql:
             if self.read_exception is not None:
                 raise self.read_exception
             return _FakeResult(rows=self.claimed_items)
 
-        # Step 5: 标记已使用 / 回滚 status
+        # Step 5: 标记已使用 / 回滚 status（按 id IN :ids 操作）
+        # 注意：自愈 SQL 已在 Step 0 分支拦截，此处仅处理按 id 的标记/回滚
         if "UPDATE card_item" in sql and ("SET status = 2" in sql or "SET status = 0" in sql):
             return _FakeResult(rowcount=1)
 
@@ -277,12 +299,14 @@ async def test_kami_delivery_send_failure_rolls_back_card_status(monkeypatch):
     send_mock.assert_awaited_once()
     assert "KEY-AAA" in send_mock.await_args.args[3]
 
-    # 应执行回滚 UPDATE card_item SET status=0
+    # 应执行回滚 UPDATE card_item SET status=0（按 id IN :ids 精确回滚，排除自愈 SQL）
     rollback_calls = [
         (sql, params) for sql, params in db.execute_calls
-        if "UPDATE card_item" in sql and "SET status = 0" in sql
+        if "UPDATE card_item" in sql
+        and "SET status = 0" in sql
+        and "id IN" in sql  # 自愈 SQL 用 used_order_id IS NULL，回滚 SQL 用 id IN :ids
     ]
-    assert len(rollback_calls) == 1, "应回滚 card_item.status=0"
+    assert len(rollback_calls) == 1, "应回滚 card_item.status=0（按 id IN :ids）"
     # 不应执行标记 status=2
     assert not any(
         "UPDATE card_item" in sql and "SET status = 2" in sql

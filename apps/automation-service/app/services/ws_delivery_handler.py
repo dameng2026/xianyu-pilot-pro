@@ -17,7 +17,7 @@ import time
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.database import async_session
@@ -43,6 +43,12 @@ DELIVERY_TIMING_AFTER_PAYMENT = "after_payment"
 # 第一个任务完成 INSERT 后，后续任务的 _has_existing_realtime_delivery 检查会命中并跳过。
 _delivery_locks: dict[str, asyncio.Lock] = {}
 _delivery_locks_guard = asyncio.Lock()
+
+# 内存级发货去重：防止同一会话+商品的并发任务在锁失效时重复认领卡密。
+# key = f"{account_id}:{normalized_sid}:{xy_goods_id}"，value = 无意义占位。
+# 在 _execute_kami_delivery 入口处 set.add，出口处 set.discard。
+_delivery_in_flight: set[str] = set()
+_delivery_in_flight_guard = asyncio.Lock()
 
 
 # ============================================================
@@ -73,8 +79,15 @@ def _get_order_sync_tasks_lock() -> asyncio.Lock:
 
 
 async def _get_delivery_lock(account_id: int, s_id: str, xy_goods_id: str) -> asyncio.Lock:
-    """获取按 会话+商品 维度的发货串行锁。"""
-    key = f"{account_id}:{s_id}:{xy_goods_id}"
+    """获取按 会话+商品 维度的发货串行锁。
+
+    归一化 s_id：去掉 @goofish 后缀。闲鱼 WS 推送的同一会话消息可能带
+    或不带 @goofish 后缀（如 64799897685 vs 64799897685@goofish），
+    若不归一化会产生不同的 lock key，导致同一会话的并发发货任务不被串行化，
+    去重检查在 record 写入前执行，引发重复认领卡密。
+    """
+    normalized_sid = (s_id or "").replace("@goofish", "")
+    key = f"{account_id}:{normalized_sid}:{xy_goods_id}"
     async with _delivery_locks_guard:
         lock = _delivery_locks.get(key)
         if lock is None:
@@ -620,6 +633,20 @@ async def _process_delivery(
             account_id, s_id, xy_goods_id
         )
     async with delivery_lock:
+        # 重置事务快照：_should_send_statement 的 SELECT 已隐式开启事务，
+        # MySQL REPEATABLE READ 隔离级别下，Check 1 会使用旧 snapshot，
+        # 看不到前序任务刚 commit 的 delivery_record → 去重失效。
+        # commit() 结束当前事务，后续查询创建新 snapshot，能看到最新已提交数据。
+        if hasattr(db, "commit"):
+            try:
+                await db.commit()
+            except Exception:
+                if hasattr(db, "rollback"):
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
+
         # 持锁后再次检查（防止前序任务刚完成 INSERT）
         if await _has_existing_realtime_delivery(
             db,
@@ -645,6 +672,17 @@ async def _process_delivery(
             xy_goods_id=xy_goods_id, buyer_user_id=buyer_user_id,
             buyer_user_name=buyer_user_name, buy_quantity=buy_quantity,
         )
+        # 锁内提交：确保 delivery_record INSERT 在锁释放前已对其他会话可见。
+        if hasattr(db, "commit"):
+            try:
+                await db.commit()
+            except Exception as commit_err:
+                logger.error("锁内提交事务失败: %s", commit_err, exc_info=True)
+                if hasattr(db, "rollback"):
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
 
 
 async def _process_delivery_inner(
@@ -749,11 +787,10 @@ async def _trigger_delivery_for_confirmed_statement(
 ) -> None:
     """买家确认发货声明后，触发该订单的发货流程。
 
-    与实时付款触发的 _process_delivery 区别：
-    - 不走并发去重锁（声明确认是明确的发货许可，无需串行化）
-    - 不走 _has_existing_realtime_delivery 检查（避免误判为重复发货）
-    - 直接调用 _process_delivery_inner 执行发货
-    - 发货成功后绑定 delivery_record_id 到声明会话
+    安全保障（防止重复发货）：
+    - 走并发去重锁 _get_delivery_lock（与实时付款路径共用同一把锁，互斥）
+    - 走 _has_existing_realtime_delivery 去重检查（防止已发货订单被重复发货）
+    - 持锁后再次检查（防止前序任务刚完成 INSERT）
     """
     logger.info(
         "声明确认后触发发货: tenantId=%d accountId=%d orderId=%s xyGoodsId=%s sessionId=%d",
@@ -764,14 +801,64 @@ async def _trigger_delivery_for_confirmed_statement(
     buyer_user_name = ""
     buy_quantity = 1
 
-    await _process_delivery_inner(
-        db, tenant_id, account_id, msg={},  # msg 仅用于日志，此处为空
-        s_id=s_id, sender_user_id=buyer_user_id, receiver_user_id="",
-        reminder_url="", reminder_content="", pnm_id="", msg_content="",
-        order_id=order_id, xy_goods_id=xy_goods_id,
-        buyer_user_id=buyer_user_id, buyer_user_name=buyer_user_name,
-        buy_quantity=buy_quantity,
-    )
+    # === 并发去重锁（与实时付款路径共用同一把锁，确保互斥） ===
+    # 防止声明确认与实时付款路径并发触发导致重复发货。
+    # 同一会话同一商品的发货任务串行化，前序任务完成后后续任务通过 DB 去重跳过。
+    delivery_lock = await _get_delivery_lock(account_id, s_id, xy_goods_id)
+    if delivery_lock.locked():
+        logger.info(
+            "声明确认发货等待锁: accountId=%d sId=%s xyGoodsId=%s（前序任务处理中）",
+            account_id, s_id, xy_goods_id
+        )
+    async with delivery_lock:
+        # 重置事务快照：调用方传入的 db session 可能已有活跃事务（旧 snapshot），
+        # commit() 结束当前事务，后续查询能看到最新已提交数据。
+        if hasattr(db, "commit"):
+            try:
+                await db.commit()
+            except Exception:
+                if hasattr(db, "rollback"):
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
+
+        # === 持锁后去重检查（防止已发货订单被重复发货） ===
+        if await _has_existing_realtime_delivery(
+            db,
+            tenant_id,
+            account_id,
+            order_id,
+            s_id,
+            xy_goods_id,
+            buyer_user_id,
+            "",  # pnm_id
+            "",  # delivery_content
+        ):
+            logger.info(
+                "声明确认发货跳过重复处理（已存在发货记录） accountId=%d orderId=%s sId=%s xyGoodsId=%s",
+                account_id, order_id, s_id, xy_goods_id
+            )
+            return
+        await _process_delivery_inner(
+            db, tenant_id, account_id, msg={},  # msg 仅用于日志，此处为空
+            s_id=s_id, sender_user_id=buyer_user_id, receiver_user_id="",
+            reminder_url="", reminder_content="", pnm_id="", msg_content="",
+            order_id=order_id, xy_goods_id=xy_goods_id,
+            buyer_user_id=buyer_user_id, buyer_user_name=buyer_user_name,
+            buy_quantity=buy_quantity,
+        )
+        # 锁内提交：确保 delivery_record INSERT 在锁释放前已对其他会话可见。
+        if hasattr(db, "commit"):
+            try:
+                await db.commit()
+            except Exception as commit_err:
+                logger.error("声明确认锁内提交失败: %s", commit_err, exc_info=True)
+                if hasattr(db, "rollback"):
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
 
     # 绑定 delivery_record_id 到声明会话（查询最近成功的发货记录）
     try:
@@ -1116,7 +1203,10 @@ async def _load_goods_delivery_rule(
     if enabled in (0, "0", False, "false", "False", None):
         return None
 
-    mode = str(timing_config.get("mode") or MODE_TEXT).lower()
+    # 前端和 Java 后端统一使用 "card" 表示卡密发货，Python 侧历史常量为 "kami"。
+    # 此处归一化别名，避免 delivery_mode 进入 "未知的发货模式" 分支导致实时发货全部失败。
+    _raw_mode = str(timing_config.get("mode") or MODE_TEXT).lower()
+    mode = "kami" if _raw_mode == "card" else _raw_mode
     header = str(timing_config.get("header") or "")
     content = str(timing_config.get("content") or "")
     footer = str(timing_config.get("footer") or "")
@@ -1192,6 +1282,17 @@ async def _has_existing_realtime_delivery(
     pnm_id: str,
     delivery_content: str,
 ) -> bool:
+    """检查是否已存在该订单/会话的实时发货记录（去重核心）。
+
+    去重维度（任一命中即视为已发货）：
+    1. order_id 精确匹配（优先）：同一 order_id 已有 status IN (1,2) 的记录
+    2. 会话+买家+商品 交叉匹配（order_id 为空时兜底）：同一 (sid, buyerUserId, xyGoodsId)
+       已有 after_payment 发货记录
+
+    重要：pnmId 是消息级唯一标识（每条 WS 消息不同），不参与去重判断。
+    同一订单的付款消息和后续系统推送消息会有不同 pnmId，但属于同一发货单元。
+    若 pnmId 参与去重会导致同一订单被重复发货（事故级 Bug）。
+    """
     if order_id:
         existing = (await db.execute(
             text("""
@@ -1213,12 +1314,19 @@ async def _has_existing_realtime_delivery(
         if existing:
             return True
 
-    normalized_sid = s_id if str(s_id).endswith("@goofish") else f"{s_id}@goofish"
-    normalized_buyer = (
-        buyer_user_id
-        if str(buyer_user_id).endswith("@goofish")
-        else f"{buyer_user_id}@goofish"
-    )
+    # 归一化：去掉 @goofish 后缀后比较，彻底消除 receiver_info 中 sid/buyerUserId
+    # 格式不一致（有的带 @goofish，有的不带）导致的去重失败问题。
+    # 用 REPLACE(..., '@goofish', '') 双向归一化，确保匹配稳定。
+    #
+    # 注意：pnmId 不参与去重（消息级标识，同一订单不同消息的 pnmId 不同）。
+    # delivery_content 仅在传入非空时才检查（用于文本模式区分不同声明文案）。
+    #
+    # delivery_timing 兼容 NULL：历史 bug 导致部分记录的 delivery_timing 为 NULL，
+    # 用 (delivery_timing = :delivery_timing OR delivery_timing IS NULL) 兼容旧数据，
+    # 确保这些记录也能被去重命中，避免重复发货。
+    # 当 order_id 为空时（付款消息 URL 不含 orderId），按会话+买家+商品去重。
+    # 添加 10 分钟时间窗口：同一会话同一商品 10 分钟内的记录视为同一订单的 WS 重复推送，
+    # 超过 10 分钟视为新订单（买家重新下单），避免跨天旧记录误判导致新订单不发货。
     existing = (await db.execute(
         text("""
             SELECT id
@@ -1226,23 +1334,22 @@ async def _has_existing_realtime_delivery(
             WHERE tenant_id = :tenant_id
               AND account_id = :account_id
               AND deleted = 0
-              AND delivery_timing = :delivery_timing
-              AND JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.sid')) = :sid
-              AND JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.buyerUserId')) = :buyer_user_id
+              AND (delivery_timing = :delivery_timing OR delivery_timing IS NULL)
+              AND REPLACE(JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.sid')), '@goofish', '') = REPLACE(:sid, '@goofish', '')
+              AND REPLACE(JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.buyerUserId')), '@goofish', '') = REPLACE(:buyer_user_id, '@goofish', '')
               AND JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.xyGoodsId')) = :xy_goods_id
-              AND (:pnm_id = '' OR JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.pnmId')) = :pnm_id)
               AND (:delivery_content = '' OR COALESCE(delivery_content, '') = :delivery_content)
               AND status IN (1, 2)
+              AND created_time >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)
             LIMIT 1
         """),
         {
             "tenant_id": tenant_id,
             "account_id": account_id,
             "delivery_timing": DELIVERY_TIMING_AFTER_PAYMENT,
-            "sid": normalized_sid,
-            "buyer_user_id": normalized_buyer,
+            "sid": str(s_id or ""),
+            "buyer_user_id": str(buyer_user_id or ""),
             "xy_goods_id": str(xy_goods_id or ""),
-            "pnm_id": str(pnm_id or ""),
             "delivery_content": str(delivery_content or ""),
         }
     )).mappings().first()
@@ -1274,10 +1381,112 @@ async def _execute_kami_delivery(
     - 任何失败都必须留下 delivery_record，让用户看到可理解的失败原因
     - fail_reason 只暴露用户可理解的中文，不暴露 SQL/堆栈/连接串等技术细节
     - 卡密已发送给买家后，即使后续步骤失败也不回滚卡密（避免重复发送）
+
+    重复发货防护（最后一道防线）：
+    - 入口处再次检查该订单/会话是否已有成功发货记录
+    - 即使上层 _has_existing_realtime_delivery 去重被绕过（如 order_id 为空 +
+      pnmId 已移除去重 + 闲鱼重复推送付款消息），此处也能拦截重复认领卡密
     """
     rule_id = rule.get("id") if isinstance(rule, dict) else None
 
+    # Step -2: 内存级并发去重（最终防线）
+    # 即使 _get_delivery_lock 因 sid 格式差异（@goofish 后缀）失效，
+    # 此处也能拦截同一会话+商品的并发卡密认领。
+    # key 归一化与 _get_delivery_lock 保持一致。
+    in_flight_key = f"{account_id}:{(s_id or '').replace('@goofish', '')}:{xy_goods_id}"
+    async with _delivery_in_flight_guard:
+        if in_flight_key in _delivery_in_flight:
+            logger.warning(
+                "卡密发货内存级去重拦截: tenantId=%d accountId=%d sId=%s xyGoodsId=%s"
+                "（同一会话+商品已有发货任务在进行中，跳过）",
+                tenant_id, account_id, s_id, xy_goods_id,
+            )
+            return
+        _delivery_in_flight.add(in_flight_key)
+
+    # Step -1: 重复发货最后防线 - 入口处检查是否已发货
+    # 背景：用户反馈付款后收到卡密，买家再次发消息会重新发送新卡密。
+    # 根因是闲鱼 WS 可能在买家发消息后重新推送付款系统消息（contentType=26），
+    # 触发 _process_delivery。上层 _has_existing_realtime_delivery 去重已修复
+    # （移除 pnmId 条件），此处作为卡密认领前的最后一道防线，确保万无一失。
+    try:
+        already_delivered = await _has_existing_realtime_delivery(
+            db, tenant_id, account_id, order_id,
+            s_id, xy_goods_id, buyer_user_id, pnm_id="",
+            delivery_content="",
+        )
+        if already_delivered:
+            logger.warning(
+                "卡密发货最后防线拦截重复发货: tenantId=%d accountId=%d orderId=%s sId=%s xyGoodsId=%s buyer=%s"
+                "（该订单/会话已有成功发货记录，跳过卡密认领）",
+                tenant_id, account_id, order_id, s_id, xy_goods_id, buyer_user_id,
+            )
+            _delivery_in_flight.discard(in_flight_key)
+            return
+    except Exception as check_err:
+        # 检查失败不阻断主流程（fail-open），由上层去重和卡密原子认领兜底
+        logger.warning("卡密发货入口去重检查异常，继续执行: %s", check_err, exc_info=True)
+
+    # Step 0: 自愈机制 - 回收历史遗留的孤儿卡密
+    # 背景：旧版本 _execute_kami_delivery 在认领后（status=1）若发送/确认等步骤异常或容器重启，
+    # 可能未触发 _safe_rollback_cards_by_ids，导致卡密永久卡在 status=1 状态。
+    # 之后认领 SQL 的 WHERE status=0 永远找不到可用卡密，每次发货都报"卡密库存不足"。
+    # 自愈策略：认领前先扫描该 tenant + group 下 status=1 且 used_order_id IS NULL
+    #          且 used_time < NOW() - INTERVAL 5 MINUTE 的卡密，自动回滚为 status=0。
+    # 5 分钟超时足够安全：正常认领→发送→标记已使用应在数秒内完成，绝不会超过 5 分钟。
+    # 带时间保护避免误回收当前正在认领的卡密。
+    try:
+        reclaim_result = await db.execute(
+            text("""
+                UPDATE card_item
+                SET status = 0, used_order_id = NULL, used_time = NULL, updated_time = NOW()
+                WHERE tenant_id = :tenant_id
+                  AND deleted = 0
+                  AND status = 1
+                  AND used_order_id IS NULL
+                  AND used_time < (NOW() - INTERVAL 5 MINUTE)
+                  AND (:group_id IS NULL OR group_id = :group_id)
+            """),
+            {
+                "tenant_id": tenant_id,
+                "group_id": card_group_id,
+            }
+        )
+        reclaimed_count = reclaim_result.rowcount or 0
+        if reclaimed_count > 0:
+            logger.warning(
+                "卡密自愈：回收孤儿卡密 tenantId=%d accountId=%d groupId=%s reclaimedCount=%d",
+                tenant_id, account_id, card_group_id, reclaimed_count,
+            )
+            # 同步刷新该 group 的统计计数（避免 available_count/remain_count 显示错误）
+            if card_group_id:
+                try:
+                    await db.execute(
+                        text("""
+                            UPDATE card_group g SET
+                                total_count = (SELECT COUNT(*) FROM card_item i WHERE i.group_id = g.id AND i.tenant_id = g.tenant_id AND i.deleted = 0),
+                                used_count = (SELECT COUNT(*) FROM card_item i WHERE i.group_id = g.id AND i.tenant_id = g.tenant_id AND i.deleted = 0 AND i.status = 2),
+                                remain_count = (SELECT COUNT(*) FROM card_item i WHERE i.group_id = g.id AND i.tenant_id = g.tenant_id AND i.deleted = 0 AND i.status = 0),
+                                available_count = (SELECT COUNT(*) FROM card_item i WHERE i.group_id = g.id AND i.tenant_id = g.tenant_id AND i.deleted = 0 AND i.status = 0),
+                                updated_time = NOW()
+                            WHERE g.id = :group_id AND g.tenant_id = :tenant_id
+                        """),
+                        {"group_id": card_group_id, "tenant_id": tenant_id}
+                    )
+                except Exception as stats_err:
+                    logger.warning("卡密自愈统计刷新失败 tenantId=%d groupId=%s error=%s", tenant_id, card_group_id, stats_err)
+    except Exception as reclaim_err:
+        # 自愈失败不影响主流程，继续走原认领逻辑
+        logger.warning("卡密自愈扫描失败 tenantId=%d groupId=%s error=%s", tenant_id, card_group_id, reclaim_err, exc_info=True)
+
     # Step 1: 原子认领卡密（UPDATE + LIMIT 1）
+    # 注意：order_id 可能为 None（付款消息的 reminder_url 不含 orderId 时），
+    # 此时 used_order_id 会被设为 NULL，后续读取/回滚不能依赖 used_order_id 匹配（NULL != NULL）。
+    # 修复方案：认领后用 used_time >= claim_before 时间戳精确定位被认领的 card_item id，
+    # 后续读取和回滚全部按 id 操作，彻底摆脱对 used_order_id 的依赖。
+    from datetime import datetime as _dt
+    claim_before = _dt.now()
+    claimed_item_ids: list = []
     claimed_count = 0
     try:
         update_result = await db.execute(
@@ -1302,6 +1511,27 @@ async def _execute_kami_delivery(
             }
         )
         claimed_count = update_result.rowcount or 0
+        # 认领成功后立即按 used_time >= claim_before 精确获取被认领的 card_item id
+        if claimed_count > 0:
+            id_rows = (await db.execute(
+                text("""
+                    SELECT id FROM card_item
+                    WHERE tenant_id = :tenant_id
+                      AND deleted = 0
+                      AND status = 1
+                      AND used_time >= :claim_before
+                      AND (:group_id IS NULL OR group_id = :group_id)
+                    ORDER BY id ASC
+                    LIMIT :limit
+                """),
+                {
+                    "tenant_id": tenant_id,
+                    "group_id": card_group_id,
+                    "claim_before": claim_before,
+                    "limit": buy_quantity,
+                }
+            )).mappings().all()
+            claimed_item_ids = [int(r["id"]) for r in id_rows]
     except Exception as e:
         logger.error("卡密认领失败 tenantId=%d accountId=%d groupId=%s error=%s", tenant_id, account_id, card_group_id, e, exc_info=True)
         await _safe_insert_delivery_record(
@@ -1316,6 +1546,7 @@ async def _execute_kami_delivery(
             order_id=order_id, xy_goods_id=xy_goods_id,
             fail_reason="卡密仓库暂时无法访问，请稍后重试",
         )
+        _delivery_in_flight.discard(in_flight_key)
         return
 
     if claimed_count <= 0:
@@ -1332,29 +1563,31 @@ async def _execute_kami_delivery(
             order_id=order_id, xy_goods_id=xy_goods_id,
             fail_reason="卡密库存不足，请及时补充库存",
         )
+        _delivery_in_flight.discard(in_flight_key)
         return
 
-    # Step 2: 读取被认领的卡密内容
+    # Step 2: 读取被认领的卡密内容（按 id 精确读取，不依赖 used_order_id）
     card_items = []
     try:
-        card_items = (await db.execute(
-            text("""
-                SELECT id, card_key, card_value, extra_info
-                FROM card_item
-                WHERE tenant_id = :tenant_id
-                  AND used_order_id = :order_id
-                  AND deleted = 0
-                  AND status = 1
-                ORDER BY id ASC
-            """),
-            {"tenant_id": tenant_id, "order_id": order_id}
-        )).mappings().all()
+        if claimed_item_ids:
+            card_items = (await db.execute(
+                text("""
+                    SELECT id, card_key, card_value, extra_info
+                    FROM card_item
+                    WHERE tenant_id = :tenant_id
+                      AND deleted = 0
+                      AND status = 1
+                      AND id IN :ids
+                    ORDER BY id ASC
+                """).bindparams(bindparam("ids", expanding=True)),
+                {"tenant_id": tenant_id, "ids": claimed_item_ids}
+            )).mappings().all()
     except Exception as e:
         logger.error("读取已认领卡密失败 tenantId=%d accountId=%d orderId=%s error=%s", tenant_id, account_id, order_id, e, exc_info=True)
 
     if not card_items:
-        # 认领成功但读取失败：尝试回滚卡密状态，避免库存泄漏
-        await _safe_rollback_claimed_cards(db, tenant_id, order_id)
+        # 认领成功但读取失败：按 id 回滚卡密状态，避免库存泄漏
+        await _safe_rollback_cards_by_ids(db, tenant_id, claimed_item_ids)
         await _safe_insert_delivery_record(
             db, tenant_id, account_id, order_id, s_id, pnm_id,
             buyer_user_id, buyer_user_name, xy_goods_id, buy_quantity,
@@ -1367,6 +1600,7 @@ async def _execute_kami_delivery(
             order_id=order_id, xy_goods_id=xy_goods_id,
             fail_reason="卡密读取失败，已自动回滚，请稍后重试",
         )
+        _delivery_in_flight.discard(in_flight_key)
         return
 
     # Step 3: 组装卡密内容（对异常格式做兜底）
@@ -1387,7 +1621,7 @@ async def _execute_kami_delivery(
             kami_contents.append("（卡密内容生成失败，请联系商家）")
 
     if not kami_contents:
-        await _safe_rollback_claimed_cards(db, tenant_id, order_id)
+        await _safe_rollback_cards_by_ids(db, tenant_id, claimed_item_ids)
         await _safe_insert_delivery_record(
             db, tenant_id, account_id, order_id, s_id, pnm_id,
             buyer_user_id, buyer_user_name, xy_goods_id, buy_quantity,
@@ -1395,6 +1629,7 @@ async def _execute_kami_delivery(
             content=None, status=3, fail_reason="卡密内容组装失败，已自动回滚",
             trigger_source=trigger_source,
         )
+        _delivery_in_flight.discard(in_flight_key)
         return
 
     combined_content = "\n---\n".join(kami_contents)
@@ -1420,9 +1655,11 @@ async def _execute_kami_delivery(
     if send_ok:
         await _safe_mark_cards_used(db, tenant_id, [item["id"] for item in card_items])
     else:
-        await _safe_rollback_claimed_cards(db, tenant_id, order_id)
+        await _safe_rollback_cards_by_ids(db, tenant_id, claimed_item_ids)
 
     # Step 6: 更新卡密组统计计数（失败不影响主流程）
+    # 注意：必须同时更新 remain_count 和 available_count，前端（卡密仓库/货源库）读取的是 remain_count，
+    # 漏更新 remain_count 会导致前端显示的"可用/库存"数量不随卡密使用而减少。
     if card_group_id:
         try:
             await db.execute(
@@ -1430,6 +1667,7 @@ async def _execute_kami_delivery(
                     UPDATE card_group g SET
                         total_count = (SELECT COUNT(*) FROM card_item i WHERE i.group_id = g.id AND i.tenant_id = g.tenant_id AND i.deleted = 0),
                         used_count = (SELECT COUNT(*) FROM card_item i WHERE i.group_id = g.id AND i.tenant_id = g.tenant_id AND i.deleted = 0 AND i.status = 2),
+                        remain_count = (SELECT COUNT(*) FROM card_item i WHERE i.group_id = g.id AND i.tenant_id = g.tenant_id AND i.deleted = 0 AND i.status = 0),
                         available_count = (SELECT COUNT(*) FROM card_item i WHERE i.group_id = g.id AND i.tenant_id = g.tenant_id AND i.deleted = 0 AND i.status = 0),
                         updated_time = NOW()
                     WHERE g.id = :group_id AND g.tenant_id = :tenant_id
@@ -1498,6 +1736,9 @@ async def _execute_kami_delivery(
             logger.error("确认发货流程异常 tenantId=%d orderId=%s error=%s", tenant_id, order_id, e, exc_info=True)
             # 确认发货异常不影响卡密已发送的事实，仅记录日志
 
+    # 清理内存级去重标记
+    _delivery_in_flight.discard(in_flight_key)
+
 
 async def _safe_insert_delivery_record(
     db: AsyncSession,
@@ -1516,8 +1757,15 @@ async def _safe_insert_delivery_record(
     status: int,
     fail_reason: Optional[str] = None,
     trigger_source: str = "payment",
+    delivery_mode: Optional[str] = None,
+    delivery_timing: Optional[str] = DELIVERY_TIMING_AFTER_PAYMENT,
 ) -> None:
-    """安全地插入发货记录，失败时仅记录日志不抛出异常。"""
+    """安全地插入发货记录，失败时仅记录日志不抛出异常。
+
+    delivery_timing 默认为 after_payment：所有实时发货均为付款后触发，
+    必须正确写入此值，否则 _has_existing_realtime_delivery 的去重查询
+    (WHERE delivery_timing = 'after_payment') 匹配不到 NULL，导致重复发货。
+    """
     try:
         await _insert_delivery_record(
             db, tenant_id, account_id, order_id, s_id, pnm_id,
@@ -1525,11 +1773,44 @@ async def _safe_insert_delivery_record(
             rule_id=rule_id, delivery_type=delivery_type,
             content=content, status=status, fail_reason=fail_reason,
             trigger_source=trigger_source,
+            delivery_mode=delivery_mode,
+            delivery_timing=delivery_timing,
         )
     except Exception as e:
         logger.error(
             "写入发货记录失败 tenantId=%d accountId=%d orderId=%s status=%s error=%s",
             tenant_id, account_id, order_id, status, e, exc_info=True,
+        )
+
+
+async def _safe_rollback_cards_by_ids(
+    db: AsyncSession,
+    tenant_id: int,
+    card_item_ids: list,
+) -> None:
+    """按 card_item id 精确回滚卡密状态（不依赖 used_order_id）。
+
+    用于 order_id 为空（付款消息 reminder_url 不含 orderId）时，
+    避免 NULL != NULL 导致回滚 WHERE 条件不匹配的问题。
+    """
+    if not card_item_ids:
+        return
+    try:
+        await db.execute(
+            text("""
+                UPDATE card_item
+                SET status = 0, used_order_id = NULL, used_time = NULL, updated_time = NOW()
+                WHERE tenant_id = :tenant_id
+                  AND deleted = 0
+                  AND status = 1
+                  AND id IN :ids
+            """).bindparams(bindparam("ids", expanding=True)),
+            {"tenant_id": tenant_id, "ids": card_item_ids}
+        )
+    except Exception as e:
+        logger.error(
+            "按 id 回滚已认领卡密失败 tenantId=%d ids=%s error=%s（需人工检查卡密状态）",
+            tenant_id, card_item_ids, e, exc_info=True,
         )
 
 
@@ -1565,7 +1846,15 @@ async def _safe_mark_cards_used(
     tenant_id: int,
     card_ids: list,
 ) -> None:
-    """安全地将卡密标记为已使用，失败时仅记录日志。"""
+    """安全地将卡密标记为已使用，失败时仅记录日志。
+
+    标记 status=2（已使用）+ is_used=1，保留 deleted=0（不从卡密仓库移除）：
+    - status=2 保留卡密的"已使用"状态，便于审计追溯
+    - is_used=1 与 Java 侧 updateStatus/updateStatusOnly 逻辑一致
+    - deleted=0 使已发送卡密仍可在卡密明细、使用记录、库存统计中被查询和统计
+    - 总量(total_count)保持不变，可用量(remain_count)=总量-已使用量，已使用量(used_count)正确递增
+    - delivery_record 中的 delivery_content 仍保留卡密内容，可审计
+    """
     if not card_ids:
         return
     for card_id in card_ids:
@@ -1573,7 +1862,7 @@ async def _safe_mark_cards_used(
             await db.execute(
                 text("""
                     UPDATE card_item
-                    SET status = 2, updated_time = NOW()
+                    SET status = 2, is_used = 1, updated_time = NOW()
                     WHERE id = :id AND tenant_id = :tenant_id
                 """),
                 {"id": card_id, "tenant_id": tenant_id}
@@ -1668,7 +1957,7 @@ async def _execute_custom_delivery(
         db, tenant_id, account_id, order_id, s_id, pnm_id,
         buyer_user_id, buyer_user_name, xy_goods_id, buy_quantity,
         rule_id=rule.get("id"), delivery_type=MODE_CUSTOM,
-        content="[自定义发货-不发送消息]", status=1,
+        content="[自定义发货-不发送消息]", status=2,
         fail_reason=None, trigger_source=trigger_source,
     )
 
@@ -1925,9 +2214,14 @@ async def _insert_delivery_record(
     trigger_source: str = "payment",
     external_allocation_id: Optional[str] = None,
     delivery_mode: Optional[str] = None,
-    delivery_timing: Optional[str] = None,
+    delivery_timing: Optional[str] = DELIVERY_TIMING_AFTER_PAYMENT,
 ):
-    """插入发货记录。"""
+    """插入发货记录。
+
+    delivery_timing 默认 after_payment：所有实时发货均为付款后触发。
+    历史 bug 中此值为 None 导致 delivery_record.delivery_timing 为 NULL，
+    使 _has_existing_realtime_delivery 去重查询匹配不到记录，引发重复发货。
+    """
     delivery_status = "success" if status == 2 else "pending" if status in (0, 1) else "failed"
     error_msg = fail_reason
     
