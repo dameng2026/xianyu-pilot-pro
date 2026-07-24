@@ -63,6 +63,7 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
       ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET must be set}
       COOKIE_CRYPTO_SECRET: ${COOKIE_CRYPTO_SECRET:?COOKIE_CRYPTO_SECRET must be set}
+      API_KEY_CRYPTO_SECRET: ${API_KEY_CRYPTO_SECRET:?API_KEY_CRYPTO_SECRET must be set}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN must be set}
       OPS_METRICS_TOKEN: ${OPS_METRICS_TOKEN:?OPS_METRICS_TOKEN must be set}
       IMAGE_PROXY_ALLOWED_HOSTS: ${IMAGE_PROXY_ALLOWED_HOSTS:?IMAGE_PROXY_ALLOWED_HOSTS must be set}
@@ -85,7 +86,7 @@ services:
       OPEN_SOURCE_BRIDGE_TOKEN: ${OPEN_SOURCE_BRIDGE_TOKEN:-}
       OPEN_SOURCE_BRIDGE_SITE_CODE: ${OPEN_SOURCE_BRIDGE_SITE_CODE:-open-source}
       OPEN_SOURCE_BRIDGE_SITE_NAME: ${OPEN_SOURCE_BRIDGE_SITE_NAME:-开源版}
-      JAVA_TOOL_OPTIONS: "-XX:InitialRAMPercentage=75 -XX:MaxRAMPercentage=75 -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+ParallelRefProc -XX:+ExitOnOutOfMemoryError"
+      JAVA_TOOL_OPTIONS: "-XX:InitialRAMPercentage=75 -XX:MaxRAMPercentage=75 -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+ParallelRefProcEnabled -XX:+ExitOnOutOfMemoryError"
     healthcheck:
       test: ["CMD-SHELL", "curl --fail --silent --show-error http://127.0.0.1:18080/api/ops/readiness | grep -q '\"UP\"'"]
       interval: 15s

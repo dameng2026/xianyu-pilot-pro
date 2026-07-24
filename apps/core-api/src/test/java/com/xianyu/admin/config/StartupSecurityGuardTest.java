@@ -11,7 +11,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class StartupSecurityGuardTest {
 
     @Test
-    void productionRequiresAnOperationsMetricsToken() {
+    void productionRequiresApiKeyCryptoSecret() {
+        MockEnvironment environment = secureProductionEnvironment();
+        environment.setProperty("xianyu.api-key.crypto-secret", "");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new StartupSecurityGuard(environment).run(args()));
+
+        assertTrue(error.getMessage().contains("API_KEY_CRYPTO_SECRET"));
+    }
+
+    @Test
+    void productionRequiresOperationsMetricsToken() {
         MockEnvironment environment = secureProductionEnvironment();
         environment.setProperty("ops.metrics.token", "");
 
@@ -106,9 +117,11 @@ class StartupSecurityGuardTest {
     private MockEnvironment secureProductionEnvironment() {
         MockEnvironment environment = new MockEnvironment();
         environment.setActiveProfiles("prod");
+        environment.setProperty("xianyu.security-guard.enabled", "true");
         environment.setProperty("xianyu.automation.internal-token", strong("internal"));
         environment.setProperty("admin.jwt.secret", strong("jwt"));
         environment.setProperty("xianyu.cookie.crypto-secret", strong("cookie"));
+        environment.setProperty("xianyu.api-key.crypto-secret", strong("api-key"));
         environment.setProperty("ops.metrics.token", strong("metrics"));
         environment.setProperty("spring.datasource.password", strong("mysql"));
         environment.setProperty("spring.data.redis.password", strong("redis"));
@@ -125,6 +138,7 @@ class StartupSecurityGuardTest {
         environment.setProperty("admin.cors.user-allowed-origin-patterns", "");
         environment.setProperty("image.proxy.allowed-hosts", "cdn.example.com,images.example.com");
         environment.setProperty("xianyu.ai.provider.allowed-hosts", "api.openai.com,*.trusted-ai.example.com");
+        environment.setProperty("xianyu.sync.token", strong("sync"));
         environment.setProperty("xianyu.ai.provider.enabled", "false");
         return environment;
     }

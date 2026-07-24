@@ -366,6 +366,42 @@
         <ElButton type="primary" :loading="saving" @click="onSave">保存</ElButton>
       </template>
     </ElDialog>
+
+    <!-- API 滑块求解费用简化编辑对话框 -->
+    <ElDialog
+      v-model="sliderDialogVisible"
+      title="编辑 API 滑块求解费用"
+      width="480px"
+    >
+      <ElForm label-width="120px" label-position="right">
+        <ElFormItem label="每次售价(元)">
+          <ElInputNumber
+            v-model="sliderForm.perCallPrice"
+            :min="0.01"
+            :precision="2"
+            :step="0.01"
+            controls-position="right"
+            style="width: 100%"
+          />
+          <div class="form-tip">
+            每次滑块求解扣费 {{ sliderPerCallTokens }} Token（按 1 元 = 100 Token 换算）
+          </div>
+        </ElFormItem>
+        <ElFormItem label="状态">
+          <ElSwitch
+            v-model="sliderForm.enabled"
+            :active-value="1"
+            :inactive-value="0"
+            active-text="启用"
+            inactive-text="禁用"
+          />
+        </ElFormItem>
+      </ElForm>
+      <template #footer>
+        <ElButton @click="sliderDialogVisible = false">取消</ElButton>
+        <ElButton type="primary" :loading="sliderSaving" @click="onSliderSave">保存</ElButton>
+      </template>
+    </ElDialog>
   </div>
 </template>
 
@@ -455,6 +491,16 @@
     modelName: [{ required: true, message: '请输入模型名称', trigger: 'blur' }],
   }
 
+  // API 滑块求解费用简化弹窗
+  const sliderDialogVisible = ref(false)
+  const sliderSaving = ref(false)
+  const sliderForm = reactive({
+    id: 0,
+    perCallPrice: 0.05,
+    enabled: 1,
+  })
+  const sliderPerCallTokens = computed(() => Math.max(1, Math.round((sliderForm.perCallPrice || 0) * 100)))
+
   onMounted(() => {
     loadAll()
   })
@@ -510,6 +556,15 @@
   function openEdit(value: unknown) {
     if (!isModelPriceRow(value)) {
       ElMessage.error('该价格配置缺少有效 ID，暂时无法编辑，请刷新后重试')
+      return
+    }
+
+    // API 滑块求解费用使用简化弹窗（仅输入每次售价）
+    if (value.moduleKey === 'api-slider-solve') {
+      sliderForm.id = value.id
+      sliderForm.perCallPrice = requiredFiniteNumber(value.perCallPrice, '每次售价', 0.05) || 0.05
+      sliderForm.enabled = requiredEnabledValue(value.enabled)
+      sliderDialogVisible.value = true
       return
     }
 
@@ -573,6 +628,43 @@
       if (error !== 'cancel' && error !== 'close') {
         ElMessage.error(getErrorMessage(error, '删除失败，请稍后重试'))
       }
+    }
+  }
+
+  async function onSliderSave() {
+    if (listState.value !== 'ready') {
+      ElMessage.error('价格配置列表尚未成功读取，已阻止保存')
+      return
+    }
+    sliderSaving.value = true
+    try {
+      await saveModelPrice({
+        id: sliderForm.id,
+        moduleKey: 'api-slider-solve',
+        providerName: 'default',
+        modelName: 'default',
+        modelType: 'chat',
+        billingMode: 'per_call',
+        billingUnit: '1K',
+        tokenExchangeRate: 100,
+        minChargeToken: 1,
+        perCallPrice: sliderForm.perCallPrice,
+        inputPricePer1k: 0,
+        outputPricePer1k: 0,
+        cachedInputPricePer1k: 0,
+        costPerImage: 0,
+        tokensPerImage: 0,
+        costPerCall: 0,
+        tokensPerCall: 0,
+        enabled: sliderForm.enabled,
+      })
+      ElMessage.success('保存成功')
+      sliderDialogVisible.value = false
+      await loadAll()
+    } catch (error: unknown) {
+      ElMessage.error(getErrorMessage(error, '保存失败'))
+    } finally {
+      sliderSaving.value = false
     }
   }
 

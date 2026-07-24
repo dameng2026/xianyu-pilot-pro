@@ -64,12 +64,12 @@
           </template>
           <!-- 结果步骤 -->
           <template v-else-if="keyModal.step === 'result'">
-            <p class="key-modal-text">新密钥已生成，<b>仅本次显示</b>，请立即复制保存：</p>
+            <p class="key-modal-text">新密钥已生成，请复制保存：</p>
             <div class="key-modal-result">
               <code class="key-modal-key">{{ keyModal.newKey }}</code>
               <button class="key-modal-copy" @click="copyNewKey">复制</button>
             </div>
-            <p class="key-modal-warn">⚠️ 关闭后将无法再次查看完整密钥，如丢失需重新生成。</p>
+            <p class="key-modal-warn">密钥会持续有效，只有点击“重置密钥”后旧密钥才会失效。</p>
           </template>
           <!-- 错误步骤 -->
           <template v-else>
@@ -179,7 +179,7 @@ function onResetKey() {
   keyModal.title = hasExisting ? '重置对接密钥' : '生成对接密钥'
   keyModal.message = hasExisting
     ? '重置后旧密钥立即失效，已对接的系统需更新密钥。确定要重置吗？'
-    : '将为您生成新的对接密钥，生成后请立即复制保存（仅本次显示）。'
+    : '将为您生成新的对接密钥，生成后可查看和复制。'
   keyModal.step = 'confirm'
   keyModal.newKey = ''
   keyModal.errorMsg = ''

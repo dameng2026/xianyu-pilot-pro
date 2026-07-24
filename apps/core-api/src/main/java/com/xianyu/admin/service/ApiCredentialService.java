@@ -2,8 +2,10 @@ package com.xianyu.admin.service;
 
 import com.xianyu.admin.mapper.ApiCredentialMapper;
 import com.xianyu.admin.security.ApikeyVerifier;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Service;
-
+import org.springframework.transaction.annotation.Transactional;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.HexFormat;
@@ -11,7 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Service
-public class ApiCredentialService implements ApikeyVerifier {
+public class ApiCredentialService implements ApikeyVerifier, ApplicationRunner {
 
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final String ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -19,9 +21,38 @@ public class ApiCredentialService implements ApikeyVerifier {
     private static final int PREFIX_LENGTH = 8;
 
     private final ApiCredentialMapper mapper;
+    private final ApiKeyCryptoService cryptoService;
 
-    public ApiCredentialService(ApiCredentialMapper mapper) {
+    public ApiCredentialService(ApiCredentialMapper mapper, ApiKeyCryptoService cryptoService) {
         this.mapper = mapper;
+        this.cryptoService = cryptoService;
+    }
+
+    @Override
+    public void run(ApplicationArguments args) {
+        var operationKeys = args.getOptionValues("api-credential-full-reset");
+        if (operationKeys != null && !operationKeys.isEmpty()) {
+            resetAllCredentialsOnce(operationKeys.get(0));
+        }
+    }
+
+    @Transactional
+    public int resetAllCredentialsOnce(String operationKey) {
+        if (operationKey == null || operationKey.isBlank()) {
+            throw new IllegalArgumentException("api-credential-full-reset must be provided explicitly");
+        }
+        mapper.ensureFullResetOperation(operationKey);
+        Map<String, Object> operation = mapper.findFullResetOperationForUpdate(operationKey);
+        if (operation == null || !"pending".equals(operation.get("status"))) return 0;
+        int resetCount = 0;
+        for (Long tenantId : mapper.findAllTenantsWithCredentials()) {
+            saveCredential(tenantId, generateApiKey());
+            resetCount++;
+        }
+        if (mapper.markFullResetCompleted(operationKey) != 1) {
+            throw new IllegalStateException("API credential full reset completion failed");
+        }
+        return resetCount;
     }
 
     @Override
@@ -37,41 +68,37 @@ public class ApiCredentialService implements ApikeyVerifier {
         return new VerifiedCredential(tenantId, prefix);
     }
 
-    /**
-     * 获取租户的凭证信息（脱敏，不返回完整 apiKey）。
-     * 若租户尚无凭证，自动创建一个。
-     */
     public Map<String, Object> getOrCreateCredential(Long tenantId) {
         Map<String, Object> row = mapper.findByTenantId(tenantId);
         if (row == null) {
             String plainKey = generateApiKey();
-            String hash = sha256(plainKey);
-            String prefix = plainKey.substring(0, PREFIX_LENGTH);
-            mapper.upsertCredential(tenantId, hash, prefix);
+            saveCredential(tenantId, plainKey);
             row = mapper.findByTenantId(tenantId);
-            if (row == null) {
-                throw new IllegalStateException("failed to create api credential");
-            }
-            // 首次创建时返回明文（仅一次）
-            row = new LinkedHashMap<>(row);
-            row.put("api_key_plain", plainKey);
+        } else if (row.get("api_key_encrypted") == null) {
+            String plainKey = generateApiKey();
+            saveCredential(tenantId, plainKey);
+            row = mapper.findByTenantId(tenantId);
         }
-        return row;
+        if (row == null) throw new IllegalStateException("failed to create api credential");
+        Map<String, Object> result = new LinkedHashMap<>(row);
+        result.put("api_key_plain", cryptoService.decrypt((String) row.get("api_key_encrypted")));
+        result.remove("api_key_hash");
+        result.remove("api_key_encrypted");
+        return result;
     }
 
-    /**
-     * 重置密钥，返回新明文（仅此一次可见）。
-     */
     public String resetCredential(Long tenantId) {
         String plainKey = generateApiKey();
+        saveCredential(tenantId, plainKey);
+        return plainKey;
+    }
+
+    private void saveCredential(Long tenantId, String plainKey) {
         String hash = sha256(plainKey);
         String prefix = plainKey.substring(0, PREFIX_LENGTH);
-        int affected = mapper.updateCredential(tenantId, hash, prefix);
-        if (affected == 0) {
-            // 尚未存在则创建
-            mapper.upsertCredential(tenantId, hash, prefix);
-        }
-        return plainKey;
+        String encrypted = cryptoService.encrypt(plainKey);
+        int affected = mapper.updateCredential(tenantId, hash, prefix, encrypted);
+        if (affected == 0) mapper.upsertCredential(tenantId, hash, prefix, encrypted);
     }
 
     private String generateApiKey() {

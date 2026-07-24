@@ -4,10 +4,10 @@
     <div class="overview-card">
       <div class="card-icon icon-blue">🔑</div>
       <div class="card-label">对接密钥</div>
-      <div class="card-value">{{ keyDisplay }}</div>
+      <div class="card-value key-value">{{ keyDisplay }}</div>
       <div class="card-sub">
         <Badge v-if="credential" :type="credential?.enabled === 0 ? 'gray' : 'green'">{{ credential?.enabled === 0 ? '已禁用' : '启用中' }}</Badge>
-        <button class="copy-btn" @click="$emit('copy', fullKey, '密钥')" v-if="credential">复制</button>
+        <button class="copy-btn" @click="$emit('copy', fullKey, '密钥')" v-if="fullKey">复制</button>
         <button class="action-btn" @click="$emit('reset-key')" v-if="!loading && !credential">生成密钥</button>
       </div>
     </div>
@@ -27,8 +27,8 @@
     <div class="overview-card">
       <div class="card-icon icon-purple">🏷</div>
       <div class="card-label">单次滑块求解价格</div>
-      <div class="card-value">{{ overview.perCallTokens ?? 5 }} Token</div>
-      <div class="card-sub">{{ overview.perCallPrice ?? 0.05 }} 元/次</div>
+      <div class="card-value">{{ overview.perCallTokens != null ? `${overview.perCallTokens} Token` : '价格不可用' }}</div>
+      <div class="card-sub">{{ overview.perCallPrice != null ? `${overview.perCallPrice} 元/次` : '价格不可用' }}</div>
     </div>
 
     <!-- API 地址 -->
@@ -70,15 +70,9 @@ const apiUrl = computed(() => {
   return 'https://api.xianyupilot.com/api/v1/slider/solve'
 })
 
-const maskedKey = computed(() => {
-  const prefix = props.credential?.api_key_prefix
-  if (!prefix) return '尚未生成'
-  return `${prefix}••••••••`
-})
-
 const keyDisplay = computed(() => {
   if (props.loading && !props.credential) return '加载中…'
-  return maskedKey.value
+  return props.credential?.api_key_plain || '尚未生成'
 })
 
 const fullKey = computed(() => props.credential?.api_key_plain || '')
@@ -109,6 +103,7 @@ const fullKey = computed(() => props.credential?.api_key_plain || '')
 .icon-orange { background: #fff3e0; }
 .card-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .card-value { font-size: 26px; font-weight: 600; color: var(--text); word-break: break-all; }
+.key-value { font-size: 16px; letter-spacing: 0.02em; }
 .card-value-sm { font-size: 16px; }
 .card-sub { margin-top: 8px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .copy-btn, .action-btn {

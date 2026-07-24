@@ -294,6 +294,22 @@
           "sha256": "005126521e9738840ebb3a44a5173acc9cbf4cdf8b70e9671684a7a24d8d2413",
           "risk": "contract",
           "rollback": "restore"
+        },
+        {
+          "version": "1.36",
+          "description": "store API slider credentials as AES-GCM ciphertext for persistent display and copying",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.36__encrypt_api_credentials.sql",
+          "sha256": "5f693c2c949b50eeafad0c32c71e36fb17e9f6b167fc613e79491c4a7b91fc0a",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.37",
+          "description": "add idempotent API credential full reset operation gate",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.37__api_credential_reset_operation.sql",
+          "sha256": "cee54abb7e49dca5f63bf42f048e93e6464a8e2b2fa9e9adfde99f3d0baf7fe1",
+          "risk": "expand",
+          "rollback": "restore"
         }
       ],
       "quarantined": [

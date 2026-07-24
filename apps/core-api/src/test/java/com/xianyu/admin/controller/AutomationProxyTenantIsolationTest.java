@@ -8,6 +8,7 @@ import com.xianyu.admin.service.ModelConfigService;
 import com.xianyu.admin.service.OperationAuditService;
 import com.xianyu.admin.service.OpportunityDraftService;
 import com.xianyu.admin.service.OpenSourceContentService;
+import com.xianyu.admin.service.FeatureSwitchService;
 import com.xianyu.admin.service.TenantSupportService;
 import com.xianyu.admin.service.XianyuAccountService;
 import org.junit.jupiter.api.AfterEach;
@@ -107,7 +108,8 @@ class AutomationProxyTenantIsolationTest {
                 mock(ModelConfigService.class),
                 mock(XianyuAccountService.class),
                 mock(TenantSupportService.class),
-                mock(OpenSourceContentService.class)
+                mock(OpenSourceContentService.class),
+                mock(FeatureSwitchService.class)
         );
     }
 }

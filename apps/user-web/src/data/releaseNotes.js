@@ -9,7 +9,7 @@
  *   - major (1.0.0 → 2.0.0)：大量功能改变的大版本
  *
  * 每次上线前由 AI 对比已上线代码与本地代码，找出前台功能变动后追加条目。
- * 新条目始终放在数组最前面（最新在上）。
+ * 新条目始终放在数组最前面（按发布日期倒序，最新版本在上）。
  */
 
 /** 变动类型 */
@@ -66,13 +66,31 @@ export const VERSION_BUMP_RULES = [
  */
 
 /** 当前最新版本号（应与 package.json 的 version 字段保持一致） */
-export const CURRENT_VERSION = '2.0.0'
+export const CURRENT_VERSION = '2.1.0'
 
 /**
  * 更新日志数据，最新在前。
  * @type {ReleaseNote[]}
  */
 export const releaseNotes = [
+  {
+    version: '2.1.0',
+    date: '2026-07-24',
+    type: RELEASE_TYPES.MINOR,
+    title: 'API 滑块求解费用与密钥体验升级',
+    summary: '优化 API 滑块求解计费配置、Token 余额展示和对接密钥管理体验。',
+    changes: [
+      {
+        label: '优化',
+        items: [
+          'API 滑块求解费用设置改为独立的每次售价配置，并按后台价格自动计算 Token 扣费。',
+          'API 滑块求解页面与个人中心统一使用真实 Token 余额。',
+          '对接密钥支持完整展示和随时复制，密钥在用户主动重置前持续有效。'
+        ]
+      }
+    ],
+    remark: '本次上线将为所有现有用户统一重置一次 API 对接密钥，请及时更新已接入系统中的密钥。'
+  },
   {
     version: '2.0.0',
     date: '2026-07-24',

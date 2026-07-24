@@ -5,29 +5,26 @@ import com.xianyu.admin.common.BizException;
 import com.xianyu.admin.mapper.ApiSliderSolveRecordMapper;
 import com.xianyu.admin.security.ApiSliderContext;
 import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.Duration;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 @Service
 public class ApiSliderSolveService {
@@ -36,12 +33,10 @@ public class ApiSliderSolveService {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String PENDING_KEY_PREFIX = "api_slider:pending:";
     private static final String MODULE_KEY = "api-slider-solve";
-    private static final BigDecimal DEFAULT_PER_CALL_PRICE = new BigDecimal("0.05");
-    private static final BigDecimal DEFAULT_EXCHANGE_RATE = new BigDecimal("100");
-
     private final JdbcTemplate jdbcTemplate;
     private final ApiSliderSolveRecordMapper recordMapper;
     private final StringRedisTemplate redisTemplate;
+    private final TransactionTemplate transactionTemplate;
 
     @Value("${xianyu.api-slider.automation-base-url:http://localhost:12401}")
     private String automationBaseUrl;
@@ -57,10 +52,12 @@ public class ApiSliderSolveService {
     @Autowired
     public ApiSliderSolveService(JdbcTemplate jdbcTemplate,
                                  ApiSliderSolveRecordMapper recordMapper,
-                                 StringRedisTemplate redisTemplate) {
+                                 StringRedisTemplate redisTemplate,
+                                 PlatformTransactionManager transactionManager) {
         this.jdbcTemplate = jdbcTemplate;
         this.recordMapper = recordMapper;
         this.redisTemplate = redisTemplate;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     @PostConstruct
@@ -76,6 +73,7 @@ public class ApiSliderSolveService {
      * 若未配置或禁用，perCallPrice<=0 视为禁用，返回 null。
      */
     public Map<String, Object> loadPriceConfig(Long tenantId) {
+        if (tenantId == null) return null;
         // 优先查租户级配置，回退全局配置
         Map<String, Object> row = jdbcTemplate.queryForList(
                 "SELECT * FROM ai_model_price_config WHERE deleted=0 AND enabled=1 AND module_key=? " +
@@ -113,11 +111,13 @@ public class ApiSliderSolveService {
         Map<String, Object> price = loadPriceConfig(tenantId);
         if (price == null) throw new BizException(503, "服务未配置价格");
         int perCallTokens = (int) price.get("perCallTokens");
+        Long userId = resolveTenantUserId(tenantId);
+        if (userId == null) throw new BizException(503, "租户主用户不可用");
 
         // 2. 准入检查
         String pendingKey = PENDING_KEY_PREFIX + tenantId;
         long pendingCount = getCurrentPending(pendingKey);
-        long tokenBalance = queryTokenBalance(tenantId);
+        long tokenBalance = queryTokenBalance(userId, tenantId);
         long required = (pendingCount + 1) * perCallTokens;
         if (tokenBalance < required) {
             Map<String, Object> err = new LinkedHashMap<>();
@@ -170,17 +170,17 @@ public class ApiSliderSolveService {
             int tokenCharged = 0;
             boolean chargeFailed = false;
             if (success) {
-                int affected = jdbcTemplate.update(
-                        "UPDATE sys_user SET token_balance = token_balance - ?, updated_time = NOW() " +
-                                "WHERE id = ? AND tenant_id = ? AND status = 1 AND deleted = 0 AND token_balance >= ?",
-                        perCallTokens, tenantId, tenantId, perCallTokens);
-                if (affected == 1) {
-                    tokenCharged = perCallTokens;
-                    writeTokenLedger(tenantId, -perCallTokens, requestId);
-                } else {
-                    // 极端竞态：余额被其他操作耗尽
+                try {
+                    ChargeResult charge = chargeAndUpdateRecord(userId, tenantId, requestId, perCallTokens);
+                    tokenCharged = charge.tokenCharged();
+                    chargeFailed = charge.failed();
+                } catch (Exception chargeError) {
                     chargeFailed = true;
-                    log.warn("token charge failed for tenant {} req {} (balance race)", tenantId, requestId);
+                    log.error("token charge transaction failed for tenant {} user {} req {}", tenantId, userId, requestId, chargeError);
+                }
+                if (chargeFailed) {
+                    updateChargeFailure(tenantId, requestId);
+                    log.warn("token charge failed for tenant {} user {} req {}", tenantId, userId, requestId);
                 }
             }
             result.put("ok", success);
@@ -214,37 +214,68 @@ public class ApiSliderSolveService {
         try { return Math.max(0, Long.parseLong(v)); } catch (Exception e) { return 0; }
     }
 
-    private long queryTokenBalance(Long tenantId) {
+    public Long resolveTenantUserId(Long tenantId) {
+        if (tenantId == null) return null;
+        var rows = jdbcTemplate.queryForList(
+                "SELECT id FROM sys_user WHERE tenant_id = ? AND status = 1 AND deleted = 0 " +
+                        "ORDER BY CASE WHEN user_type = 1 THEN 0 ELSE 1 END, id ASC LIMIT 1",
+                tenantId);
+        if (rows.isEmpty()) return null;
+        Object id = rows.get(0).get("id");
+        return id instanceof Number n ? n.longValue() : Long.valueOf(String.valueOf(id));
+    }
+
+    private long queryTokenBalance(Long userId, Long tenantId) {
+        if (userId == null || tenantId == null) return 0;
         try {
             Map<String, Object> row = jdbcTemplate.queryForMap(
                     "SELECT token_balance FROM sys_user WHERE id = ? AND tenant_id = ? AND status = 1 AND deleted = 0",
-                    tenantId, tenantId);
+                    userId, tenantId);
             return ((Number) row.get("token_balance")).longValue();
         } catch (Exception e) {
-            log.warn("query token balance failed tenant={}", tenantId, e);
+            log.warn("query token balance failed tenant={} user={}", tenantId, userId, e);
             return 0;
         }
     }
 
     /**
-     * 查询用户余额行（前台 overview 用，Task 2.8 Step 3 追加）。
+     * 查询用户余额行（前台 overview 用）。
+     * 参数为 userId（与 /profile/overview 一致），不再要求 id == tenant_id。
      */
-    public Map<String, Object> queryUserBalanceRow(Long tenantId) {
+    public Map<String, Object> queryUserBalanceRow(Long userId) {
         return jdbcTemplate.queryForMap(
-                "SELECT id, token_balance FROM sys_user WHERE id = ? AND tenant_id = ? AND status = 1 AND deleted = 0",
-                tenantId, tenantId);
+                "SELECT id, token_balance FROM sys_user WHERE id = ? AND deleted = 0",
+                userId);
     }
 
-    private void writeTokenLedger(Long tenantId, long change, String refNo) {
-        try {
-            jdbcTemplate.update(
+    private ChargeResult chargeAndUpdateRecord(Long userId, Long tenantId, String requestId, int tokens) {
+        Boolean charged = transactionTemplate.execute(status -> {
+            int affected = jdbcTemplate.update(
+                    "UPDATE sys_user SET token_balance = token_balance - ?, updated_time = NOW() " +
+                            "WHERE id = ? AND tenant_id = ? AND status = 1 AND deleted = 0 AND token_balance >= ?",
+                    tokens, userId, tenantId, tokens);
+            if (affected != 1) return false;
+            int ledger = jdbcTemplate.update(
                     "INSERT INTO token_balance_ledger (user_id, tenant_id, change_amount, change_type, ref_type, ref_no, remark, created_time, updated_time) " +
                             "VALUES (?, ?, ?, 'consume', 'api_slider', ?, 'API滑块求解扣费', NOW(), NOW())",
-                    tenantId, tenantId, change, refNo);
-        } catch (Exception e) {
-            log.warn("write token ledger failed tenant={} ref={}", tenantId, refNo, e);
-        }
+                    userId, tenantId, -tokens, requestId);
+            if (ledger != 1) throw new IllegalStateException("token ledger insert failed");
+            int record = jdbcTemplate.update(
+                    "UPDATE xianyu_api_captcha_solve_record SET token_charged=?, token_charge_failed=0, updated_at=NOW() WHERE request_id=? AND tenant_id=?",
+                    tokens, requestId, tenantId);
+            if (record != 1) throw new IllegalStateException("api slider solve record update failed");
+            return true;
+        });
+        return Boolean.TRUE.equals(charged) ? new ChargeResult(tokens, false) : new ChargeResult(0, true);
     }
+
+    private void updateChargeFailure(Long tenantId, String requestId) {
+        jdbcTemplate.update(
+                "UPDATE xianyu_api_captcha_solve_record SET token_charge_failed=1, updated_at=NOW() WHERE request_id=? AND tenant_id=?",
+                requestId, tenantId);
+    }
+
+    private record ChargeResult(int tokenCharged, boolean failed) {}
 
     private static String sanitizeError(String msg) {
         if (msg == null) return "unknown";

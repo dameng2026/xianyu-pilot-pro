@@ -10,16 +10,16 @@
     <div class="form-row">
       <label>对接密钥</label>
       <div class="input-group">
-        <input :value="maskedKey" readonly class="readonly-input" />
-        <button class="mini-btn" @click="$emit('copy', credential?.api_key_plain, '密钥')" v-if="credential">复制</button>
+        <input :value="fullKey" readonly class="readonly-input" />
+        <button class="mini-btn" @click="$emit('copy', fullKey, '密钥')" v-if="fullKey">复制</button>
       </div>
     </div>
     <div class="form-row">
       <label>当前扣费单价</label>
-      <input :value="`${overview?.perCallTokens ?? 5} Token / 次`" readonly class="readonly-input" />
+      <input :value="overview?.perCallTokens != null ? `${overview.perCallTokens} Token / 次` : '价格不可用'" readonly class="readonly-input" />
     </div>
     <div class="form-actions">
-      <button class="btn-secondary" @click="$emit('copy', credential?.api_key_plain, '密钥')" v-if="credential">复制密钥</button>
+      <button class="btn-secondary" @click="$emit('copy', fullKey, '密钥')" v-if="fullKey">复制密钥</button>
       <button class="btn-secondary" @click="$emit('copy', apiUrl, 'API地址')">复制地址</button>
       <button class="btn-primary" @click="$emit('reset-key')">重置密钥</button>
     </div>
@@ -40,10 +40,7 @@ const apiUrl = computed(() => {
   if (typeof window !== 'undefined') return `${window.location.origin}/api/v1/slider/solve`
   return 'https://api.xianyupilot.com/api/v1/slider/solve'
 })
-const maskedKey = computed(() => {
-  const prefix = props.credential?.api_key_prefix
-  return prefix ? `${prefix}••••••••` : '尚未生成'
-})
+const fullKey = computed(() => props.credential?.api_key_plain || '')
 </script>
 
 <style scoped>

@@ -35,7 +35,7 @@ class VerificationDeliveryAvailabilityTest {
         return new UserAuthService(
                 jdbcTemplate, mock(JwtUtil.class), environment, redisTemplate,
                 mock(UserProfileService.class), capabilityService,
-                mock(EmailSenderService.class), false);
+                mock(EmailSenderService.class), mock(ApiCredentialService.class), false);
     }
 
     @Test
@@ -124,7 +124,7 @@ class VerificationDeliveryAvailabilityTest {
         UserAuthService service = new UserAuthService(
                 jdbcTemplate, mock(JwtUtil.class), environment, redisTemplate,
                 mock(UserProfileService.class), capabilityService,
-                mock(EmailSenderService.class), false);
+                mock(EmailSenderService.class), mock(ApiCredentialService.class), false);
 
         BizException error = assertThrows(BizException.class,
                 () -> service.loginByEmail("test@example.com", "123456"));

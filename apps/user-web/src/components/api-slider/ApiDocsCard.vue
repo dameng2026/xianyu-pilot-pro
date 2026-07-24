@@ -60,7 +60,7 @@
 
     <!-- 6. 对接代码示例 -->
     <h4 class="section-title">对接代码示例</h4>
-    <p class="param-tip">以下示例展示如何向本平台发起滑块求解请求、接收并处理响应。请将 <code>YOUR_API_KEY</code> 替换为本页「对接密钥」卡片中的密钥。</p>
+    <p class="param-tip">以下示例展示如何向本平台发起滑块求解请求、接收并处理响应。请将 <code>YOUR_API_KEY</code> 替换为本页「对接密钥」卡片中的密钥；实际扣费由接口按当前动态价格返回，请以页面显示价格和响应字段为准。</p>
     <div class="code-tabs">
       <button
         v-for="t in codeTabs"
@@ -138,7 +138,7 @@ const responseParams = [
   { name: 'cookies', desc: 'string 新鲜 Cookie（仅成功）' },
   { name: 'error', desc: 'string 失败原因（脱敏）' },
   { name: 'recordId', desc: 'string 请求唯一 ID' },
-  { name: 'tokenCharged', desc: 'number 扣费 Token 数' },
+  { name: 'tokenCharged', desc: 'number 实际扣费 Token 数，以接口返回为准' },
 ]
 
 const requestExample = `curl -X POST https://api.xianyupilot.com/api/v1/slider/solve \\
@@ -157,7 +157,7 @@ const responseExample = `{
   "durationMs": 5200,
   "cookies": "求解后的新鲜Cookie",
   "recordId": "req_a1b2c3d4",
-  "tokenCharged": 5
+  "tokenCharged": "由接口按当前动态价格返回"
 }`
 
 const pythonCode = `# Python 对接示例
@@ -283,7 +283,6 @@ async function solveSlider(cookie) {
   // 处理响应
   if (data.ok && data.solved) {
     // 求解成功，使用返回的新鲜 Cookie 继续业务
-    console.log(\`求解成功，耗时 \${data.durationMs}ms，扣费 \${data.tokenCharged} Token\`);
     return {
       success: true,
       cookie: data.cookies,
@@ -292,7 +291,6 @@ async function solveSlider(cookie) {
   }
 
   // 求解失败，根据 status 区分原因
-  console.error(\`求解失败：\${data.status} - \${data.error}\`);
   return {
     success: false,
     status: data.status,
@@ -304,7 +302,7 @@ async function solveSlider(cookie) {
 (async () => {
   const yourCookie = '在此填入闲鱼完整 Cookie';
   const result = await solveSlider(yourCookie);
-  console.log(result);
+  return result;
 })();`
 
 const codeTabs = [

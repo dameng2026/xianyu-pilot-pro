@@ -95,6 +95,7 @@ class UserAuthLogoutRevocationTest {
                 mock(UserProfileService.class),
                 mock(UserAuthCapabilityService.class),
                 mock(EmailSenderService.class),
+                mock(ApiCredentialService.class),
                 false
         );
     }

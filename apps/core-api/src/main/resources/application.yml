@@ -190,6 +190,8 @@ xianyu:
     # 数据保留策略定时清理 cron（每日凌晨 04:00）
     # 与 UploadStorageCleanupService 03:30 错开，避免抖动
     cleanup-cron: ${DATA_RETENTION_CLEANUP_CRON:0 0 4 * * ?}
+  api-key:
+    crypto-secret: ${API_KEY_CRYPTO_SECRET:dev-only-api-key-crypto-secret-change-me-32-chars}
   # API 滑块求解对接：对外 X-Api-Key 鉴权的滑块求解服务
   # automation-base-url 复用 xianyu.automation.base-url 同源的 automation-service
   # internal-token 必须与 automation-service 端 INTERNAL_API_TOKEN 一致

@@ -10,8 +10,8 @@
     <div class="m-overview-grid">
       <div class="m-overview-card">
         <div class="m-card-label">对接密钥</div>
-        <div class="m-card-value">{{ maskedKey }}</div>
-        <button class="m-mini-btn" @click="copy(fullKey, '密钥')" v-if="credential?.api_key_plain">复制</button>
+        <div class="m-card-value">{{ fullKey || '尚未生成' }}</div>
+        <button class="m-mini-btn" @click="copy(fullKey, '密钥')" v-if="fullKey">复制</button>
       </div>
       <div class="m-overview-card">
         <div class="m-card-label">Token 余额</div>
@@ -20,7 +20,7 @@
       </div>
       <div class="m-overview-card">
         <div class="m-card-label">单次价格</div>
-        <div class="m-card-value">{{ overview.perCallTokens ?? 5 }} Token</div>
+        <div class="m-card-value">{{ overview.perCallTokens != null ? `${overview.perCallTokens} Token` : '价格不可用' }}</div>
       </div>
       <div class="m-overview-card">
         <div class="m-card-label">API 地址</div>
@@ -116,10 +116,6 @@ const docExpanded = ref(false)
 const apiUrl = computed(() => {
   if (typeof window !== 'undefined') return `${window.location.origin}/api/v1/slider/solve`
   return 'https://api.xianyupilot.com/api/v1/slider/solve'
-})
-const maskedKey = computed(() => {
-  const prefix = credential.value?.api_key_prefix
-  return prefix ? `${prefix}••••••••` : '尚未生成'
 })
 const fullKey = computed(() => credential.value?.api_key_plain || '')
 

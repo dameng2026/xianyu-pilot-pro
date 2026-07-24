@@ -50,32 +50,37 @@ public class ApiIntegrationController {
         String plainKey = credentialService.resetCredential(tenantId);
         Map<String, Object> res = new LinkedHashMap<>();
         res.put("apiKey", plainKey);
-        res.put("message", "密钥已重置，请立即保存。此明文仅本次返回一次。");
+        res.put("message", "密钥已重置，旧密钥已失效。");
         return Result.ok(res);
     }
 
     @GetMapping("/api/api-integration/overview")
     public Result<Map<String, Object>> overview() {
         Long tenantId = UserContext.getTenantId();
-        if (tenantId == null) throw new BizException(401, "请先登录");
+        Long userId = UserContext.userId();
+        if (tenantId == null && userId == null) throw new BizException(401, "请先登录");
         Map<String, Object> price = solveService.loadPriceConfig(tenantId);
         Map<String, Object> res = new LinkedHashMap<>();
-        // 余额
+        // 余额（登录上下文可能只有 tenantId 时，解析该租户的主用户）
         try {
-            Map<String, Object> user = solveService.queryUserBalanceRow(tenantId);
+            Long balanceUserId = userId != null ? userId : solveService.resolveTenantUserId(tenantId);
+            if (balanceUserId == null) throw new IllegalStateException("tenant main user unavailable");
+            Map<String, Object> user = solveService.queryUserBalanceRow(balanceUserId);
             res.put("tokenBalance", ((Number) user.get("token_balance")).longValue());
         } catch (Exception e) {
             res.put("tokenBalance", 0);
         }
         // 单次价格
         if (price != null) {
+            res.put("available", true);
             res.put("perCallTokens", price.get("perCallTokens"));
             res.put("perCallPrice", price.get("perCallPrice"));
             res.put("tokenExchangeRate", price.get("tokenExchangeRate"));
         } else {
-            res.put("perCallTokens", 5);
-            res.put("perCallPrice", new java.math.BigDecimal("0.05"));
-            res.put("tokenExchangeRate", new java.math.BigDecimal("100"));
+            res.put("perCallTokens", null);
+            res.put("perCallPrice", null);
+            res.put("tokenExchangeRate", null);
+            res.put("available", false);
         }
         // 今日统计
         LocalDateTime todayStart = LocalDate.now().atStartOfDay();

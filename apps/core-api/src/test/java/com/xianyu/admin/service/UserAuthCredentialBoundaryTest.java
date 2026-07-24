@@ -114,6 +114,7 @@ class UserAuthCredentialBoundaryTest {
                 mock(UserProfileService.class),
                 mock(UserAuthCapabilityService.class),
                 mock(EmailSenderService.class),
+                mock(ApiCredentialService.class),
                 false
         );
     }

@@ -1637,8 +1637,9 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
                 CREATE TABLE IF NOT EXISTS xianyu_api_credential (
                     id BIGINT PRIMARY KEY AUTO_INCREMENT,
                     tenant_id BIGINT NOT NULL UNIQUE COMMENT '租户ID（一租户一密钥）',
-                    api_key_hash VARCHAR(64) NOT NULL UNIQUE COMMENT 'sha256(apiKey)，不存明文',
+                    api_key_hash VARCHAR(64) NOT NULL UNIQUE COMMENT 'sha256(apiKey)',
                     api_key_prefix VARCHAR(8) NOT NULL COMMENT 'apiKey 前 8 位明文，用于展示识别',
+                    api_key_encrypted VARCHAR(512) NULL COMMENT 'API 密钥 AES-GCM 密文',
                     enabled TINYINT NOT NULL DEFAULT 1 COMMENT '1启用 0禁用',
                     last_used_at DATETIME NULL COMMENT '最近调用时间',
                     created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1648,6 +1649,16 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
                 """, "xianyu_api_credential");
 
         // API 对接滑块求解记录表（V1.17 automation 侧同名表，core-api 侧查询/统计依赖）
+        createTable("""
+                CREATE TABLE IF NOT EXISTS xianyu_api_credential_reset_operation (
+                    operation_key VARCHAR(128) NOT NULL PRIMARY KEY,
+                    status VARCHAR(16) NOT NULL,
+                    completed_time DATETIME NULL,
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='API 密钥全量重置操作门禁'
+                """, "xianyu_api_credential_reset_operation");
+
         createTable("""
                 CREATE TABLE IF NOT EXISTS xianyu_api_captcha_solve_record (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
