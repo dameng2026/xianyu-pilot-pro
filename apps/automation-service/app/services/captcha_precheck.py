@@ -38,8 +38,9 @@ from ..core.failure_logging import log_service_failure
 
 logger = logging.getLogger(__name__)
 
-# 连续 3 天无操作则禁止求解
-ACCOUNT_INACTIVE_DAYS = 3
+# 连续 N 天无操作则禁止求解（通过环境变量覆盖，默认 30 天）
+import os as _os
+ACCOUNT_INACTIVE_DAYS = int(_os.environ.get("INACTIVE_ACCOUNT_DAYS", "30"))
 # Cookie 预校验调用 hasLogin 的超时（秒）
 PRECHECK_COOKIE_TIMEOUT_SEC = 20
 
