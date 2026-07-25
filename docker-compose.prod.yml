@@ -87,6 +87,8 @@ services:
       OPEN_SOURCE_BRIDGE_SITE_CODE: ${OPEN_SOURCE_BRIDGE_SITE_CODE:-open-source}
       OPEN_SOURCE_BRIDGE_SITE_NAME: ${OPEN_SOURCE_BRIDGE_SITE_NAME:-开源版}
       JAVA_TOOL_OPTIONS: "-XX:InitialRAMPercentage=75 -XX:MaxRAMPercentage=75 -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+ParallelRefProcEnabled -XX:+ExitOnOutOfMemoryError"
+      # 临时修复：ApiSliderSolveService 引用 AUTOMATION_SERVICE_URL（application.yml 治本改为 AUTOMATION_BASE_URL 后可移除）
+      AUTOMATION_SERVICE_URL: http://automation:12401
     healthcheck:
       test: ["CMD-SHELL", "curl --fail --silent --show-error http://127.0.0.1:18080/api/ops/readiness | grep -q '\"UP\"'"]
       interval: 15s

@@ -17,10 +17,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.net.http.HttpClient;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -62,8 +64,17 @@ public class ApiSliderSolveService {
 
     @PostConstruct
     void init() {
+        // 强制 HTTP/1.1：automation-service 的 uvicorn（httptools 实现）不支持 h2c 升级，
+        // 默认 JDK HttpClient 会尝试 HTTP/2 升级导致 uvicorn 报
+        // "Unsupported upgrade request" + "Invalid HTTP request received" → 400 Bad Request
+        HttpClient jdkClient = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .build();
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(jdkClient);
+        requestFactory.setReadTimeout(java.time.Duration.ofMillis(solveTimeoutMs));
         this.httpClient = RestClient.builder()
                 .baseUrl(automationBaseUrl)
+                .requestFactory(requestFactory)
                 .build();
     }
 
