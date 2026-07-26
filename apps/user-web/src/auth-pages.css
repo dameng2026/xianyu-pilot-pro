@@ -209,9 +209,9 @@
   padding: 22px 34px 20px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 680px;
-  gap: 52px;
+  gap: 80px;
   align-content: center;
-  align-items: start;
+  align-items: stretch;
   min-height: 0;
 }
 
@@ -247,6 +247,18 @@
   font-size: 20px;
   line-height: 1.78;
   color: #5d6d87;
+}
+
+/* 标题与描述适度缩小，为放大的 3D 插画腾出垂直空间 */
+.auth-copy .auth-hero-title {
+  font-size: clamp(40px, 3.8vw, 62px);
+  line-height: 1.18;
+}
+
+.auth-copy .auth-hero-desc {
+  margin-top: 16px;
+  font-size: 17px;
+  line-height: 1.65;
 }
 
 .auth-feature-row {
@@ -311,7 +323,7 @@
 .auth-visual {
   position: relative;
   margin-top: 22px;
-  height: 440px;
+  height: 560px;
 }
 
 .auth-visual-layer {
@@ -457,9 +469,12 @@
 
 .auth-panel {
   width: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .auth-panel-inner {
+  flex: 1;
   padding: 34px 40px 30px;
   border-radius: 28px;
   background: rgba(255, 255, 255, .9);
@@ -2203,7 +2218,7 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 820px;
+  width: 1025px;
   max-width: 100%;
   aspect-ratio: 640 / 338;
   height: auto;
@@ -2219,7 +2234,7 @@
 }
 
 .auth-visual-security .auth-illustration {
-  width: 720px;
+  width: 900px;
   aspect-ratio: 540 / 340;
 }
 
