@@ -1,9 +1,10 @@
 <template>
   <AuthShell
+    v-if="!isMobile"
     page-key="register"
     title-lead="快速注册，"
     title-accent="开启智能运营"
-    description="创建账号后可使用部署方已启用的管理能力；实际可用功能取决于后台服务与部署配置。"
+    description="XianYuAssistant 闲鱼助手，专为闲鱼商家打造的智能化运营平台，助力商品管理、数据分析与自动化运营，提升效率，增长业绩。"
     legal-description="该页面用于说明 XianYuAssistant 注册、邮箱校验与账号创建相关规则。"
     @navigate="emit('navigate', $event)"
   >
@@ -16,159 +17,283 @@
 
     <div v-if="errorMsg" ref="errorMsgRef" class="form-error" role="alert" aria-live="assertive">{{ errorMsg }}</div>
 
-    <div v-if="authCapabilityLoading" class="auth-capability-card" role="status">
-      <h3>正在确认注册能力</h3>
-      <p>确认完成前不会显示或提交注册表单。</p>
+    <div v-if="authCapabilityLoading" class="auth-capability-note" role="status">
+      正在确认注册能力...
     </div>
-    <div v-else-if="!selfRegistrationCapability.available" class="auth-capability-card unavailable" role="status">
-      <h3>自助注册暂不可用</h3>
-      <p>{{ authUnavailableMessage }}</p>
-      <p v-if="authSupportMessage">{{ authSupportMessage }}</p>
-      <div class="auth-capability-actions">
-        <button v-if="authCapabilityError" type="button" class="auth-text-link" @click="refreshAuthCapabilities">重新检查</button>
-        <button type="button" class="auth-text-link auth-link-strong" @click="emit('navigate', 'login')">返回密码登录</button>
-      </div>
-    </div>
-
-    <template v-else>
-    <div v-if="selfRegistrationCapability.devOnly" class="auth-capability-note development" role="status">
+    <div v-else-if="selfRegistrationCapability.devOnly" class="auth-capability-note development" role="status">
       {{ authCapabilities.securityNotice }}
     </div>
+
     <form class="auth-form" @submit.prevent="submitRegister">
-      <label class="auth-field auth-field-with-action" :class="{ 'has-error': fieldErrors.email }">
-        <AuthIcon class="auth-field-icon" name="mail" />
-        <input
-          v-model.trim="form.email"
-          type="email"
-          autocomplete="email"
-          placeholder="邮箱"
-          aria-invalid="!!fieldErrors.email"
-          @blur="blurEmail"
-        />
-        <button v-if="form.email" type="button" class="auth-clear-btn" @click="form.email = ''">
-          <AuthIcon name="close" />
-        </button>
-      </label>
-      <span v-if="fieldErrors.email" class="auth-field-error">{{ fieldErrors.email }}</span>
-
-      <label class="auth-field auth-field-with-action" :class="{ 'has-error': fieldErrors.emailCode }">
-        <AuthIcon class="auth-field-icon" name="code" />
-        <input
-          v-model.trim="form.emailCode"
-          type="text"
-          maxlength="6"
-          autocomplete="one-time-code"
-          placeholder="邮箱验证码"
-          aria-invalid="!!fieldErrors.emailCode"
-          @blur="blurEmailCode"
-        />
-        <button
-          type="button"
-          class="auth-inline-link auth-inline-link-boxed"
-          :disabled="!emailLoginCapability.available || !emailValid || emailSending || emailCountdown > 0"
-          aria-label="获取注册邮箱验证码"
-          :title="emailValid ? '获取邮箱验证码' : '请输入有效邮箱后获取验证码'"
-          @click="sendEmail"
-        >
-          {{ emailSending ? '发送中...' : emailCountdown > 0 ? `${emailCountdown}s 后重试` : '获取验证码' }}
-        </button>
-      </label>
-      <span v-if="fieldErrors.emailCode" class="auth-field-error">{{ fieldErrors.emailCode }}</span>
-
-      <label class="auth-field auth-field-with-action" :class="{ 'has-error': fieldErrors.password }">
-        <AuthIcon class="auth-field-icon" name="lock" />
-        <input
-          v-model="form.password"
-          :type="showPwd ? 'text' : 'password'"
-          maxlength="32"
-          autocomplete="new-password"
-          placeholder="设置密码（8-32位，字母+数字组合）"
-          aria-invalid="!!fieldErrors.password"
-          @blur="blurPassword"
-        />
-        <button type="button" class="auth-eye-btn" @click="showPwd = !showPwd">
-          <AuthIcon :name="showPwd ? 'eyeOff' : 'eye'" />
-        </button>
-      </label>
-      <span v-if="fieldErrors.password" class="auth-field-error">{{ fieldErrors.password }}</span>
-
-      <label class="auth-field auth-field-with-action" :class="{ 'has-error': fieldErrors.confirmPassword }">
-        <AuthIcon class="auth-field-icon" name="lock" />
-        <input
-          v-model="form.confirmPassword"
-          :type="showConfirmPwd ? 'text' : 'password'"
-          maxlength="32"
-          autocomplete="new-password"
-          placeholder="确认密码"
-          aria-invalid="!!fieldErrors.confirmPassword"
-          @blur="blurConfirmPassword"
-        />
-        <button type="button" class="auth-eye-btn" @click="showConfirmPwd = !showConfirmPwd">
-          <AuthIcon :name="showConfirmPwd ? 'eyeOff' : 'eye'" />
-        </button>
-      </label>
-      <span v-if="fieldErrors.confirmPassword" class="auth-field-error">{{ fieldErrors.confirmPassword }}</span>
-
-      <label class="auth-field">
-        <AuthIcon class="auth-field-icon" name="user" />
-        <input
-          v-model.trim="form.inviteCode"
-          type="text"
-          maxlength="40"
-          placeholder="邀请码（可选）"
-        />
-      </label>
-
-      <div class="auth-agreement">
-        <label class="auth-check auth-check-register auth-check-agreement" :class="{ 'has-error': fieldErrors.agreed }">
-          <input v-model="form.agreed" type="checkbox" :disabled="!legalDocumentsAvailable" @change="blurAgreed" />
-          <span>
-            我已阅读并同意
-            <button type="button" class="auth-text-link" :disabled="!legalConfig.termsUrl" @click="openDoc('用户协议')">《用户协议》</button>
-            和
-            <button type="button" class="auth-text-link" :disabled="!legalConfig.privacyUrl" @click="openDoc('隐私政策')">《隐私政策》</button>
-          </span>
+        <label class="auth-field auth-field-with-action" :class="{ 'has-error': fieldErrors.email }">
+          <AuthIcon class="auth-field-icon" name="mail" />
+          <input
+            v-model.trim="form.email"
+            type="email"
+            autocomplete="email"
+            placeholder="邮箱"
+            aria-invalid="!!fieldErrors.email"
+            @blur="blurEmail"
+          />
+          <button v-if="form.email" type="button" class="auth-clear-btn" @click="form.email = ''">
+            <AuthIcon name="close" />
+          </button>
         </label>
-        <span v-if="fieldErrors.agreed" class="auth-field-error">{{ fieldErrors.agreed }}</span>
-        <p v-if="!legalDocumentsAvailable" class="auth-legal-unavailable" role="status">
-          用户协议或隐私政策链接未配置，当前无法完成注册，请联系部署方。
-        </p>
+        <span v-if="fieldErrors.email" class="auth-field-error">{{ fieldErrors.email }}</span>
+
+        <AuthCaptcha
+          ref="pcRegisterCaptchaRef"
+          v-model="pcRegisterCaptcha"
+          hint="验证通过后才可获取注册验证码"
+        />
+
+        <label class="auth-field auth-field-with-action" :class="{ 'has-error': fieldErrors.emailCode }">
+          <AuthIcon class="auth-field-icon" name="code" />
+          <input
+            v-model.trim="form.emailCode"
+            type="text"
+            maxlength="6"
+            autocomplete="one-time-code"
+            placeholder="邮箱验证码"
+            aria-invalid="!!fieldErrors.emailCode"
+            @blur="blurEmailCode"
+          />
+          <button
+            type="button"
+            class="auth-inline-link auth-inline-link-boxed"
+            :disabled="!emailLoginCapability.available || !emailValid || emailSending || emailCountdown > 0"
+            aria-label="获取注册邮箱验证码"
+            :title="emailValid ? '获取邮箱验证码' : '请输入有效邮箱后获取验证码'"
+            @click="sendEmail"
+          >
+            {{ emailSending ? '发送中...' : emailCountdown > 0 ? `${emailCountdown}s 后重试` : '获取验证码' }}
+          </button>
+        </label>
+        <span v-if="fieldErrors.emailCode" class="auth-field-error">{{ fieldErrors.emailCode }}</span>
+
+        <label class="auth-field auth-field-with-action" :class="{ 'has-error': fieldErrors.password }">
+          <AuthIcon class="auth-field-icon" name="lock" />
+          <input
+            v-model="form.password"
+            :type="showPwd ? 'text' : 'password'"
+            maxlength="32"
+            autocomplete="new-password"
+            placeholder="设置密码（8-32位，字母+数字组合）"
+            aria-invalid="!!fieldErrors.password"
+            @blur="blurPassword"
+          />
+          <button type="button" class="auth-eye-btn" @click="showPwd = !showPwd">
+            <AuthIcon :name="showPwd ? 'eyeOff' : 'eye'" />
+          </button>
+        </label>
+        <span v-if="fieldErrors.password" class="auth-field-error">{{ fieldErrors.password }}</span>
+
+        <label class="auth-field auth-field-with-action" :class="{ 'has-error': fieldErrors.confirmPassword }">
+          <AuthIcon class="auth-field-icon" name="lock" />
+          <input
+            v-model="form.confirmPassword"
+            :type="showConfirmPwd ? 'text' : 'password'"
+            maxlength="32"
+            autocomplete="new-password"
+            placeholder="确认密码"
+            aria-invalid="!!fieldErrors.confirmPassword"
+            @blur="blurConfirmPassword"
+          />
+          <button type="button" class="auth-eye-btn" @click="showConfirmPwd = !showConfirmPwd">
+            <AuthIcon :name="showConfirmPwd ? 'eyeOff' : 'eye'" />
+          </button>
+        </label>
+        <span v-if="fieldErrors.confirmPassword" class="auth-field-error">{{ fieldErrors.confirmPassword }}</span>
+
+        <label class="auth-field">
+          <AuthIcon class="auth-field-icon" name="user" />
+          <input
+            v-model.trim="form.inviteCode"
+            type="text"
+            maxlength="40"
+            placeholder="邀请码（可选）"
+          />
+        </label>
+
+        <div class="auth-agreement">
+          <label class="auth-check auth-check-register auth-check-agreement" :class="{ 'has-error': fieldErrors.agreed }">
+            <input v-model="form.agreed" type="checkbox" :disabled="!legalDocumentsAvailable" @change="blurAgreed" />
+            <span>
+              我已阅读并同意
+              <button type="button" class="auth-text-link" :disabled="!legalConfig.termsUrl" @click="openDoc('用户协议')">《用户协议》</button>
+              和
+              <button type="button" class="auth-text-link" :disabled="!legalConfig.privacyUrl" @click="openDoc('隐私政策')">《隐私政策》</button>
+            </span>
+          </label>
+          <span v-if="fieldErrors.agreed" class="auth-field-error">{{ fieldErrors.agreed }}</span>
+          <p v-if="!legalDocumentsAvailable" class="auth-legal-unavailable" role="status">
+            用户协议或隐私政策链接未配置，当前无法完成注册，请联系部署方。
+          </p>
+        </div>
+
+        <button class="auth-submit" type="submit" :disabled="loading || !legalDocumentsAvailable">
+          {{ loading ? '注册中...' : '立即注册' }}
+        </button>
+      </form>
+
+      <div class="auth-divider">
+        <span></span>
+        <em>其他注册方式</em>
+        <span></span>
       </div>
 
-      <button class="auth-submit" type="submit" :disabled="loading || !selfRegistrationCapability.available || !legalDocumentsAvailable">
-        {{ loading ? '注册中...' : '立即注册' }}
-      </button>
-    </form>
-
-    <div class="auth-divider">
-      <span></span>
-      <em>其他注册方式</em>
-      <span></span>
-    </div>
-
-    <div class="auth-social-grid auth-social-grid--3">
-      <button type="button" class="auth-social-btn" disabled aria-disabled="true" title="微信注册暂未开放">
-        <AuthIcon class="auth-social-icon auth-social-icon-wechat" name="wechat" />
-        <span>微信注册（暂未开放）</span>
-      </button>
-      <button type="button" class="auth-social-btn" disabled aria-disabled="true" title="QQ 注册暂未开放">
-        <AuthIcon class="auth-social-icon auth-social-icon-qq" name="qq" />
-        <span>QQ注册（暂未开放）</span>
-      </button>
-      <button type="button" class="auth-social-btn" @click="emit('navigate', 'login')">
-        <AuthIcon class="auth-social-icon" name="lock" />
-        <span>密码登录</span>
-      </button>
-    </div>
-    </template>
+      <div class="auth-social-grid auth-social-grid--3">
+        <button type="button" class="auth-social-btn" disabled aria-disabled="true" title="微信注册暂未开放">
+          <AuthIcon class="auth-social-icon auth-social-icon-wechat" name="wechat" />
+          <span>微信注册（暂未开放）</span>
+        </button>
+        <button type="button" class="auth-social-btn" disabled aria-disabled="true" title="QQ 注册暂未开放">
+          <AuthIcon class="auth-social-icon auth-social-icon-qq" name="qq" />
+          <span>QQ注册（暂未开放）</span>
+        </button>
+        <button type="button" class="auth-social-btn" @click="emit('navigate', 'login')">
+          <AuthIcon class="auth-social-icon" name="lock" />
+          <span>密码登录</span>
+        </button>
+      </div>
   </AuthShell>
+
+  <MobileAuthShell
+    v-else
+    page-key="register"
+    :hero-title="mobileHeroTitle"
+    :hero-desc="mobileHeroDesc"
+    :heading="mobileHeading"
+    :subheading="mobileSubheading"
+    @navigate="emit('navigate', $event)"
+  >
+    <div v-if="errorMsg" class="mobile-auth-form-error" role="alert" aria-live="assertive">{{ errorMsg }}</div>
+
+    <div v-if="authCapabilityLoading" class="mobile-auth-capability-note" role="status">
+      正在确认注册能力...
+    </div>
+    <div v-else-if="selfRegistrationCapability.devOnly" class="mobile-auth-capability-note development" role="status">
+      {{ authCapabilities.securityNotice }}
+    </div>
+
+    <form class="mobile-auth-form" @submit.prevent="submitRegister">
+        <label class="mobile-auth-field">
+          <span class="mobile-auth-field-icon"><AuthIcon name="mail" /></span>
+          <input
+            v-model.trim="form.email"
+            type="email"
+            autocomplete="email"
+            placeholder="请输入邮箱"
+          />
+        </label>
+
+        <MobileCaptcha
+          ref="registerCaptchaRef"
+          v-model="registerCaptcha"
+          hint="验证通过后才可获取注册验证码"
+        />
+
+        <label class="mobile-auth-field mobile-auth-field--code">
+          <span class="mobile-auth-field-icon"><AuthIcon name="code" /></span>
+          <input
+            v-model.trim="form.emailCode"
+            type="text"
+            maxlength="6"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            placeholder="请输入邮箱验证码"
+          />
+          <button
+            type="button"
+            class="mobile-auth-code-button"
+            :disabled="!emailValid || emailSending || emailCountdown > 0"
+            @click="sendEmail"
+          >
+            {{ emailSending ? '发送中...' : emailCountdown > 0 ? `${emailCountdown}s 后重试` : '获取验证码' }}
+          </button>
+        </label>
+
+        <label class="mobile-auth-field">
+          <span class="mobile-auth-field-icon"><AuthIcon name="lock" /></span>
+          <input
+            v-model="form.password"
+            :type="showPwd ? 'text' : 'password'"
+            maxlength="32"
+            autocomplete="new-password"
+            placeholder="请输入密码（8-32位，字母+数字）"
+          />
+          <button type="button" class="mobile-auth-eye-btn" @click="showPwd = !showPwd">
+            <AuthIcon :name="showPwd ? 'eyeOff' : 'eye'" />
+          </button>
+        </label>
+
+        <label class="mobile-auth-field">
+          <span class="mobile-auth-field-icon"><AuthIcon name="lock" /></span>
+          <input
+            v-model="form.confirmPassword"
+            :type="showConfirmPwd ? 'text' : 'password'"
+            maxlength="32"
+            autocomplete="new-password"
+            placeholder="请再次输入密码"
+          />
+          <button type="button" class="mobile-auth-eye-btn" @click="showConfirmPwd = !showConfirmPwd">
+            <AuthIcon :name="showConfirmPwd ? 'eyeOff' : 'eye'" />
+          </button>
+        </label>
+
+        <label class="mobile-auth-field">
+          <span class="mobile-auth-field-icon"><AuthIcon name="user" /></span>
+          <input
+            v-model.trim="form.inviteCode"
+            type="text"
+            maxlength="40"
+            placeholder="邀请码（可选）"
+          />
+        </label>
+
+        <label class="mobile-auth-agreement">
+          <input v-model="form.agreed" type="checkbox" :disabled="!legalDocumentsAvailable" />
+          <span>
+            我已阅读并同意
+            <button type="button" class="mobile-auth-text-link" :disabled="!legalConfig.termsUrl" @click="openDoc('用户协议')">《用户协议》</button>
+            和
+            <button type="button" class="mobile-auth-text-link" :disabled="!legalConfig.privacyUrl" @click="openDoc('隐私政策')">《隐私政策》</button>
+          </span>
+        </label>
+        <p v-if="!legalDocumentsAvailable" class="mobile-auth-legal-unavailable" role="status">
+          用户协议或隐私政策链接未配置，当前无法完成注册。
+        </p>
+
+        <button
+          class="mobile-auth-primary-button"
+          type="submit"
+          :disabled="loading || !legalDocumentsAvailable"
+        >
+          {{ loading ? '注册中...' : '完成注册' }}
+        </button>
+      </form>
+
+    <template #footer-actions>
+      <div class="mobile-auth-divider"><span>已有账号？</span></div>
+      <button
+        type="button"
+        class="mobile-auth-secondary-button"
+        @click="emit('navigate', 'login')"
+      >
+        返回登录
+      </button>
+    </template>
+  </MobileAuthShell>
 </template>
 
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { register, sendEmailCode } from '../api/auth.js'
 import AuthIcon from '../components/auth/AuthIcon.vue'
+import AuthCaptcha from '../components/auth/AuthCaptcha.vue'
 import AuthShell from '../components/auth/AuthShell.vue'
+import MobileAuthShell from '../components/auth/MobileAuthShell.vue'
+import MobileCaptcha from '../components/auth/MobileCaptcha.vue'
 import { friendlyError } from '../utils/friendlyError.js'
 import { openLegalDoc } from '../components/auth/authContent.js'
 import { hasRequiredLegalDocuments, LEGAL_CONFIG } from '../utils/legalConfig.js'
@@ -211,7 +336,15 @@ const legalConfig = LEGAL_CONFIG
 const legalDocumentsAvailable = hasRequiredLegalDocuments(legalConfig)
 let emailTimer = null
 
-// 字段级失焦校验：用户离开字段时给出即时反馈，避免仅在 submit 时才提示
+// 移动端图形验证码
+const registerCaptchaRef = ref(null)
+const registerCaptcha = ref('')
+
+// PC 端图形验证码
+const pcRegisterCaptchaRef = ref(null)
+const pcRegisterCaptcha = ref('')
+
+// 字段级失焦校验
 const fieldErrors = reactive({
   email: '',
   emailCode: '',
@@ -219,6 +352,17 @@ const fieldErrors = reactive({
   confirmPassword: '',
   agreed: ''
 })
+
+// 移动端检测
+const isMobile = ref(false)
+function updateMobileDetection() {
+  isMobile.value = window.matchMedia?.('(max-width: 900px)').matches || /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+}
+
+const mobileHeroTitle = computed(() => '创建账号')
+const mobileHeroDesc = computed(() => '验证邮箱并设置密码')
+const mobileHeading = computed(() => '邮箱验证码注册')
+const mobileSubheading = computed(() => '完成安全验证后获取邮箱验证码')
 
 function showToast(message, type = 'info') {
   if (typeof window === 'undefined' || !window.dispatchEvent) return
@@ -265,7 +409,6 @@ function blurAgreed() {
 }
 
 function scrollToError() {
-  // 优先滚动到字段级错误，其次滚动到顶部错误条
   const fieldErr = document.querySelector('.auth-field-error')
   if (fieldErr && typeof fieldErr.scrollIntoView === 'function') {
     fieldErr.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -304,10 +447,25 @@ async function sendEmail() {
   if (emailSending.value || emailCountdown.value > 0) return
   errorMsg.value = ''
 
-  if (!selfRegistrationCapability.value.available || !emailLoginCapability.value.available) return
+  // 仅在用户点击「获取验证码」时校验后端 capability，避免阻塞表单显示
+  if (!selfRegistrationCapability.value.available) {
+    errorMsg.value = selfRegistrationCapability.value.reason || '自助注册暂不可用'
+    return
+  }
+  if (!emailLoginCapability.value.available) {
+    errorMsg.value = emailLoginCapability.value.reason || '邮箱验证码服务暂不可用'
+    return
+  }
 
   if (!validateEmail(form.email)) {
     errorMsg.value = '请先输入正确邮箱'
+    return
+  }
+
+  // 图形验证码校验（PC + 移动端）
+  const captchaRef = isMobile.value ? registerCaptchaRef.value : pcRegisterCaptchaRef.value
+  if (captchaRef && !captchaRef.validate()) {
+    errorMsg.value = '请先完成图形验证'
     return
   }
 
@@ -334,8 +492,6 @@ async function sendEmail() {
 }
 
 async function submitRegister() {
-  if (!selfRegistrationCapability.value.available) return
-  // 触发所有字段级校验，让用户在视觉上看到所有缺失项
   blurEmail()
   blurEmailCode()
   blurPassword()
@@ -343,12 +499,19 @@ async function submitRegister() {
   blurAgreed()
   errorMsg.value = validateForm()
   if (errorMsg.value || loading.value) {
-    // 顶部错误条 + 全局 toast 双重提示，确保用户感知到错误
     if (errorMsg.value) {
       showToast(errorMsg.value, 'error')
-      // 下一帧滚动，确保 errorMsg div 已渲染
       requestAnimationFrame(scrollToError)
     }
+    return
+  }
+
+  // 图形验证码校验（PC + 移动端）
+  const captchaRef = isMobile.value ? registerCaptchaRef.value : pcRegisterCaptchaRef.value
+  if (captchaRef && !captchaRef.validate()) {
+    errorMsg.value = '请先完成图形验证'
+    showToast(errorMsg.value, 'error')
+    requestAnimationFrame(scrollToError)
     return
   }
 
@@ -374,9 +537,14 @@ async function submitRegister() {
   }
 }
 
-onMounted(refreshAuthCapabilities)
+onMounted(() => {
+  refreshAuthCapabilities()
+  updateMobileDetection()
+  window.addEventListener('resize', updateMobileDetection, { passive: true })
+})
 
 onUnmounted(() => {
   if (emailTimer) clearInterval(emailTimer)
+  window.removeEventListener('resize', updateMobileDetection)
 })
 </script>

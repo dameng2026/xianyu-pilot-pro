@@ -1,28 +1,25 @@
 <template>
   <AuthShell
+    v-if="!isMobile"
     page-key="login"
     title-lead="让闲鱼运营"
     title-accent="更简单、"
     title-tail="更智能"
-    description="XianYuAssistant 提供账号、商品、消息与自动化工作台；实际可用能力取决于部署配置和后台服务。"
+    description="XianYuAssistant 闲鱼助手，专为闲鱼商家打造的智能化运营平台，助力商品管理、数据分析与自动化运营，提升效率，增长业绩。"
     legal-description="该页面用于说明 XianYuAssistant 登录、身份验证与账号安全相关规则。"
     @navigate="emit('navigate', $event)"
   >
-    <div class="auth-panel-heading auth-panel-heading-tabs">
-      <div class="auth-tabs auth-tabs-split">
-        <button type="button" :class="{ active: tab === 'password' }" @click="switchTab('password')">密码登录</button>
-        <button
-          type="button"
-          :class="{ active: tab === 'email' }"
-          :disabled="!emailLoginCapability.available"
-          :aria-disabled="!emailLoginCapability.available"
-          :title="emailLoginCapability.reason"
-          @click="switchTab('email')"
-        >
-          邮箱验证码登录{{ emailLoginCapability.devOnly ? '（仅本地开发）' : '' }}
-        </button>
-      </div>
-    </div>
+    <nav class="auth-tabs auth-tabs-split" aria-label="登录方式">
+      <button type="button" :class="{ active: tab === 'password' }" @click="switchTab('password')">密码登录</button>
+      <button
+        type="button"
+        :class="{ active: tab === 'email' }"
+        :title="emailLoginCapability.available ? '邮箱验证码登录' : emailLoginCapability.reason"
+        @click="switchTab('email')"
+      >
+        邮箱验证码登录{{ emailLoginCapability.devOnly ? '（仅本地开发）' : '' }}
+      </button>
+    </nav>
 
     <div v-if="authCapabilityLoading" class="auth-capability-note" role="status">
       正在确认当前部署的登录能力，确认前所有提交入口保持关闭。
@@ -48,7 +45,7 @@
             v-model.trim="username"
             type="text"
             autocomplete="username"
-            placeholder="邮箱 / 账号"
+            placeholder="手机号 / 账号"
           />
         </label>
 
@@ -64,6 +61,12 @@
             <AuthIcon :name="showPwd ? 'eyeOff' : 'eye'" />
           </button>
         </label>
+
+        <AuthCaptcha
+          ref="pcPasswordCaptchaRef"
+          v-model="pcPasswordCaptcha"
+          hint="完成图形验证后才会提交登录请求"
+        />
       </template>
 
       <template v-else>
@@ -76,6 +79,12 @@
             placeholder="请输入邮箱"
           />
         </label>
+
+        <AuthCaptcha
+          ref="pcEmailCaptchaRef"
+          v-model="pcEmailCaptcha"
+          hint="验证通过后才可获取邮箱验证码"
+        />
 
         <label class="auth-field auth-field-with-action">
           <AuthIcon class="auth-field-icon" name="code" />
@@ -90,14 +99,13 @@
             type="button"
             class="auth-inline-link auth-inline-link-boxed"
             :disabled="!emailLoginCapability.available || !isEmailValid || emailSending || emailCountdown > 0"
-            aria-describedby="login-email-help"
             :title="isEmailValid ? '获取邮箱验证码' : '请输入有效邮箱后获取验证码'"
             @click="sendEmail"
           >
             {{ emailSending ? '发送中...' : emailCountdown > 0 ? `${emailCountdown}s 后重试` : '获取验证码' }}
           </button>
         </label>
-        <p id="login-email-help" class="auth-field-help">
+        <p class="auth-field-help">
           {{ emailLoginCapability.available
             ? (isEmailValid ? '邮箱格式有效，可以获取验证码。' : '请输入有效的邮箱后获取验证码。')
             : emailLoginCapability.reason }}
@@ -112,8 +120,7 @@
         <button
           type="button"
           class="auth-inline-link"
-          :disabled="!passwordResetCapability.available"
-          :title="passwordResetCapability.reason"
+          :title="passwordResetCapability.available ? '找回密码' : passwordResetCapability.reason"
           @click="emit('navigate', 'forgot-password')"
         >
           忘记密码？
@@ -157,8 +164,7 @@
       <button
         type="button"
         class="auth-text-link auth-link-strong"
-        :disabled="!selfRegistrationCapability.available"
-        :title="selfRegistrationCapability.reason"
+        :title="selfRegistrationCapability.available ? '注册新账号' : selfRegistrationCapability.reason"
         @click="emit('navigate', 'register')"
       >
         <span>立即注册</span>
@@ -181,13 +187,158 @@
       </p>
     </div>
   </AuthShell>
+
+  <MobileAuthShell
+    v-else
+    page-key="login"
+    :hero-title="mobileHeroTitle"
+    :hero-desc="mobileHeroDesc"
+    :heading="mobileHeading"
+    :subheading="mobileSubheading"
+    show-tabs
+    :tabs="mobileTabs"
+    :active-tab="tab"
+    @navigate="emit('navigate', $event)"
+    @tab-change="switchTab"
+  >
+    <div v-if="authCapabilityLoading" class="mobile-auth-capability-note" role="status">
+      正在确认当前部署的登录能力...
+    </div>
+    <div v-else-if="authCapabilityError" class="mobile-auth-capability-note unavailable" role="alert">
+      <span>{{ authCapabilityError }}</span>
+      <button type="button" class="mobile-auth-text-link" @click="refreshAuthCapabilities">重新检查</button>
+    </div>
+
+    <div v-if="errorMsg" class="mobile-auth-form-error" role="alert" aria-live="assertive">{{ errorMsg }}</div>
+
+    <form class="mobile-auth-form" @submit.prevent="handleLogin">
+      <template v-if="tab === 'password'">
+        <label class="mobile-auth-field">
+          <span class="mobile-auth-field-icon"><AuthIcon name="user" /></span>
+          <input
+            v-model.trim="username"
+            type="text"
+            autocomplete="username"
+            placeholder="请输入账号"
+          />
+        </label>
+
+        <label class="mobile-auth-field">
+          <span class="mobile-auth-field-icon"><AuthIcon name="lock" /></span>
+          <input
+            v-model="password"
+            :type="showPwd ? 'text' : 'password'"
+            autocomplete="current-password"
+            placeholder="请输入密码"
+          />
+          <button type="button" class="mobile-auth-eye-btn" @click="showPwd = !showPwd">
+            <AuthIcon :name="showPwd ? 'eyeOff' : 'eye'" />
+          </button>
+        </label>
+
+        <MobileCaptcha
+          ref="passwordCaptchaRef"
+          v-model="passwordCaptcha"
+          hint="完成图形验证后才会提交登录请求"
+        />
+
+        <div class="mobile-auth-form-links mobile-auth-form-links--right">
+          <button
+            type="button"
+            class="mobile-auth-link-button"
+            @click="emit('navigate', 'forgot-password')"
+          >
+            忘记密码？
+          </button>
+        </div>
+      </template>
+
+      <template v-else>
+        <label class="mobile-auth-field">
+          <span class="mobile-auth-field-icon"><AuthIcon name="mail" /></span>
+          <input
+            v-model.trim="email"
+            type="email"
+            autocomplete="email"
+            placeholder="请输入邮箱"
+          />
+        </label>
+
+        <MobileCaptcha
+          ref="emailCaptchaRef"
+          v-model="emailCaptcha"
+          hint="验证通过后才可获取邮箱验证码"
+        />
+
+        <label class="mobile-auth-field mobile-auth-field--code">
+          <span class="mobile-auth-field-icon"><AuthIcon name="code" /></span>
+          <input
+            v-model.trim="emailCode"
+            type="text"
+            maxlength="6"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            placeholder="请输入邮箱验证码"
+          />
+          <button
+            type="button"
+            class="mobile-auth-code-button"
+            :disabled="!isEmailValid || emailSending || emailCountdown > 0"
+            @click="sendEmail"
+          >
+            {{ emailSending ? '发送中...' : emailCountdown > 0 ? `${emailCountdown}s 后重试` : '获取验证码' }}
+          </button>
+        </label>
+
+        <div class="mobile-auth-form-links">
+          <button
+            type="button"
+            class="mobile-auth-link-button"
+            @click="emit('navigate', 'register')"
+          >
+            立即注册
+          </button>
+          <button
+            type="button"
+            class="mobile-auth-link-button"
+            @click="emit('navigate', 'forgot-password')"
+          >
+            忘记密码？
+          </button>
+        </div>
+      </template>
+
+      <button
+        class="mobile-auth-primary-button"
+        type="submit"
+        :disabled="loading || authCapabilityLoading"
+      >
+        {{ loading ? '登录中...' : '立即登录' }}
+      </button>
+    </form>
+
+    <template #footer-actions>
+      <div class="mobile-auth-divider"><span>还没有账号？</span></div>
+      <button
+        type="button"
+        class="mobile-auth-secondary-button"
+        :title="selfRegistrationCapability.available ? '注册新账号' : selfRegistrationCapability.reason"
+        @click="emit('navigate', 'register')"
+      >
+        立即注册
+      </button>
+    </template>
+  </MobileAuthShell>
 </template>
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { login, sendEmailCode } from '../api/auth.js'
 import AuthIcon from '../components/auth/AuthIcon.vue'
+import AuthCaptcha from '../components/auth/AuthCaptcha.vue'
 import AuthShell from '../components/auth/AuthShell.vue'
+import MobileAuthShell from '../components/auth/MobileAuthShell.vue'
+import MobileCaptcha from '../components/auth/MobileCaptcha.vue'
 import { friendlyError } from '../utils/friendlyError.js'
 import { openLegalDoc } from '../components/auth/authContent.js'
 import { hasRequiredLegalDocuments, LEGAL_CONFIG } from '../utils/legalConfig.js'
@@ -226,6 +377,33 @@ const legalConfig = LEGAL_CONFIG
 const legalDocumentsAvailable = hasRequiredLegalDocuments(legalConfig)
 let emailTimer = null
 
+// 移动端图形验证码
+const passwordCaptchaRef = ref(null)
+const emailCaptchaRef = ref(null)
+const passwordCaptcha = ref('')
+const emailCaptcha = ref('')
+
+// PC 端图形验证码
+const pcPasswordCaptchaRef = ref(null)
+const pcEmailCaptchaRef = ref(null)
+const pcPasswordCaptcha = ref('')
+const pcEmailCaptcha = ref('')
+
+// 移动端检测
+const isMobile = ref(false)
+function updateMobileDetection() {
+  isMobile.value = window.matchMedia?.('(max-width: 900px)').matches || /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+}
+
+const mobileHeroTitle = computed(() => tab.value === 'password' ? '欢迎登录' : '邮箱登录')
+const mobileHeroDesc = computed(() => tab.value === 'password' ? '登录后进入工作台' : '输入邮箱并完成安全验证')
+const mobileHeading = computed(() => tab.value === 'password' ? '欢迎登录' : '邮箱登录')
+const mobileSubheading = computed(() => tab.value === 'password' ? '登录后进入工作台' : '输入邮箱并完成安全验证')
+const mobileTabs = computed(() => [
+  { key: 'password', label: '账号登录' },
+  { key: 'email', label: '邮箱登录' }
+])
+
 function openDoc(title) {
   const result = openLegalDoc(title)
   if (!result.opened) errorMsg.value = result.message
@@ -244,7 +422,7 @@ function ensureAgreed() {
 }
 
 function switchTab(nextTab) {
-  if (nextTab === 'email' && !emailLoginCapability.value.available) return
+  // 允许自由切换 tab，仅作为视图切换；表单提交时才校验能力
   tab.value = nextTab
   errorMsg.value = ''
 }
@@ -266,6 +444,12 @@ async function handleLogin() {
       errorMsg.value = '请输入密码'
       return
     }
+    // 图形验证码校验（PC + 移动端）
+    const captchaRef = isMobile.value ? passwordCaptchaRef.value : pcPasswordCaptchaRef.value
+    if (captchaRef && !captchaRef.validate()) {
+      errorMsg.value = '请先完成图形验证'
+      return
+    }
   } else {
     if (!emailLoginCapability.value.available) return
     if (!isEmailValid.value) {
@@ -274,6 +458,12 @@ async function handleLogin() {
     }
     if (!emailCode.value.trim()) {
       errorMsg.value = '请输入邮箱验证码'
+      return
+    }
+    // 图形验证码校验（PC + 移动端）
+    const captchaRef = isMobile.value ? emailCaptchaRef.value : pcEmailCaptchaRef.value
+    if (captchaRef && !captchaRef.validate()) {
+      errorMsg.value = '请先完成图形验证'
       return
     }
   }
@@ -301,10 +491,21 @@ async function sendEmail() {
   if (emailSending.value || emailCountdown.value > 0) return
   errorMsg.value = ''
 
-  if (!emailLoginCapability.value.available) return
+  // 仅在用户点击「获取验证码」时校验后端 capability，避免阻塞表单显示
+  if (!emailLoginCapability.value.available) {
+    errorMsg.value = emailLoginCapability.value.reason || '邮箱验证码服务暂不可用'
+    return
+  }
 
   if (!isEmailValid.value) {
     errorMsg.value = '请先输入正确邮箱'
+    return
+  }
+
+  // 图形验证码校验（PC + 移动端）
+  const captchaRef = isMobile.value ? emailCaptchaRef.value : pcEmailCaptchaRef.value
+  if (captchaRef && !captchaRef.validate()) {
+    errorMsg.value = '请先完成图形验证'
     return
   }
 
@@ -329,9 +530,14 @@ async function sendEmail() {
   }
 }
 
-onMounted(refreshAuthCapabilities)
+onMounted(() => {
+  refreshAuthCapabilities()
+  updateMobileDetection()
+  window.addEventListener('resize', updateMobileDetection, { passive: true })
+})
 
 onUnmounted(() => {
   if (emailTimer) clearInterval(emailTimer)
+  window.removeEventListener('resize', updateMobileDetection)
 })
 </script>

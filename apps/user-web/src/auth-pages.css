@@ -127,6 +127,42 @@
   border: 0;
   background: transparent;
   margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  cursor: pointer;
+}
+
+.auth-brand-mark {
+  width: 210px;
+  height: auto;
+  max-height: 88px;
+  object-fit: contain;
+  display: block;
+  flex-shrink: 0;
+}
+
+.auth-brand-copy {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1;
+}
+
+.auth-brand-copy strong {
+  color: #111a32;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  white-space: nowrap;
+}
+
+.auth-brand-copy small {
+  margin-top: 6px;
+  color: #616f8b;
+  font-size: 14px;
+  font-weight: 400;
+  white-space: nowrap;
 }
 
 .auth-lang-switch {
@@ -170,10 +206,10 @@
   flex: 1;
   width: min(100%, 1560px);
   margin: 0 auto;
-  padding: 18px 28px 16px;
+  padding: 22px 34px 20px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 604px;
-  gap: 44px;
+  grid-template-columns: minmax(0, 1fr) 680px;
+  gap: 52px;
   align-content: center;
   align-items: start;
   min-height: 0;
@@ -185,7 +221,7 @@
 
 .auth-copy h1 {
   margin: 0;
-  font-size: clamp(40px, 3.8vw, 62px);
+  font-size: clamp(48px, 4.6vw, 74px);
   line-height: 1.18;
   font-weight: 800;
   letter-spacing: -.04em;
@@ -206,9 +242,9 @@
 }
 
 .auth-copy p {
-  margin: 18px 0 0;
-  max-width: 660px;
-  font-size: 17px;
+  margin: 20px 0 0;
+  max-width: 720px;
+  font-size: 20px;
   line-height: 1.78;
   color: #5d6d87;
 }
@@ -265,10 +301,17 @@
   font-size: 12px;
 }
 
+.auth-feature-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .auth-visual {
   position: relative;
-  margin-top: 18px;
-  height: 332px;
+  margin-top: 22px;
+  height: 440px;
 }
 
 .auth-visual-layer {
@@ -324,7 +367,7 @@
 }
 
 .auth-visual-security {
-  height: 372px;
+  height: 480px;
 }
 
 .auth-visual-security-phone {
@@ -399,6 +442,13 @@
   font-size: 12px;
 }
 
+.auth-stat-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .auth-stat-divider {
   width: 1px;
   height: 36px;
@@ -410,8 +460,8 @@
 }
 
 .auth-panel-inner {
-  padding: 28px 34px 24px;
-  border-radius: 26px;
+  padding: 34px 40px 30px;
+  border-radius: 28px;
   background: rgba(255, 255, 255, .9);
   border: 1px solid rgba(220, 229, 244, .98);
   box-shadow: 0 28px 72px rgba(35, 83, 160, .12);
@@ -453,12 +503,12 @@
 }
 
 .auth-tabs button {
-  height: 56px;
+  height: 64px;
   padding: 0 6px;
   border: 0;
   background: transparent;
   color: #6a7892;
-  font-size: 17px;
+  font-size: 19px;
   font-weight: 700;
   border-bottom: 3px solid transparent;
 }
@@ -480,14 +530,14 @@
 .auth-field {
   width: 100%;
   min-width: 0;
-  min-height: 62px;
-  border-radius: 16px;
+  min-height: 72px;
+  border-radius: 18px;
   border: 1px solid #dce5f4;
   background: #fff;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 18px;
+  gap: 14px;
+  padding: 0 20px;
   transition: border-color .2s ease, box-shadow .2s ease;
 }
 
@@ -528,7 +578,7 @@
   outline: none;
   background: transparent;
   color: #17284a;
-  font-size: 16px;
+  font-size: 18px;
 }
 
 .auth-field input::placeholder {
@@ -660,6 +710,88 @@
   line-height: 1.6;
 }
 
+/* ==========================================================================
+   PC 版图形验证码组件（AuthCaptcha）
+   ========================================================================== */
+
+.auth-captcha {
+  padding: 14px 16px;
+  border: 1px solid #e4eaf4;
+  border-radius: 14px;
+  background: radial-gradient(circle at 92% 12%, rgba(65, 139, 255, .10), transparent 38%), linear-gradient(180deg, #f9fbff 0%, #f5f8fe 100%);
+}
+
+.auth-captcha.is-verified {
+  border-color: rgba(10, 159, 105, .28);
+  background: linear-gradient(180deg, #f8fffb 0%, #f1fcf7 100%);
+}
+
+.auth-captcha-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.auth-captcha-head span {
+  color: #27416d;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.auth-captcha-head small {
+  color: #8b98b0;
+  font-size: 12px;
+}
+
+.auth-captcha-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 130px;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.auth-field--captcha {
+  min-height: 50px;
+}
+
+.auth-captcha-chip {
+  position: relative;
+  min-height: 50px;
+  border-radius: 12px;
+  border: 1px solid #d9e5fa;
+  background: linear-gradient(180deg, #fff 0%, #f7faff 100%);
+  color: #1f4dd9;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: .18em;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .92);
+  transition: transform .2s ease, border-color .2s ease;
+}
+
+.auth-captcha-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(22, 119, 255, .4);
+}
+
+.auth-captcha-chip.is-refreshing {
+  animation: authCaptchaPulse .35s ease;
+}
+
+.auth-captcha.is-verified .auth-captcha-chip {
+  border-color: rgba(10, 159, 105, .3);
+  background: linear-gradient(180deg, #f0fdf4 0%, #dcfce7 100%);
+  color: #15803d;
+}
+
+@keyframes authCaptchaPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+  100% { transform: scale(1); }
+}
+
 .auth-capability-note,
 .auth-capability-card {
   border: 1px solid #d7e5f8;
@@ -731,12 +863,12 @@
 
 .auth-submit {
   margin-top: 2px;
-  height: 58px;
+  height: 68px;
   border: 0;
-  border-radius: 16px;
+  border-radius: 18px;
   background: linear-gradient(90deg, #0d6cff 0%, #1780ff 100%);
   color: #fff;
-  font-size: 16px;
+  font-size: 19px;
   font-weight: 700;
   letter-spacing: .02em;
   box-shadow: 0 18px 34px rgba(20, 112, 255, .26);
@@ -873,6 +1005,23 @@
 .footer-link {
   color: inherit;
   cursor: pointer;
+}
+
+.auth-footer-link {
+  color: inherit;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.auth-footer-link:disabled {
+  color: #9aa8bb;
+  cursor: not-allowed;
+  text-decoration: none;
 }
 
 .form-success {
@@ -1129,8 +1278,10 @@
     padding: 0 14px;
   }
 
-  .auth-brand .brand-logo {
+  .auth-brand .brand-logo,
+  .auth-brand-mark {
     width: 176px;
+    max-height: 56px;
   }
 
   .auth-lang-switch {
@@ -1201,4 +1352,1469 @@
 .auth-field.has-error {
   border-color: #ff4d4f;
   box-shadow: 0 0 0 4px rgba(255, 77, 79, .12);
+}
+
+/* ==========================================================================
+   移动端认证页（MobileAuthShell）样式
+   基于「登录界面纯html设计/移动版」还原，使用 941px 设计稿 + scale 自适应
+   ========================================================================== */
+
+.mobile-auth-shell {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: #f6f9ff;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+  color: #07133c;
+}
+
+/* 荧光装饰：放在 shell 层级，确保始终位于页面最底部（视口底部或内容底部）
+   原 canvas::after 在缩放后可能小于视口高度，导致荧光出现在内容中间 */
+.mobile-auth-shell::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 120px;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse at 24% 100%, rgba(87, 224, 236, .14), transparent 60%),
+    radial-gradient(ellipse at 76% 100%, rgba(88, 154, 255, .10), transparent 58%);
+}
+
+.mobile-auth-shell,
+.mobile-auth-shell *,
+.mobile-auth-shell *::before,
+.mobile-auth-shell *::after {
+  box-sizing: border-box;
+}
+
+.mobile-auth-shell input {
+  font: inherit;
+}
+
+/* 仅重置没有特定样式的按钮，避免覆盖 primary-button / secondary-button / tab 等的 background、border、font-size
+   原因：`.mobile-auth-shell button` (0,1,1) 优先级高于 `.mobile-auth-primary-button` (0,1,0)，
+   会导致按钮 background 被重置为 none、font-size 被重置为继承值（14px），显示为空白小字按钮 */
+.mobile-auth-shell button:not(.mobile-auth-primary-button):not(.mobile-auth-secondary-button):not(.mobile-auth-tab):not(.mobile-auth-captcha-chip) {
+  font: inherit;
+  border: 0;
+  background: none;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+}
+
+/* ==========================================================================
+   移动端尺寸自适应：根据视口宽高对 941x1672px 设计稿进行 scale
+   - JS 设置 --mobile-auth-scale 变量（无单位数字，如 0.414）
+   - CSS 用 var() 应用 scale 和计算 stage 高度
+   - 注意：scale() 需要无单位数字，不能用 calc(100vw / 941)（返回长度值）
+   - 关键：canvas 必须 overflow: hidden，否则 bg-lower (top:738 + height:1500 = 2238px)
+     会让 canvas scrollH=2238px，缩放后视觉高度 926px > stage 高度 693px，导致 80% 空白
+   ========================================================================== */
+.mobile-auth-stage {
+  position: relative;
+  width: 941px;
+  margin: 0 auto;
+  /* stage 高度 = canvas 高度 * scale，scale 由 JS 设置到 --mobile-auth-scale */
+  height: calc(1672px * var(--mobile-auth-scale, 1));
+  overflow: hidden;
+}
+
+.mobile-auth-canvas {
+  position: relative;
+  width: 941px;
+  /* canvas 固定高度，避免内部 absolute 子元素（bg-lower）撑大 scrollH
+     JS 会根据 card 内容动态调整此高度 */
+  height: 1672px;
+  overflow: hidden;
+  background: #f7f9ff;
+  /* 关键：应用 scale 变换，否则 941px 宽 canvas 会溢出移动端视口 */
+  transform: scale(var(--mobile-auth-scale, 1));
+  transform-origin: top left;
+}
+
+/* 荧光装饰已移至 .mobile-auth-shell::after，确保始终位于页面最底部 */
+
+.mobile-auth-bg-upper,
+.mobile-auth-bg-lower {
+  position: absolute;
+  left: 0;
+  width: 941px;
+  pointer-events: none;
+  user-select: none;
+  image-rendering: -webkit-optimize-contrast;
+}
+
+.mobile-auth-bg-upper {
+  top: 0;
+  height: 1672px;
+}
+
+.mobile-auth-bg-lower {
+  top: 738px;
+  height: 1500px;
+}
+
+.mobile-auth-brand {
+  position: absolute;
+  z-index: 9;
+  left: 32px;
+  top: 24px;
+  width: 560px;
+  height: 100px;
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+}
+
+.mobile-auth-brand-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.mobile-auth-brand-mark {
+  width: 560px;
+  height: auto;
+  max-height: 96px;
+  border-radius: 20px;
+  object-fit: contain;
+  display: block;
+}
+
+.mobile-auth-brand-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  color: #07133c;
+}
+
+.mobile-auth-brand-copy strong {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -.01em;
+  line-height: 1;
+}
+
+.mobile-auth-brand-copy small {
+  font-size: 18px;
+  color: #5d6e91;
+  font-weight: 500;
+}
+
+.mobile-auth-hero {
+  position: absolute;
+  z-index: 5;
+  left: 33px;
+  top: 128px;
+  width: 470px;
+  padding: 0;
+}
+
+.mobile-auth-hero-title {
+  margin: 0;
+  color: #07133c;
+  font-size: 56px;
+  line-height: 1.05;
+  font-weight: 800;
+  letter-spacing: -.02em;
+}
+
+.mobile-auth-hero-desc {
+  margin: 22px 0 0;
+  color: #7c89a4;
+  font-size: 22px;
+  line-height: 1.55;
+}
+
+.mobile-auth-card {
+  position: absolute;
+  z-index: 8;
+  left: 53px;
+  /* card top=760px，位于装饰卡片（mask-card-3/4 bottom=738px）下方 22px，
+     不遮盖任何背景装饰卡片。canvas 高度由 JS fitCanvas 动态扩展。 */
+  top: 760px;
+  width: 824px;
+  border: 1px solid #e2e8f4;
+  border-radius: 30px;
+  background: rgba(255, 255, 255, .985);
+  box-shadow: 0 20px 46px rgba(45, 84, 150, .09);
+  overflow: hidden;
+}
+
+.mobile-auth-tabs {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  height: 84px;
+  border-bottom: 1px solid #e2e8f4;
+  background: linear-gradient(180deg, #fff 0%, #fbfcff 100%);
+}
+
+.mobile-auth-tab {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  color: #60708c;
+  font-size: 28px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color .24s ease, transform .24s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-auth-tab.is-active {
+  color: #1671ff;
+}
+
+.mobile-auth-tab:hover {
+  transform: translateY(-1px);
+}
+
+.mobile-auth-tab:disabled {
+  color: #b3bccd;
+  cursor: not-allowed;
+}
+
+.mobile-auth-tab-indicator {
+  position: absolute;
+  left: calc(25% - 46px);
+  bottom: 0;
+  width: 92px;
+  height: 5px;
+  border-radius: 6px 6px 0 0;
+  background: linear-gradient(90deg, #2970ff, #4b94ff);
+  transition: transform .36s cubic-bezier(.2, .8, .2, 1);
+  pointer-events: none;
+}
+
+.mobile-auth-tabs[data-mode="email"] .mobile-auth-tab-indicator {
+  transform: translateX(412px);
+}
+
+.mobile-auth-heading {
+  padding: 36px 38px 20px;
+}
+
+.mobile-auth-heading h2 {
+  margin: 0;
+  color: #07133c;
+  font-size: 50px;
+  line-height: 1;
+  font-weight: 800;
+}
+
+.mobile-auth-heading p {
+  margin: 18px 0 0;
+  color: #7c89a4;
+  font-size: 22px;
+  line-height: 1.5;
+}
+
+.mobile-auth-panel {
+  padding: 30px 34px 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.mobile-auth-form {
+  display: grid;
+  gap: 18px;
+  margin: 0;
+}
+
+.mobile-auth-field {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 82px;
+  padding: 0 22px;
+  border: 1px solid #dbe3ef;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #fff 0%, #fbfcff 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .85);
+  transition: border-color .24s ease, box-shadow .24s ease, transform .24s ease;
+}
+
+.mobile-auth-field:focus-within {
+  border-color: rgba(22, 113, 255, .38);
+  box-shadow: 0 0 0 4px rgba(22, 113, 255, .08), 0 10px 22px rgba(45, 88, 174, .05);
+  transform: translateY(-1px);
+}
+
+.mobile-auth-field-icon {
+  display: grid;
+  place-items: center;
+  color: #1671ff;
+}
+
+.mobile-auth-field-icon .ui-icon {
+  width: 26px;
+  height: 26px;
+}
+
+.mobile-auth-field input {
+  width: 100%;
+  height: 78px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #465a7d;
+  font-size: 24px;
+}
+
+.mobile-auth-field input::placeholder {
+  color: #a1adbf;
+}
+
+.mobile-auth-field--code {
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+}
+
+/* 移动端图形验证码（human-check）样式 */
+.mobile-auth-human-check {
+  padding: 18px;
+  border: 1px solid #e4eaf4;
+  border-radius: 18px;
+  background: radial-gradient(circle at 92% 12%, rgba(65, 139, 255, .10), transparent 38%),
+              linear-gradient(180deg, #f9fbff 0%, #f5f8fe 100%);
+}
+
+.mobile-auth-human-check.is-verified {
+  border-color: rgba(10, 159, 105, .28);
+  background: linear-gradient(180deg, #f8fffb 0%, #f1fcf7 100%);
+}
+
+.mobile-auth-human-check-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.mobile-auth-human-check-head span {
+  color: #27416d;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.mobile-auth-human-check-head small {
+  color: #8b98b0;
+  font-size: 15px;
+}
+
+.mobile-auth-human-check-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 170px;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.mobile-auth-field--captcha {
+  grid-template-columns: 28px minmax(0, 1fr);
+  min-height: 74px;
+}
+
+.mobile-auth-field--captcha input {
+  height: 70px;
+}
+
+.mobile-auth-captcha-chip {
+  position: relative;
+  min-height: 74px;
+  border-radius: 16px;
+  border: 1px solid #d9e5fa;
+  background: linear-gradient(180deg, #fff 0%, #f7faff 100%);
+  color: #1f4dd9;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: .18em;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .92);
+  transition: transform .2s ease, border-color .2s ease;
+}
+
+.mobile-auth-captcha-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(22, 113, 255, .35);
+}
+
+.mobile-auth-captcha-chip.is-refreshing {
+  animation: mobileAuthCaptchaPulse .35s ease;
+}
+
+.mobile-auth-human-check.is-verified .mobile-auth-captcha-chip {
+  color: #0a9f69;
+  border-color: rgba(10, 159, 105, .32);
+  background: linear-gradient(180deg, #f6fff9 0%, #ecfdf5 100%);
+}
+
+@keyframes mobileAuthCaptchaPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+  100% { transform: scale(1); }
+}
+
+.mobile-auth-eye-btn {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #94a0b8;
+  transition: transform .2s ease, background-color .2s ease, color .2s ease;
+}
+
+.mobile-auth-eye-btn .ui-icon {
+  width: 28px;
+  height: 28px;
+}
+
+.mobile-auth-eye-btn:hover {
+  background: rgba(22, 113, 255, .08);
+  color: #1671ff;
+  transform: scale(1.04);
+}
+
+.mobile-auth-code-button {
+  min-width: 146px;
+  height: 48px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background: rgba(22, 113, 255, .08);
+  color: #1671ff;
+  font-size: 18px;
+  font-weight: 700;
+  transition: background-color .22s ease, transform .22s ease;
+}
+
+.mobile-auth-code-button:hover {
+  background: rgba(22, 113, 255, .12);
+  transform: translateY(-1px);
+}
+
+.mobile-auth-code-button:disabled {
+  background: rgba(154, 166, 189, .12);
+  color: #90a0b8;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.mobile-auth-form-links {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  min-height: 28px;
+}
+
+.mobile-auth-form-links--right {
+  justify-content: flex-end;
+}
+
+.mobile-auth-link-button {
+  color: #1671ff;
+  font-size: 20px;
+  font-weight: 600;
+  transition: opacity .22s ease, transform .22s ease;
+}
+
+.mobile-auth-link-button:hover {
+  opacity: .85;
+  transform: translateX(2px);
+}
+
+.mobile-auth-link-button:disabled {
+  color: #b3bccd;
+  cursor: not-allowed;
+  opacity: .7;
+  transform: none;
+}
+
+.mobile-auth-primary-button,
+.mobile-auth-secondary-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 16px;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 28px;
+  cursor: pointer;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+
+.mobile-auth-primary-button:active {
+  transform: translateY(1px);
+}
+
+.mobile-auth-primary-button {
+  height: 88px;
+  background: linear-gradient(90deg, #156cff 0%, #5d9cff 100%);
+  color: #fff;
+  box-shadow: 0 14px 30px rgba(32, 97, 225, .18);
+}
+
+.mobile-auth-primary-button:disabled {
+  background: linear-gradient(90deg, #b6c6e0 0%, #c8d4ec 100%);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.mobile-auth-secondary-button {
+  height: 78px;
+  background: rgba(255, 255, 255, .96);
+  border: 1.5px solid rgba(22, 113, 255, .46);
+  color: #1671ff;
+}
+
+.mobile-auth-secondary-button:disabled {
+  border-color: rgba(154, 166, 189, .46);
+  color: #90a0b8;
+  cursor: not-allowed;
+}
+
+.mobile-auth-primary-button::before,
+.mobile-auth-secondary-button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 18%, rgba(255, 255, 255, .34) 50%, transparent 82%);
+  transform: translateX(-140%);
+  pointer-events: none;
+}
+
+.mobile-auth-primary-button:hover::before,
+.mobile-auth-secondary-button:hover::before {
+  animation: mobileAuthSweep .8s ease forwards;
+}
+
+.mobile-auth-footer-actions {
+  margin-top: 22px;
+  padding: 0 34px 34px;
+}
+
+.mobile-auth-divider {
+  position: relative;
+  text-align: center;
+  color: #99a6bd;
+  font-size: 18px;
+  margin: 0 0 16px;
+}
+
+.mobile-auth-divider::before,
+.mobile-auth-divider::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: calc(50% - 88px);
+  height: 1px;
+  background: #e1e7f1;
+}
+
+.mobile-auth-divider::before {
+  left: 0;
+}
+
+.mobile-auth-divider::after {
+  right: 0;
+}
+
+.mobile-auth-divider span {
+  padding: 0 12px;
+}
+
+/* pageFooter 已移到 shell 内（canvas 外），样式见下方"移动端尺寸自适应"区块 */
+.mobile-auth-page-footer p {
+  margin: 0;
+  text-align: center;
+  color: #7886a0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.mobile-auth-form-error,
+.mobile-auth-form-success {
+  min-height: 24px;
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+.mobile-auth-form-error {
+  color: #d43d52;
+}
+
+.mobile-auth-form-success {
+  color: #16a34a;
+}
+
+.mobile-auth-capability-note {
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: #f5f9ff;
+  border: 1px solid #d7e5f8;
+  color: #46617f;
+  font-size: 16px;
+  line-height: 1.5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mobile-auth-capability-note.unavailable {
+  border-color: #f2d49b;
+  background: #fff9ed;
+  color: #8b5a0c;
+}
+
+.mobile-auth-capability-note.development {
+  border-color: #c5e6d2;
+  background: #f0fbf4;
+  color: #236a42;
+}
+
+.mobile-auth-text-link {
+  color: #1671ff;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.mobile-auth-text-link:disabled {
+  color: #9aa8bb;
+  cursor: not-allowed;
+}
+
+.mobile-auth-field-help {
+  margin: -6px 2px 0;
+  color: #75849b;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.mobile-auth-agreement {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 4px 2px;
+  color: #46617f;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.mobile-auth-agreement input {
+  width: 22px;
+  height: 22px;
+  margin: 4px 0 0;
+  accent-color: #1671ff;
+  flex: none;
+}
+
+.mobile-auth-agreement .mobile-auth-text-link {
+  font-size: 16px;
+}
+
+.mobile-auth-legal-unavailable {
+  margin: 6px 0 0;
+  color: #9b6a16;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.mobile-auth-safe-tip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #8c9ab0;
+  font-size: 14px;
+  margin-top: 18px;
+}
+
+.mobile-auth-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #1671ff;
+  font-size: 16px;
+  font-weight: 700;
+  margin-top: 12px;
+}
+
+.mobile-auth-back-link .ui-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.mobile-auth-social-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.mobile-auth-social-btn {
+  min-height: 64px;
+  padding: 0 16px;
+  border-radius: 14px;
+  border: 1px solid #dbe3ef;
+  background: #fff;
+  color: #40506d;
+  font-size: 16px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.mobile-auth-social-btn:disabled {
+  cursor: not-allowed;
+  color: #8492a8;
+  background: #f7f9fc;
+  opacity: .78;
+}
+
+.mobile-auth-social-btn .ui-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.mobile-auth-social-icon-wechat {
+  color: #27c267;
+}
+
+.mobile-auth-social-icon-qq {
+  color: #2d78ff;
+}
+
+@keyframes mobileAuthSweep {
+  from { transform: translateX(-140%); }
+  to { transform: translateX(140%); }
+}
+
+/* ==========================================================================
+   移动端尺寸自适应：根据视口宽高对 941x1672px 设计稿进行 scale
+   - JS 设置 --mobile-auth-scale 变量（无单位数字，如 0.414）
+   - CSS 用 var() 应用 scale 和计算 stage 高度
+   - 注意：scale() 需要无单位数字，不能用 calc(100vw / 941)（返回长度值）
+   - 关键：canvas 必须 overflow: hidden，否则 bg-lower (top:738 + height:1500 = 2238px)
+     会让 canvas scrollH=2238px，缩放后视觉高度 926px > stage 高度 693px，导致 80% 空白
+   ========================================================================== */
+
+.mobile-auth-stage {
+  position: relative;
+  width: 941px;
+  margin: 0 auto;
+  /* stage 高度 = 1672px * scale，scale 由 JS 设置到 --mobile-auth-scale */
+  height: calc(1672px * var(--mobile-auth-scale, 1));
+  overflow: hidden;
+}
+
+.mobile-auth-canvas {
+  transform: scale(var(--mobile-auth-scale, 1));
+  transform-origin: top left;
+  /* canvas 固定高度，避免内部 absolute 子元素（bg-lower）撑大 scrollH */
+  height: 1672px;
+  overflow: hidden;
+}
+
+/* pageFooter 移到 shell 内（canvas 外），避免与 card 重叠 */
+.mobile-auth-page-footer {
+  position: relative;
+  width: 100%;
+  padding: 12px 16px 20px;
+  text-align: center;
+  background: rgba(246, 249, 255, .96);
+  z-index: 10;
+}
+
+/* 在视口宽度 >= 941px 时（如平板横屏 / 折叠屏 / 小桌面），让设计稿居中显示 */
+@media (min-width: 941px) {
+  .mobile-auth-shell {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .mobile-auth-stage {
+    width: 941px;
+    margin: 0 auto;
+    height: 1672px;
+  }
+
+  .mobile-auth-canvas {
+    transform: none;
+  }
+}
+
+/* 在视口宽度 < 941px 时，stage 宽度 = 100vw */
+@media (max-width: 940px) {
+  .mobile-auth-stage {
+    width: 100vw;
+  }
+}
+
+/* 极小屏防御：避免横向滚动条 */
+@media (max-width: 360px) {
+  .mobile-auth-shell {
+    overflow-x: hidden;
+  }
+}
+
+/* ==========================================================================
+   PC 版 3D 素材插图尺寸约束
+   原 HTML 设计稿用绝对定位 + 精确尺寸（640x338），Vue 版用相对定位容器
+   此处约束图片在 .auth-visual 容器内自适应，避免过大遮盖其他元素
+   ========================================================================== */
+
+.auth-illustration {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 820px;
+  max-width: 100%;
+  aspect-ratio: 640 / 338;
+  height: auto;
+  max-height: 100%;
+  object-fit: contain;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  filter: drop-shadow(0 18px 30px rgba(14, 91, 219, .12));
+  will-change: transform, opacity, filter;
+  opacity: 0;
+}
+
+.auth-visual-security .auth-illustration {
+  width: 720px;
+  aspect-ratio: 540 / 340;
+}
+
+/* 入场动画结束后让插图可见 */
+.auth-shell.motion-running .auth-illustration {
+  animation: authIllustrationIn 1.18s cubic-bezier(.16, .82, .23, 1) forwards;
+}
+
+/* motion-complete 状态下保持可见，避免持续动画覆盖 forwards 导致插图消失 */
+.auth-shell.motion-complete .auth-illustration {
+  opacity: 1;
+}
+
+@keyframes authIllustrationIn {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) translate3d(-36px, 58px, 0) scale(.82) rotate(-3deg);
+    filter: blur(7px) drop-shadow(0 18px 30px rgba(14, 91, 219, .12));
+  }
+  72% {
+    opacity: 1;
+    transform: translate(-50%, -50%) translate3d(4px, -7px, 0) scale(1.035) rotate(.5deg);
+    filter: blur(0) drop-shadow(0 18px 30px rgba(14, 91, 219, .14));
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) translate3d(0, 0, 0) scale(1) rotate(0deg);
+    filter: drop-shadow(0 18px 30px rgba(14, 91, 219, .12));
+  }
+}
+
+/* 不同页面的入场动画变体（仅 motion-running 阶段生效，motion-complete 后切换为浮动动画） */
+.auth-shell-forgot.motion-running:not(.motion-complete) .auth-illustration {
+  animation-name: authIllustrationInForgot;
+}
+
+.auth-shell-register.motion-running:not(.motion-complete) .auth-illustration {
+  animation-name: authIllustrationInRegister;
+}
+
+@keyframes authIllustrationInForgot {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) translate3d(0, 46px, 0) scale(.68) rotate(-5deg);
+    filter: blur(9px) brightness(1.15);
+  }
+  72% {
+    opacity: 1;
+    transform: translate(-50%, -50%) translate3d(0, -8px, 0) scale(1.045) rotate(.7deg);
+    filter: blur(0) brightness(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) translate3d(0, 0, 0) scale(1) rotate(0deg);
+    filter: brightness(1);
+  }
+}
+
+@keyframes authIllustrationInRegister {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) translate3d(0, 72px, 0) scale(.78) rotate(3deg);
+    filter: blur(7px);
+  }
+  70% {
+    opacity: 1;
+    transform: translate(-50%, -50%) translate3d(0, -10px, 0) scale(1.04) rotate(-.5deg);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) translate3d(0, 0, 0) scale(1) rotate(0deg);
+    filter: blur(0);
+  }
+}
+
+/* ==========================================================================
+   PC 版持续动画系统：复刻原 HTML 设计稿的 motion-complete 机制
+   入场动画结束后（1.8s），由 AuthShell.vue 添加 motion-complete 类触发
+   ========================================================================== */
+
+/* 环境光晕：背景径向渐变光圈呼吸 */
+.auth-shell::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  width: 620px;
+  height: 620px;
+  left: 35px;
+  top: 270px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(61, 137, 255, .15) 0%, rgba(100, 164, 255, .055) 42%, transparent 70%);
+  opacity: 0;
+  transform: scale(.72);
+  pointer-events: none;
+  will-change: opacity, transform;
+}
+
+.auth-shell.motion-complete::after {
+  animation: ambientBloom 7.5s ease-in-out infinite;
+}
+
+.auth-shell-forgot::after {
+  background: radial-gradient(circle, rgba(45, 126, 255, .18) 0%, rgba(88, 158, 255, .06) 44%, transparent 72%);
+}
+
+.auth-shell-register::after {
+  left: 50px;
+  top: 300px;
+}
+
+/* 标题渐变扫光 */
+.auth-title-accent {
+  background: linear-gradient(105deg, #0878ff 8%, #0878ff 43%, #4aa0ff 51%, #0878ff 60%, #0878ff 100%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.auth-shell.motion-complete .auth-title-accent {
+  animation: accentSweep 5.8s ease-in-out infinite 1.2s;
+}
+
+/* 3D 素材插图浮动动画（入场后触发） */
+.auth-shell.motion-complete .motion-float {
+  animation: opsFloat 5.8s ease-in-out infinite;
+}
+
+.auth-shell.motion-complete .motion-float-alt {
+  animation: opsFloatAlt 5.2s ease-in-out infinite;
+}
+
+.auth-shell.motion-complete .motion-register {
+  animation: registerFloat 5.4s ease-in-out infinite;
+}
+
+.auth-shell.motion-complete .motion-secure {
+  animation: secureFloat 5.6s ease-in-out infinite;
+}
+
+/* 安全页：插图浮动时配合外圈光环 */
+.auth-shell-forgot.motion-complete .auth-visual::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -120px;
+  width: 310px;
+  height: 310px;
+  border: 1px solid rgba(42, 128, 255, .12);
+  border-radius: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  animation: securityRing 4.4s ease-out infinite;
+  z-index: 0;
+}
+
+/* ==========================================================================
+   PC 版交互微动画：复刻原 HTML 设计稿的 hover / focus 效果
+   ========================================================================== */
+
+.auth-feature-card {
+  transition: transform .24s cubic-bezier(.2, .8, .25, 1),
+              border-color .24s ease,
+              box-shadow .24s ease,
+              background .24s ease;
+}
+
+.auth-feature-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(91, 154, 255, .34);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .98), rgba(239, 246, 255, .94));
+  box-shadow: 0 12px 30px rgba(57, 111, 197, .10), inset 0 1px 0 #fff;
+}
+
+.auth-feature-card:hover .auth-feature-icon {
+  animation: iconPop .55s cubic-bezier(.2, .85, .28, 1.25);
+}
+
+.auth-field {
+  transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+}
+
+.auth-field:focus-within {
+  transform: translateY(-2px);
+}
+
+.auth-field-icon {
+  transition: color .2s ease, transform .2s ease;
+}
+
+.auth-field:focus-within .auth-field-icon {
+  color: #1677ff;
+  transform: scale(1.06);
+}
+
+/* 主按钮：高光扫过 + hover 抬升 + 点击涟漪 */
+.auth-submit {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  transition: transform .22s cubic-bezier(.2, .8, .25, 1),
+              box-shadow .22s ease,
+              filter .22s ease,
+              background .22s ease;
+}
+
+.auth-submit::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -35% auto -35% -45%;
+  width: 34%;
+  transform: skewX(-20deg);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .34), transparent);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.auth-shell.motion-complete .auth-submit::before {
+  animation: buttonSheen 4.6s ease-in-out infinite 1.6s;
+}
+
+.auth-submit:not(:disabled):hover {
+  transform: translateY(-2px);
+  box-shadow: 0 11px 25px rgba(8, 119, 255, .22);
+  filter: saturate(1.08) brightness(1.025);
+}
+
+.auth-submit:not(:disabled):active {
+  transform: translateY(0) scale(.992);
+}
+
+/* tab 下划线入场 */
+.auth-tabs button.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  border-radius: 3px;
+  background: #1677ff;
+  transform-origin: center;
+  animation: tabUnderline .72s cubic-bezier(.2, .8, .25, 1) both .55s;
+}
+
+.auth-tabs button {
+  position: relative;
+}
+
+/* 社交按钮 hover */
+.auth-social-btn {
+  transition: transform .22s cubic-bezier(.2, .8, .25, 1),
+              border-color .22s ease,
+              box-shadow .22s ease,
+              background .22s ease;
+}
+
+.auth-social-btn:not(:disabled):hover {
+  transform: translateY(-3px);
+  border-color: rgba(72, 145, 255, .35);
+  background: rgba(255, 255, 255, .96);
+  box-shadow: 0 10px 24px rgba(58, 104, 177, .10);
+}
+
+.auth-social-btn:not(:disabled):hover .auth-social-icon {
+  animation: iconPop .52s cubic-bezier(.2, .85, .28, 1.25);
+}
+
+/* 统计卡片 hover */
+.auth-stat-icon {
+  transition: transform .22s ease, background .22s ease;
+}
+
+.auth-stat-item:hover .auth-stat-icon {
+  transform: translateY(-2px) scale(1.07);
+  background: rgba(226, 239, 255, .98);
+}
+
+/* ==========================================================================
+   PC 版所有 keyframes 定义（与原 HTML 设计稿完全一致）
+   ========================================================================== */
+
+@keyframes ambientBloom {
+  0%, 100% { opacity: .38; transform: scale(.84); }
+  50% { opacity: .72; transform: scale(1.08); }
+}
+
+@keyframes accentSweep {
+  0%, 28%, 100% { background-position: 100% 0; }
+  52%, 70% { background-position: 0 0; }
+}
+
+@keyframes iconPop {
+  0% { transform: scale(1) rotate(0); }
+  48% { transform: scale(1.15) rotate(-4deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+
+@keyframes buttonSheen {
+  0%, 64%, 100% { left: -45%; opacity: 0; }
+  72% { opacity: .9; }
+  88% { left: 118%; opacity: 0; }
+}
+
+@keyframes tabUnderline {
+  0% { transform: scaleX(0); opacity: .35; }
+  100% { transform: scaleX(1); opacity: 1; }
+}
+
+@keyframes opsFloat {
+  0%, 100% { transform: translate(-50%, -50%) translate3d(0, 0, 0) rotate(0deg); }
+  40% { transform: translate(-50%, -50%) translate3d(0, -8px, 0) rotate(.28deg); }
+  70% { transform: translate(-50%, -50%) translate3d(2px, -3px, 0) rotate(-.18deg); }
+}
+
+@keyframes opsFloatAlt {
+  0%, 100% { transform: translate(-50%, -50%) translate3d(0, 0, 0) rotate(0deg); }
+  35% { transform: translate(-50%, -50%) translate3d(-3px, -7px, 0) rotate(-.25deg); }
+  72% { transform: translate(-50%, -50%) translate3d(2px, -2px, 0) rotate(.22deg); }
+}
+
+@keyframes registerFloat {
+  0%, 100% { transform: translate(-50%, -50%) translate3d(0, 0, 0) scale(1); }
+  45% { transform: translate(-50%, -50%) translate3d(0, -9px, 0) scale(1.008); }
+  72% { transform: translate(-50%, -50%) translate3d(2px, -3px, 0) scale(1.002); }
+}
+
+@keyframes secureFloat {
+  0%, 100% {
+    transform: translate(-50%, -50%) translate3d(0, 0, 0) scale(1);
+    filter: drop-shadow(0 0 0 rgba(8, 120, 255, 0));
+  }
+  48% {
+    transform: translate(-50%, -50%) translate3d(0, -7px, 0) scale(1.008);
+    filter: drop-shadow(0 10px 16px rgba(8, 120, 255, .10));
+  }
+}
+
+@keyframes securityRing {
+  0% { opacity: 0; transform: translateX(-50%) scale(.62); }
+  28% { opacity: .35; }
+  100% { opacity: 0; transform: translateX(-50%) scale(1.18); }
+}
+
+/* ==========================================================================
+   PC 版入场动画：元素淡入上移（替代原 HTML 的 Web Animations API）
+   .motion-running 类由 AuthShell.vue 在 onMounted 后立即添加
+   ========================================================================== */
+
+.auth-shell.motion-running .auth-brand {
+  animation: authFadeInLeft 720ms cubic-bezier(.22, .8, .28, 1) 40ms both;
+}
+
+.auth-shell.motion-running .auth-lang-switch {
+  animation: authFadeInRight 620ms cubic-bezier(.22, .8, .28, 1) 130ms both;
+}
+
+.auth-shell.motion-running .auth-topbar {
+  animation: authTopbarIn 900ms ease 100ms both;
+}
+
+.auth-shell.motion-running .auth-hero-title {
+  animation: authHeroTitleIn 760ms cubic-bezier(.22, .8, .28, 1) 150ms both;
+}
+
+.auth-shell.motion-running .auth-hero-desc {
+  animation: authHeroDescIn 650ms cubic-bezier(.22, .8, .28, 1) 290ms both;
+}
+
+.auth-shell.motion-running .auth-feature-card {
+  animation: authFeatureIn 580ms cubic-bezier(.2, .9, .25, 1.18) both;
+}
+
+.auth-shell.motion-running .auth-feature-card:nth-child(1) { animation-delay: 410ms; }
+.auth-shell.motion-running .auth-feature-card:nth-child(2) { animation-delay: 505ms; }
+.auth-shell.motion-running .auth-feature-card:nth-child(3) { animation-delay: 600ms; }
+.auth-shell.motion-running .auth-feature-card:nth-child(4) { animation-delay: 695ms; }
+
+.auth-shell.motion-running .auth-stats-card {
+  animation: authStatsIn 880ms cubic-bezier(.18, .78, .26, 1) 180ms both;
+}
+
+.auth-shell.motion-running .auth-stat-item {
+  animation: authStatItemIn 520ms ease both;
+}
+
+.auth-shell.motion-running .auth-stat-item:nth-child(1) { animation-delay: 1070ms; }
+.auth-shell.motion-running .auth-stat-item:nth-child(3) { animation-delay: 1160ms; }
+.auth-shell.motion-running .auth-stat-item:nth-child(5) { animation-delay: 1250ms; }
+
+.auth-shell.motion-running .auth-panel {
+  animation: authPanelIn 880ms cubic-bezier(.18, .78, .26, 1) 180ms both;
+}
+
+/* 表单内容入场（延迟更久，等面板出现） */
+.auth-shell.motion-running .auth-panel-inner > * {
+  animation: authFormItemIn 560ms cubic-bezier(.2, .75, .25, 1) both;
+}
+
+.auth-shell.motion-running .auth-panel-inner > *:nth-child(1) { animation-delay: 490ms; }
+.auth-shell.motion-running .auth-panel-inner > *:nth-child(2) { animation-delay: 562ms; }
+.auth-shell.motion-running .auth-panel-inner > *:nth-child(3) { animation-delay: 634ms; }
+.auth-shell.motion-running .auth-panel-inner > *:nth-child(4) { animation-delay: 706ms; }
+.auth-shell.motion-running .auth-panel-inner > *:nth-child(5) { animation-delay: 778ms; }
+.auth-shell.motion-running .auth-panel-inner > *:nth-child(6) { animation-delay: 850ms; }
+.auth-shell.motion-running .auth-panel-inner > *:nth-child(7) { animation-delay: 922ms; }
+.auth-shell.motion-running .auth-panel-inner > *:nth-child(8) { animation-delay: 994ms; }
+.auth-shell.motion-running .auth-panel-inner > *:nth-child(9) { animation-delay: 1066ms; }
+.auth-shell.motion-running .auth-panel-inner > *:nth-child(10) { animation-delay: 1138ms; }
+
+.auth-shell.motion-running .auth-footer {
+  animation: authFooterIn 680ms ease 1450ms both;
+}
+
+@keyframes authFadeInLeft {
+  from { opacity: 0; transform: translate3d(-22px, -18px, 0) scale(.94); filter: blur(5px); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
+}
+
+@keyframes authFadeInRight {
+  from { opacity: 0; transform: translate3d(18px, -16px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes authTopbarIn {
+  from { border-bottom-color: rgba(124, 142, 172, 0); }
+  to { border-bottom-color: rgba(124, 142, 172, .18); }
+}
+
+@keyframes authHeroTitleIn {
+  from { opacity: 0; transform: translate3d(-58px, 0, 0); filter: blur(8px); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
+}
+
+@keyframes authHeroDescIn {
+  from { opacity: 0; transform: translate3d(-34px, 10px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes authFeatureIn {
+  from { opacity: 0; transform: translate3d(0, 24px, 0) scale(.92); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes authStatsIn {
+  from { opacity: 0; transform: translate3d(72px, 10px, 0) scale(.955); filter: blur(7px); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
+}
+
+@keyframes authStatItemIn {
+  from { opacity: 0; transform: translate3d(0, 24px, 0) scale(.96); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes authPanelIn {
+  from { opacity: 0; transform: translate3d(72px, 10px, 0) scale(.955); filter: blur(7px); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
+}
+
+@keyframes authFormItemIn {
+  from { opacity: 0; transform: translate3d(24px, 18px, 0); filter: blur(3px); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
+}
+
+@keyframes authFooterIn {
+  from { opacity: 0; transform: translate3d(0, 16px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+/* ==========================================================================
+   移动版揭幕动画：复刻原 HTML 设计稿的 reveal-mask 机制
+   8 个 mask 元素覆盖在卡片上方，依次淡出形成"揭幕"效果
+   由 MobileAuthShell.vue 渲染 .mobile-auth-reveal-mask 元素
+   ========================================================================== */
+
+.mobile-auth-reveal-mask {
+  position: absolute;
+  z-index: 6;
+  pointer-events: none;
+  background: linear-gradient(180deg, #f8faff 0%, #f5f8ff 100%);
+  transform-origin: bottom center;
+  animation: mobileRevealMask .62s cubic-bezier(.2, .8, .2, 1) forwards;
+}
+
+.mobile-auth-reveal-mask.mask-brand {
+  left: 32px;
+  top: 24px;
+  width: 560px;
+  height: 100px;
+  border-radius: 20px;
+  /* 永久遮盖背景原图中的原设计 logo，仅显示我们的 brand_004.png */
+  animation: none;
+  opacity: 1;
+  visibility: visible;
+  z-index: 8;
+}
+.mobile-auth-reveal-mask.mask-title { left: 33px; top: 128px; width: 470px; height: 190px; border-radius: 24px; animation-delay: .18s; }
+.mobile-auth-reveal-mask.mask-hero { left: 520px; top: 58px; width: 421px; height: 335px; border-radius: 34px; animation-delay: .32s; }
+.mobile-auth-reveal-mask.mask-section-title { left: 30px; top: 325px; width: 250px; height: 70px; border-radius: 20px; animation-delay: .44s; }
+.mobile-auth-reveal-mask.mask-card { width: 402px; height: 164px; border-radius: 28px; }
+.mobile-auth-reveal-mask.mask-card-1 { left: 50px; top: 391px; animation-delay: .56s; }
+.mobile-auth-reveal-mask.mask-card-2 { left: 475px; top: 391px; animation-delay: .68s; }
+.mobile-auth-reveal-mask.mask-card-3 { left: 50px; top: 574px; animation-delay: .80s; }
+.mobile-auth-reveal-mask.mask-card-4 { left: 475px; top: 574px; animation-delay: .92s; }
+
+@keyframes mobileRevealMask {
+  from { opacity: 1; transform: translateY(0) scaleY(1); }
+  to { opacity: 0; transform: translateY(-8px) scaleY(.94); visibility: hidden; }
+}
+
+/* 移动版 login-card 面板入场 */
+.mobile-auth-card {
+  opacity: 0;
+  transform: translateY(18px);
+  animation: mobilePanelIn .72s cubic-bezier(.2, .8, .2, 1) 1.05s forwards;
+}
+
+@keyframes mobilePanelIn {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 移动版 tab 指示器平滑切换 */
+.mobile-auth-tab-indicator {
+  position: absolute;
+  left: calc(25% - 46px);
+  bottom: 0;
+  width: 92px;
+  height: 5px;
+  border-radius: 6px 6px 0 0;
+  background: linear-gradient(90deg, #2970ff, #4b94ff);
+  transition: transform .36s cubic-bezier(.2, .8, .2, 1);
+  pointer-events: none;
+}
+
+.mobile-auth-tabs[data-mode="email"] .mobile-auth-tab-indicator {
+  transform: translateX(412px);
+}
+
+.mobile-auth-tabs[data-mode="password"] .mobile-auth-tab-indicator {
+  transform: translateX(0);
+}
+
+/* 移动版 field 聚焦微动画 */
+.mobile-auth-field {
+  transition: border-color .24s ease, box-shadow .24s ease, transform .24s ease;
+}
+
+.mobile-auth-field:focus-within {
+  border-color: rgba(22, 113, 255, .38);
+  box-shadow: 0 0 0 4px rgba(22, 113, 255, .08), 0 10px 22px rgba(45, 88, 174, .05);
+  transform: translateY(-1px);
+}
+
+/* 移动版图标按钮 hover */
+.mobile-auth-eye-btn,
+.mobile-auth-code-button {
+  transition: transform .2s ease, background-color .2s ease, color .2s ease;
+}
+
+.mobile-auth-eye-btn:hover,
+.mobile-auth-code-button:not(:disabled):hover {
+  background: rgba(22, 113, 255, .08);
+  color: #1671ff;
+  transform: scale(1.04);
+}
+
+/* ==========================================================================
+   偏好减少动画：尊重用户系统设置
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-shell *,
+  .auth-shell *::before,
+  .auth-shell *::after,
+  .mobile-auth-shell *,
+  .mobile-auth-shell *::before,
+  .mobile-auth-shell *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .auth-illustration,
+  .mobile-auth-card {
+    opacity: 1 !important;
+    transform: none !important;
+    filter: none !important;
+  }
+
+  .mobile-auth-reveal-mask {
+    display: none !important;
+  }
 }

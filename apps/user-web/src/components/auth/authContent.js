@@ -16,6 +16,7 @@ export const authIcons = {
   chevronRight: strokeIcon('<path d="m10 7 5 5-5 5"/>'),
   arrowLeft: strokeIcon('<path d="M19 12H5m6-6-6 6 6 6"/>'),
   user: strokeIcon('<path d="M5 20c1.4-3.7 4.3-5.6 7-5.6s5.6 1.9 7 5.6"/><circle cx="12" cy="8" r="3.5"/>'),
+  mail: strokeIcon('<path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/><path d="m4 7 8 5 8-5"/>'),
   phone: strokeIcon('<rect x="7.2" y="2.6" width="9.6" height="18.8" rx="2.4"/><path d="M10 5.6h4M11.6 18.2h.8"/>'),
   code: strokeIcon('<path d="M12 3 5 6.6V12c0 4.1 2.7 7.9 7 9.2 4.3-1.3 7-5.1 7-9.2V6.6L12 3Z"/><path d="m9.4 12.1 1.8 1.8 3.6-3.8"/>'),
   lock: strokeIcon('<rect x="5.2" y="10.2" width="13.6" height="9.8" rx="2.3"/><path d="M8.4 10.2V7.9a3.6 3.6 0 1 1 7.2 0v2.3"/>'),
@@ -37,9 +38,9 @@ export function getAuthIcon(name) {
 }
 
 export const authStats = [
-  { value: '多账号', label: '集中管理入口', icon: 'user' },
-  { value: '自动化', label: '按配置执行任务', icon: 'check' },
-  { value: '可观测', label: '状态与日志可查看', icon: 'shield' }
+  { value: '50万+', label: '商家信赖之选', icon: 'user' },
+  { value: '1000万+', label: '商品高效管理', icon: 'check' },
+  { value: '99.9%', label: '系统稳定运行', icon: 'shield' }
 ]
 
 export const dashboardVisualLayers = [
@@ -58,20 +59,22 @@ export const securityVisualLayers = [
 ]
 
 export const loginFeatures = [
-  { title: '自动化任务', desc: '能力按部署配置启用', icon: 'robot' },
-  { title: '数据面板', desc: '集中查看可用业务数据', icon: 'chart' },
-  { title: '统一工作台', desc: '管理账号、商品与消息', icon: 'layers' }
+  { title: '智能自动化', desc: '批量操作，解放双手', icon: 'robot' },
+  { title: '数据可视化', desc: '多维洞察，决策更准', icon: 'chart' },
+  { title: '多平台支持', desc: '跨平台管理，高效协同', icon: 'layers' }
 ]
 
 export const registerFeatures = [
-  ...loginFeatures,
-  { title: '账号校验', desc: '按后台策略完成身份校验', icon: 'shield' }
+  { title: '智能自动化', desc: '批量操作，解放双手', icon: 'robot' },
+  { title: '数据可视化', desc: '多维洞察，决策更准', icon: 'chart' },
+  { title: '多平台支持', desc: '跨平台管理，高效协同', icon: 'layers' },
+  { title: '安全稳定', desc: '数据加密，稳定可靠', icon: 'shield' }
 ]
 
 export const forgotFeatures = [
-  { title: '身份校验', desc: '使用已绑定邮箱验证', icon: 'shield' },
-  { title: '密码重置', desc: '校验通过后设置新密码', icon: 'spark' },
-  { title: '状态反馈', desc: '步骤结果在页面明确提示', icon: 'lock' }
+  { title: '安全验证', desc: '多重验证，保障安全', icon: 'shield' },
+  { title: '快速找回', desc: '流程简洁，快速重置', icon: 'spark' },
+  { title: '隐私保护', desc: '数据加密，隐私无忧', icon: 'lock' }
 ]
 
 export function openLegalDoc(title) {

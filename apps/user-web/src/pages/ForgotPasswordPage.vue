@@ -1,5 +1,6 @@
 <template>
   <AuthShell
+    v-if="!isMobile"
     page-key="forgot"
     title-lead="安全找回账号，"
     title-accent="快速恢复登录"
@@ -19,24 +20,13 @@
     <div v-if="error" class="form-error" role="alert" aria-live="assertive">{{ error }}</div>
     <div v-else-if="success" class="form-success" role="status" aria-live="polite">{{ success }}</div>
 
-    <div v-if="authCapabilityLoading" class="auth-capability-card" role="status">
-      <h3>正在确认密码找回能力</h3>
-      <p>确认完成前不会显示或提交密码重置表单。</p>
+    <div v-if="authCapabilityLoading" class="auth-capability-note" role="status">
+      正在确认密码找回能力...
     </div>
-    <div v-else-if="!passwordResetCapability.available" class="auth-capability-card unavailable" role="status">
-      <h3>自助密码找回暂不可用</h3>
-      <p>{{ authUnavailableMessage }}</p>
-      <p v-if="authSupportMessage">{{ authSupportMessage }}</p>
-      <div class="auth-capability-actions">
-        <button v-if="authCapabilityError" type="button" class="auth-text-link" @click="refreshAuthCapabilities">重新检查</button>
-        <button type="button" class="auth-text-link auth-link-strong" @click="emit('navigate', 'login')">返回密码登录</button>
-      </div>
-    </div>
-
-    <template v-else>
-    <div v-if="passwordResetCapability.devOnly" class="auth-capability-note development" role="status">
+    <div v-else-if="passwordResetCapability.devOnly" class="auth-capability-note development" role="status">
       {{ authCapabilities.securityNotice }}
     </div>
+
     <form class="auth-form" @submit.prevent="submitReset">
       <label class="auth-field auth-field-stack">
         <div class="auth-field-row">
@@ -50,6 +40,12 @@
         </div>
         <small>请输入绑定账号的邮箱</small>
       </label>
+
+      <AuthCaptcha
+        ref="pcCaptchaRef"
+        v-model="pcCaptcha"
+        hint="验证通过后才可获取重置验证码"
+      />
 
       <label class="auth-field auth-field-stack">
         <div class="auth-field-row auth-field-with-action">
@@ -65,7 +61,7 @@
           <button
             type="button"
             class="auth-inline-link auth-inline-link-boxed"
-            :disabled="!emailLoginCapability.available || !emailValid || countdown > 0 || sendingCode"
+            :disabled="!emailValid || countdown > 0 || sendingCode"
             :title="emailValid ? '获取邮箱验证码' : '请输入有效邮箱后获取验证码'"
             @click="sendCode"
           >
@@ -151,8 +147,111 @@
       <AuthIcon class="auth-safe-inline" name="shield" />
       <span>密码重置后，您的账号将根据最新凭据重新校验，安全可追溯</span>
     </div>
-    </template>
   </AuthShell>
+
+  <MobileAuthShell
+    v-else
+    page-key="forgot"
+    :hero-title="mobileHeroTitle"
+    :hero-desc="mobileHeroDesc"
+    :heading="mobileHeading"
+    :subheading="mobileSubheading"
+    @navigate="emit('navigate', $event)"
+  >
+    <div v-if="error" class="mobile-auth-form-error" role="alert" aria-live="assertive">{{ error }}</div>
+    <div v-else-if="success" class="mobile-auth-form-success" role="status" aria-live="polite">{{ success }}</div>
+
+    <div v-if="authCapabilityLoading" class="mobile-auth-capability-note" role="status">
+      正在确认密码找回能力...
+    </div>
+    <div v-else-if="passwordResetCapability.devOnly" class="mobile-auth-capability-note development" role="status">
+      {{ authCapabilities.securityNotice }}
+    </div>
+
+    <form class="mobile-auth-form" @submit.prevent="submitReset">
+        <label class="mobile-auth-field">
+          <span class="mobile-auth-field-icon"><AuthIcon name="mail" /></span>
+          <input
+            v-model.trim="form.email"
+            type="email"
+            autocomplete="email"
+            placeholder="请输入注册邮箱"
+          />
+        </label>
+
+        <MobileCaptcha
+          ref="resetCaptchaRef"
+          v-model="resetCaptcha"
+          hint="验证通过后才可获取重置验证码"
+        />
+
+        <label class="mobile-auth-field mobile-auth-field--code">
+          <span class="mobile-auth-field-icon"><AuthIcon name="code" /></span>
+          <input
+            v-model.trim="form.code"
+            type="text"
+            maxlength="6"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            placeholder="请输入邮箱验证码"
+          />
+          <button
+            type="button"
+            class="mobile-auth-code-button"
+            :disabled="!emailLoginCapability.available || !emailValid || countdown > 0 || sendingCode"
+            @click="sendCode"
+          >
+            {{ sendingCode ? '发送中...' : countdown > 0 ? `${countdown}s 后重试` : '获取验证码' }}
+          </button>
+        </label>
+
+        <label class="mobile-auth-field">
+          <span class="mobile-auth-field-icon"><AuthIcon name="lock" /></span>
+          <input
+            v-model="form.newPassword"
+            :type="showNewPwd ? 'text' : 'password'"
+            maxlength="32"
+            autocomplete="new-password"
+            placeholder="请输入新密码"
+          />
+          <button type="button" class="mobile-auth-eye-btn" @click="showNewPwd = !showNewPwd">
+            <AuthIcon :name="showNewPwd ? 'eyeOff' : 'eye'" />
+          </button>
+        </label>
+
+        <label class="mobile-auth-field">
+          <span class="mobile-auth-field-icon"><AuthIcon name="lock" /></span>
+          <input
+            v-model="form.confirmNewPassword"
+            :type="showConfirmPwd ? 'text' : 'password'"
+            maxlength="32"
+            autocomplete="new-password"
+            placeholder="请再次输入新密码"
+          />
+          <button type="button" class="mobile-auth-eye-btn" @click="showConfirmPwd = !showConfirmPwd">
+            <AuthIcon :name="showConfirmPwd ? 'eyeOff' : 'eye'" />
+          </button>
+        </label>
+
+        <button
+          class="mobile-auth-primary-button"
+          type="submit"
+          :disabled="loading || !resetFormValid"
+        >
+          {{ loading ? '重置中...' : '重置密码' }}
+        </button>
+      </form>
+
+    <template #footer-actions>
+      <button
+        type="button"
+        class="mobile-auth-back-link"
+        @click="emit('navigate', 'login')"
+      >
+        ← 返回登录
+      </button>
+    </template>
+  </MobileAuthShell>
 </template>
 
 <script setup>
@@ -160,6 +259,8 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { resetPassword as resetPasswordApi, sendEmailCode, verifyResetCode } from '../api/auth.js'
 import AuthIcon from '../components/auth/AuthIcon.vue'
 import AuthShell from '../components/auth/AuthShell.vue'
+import MobileAuthShell from '../components/auth/MobileAuthShell.vue'
+import MobileCaptcha from '../components/auth/MobileCaptcha.vue'
 import { friendlyError } from '../utils/friendlyError.js'
 import { useAuthCapabilities } from '../utils/useAuthCapabilities.js'
 
@@ -202,6 +303,21 @@ const resetFormValid = computed(() => (
 ))
 let timer = null
 
+// 移动端图形验证码
+const resetCaptchaRef = ref(null)
+const resetCaptcha = ref('')
+
+// 移动端检测
+const isMobile = ref(false)
+function updateMobileDetection() {
+  isMobile.value = window.matchMedia?.('(max-width: 900px)').matches || /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+}
+
+const mobileHeroTitle = computed(() => '找回密码')
+const mobileHeroDesc = computed(() => '验证邮箱后重新设置登录密码')
+const mobileHeading = computed(() => '邮箱找回密码')
+const mobileSubheading = computed(() => '验证身份后重新设置登录密码')
+
 function isEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 }
@@ -227,10 +343,25 @@ async function sendCode() {
   error.value = ''
   success.value = ''
 
-  if (!passwordResetCapability.value.available || !emailLoginCapability.value.available) return
+  // 仅在用户点击「获取验证码」时校验后端 capability，避免阻塞表单显示
+  if (!passwordResetCapability.value.available) {
+    error.value = passwordResetCapability.value.reason || '密码重置服务暂不可用'
+    return
+  }
+  if (!emailLoginCapability.value.available) {
+    error.value = emailLoginCapability.value.reason || '邮箱验证码服务暂不可用'
+    return
+  }
 
   if (!isEmail(form.email.trim())) {
     error.value = '请输入正确的邮箱'
+    return
+  }
+
+  // 图形验证码校验（PC + 移动端）
+  const captchaRef = isMobile.value ? resetCaptchaRef.value : pcCaptchaRef.value
+  if (captchaRef && !captchaRef.validate()) {
+    error.value = '请先完成图形验证'
     return
   }
 
@@ -253,8 +384,6 @@ async function submitReset() {
   error.value = ''
   success.value = ''
 
-  if (!passwordResetCapability.value.available) return
-
   if (!isEmail(form.email.trim())) {
     error.value = '请输入正确的邮箱'
     return
@@ -269,6 +398,13 @@ async function submitReset() {
   }
   if (form.newPassword !== form.confirmNewPassword) {
     error.value = '两次输入的新密码不一致'
+    return
+  }
+
+  // 图形验证码校验（PC + 移动端）
+  const captchaRef = isMobile.value ? resetCaptchaRef.value : pcCaptchaRef.value
+  if (captchaRef && !captchaRef.validate()) {
+    error.value = '请先完成图形验证'
     return
   }
 
@@ -289,9 +425,14 @@ async function submitReset() {
   }
 }
 
-onMounted(refreshAuthCapabilities)
+onMounted(() => {
+  refreshAuthCapabilities()
+  updateMobileDetection()
+  window.addEventListener('resize', updateMobileDetection, { passive: true })
+})
 
 onUnmounted(() => {
   if (timer) clearInterval(timer)
+  window.removeEventListener('resize', updateMobileDetection)
 })
 </script>
