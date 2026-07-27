@@ -88,24 +88,28 @@ public class AiBillingService {
         String modelName = defaultText(first(data, "modelName", "defaultModel", "model_name"), "default");
         String modelType = normalizeModelType(defaultText(first(data, "modelType", "model_type"), inferModelType(moduleKey)));
         String billingMode = normalizeBillingModeInput(first(data, "billingMode", "billing_mode"));
-        BigDecimal inputPrice = nonNegativeMoney(first(data, "inputPricePer1k", "input_price_per_1k"), "输入单价");
-        BigDecimal outputPrice = nonNegativeMoney(first(data, "outputPricePer1k", "output_price_per_1k"), "输出单价");
-        BigDecimal cachedInputPrice = nonNegativeMoney(first(data, "cachedInputPricePer1k", "cached_input_price_per_1k"), "缓存输入单价");
-        BigDecimal perCallPrice = nonNegativeMoney(first(data, "perCallPrice", "per_call_price"), "单次调用价格");
-        String specPriceJson = text(first(data, "specPriceJson", "spec_price_json"));
-        validateSpecPriceJson(specPriceJson);
-        if ("spec".equals(billingMode) && !StringUtils.hasText(specPriceJson)) {
-            throw new BizException(400, "按规格计费时必须配置规格价格");
-        }
-        BigDecimal exchangeRate = nonNegativeMoney(first(data, "tokenExchangeRate", "token_exchange_rate"), "Token 兑换比例");
-        if (exchangeRate.compareTo(BigDecimal.ZERO) <= 0) exchangeRate = DEFAULT_TOKEN_EXCHANGE_RATE;
-        long minChargeToken = nonNegativeLong(first(data, "minChargeToken", "min_charge_token"), "最低扣费 Token");
+        // 提前解析 enabled：模型被禁用时不强制校验规格/价格配置，允许保存禁用状态的配置以便后续重新启用
         Object enabledRaw = first(data, "enabled");
         Integer enabledValue = parseEnabled(enabledRaw);
         if (enabledRaw != null && !String.valueOf(enabledRaw).isBlank() && enabledValue == null) {
             throw new BizException(400, "enabled 仅支持 true/false 或 1/0");
         }
         int enabled = enabledValue == null ? 1 : enabledValue;
+        BigDecimal inputPrice = nonNegativeMoney(first(data, "inputPricePer1k", "input_price_per_1k"), "输入单价");
+        BigDecimal outputPrice = nonNegativeMoney(first(data, "outputPricePer1k", "output_price_per_1k"), "输出单价");
+        BigDecimal cachedInputPrice = nonNegativeMoney(first(data, "cachedInputPricePer1k", "cached_input_price_per_1k"), "缓存输入单价");
+        BigDecimal perCallPrice = nonNegativeMoney(first(data, "perCallPrice", "per_call_price"), "单次调用价格");
+        String specPriceJson = text(first(data, "specPriceJson", "spec_price_json"));
+        // 仅在模型启用时校验规格价格；禁用模型允许清空价格后保存
+        if (enabled == 1) {
+            validateSpecPriceJson(specPriceJson);
+            if ("spec".equals(billingMode) && !StringUtils.hasText(specPriceJson)) {
+                throw new BizException(400, "按规格计费时必须配置规格价格");
+            }
+        }
+        BigDecimal exchangeRate = nonNegativeMoney(first(data, "tokenExchangeRate", "token_exchange_rate"), "Token 兑换比例");
+        if (exchangeRate.compareTo(BigDecimal.ZERO) <= 0) exchangeRate = DEFAULT_TOKEN_EXCHANGE_RATE;
+        long minChargeToken = nonNegativeLong(first(data, "minChargeToken", "min_charge_token"), "最低扣费 Token");
         String remark = text(first(data, "remark"));
         // 计费单位、每张图片成本、每张图片销售 Token。
         String billingUnit = normalizeBillingUnitInput(first(data, "billingUnit", "billing_unit"));
@@ -432,8 +436,8 @@ public class AiBillingService {
         long tokenBalance = number(user.get("token_balance"));
         res.put("tokenBalance", tokenBalance);
         res.put("balance", tokenBalance); // 兼容旧前端字段
-        // 附带通用模型（model-config-general）单次扣费信息，便于前端做"余额是否够单次调用"校验
-        Map<String, Object> generalPricing = generalModelPerCallPricing(UserContext.getTenantId());
+        // 附带通用模型（model-config-general）单次扣费信息，按当前用户 VIP 等级返回
+        Map<String, Object> generalPricing = generalModelPerCallPricing(UserContext.getTenantId(), userId);
         res.putAll(generalPricing);
         return res;
     }
@@ -445,39 +449,37 @@ public class AiBillingService {
      * 若后台未配置或配置为 0，使用默认值；若调用方 tenantId 为空（如内部 API），仅返回默认值。
      */
     public Map<String, Object> generalModelPerCallPricing(Long tenantId) {
-        BigDecimal perCallPrice = BigDecimal.ZERO;
-        BigDecimal exchangeRate = DEFAULT_TOKEN_EXCHANGE_RATE;
-        long tokensPerCallCfg = 0L;
-        String moduleKey = "model-config-general";
+        return generalModelPerCallPricing(tenantId, null);
+    }
+
+    /**
+     * 计算通用模型（model-config-general）的单次扣费信息。
+     * 若 userId 不为空，则按用户 VIP 等级查 ai_model_tier_price；
+     * 否则按普通用户（vip_level=0）查询。
+     */
+    public Map<String, Object> generalModelPerCallPricing(Long tenantId, Long userId) {
+        long perCallTokens = resolveTierTokensPerCall(userId);
+        // 读取上游成本（仅供管理员查看盈亏，不影响扣费）
+        BigDecimal costPerCall = BigDecimal.ZERO;
         try {
             if (tenantId != null) {
                 Map<String, Object> price = jdbcTemplate.queryForList(
-                        "SELECT * FROM ai_model_price_config WHERE deleted=0 AND enabled=1 AND module_key='model-config-general' " +
+                        "SELECT cost_per_call FROM ai_model_price_config WHERE deleted=0 AND enabled=1 AND module_key='model-config-general' " +
                                 "AND (tenant_id IS NULL OR tenant_id=?) ORDER BY CASE WHEN tenant_id IS NULL THEN 1 ELSE 0 END, id DESC LIMIT 1",
                         tenantId).stream().findFirst().orElse(null);
                 if (price != null) {
-                    perCallPrice = decimal(price.get("per_call_price"));
-                    exchangeRate = decimal(price.get("token_exchange_rate"));
-                    if (exchangeRate.compareTo(BigDecimal.ZERO) <= 0) exchangeRate = DEFAULT_TOKEN_EXCHANGE_RATE;
-                    tokensPerCallCfg = number(price.get("tokens_per_call"));
-                    moduleKey = text(price.get("module_key"));
+                    costPerCall = decimal(price.get("cost_per_call"));
                 }
             }
         } catch (Exception e) {
-            log.warn("查询通用模型单次扣费配置失败，使用默认值: {}", e.getMessage());
-        }
-        if (perCallPrice.compareTo(BigDecimal.ZERO) <= 0) perCallPrice = new BigDecimal("0.03");
-        long perCallTokens;
-        if (tokensPerCallCfg > 0) {
-            perCallTokens = tokensPerCallCfg;
-        } else {
-            perCallTokens = perCallPrice.multiply(exchangeRate).setScale(0, RoundingMode.CEILING).longValue();
+            log.warn("查询通用模型上游成本失败: {}", e.getMessage());
         }
         Map<String, Object> res = new LinkedHashMap<>();
-        res.put("perCallPrice", perCallPrice);
-        res.put("tokenExchangeRate", exchangeRate);
+        res.put("perCallPrice", new BigDecimal("0.03"));  // 保留字段以兼容旧前端读取
+        res.put("tokenExchangeRate", DEFAULT_TOKEN_EXCHANGE_RATE);  // 保留字段以兼容旧前端读取
         res.put("perCallTokens", perCallTokens);
-        res.put("moduleKey", moduleKey);
+        res.put("costPerCall", costPerCall);
+        res.put("moduleKey", "model-config-general");
         return res;
     }
 
@@ -650,7 +652,9 @@ public class AiBillingService {
         Map<String, Object> price = findPriceConfig(tenantId, providerName, modelName, modelType);
         if (!StringUtils.hasText(billingMode)) billingMode = defaultText(price.get("billing_mode"), "token");
         // 通用模型（model-config-general）强制按次计费：忽略调用方传入的 billingMode，统一按次扣费
-        if ("model-config-general".equals(price.get("module_key"))) {
+        // 扣费 Token 数由 ai_model_tier_price 按用户 VIP 等级决定，不再走 perCallPrice × tokenExchangeRate 公式
+        boolean isGeneralModel = "model-config-general".equals(price.get("module_key"));
+        if (isGeneralModel) {
             billingMode = "per_call";
         }
         billingMode = normalizeBillingMode(billingMode);
@@ -712,7 +716,10 @@ public class AiBillingService {
         long tokensPerImageCfg = number(price.get("tokens_per_image"));
         long tokensPerCallCfg = number(price.get("tokens_per_call"));
         long chargeTokens = 0;
-        if ("image".equals(modelType) && tokensPerImageCfg > 0) {
+        if (isGeneralModel) {
+            // 通用模型：按用户 VIP 等级查 ai_model_tier_price，与 tokensPerCall/costYuan 解耦
+            chargeTokens = resolveTierTokensPerCall(userId) * imageCount;
+        } else if ("image".equals(modelType) && tokensPerImageCfg > 0) {
             // 生图模型按张直接扣减销售 Token，不依赖兑换比例。
             chargeTokens = tokensPerImageCfg * imageCount;
         } else if ("chat".equals(modelType) && tokensPerCallCfg > 0) {
@@ -843,11 +850,73 @@ public class AiBillingService {
         return config;
     }
 
+    /**
+     * 读取通用模型三档定价配置。
+     * 若某档在表中不存在，使用默认值 3。
+     */
+    public com.xianyu.admin.dto.TierPriceConfigDTO getTierConfig(String moduleKey) {
+        if (!StringUtils.hasText(moduleKey)) moduleKey = "model-config-general";
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT vip_level, tokens_per_call FROM ai_model_tier_price WHERE module_key=?",
+                moduleKey);
+        com.xianyu.admin.dto.TierPriceConfigDTO dto = new com.xianyu.admin.dto.TierPriceConfigDTO();
+        dto.setModuleKey(moduleKey);
+        dto.setNormal(3L);
+        dto.setVip(3L);
+        dto.setSvp(3L);
+        for (Map<String, Object> row : rows) {
+            Long tokens = number(row.get("tokens_per_call"));
+            if (tokens <= 0) tokens = 3L;
+            Integer level = null;
+            Object levelObj = row.get("vip_level");
+            if (levelObj instanceof Number n) level = n.intValue();
+            else if (levelObj != null) {
+                try { level = Integer.parseInt(String.valueOf(levelObj)); } catch (Exception ignored) {}
+            }
+            if (level == null) continue;
+            switch (level) {
+                case 0 -> dto.setNormal(tokens);
+                case 1 -> dto.setVip(tokens);
+                case 2 -> dto.setSvp(tokens);
+            }
+        }
+        return dto;
+    }
+
+    /**
+     * 保存通用模型三档定价配置。
+     * 使用 UPSERT 语义：记录存在则更新，不存在则插入。
+     */
+    @Transactional
+    public com.xianyu.admin.dto.TierPriceConfigDTO saveTierConfig(com.xianyu.admin.dto.TierPriceConfigDTO dto) {
+        String moduleKey = StringUtils.hasText(dto.getModuleKey()) ? dto.getModuleKey() : "model-config-general";
+        upsertTierPrice(moduleKey, 0, dto.getNormal());
+        upsertTierPrice(moduleKey, 1, dto.getVip());
+        upsertTierPrice(moduleKey, 2, dto.getSvp());
+        return getTierConfig(moduleKey);
+    }
+
+    private void upsertTierPrice(String moduleKey, int vipLevel, Long tokens) {
+        long tokensPerCall = (tokens == null || tokens <= 0) ? 3L : tokens;
+        int updated = jdbcTemplate.update(
+                "UPDATE ai_model_tier_price SET tokens_per_call=?, updated_time=NOW() " +
+                        "WHERE module_key=? AND vip_level=?",
+                tokensPerCall, moduleKey, vipLevel);
+        if (updated == 0) {
+            jdbcTemplate.update(
+                    "INSERT INTO ai_model_tier_price(module_key, vip_level, tokens_per_call, created_time, updated_time) " +
+                            "VALUES(?, ?, ?, NOW(), NOW())",
+                    moduleKey, vipLevel, tokensPerCall);
+        }
+    }
+
     private Map<String, Object> findPriceConfig(Long tenantId, String providerName, String modelName, String modelType) {
-        // 通用模型（model-config-general）按 module_key 显式标识，不依赖 provider/model 匹配。
-        // 当调用方传 provider=default, model=default 时，应优先匹配通用模型记录，
-        // 避免误匹配到 model-config-chat 等其他模型（导致走 token 计费而非按次计费）。
-        boolean isGeneralLookup = "default".equals(providerName) && "default".equals(modelName);
+        // 通用模型（model-config-general）按 module_key 显式标识，是平台前台 AI 功能的默认文本模型。
+        // 对 chat 类型查询，应始终优先匹配通用模型记录（按次计费，默认 3 token/次），
+        // 避免误匹配到 model-config-chat 等其他模型（导致走 token 计费或场景定价 20 token/次）。
+        // 参见 .trae/rules/general-model-per-call-billing.md：通用模型必须按次计费，
+        // 前台所有调用通用模型的行为（AI 客服测试、商机改写、工作流润色等）必须按通用模型按次价格扣费。
+        boolean preferGeneral = "chat".equals(modelType);
         List<Object> args = new ArrayList<>();
         String sql = "SELECT * FROM ai_model_price_config WHERE deleted=0 AND enabled=1 AND model_type=? AND (tenant_id IS NULL";
         args.add(modelType);
@@ -855,9 +924,15 @@ public class AiBillingService {
             sql += " OR tenant_id=?";
             args.add(tenantId);
         }
-        sql += ") AND (model_name=? OR model_name='default') AND (provider_name=? OR provider_name='default') " +
+        sql += ") AND (";
+        if (preferGeneral) {
+            // chat 查询：通用模型（module_key=model-config-general）始终纳入候选，
+            // 不受 provider_name/model_name 过滤限制，确保前台调用任意 chat 模型时都能命中通用模型按次计费
+            sql += "module_key='model-config-general' OR ";
+        }
+        sql += "((model_name=? OR model_name='default') AND (provider_name=? OR provider_name='default'))) " +
                 "ORDER BY CASE WHEN tenant_id IS NULL THEN 1 ELSE 0 END, ";
-        if (isGeneralLookup) {
+        if (preferGeneral) {
             sql += "CASE WHEN module_key='model-config-general' THEN 0 ELSE 1 END, ";
         }
         sql += "CASE WHEN model_name=? THEN 0 ELSE 1 END, CASE WHEN provider_name=? THEN 0 ELSE 1 END, id DESC LIMIT 1";
@@ -1236,6 +1311,54 @@ public class AiBillingService {
     private Long parseNullableLong(Object value) {
         if (value == null || String.valueOf(value).isBlank()) return null;
         try { return new BigDecimal(String.valueOf(value)).longValue(); } catch (Exception e) { return null; }
+    }
+
+    /**
+     * 读取用户 VIP 等级。
+     * sys_user.vip_level：0=普通, 1=VIP, 2=SVP
+     * 用户不存在或字段为空时返回 0（普通用户）。
+     */
+    private int resolveUserVipLevel(Long userId) {
+        if (userId == null) return 0;
+        try {
+            Integer level = jdbcTemplate.queryForObject(
+                    "SELECT vip_level FROM sys_user WHERE id=? AND deleted=0",
+                    Integer.class, userId);
+            return level == null ? 0 : level;
+        } catch (Exception e) {
+            log.warn("查询用户 VIP 等级失败, userId={}, 使用普通用户默认值: {}", userId, e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * 读取通用模型（model-config-general）当前用户等级对应的每次扣费 Token 数。
+     * 优先查 ai_model_tier_price；表中无记录时回退到 ai_model_price_config.tokens_per_call；
+     * 仍无记录时使用默认值 3。
+     */
+    private long resolveTierTokensPerCall(Long userId) {
+        int vipLevel = resolveUserVipLevel(userId);
+        try {
+            Long tokens = jdbcTemplate.queryForObject(
+                    "SELECT tokens_per_call FROM ai_model_tier_price " +
+                            "WHERE module_key='model-config-general' AND vip_level=?",
+                    Long.class, vipLevel);
+            if (tokens != null && tokens > 0) return tokens;
+        } catch (Exception e) {
+            log.warn("查询 ai_model_tier_price 失败, vipLevel={}, 使用回退逻辑: {}", vipLevel, e.getMessage());
+        }
+        // 回退：从 ai_model_price_config.tokens_per_call 读取（兼容旧配置）
+        try {
+            Long tokensPerCallCfg = jdbcTemplate.queryForObject(
+                    "SELECT tokens_per_call FROM ai_model_price_config " +
+                            "WHERE deleted=0 AND enabled=1 AND module_key='model-config-general' " +
+                            "ORDER BY id DESC LIMIT 1",
+                    Long.class);
+            if (tokensPerCallCfg != null && tokensPerCallCfg > 0) return tokensPerCallCfg;
+        } catch (Exception ignored) {
+            // 继续走默认值
+        }
+        return 3L;
     }
 
     private BigDecimal money(Object value) {

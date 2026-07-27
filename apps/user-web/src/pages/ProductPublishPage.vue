@@ -196,13 +196,62 @@
         <div class="form-grid">
           <div class="form-row">
             <label>售价（元）</label>
-            <input v-model="form.price" type="number" step="0.01" min="0" placeholder="0.00">
+            <input v-model="form.price" type="number" step="0.01" min="0" placeholder="0.00" :disabled="form.multiSpecEnabled">
           </div>
           <div class="form-row">
             <label>库存</label>
-            <input v-model="form.stock" type="number" placeholder="1">
+            <input v-model="form.stock" type="number" placeholder="1" :disabled="form.multiSpecEnabled">
           </div>
         </div>
+        <div v-if="form.multiSpecEnabled" class="subtle" style="margin-top:4px;font-size:12px">
+          已开启多规格，售价/库存按 SKU 表格填写，此处仅作展示
+        </div>
+      </CardPanel>
+
+      <CardPanel style="margin-top:16px">
+        <template #title>
+          <div class="multispec-card-title">
+            <span class="multispec-card-title-icon" aria-hidden="true">⚙</span>
+            <span>多规格商品</span>
+            <span v-if="isFishShopAccount" class="multispec-account-badge multispec-account-badge-ok">鱼小铺账号</span>
+            <span v-else-if="form.accountId" class="multispec-account-badge multispec-account-badge-warn">普通账号</span>
+            <span v-else class="multispec-account-badge multispec-account-badge-muted">未选择账号</span>
+          </div>
+        </template>
+
+        <!-- 账号状态提示横幅 -->
+        <div v-if="!form.accountId" class="multispec-banner multispec-banner-muted">
+          <span class="multispec-banner-icon" aria-hidden="true">ℹ</span>
+          <span>请先选择闲鱼账号，多规格功能仅鱼小铺账号可用</span>
+        </div>
+        <div v-else-if="!isFishShopAccount" class="multispec-banner multispec-banner-warn">
+          <span class="multispec-banner-icon" aria-hidden="true">⚠</span>
+          <span>当前账号不是鱼小铺，无法开启多规格。如需使用，请切换到鱼小铺账号</span>
+        </div>
+        <div v-else-if="!form.multiSpecEnabled" class="multispec-banner multispec-banner-ok">
+          <span class="multispec-banner-icon" aria-hidden="true">✓</span>
+          <span>当前账号为鱼小铺，可开启多规格商品（最多 2 个规格类型）</span>
+        </div>
+
+        <!-- 多规格开关 -->
+        <div class="auto-delivery-toggle multispec-toggle-row" :class="{ 'multispec-toggle-on': form.multiSpecEnabled }">
+          <div class="auto-delivery-toggle-info">
+            <span class="auto-delivery-title">
+              <span class="multispec-toggle-status-dot" :class="{ 'on': form.multiSpecEnabled }" aria-hidden="true"></span>
+              开启多规格
+            </span>
+            <span class="subtle">开启后可设置规格类型、规格值、规格图片，并自动生成 SKU 笛卡尔积（价格、库存按 SKU 维度填写）</span>
+          </div>
+          <ToggleSwitch :on="form.multiSpecEnabled" @click="toggleMultiSpec" />
+        </div>
+
+        <!-- 多规格编辑器 -->
+        <MultiSpecEditor
+          v-if="form.multiSpecEnabled"
+          v-model="multiSpecData"
+          @upload-spec-image="onUploadSpecImage"
+          @upload-sku-cover="onUploadSkuCover"
+        />
       </CardPanel>
 
       <CardPanel title="自动发货" style="margin-top:16px">
@@ -309,10 +358,12 @@ import CardPanel from '../components/CardPanel.vue'
 import AppButton from '../components/AppButton.vue'
 import ToggleSwitch from '../components/ToggleSwitch.vue'
 import PublishAddressCascader from '../components/PublishAddressCascader.vue'
+import MultiSpecEditor from '../components/MultiSpecEditor.vue'
 import { getLiteAccounts, checkAccountAuth } from '../api/accounts.js'
 import { createGoods, getGoods } from '../api/goods.js'
 import { getDeliverySources, applyDeliverySourceToGoods } from '../api/autoDelivery.js'
 import { publishItem, autoCategory } from '../api/items.js'
+import { publishFishShopItem } from '../api/fishShop.js'
 import { uploadImage, uploadImageFromUrl } from '../api/misc.js'
 import { accountName } from '../utils/format.js'
 import { accountAuthUsable, pickPreferredAccount } from '../utils/accountAuth.js'
@@ -733,6 +784,62 @@ const form = reactive({
   price: '',
   stock: '',
   supportSelfPick: false,
+  multiSpecEnabled: false,  // 多规格开关，默认关闭
+})
+
+// ---- 多规格数据（鱼小铺账号开启多规格时使用） ----
+const multiSpecData = reactive({
+  propertyGroups: [],  // [{propertyName, supportImage, propertyValues: [{propertyValue, propertyValueImg}]}]
+  skuList: [],          // [{price, quantity, propertyList: [{propertyText, valueText}]}]
+})
+
+// 当前所选账号是否为鱼小铺（基于 accounts.value 中账号对象的 fishShopUser 字段判断）
+const isFishShopAccount = computed(() => {
+  const acc = accounts.value.find(a => String(a.id) === String(form.accountId))
+  return !!(acc && acc.fishShopUser)
+})
+
+// 多规格开关切换
+function toggleMultiSpec() {
+  if (!form.multiSpecEnabled) {
+    // 当前关闭，准备开启：必须先校验鱼小铺权限
+    if (!form.accountId) {
+      error.value = '请先选择闲鱼账号'
+      return
+    }
+    if (!isFishShopAccount.value) {
+      error.value = '当前闲鱼账号不支持多规格商品，只有鱼小铺账号可以使用'
+      return
+    }
+    form.multiSpecEnabled = true
+    // 若首次开启且无规格类型，自动添加一个空规格
+    if (multiSpecData.propertyGroups.length === 0) {
+      multiSpecData.propertyGroups.push({
+        propertyName: '',
+        supportImage: false,
+        propertyValues: [{ propertyValue: '', propertyValueImg: '' }],
+      })
+    }
+  } else {
+    // 关闭：清空多规格数据
+    form.multiSpecEnabled = false
+    multiSpecData.propertyGroups = []
+    multiSpecData.skuList = []
+  }
+}
+
+// 切换账号时，若新账号不是鱼小铺，自动关闭多规格
+watch(() => form.accountId, (newId, oldId) => {
+  if (newId === oldId) return
+  if (form.multiSpecEnabled) {
+    const acc = accounts.value.find(a => String(a.id) === String(newId))
+    if (!(acc && acc.fishShopUser)) {
+      form.multiSpecEnabled = false
+      multiSpecData.propertyGroups = []
+      multiSpecData.skuList = []
+      error.value = '已切换到普通账号，多规格已关闭（仅鱼小铺账号可使用多规格）'
+    }
+  }
 })
 
 function displayImageUrl(url) {
@@ -824,6 +931,70 @@ function toggleAutoDelivery() {
       autoDelivery.sourceId = deliverySources.value[0].id
     }
   }
+}
+
+// 多规格：规格图片上传（复用项目已有 uploadImage 能力）
+async function onUploadSpecImage({ pIdx, vIdx }) {
+  if (!form.accountId) {
+    error.value = '请先选择闲鱼账号'
+    return
+  }
+  // 触发文件选择
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'image/jpeg,image/png,image/gif,image/webp'
+  input.onchange = async () => {
+    const file = input.files?.[0]
+    if (!file) return
+    const validationMsg = imageUploadValidationMessage(file)
+    if (validationMsg) {
+      error.value = validationMsg
+      return
+    }
+    try {
+      const res = await uploadImage(form.accountId, file)
+      const url = res?.data?.url
+      if (!url) throw new Error('上传响应格式异常')
+      // 写入到对应的规格值
+      const prop = multiSpecData.propertyGroups[pIdx]
+      if (prop && prop.propertyValues[vIdx]) {
+        prop.propertyValues[vIdx].propertyValueImg = url
+      }
+    } catch (e) {
+      error.value = `规格图片上传失败：${e?.message || '请稍后重试'}`
+    }
+  }
+  input.click()
+}
+
+// 多规格：SKU 封面图上传（复用 uploadImage 能力）
+async function onUploadSkuCover({ sIdx }) {
+  if (!form.accountId) {
+    error.value = '请先选择闲鱼账号'
+    return
+  }
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'image/jpeg,image/png,image/gif,image/webp'
+  input.onchange = async () => {
+    const file = input.files?.[0]
+    if (!file) return
+    const validationMsg = imageUploadValidationMessage(file)
+    if (validationMsg) {
+      error.value = validationMsg
+      return
+    }
+    try {
+      const res = await uploadImage(form.accountId, file)
+      const url = res?.data?.url
+      if (!url) throw new Error('上传响应格式异常')
+      const sku = multiSpecData.skuList[sIdx]
+      if (sku) sku.coverImage = url
+    } catch (e) {
+      error.value = `SKU 封面图上传失败：${e?.message || '请稍后重试'}`
+    }
+  }
+  input.click()
 }
 
 // 发布成功后绑定自动发货货源：查询本地商品按 externalGoodsId 找到内部 id，再调用货源 apply 接口
@@ -1189,19 +1360,63 @@ async function submit() {
     // 构建位置数据（来自本地地址字典三级联动）
     const locationData = normalizePublishAddress(selectedAddress.value)
 
-    // 先发布到闲鱼，成功后再保存到本地数据库，避免发布失败时本地却显示商品
-    const publishRes = await publishItem({
-      xianyuAccountId: Number(form.accountId),
-      title: form.title.slice(0, 30),
-      description: form.description,
-      imageUrls: form.imageUrls,
-      price: finalPrice,
-      stock: finalStock,
-      category: selectedCategoryName.value,
-      freeShipping,
-      supportSelfPick: form.supportSelfPick,
-      location: locationData,
-    })
+    // 分支：鱼小铺账号开启多规格时走 fish-shop/publish，否则走原有 /item/publish
+    let publishRes
+    if (form.multiSpecEnabled && isFishShopAccount.value) {
+      // 多规格发布：构造 itemProperties / itemSkuList 负载
+      const cleanedPropertyGroups = multiSpecData.propertyGroups
+        .map(g => ({
+          propertyName: (g.propertyName || '').trim(),
+          supportImage: !!g.supportImage,
+          propertyValues: (g.propertyValues || [])
+            .map(v => ({
+              propertyValue: (v.propertyValue || '').trim(),
+              propertyValueImg: v.propertyValueImg || '',
+            }))
+            .filter(v => v.propertyValue),
+        }))
+        .filter(g => g.propertyName && g.propertyValues.length > 0)
+
+      const cleanedSkuList = multiSpecData.skuList
+        .map(s => ({
+          price: s.price,
+          quantity: s.quantity,
+          propertyList: (s.propertyList || []).map(p => ({
+            propertyText: p.propertyText,
+            valueText: p.valueText,
+          })),
+          coverImage: s.coverImage || '',
+        }))
+        .filter(s => s.propertyList.length > 0)
+
+      publishRes = await publishFishShopItem({
+        xianyuAccountId: Number(form.accountId),
+        title: form.title.slice(0, 30),
+        description: form.description,
+        imageUrls: form.imageUrls,
+        itemProperties: cleanedPropertyGroups,
+        itemSkuList: cleanedSkuList,
+        shippingMode: shippingMode.value,
+        supportSelfPick: form.supportSelfPick,
+        postFee: shippingMode.value === 'fixed' ? form.price : 0,
+        location: locationData,
+        category: selectedCategoryName.value ? { catName: selectedCategoryName.value } : null,
+      })
+    } else {
+      // 普通发布：使用原有 /item/publish
+      publishRes = await publishItem({
+        xianyuAccountId: Number(form.accountId),
+        title: form.title.slice(0, 30),
+        description: form.description,
+        imageUrls: form.imageUrls,
+        price: finalPrice,
+        stock: finalStock,
+        category: selectedCategoryName.value,
+        freeShipping,
+        supportSelfPick: form.supportSelfPick,
+        location: locationData,
+      })
+    }
 
     if (publishRes && typeof publishRes === 'object' && [0, 200].includes(Number(publishRes.code))) {
       // 发布成功，将闲鱼返回的商品 ID 同步保存到本地数据库
@@ -1786,6 +2001,126 @@ onBeforeUnmount(() => {
   background: #fee2e2;
   border-color: #fca5a5;
 }
+
+/* ---- 多规格商品板块 ---- */
+.multispec-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.multispec-card-title-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+.multispec-account-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  line-height: 1.4;
+}
+.multispec-account-badge-ok {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #86efac;
+}
+.multispec-account-badge-warn {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+}
+.multispec-account-badge-muted {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
+.multispec-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  margin-bottom: 8px;
+  border: 1px solid transparent;
+}
+.multispec-banner-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+}
+.multispec-banner-muted {
+  background: #f8fafc;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+.multispec-banner-muted .multispec-banner-icon {
+  background: #cbd5e1;
+  color: #fff;
+}
+.multispec-banner-warn {
+  background: #fffbeb;
+  color: #92400e;
+  border-color: #fde68a;
+}
+.multispec-banner-warn .multispec-banner-icon {
+  background: #f59e0b;
+  color: #fff;
+}
+.multispec-banner-ok {
+  background: #f0fdf4;
+  color: #166534;
+  border-color: #bbf7d0;
+}
+.multispec-banner-ok .multispec-banner-icon {
+  background: #22c55e;
+  color: #fff;
+}
+.multispec-toggle-row {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #fafafa;
+  transition: all 0.2s;
+}
+.multispec-toggle-row.multispec-toggle-on {
+  border-color: #c4b5fd;
+  background: #f5f3ff;
+  box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.1);
+}
+.multispec-toggle-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d1d5db;
+  margin-right: 4px;
+  vertical-align: middle;
+  transition: all 0.2s;
+}
+.multispec-toggle-status-dot.on {
+  background: #8b5cf6;
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.18);
+}
+
 /* ---- 自动发货板块 ---- */
 .auto-delivery-section {
   display: flex;

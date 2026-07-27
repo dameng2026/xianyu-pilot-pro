@@ -200,6 +200,21 @@ xianyu:
     internal-token: ${INTERNAL_API_TOKEN:dev-only-internal-api-token-change-me-32-chars}
     solve-timeout-ms: 120000
     reconcile-cron: 0 */5 * * * ?
+  # AI 客服自主学习知识库配置
+  ai-cs:
+    kb-learning:
+      enabled: ${KB_LEARNING_ENABLED:true}
+      cron: ${KB_LEARNING_CRON:0 0 2 * * ?}
+      lookback-hours: ${KB_LEARNING_LOOKBACK_HOURS:24}
+      ai-ratio-threshold: ${KB_LEARNING_AI_RATIO:0.6}
+      min-conversation-messages: ${KB_LEARNING_MIN_MSGS:5}
+      max-conversations-per-run: ${KB_LEARNING_MAX_CONVS:500}
+      llm-batch-size: ${KB_LEARNING_LLM_BATCH:5}
+      llm-concurrency: ${KB_LEARNING_LLM_CONCURRENCY:3}
+      auto-approve: ${KB_LEARNING_AUTO_APPROVE:true}
+      top-k-inject: ${KB_LEARNING_TOP_K:3}
+      max-cost-yuan-per-run: ${KB_LEARNING_MAX_COST:50}
+      automation-base-url: ${AUTOMATION_BASE_URL:http://localhost:12401}
 
 ---
 spring:

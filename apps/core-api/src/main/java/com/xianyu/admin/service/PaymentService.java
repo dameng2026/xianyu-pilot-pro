@@ -49,6 +49,13 @@ public class PaymentService {
     private final CookieCryptoService cryptoService;
     private final PaymentCallbackAuditService callbackAuditService;
 
+    /**
+     * 会员充值活动服务（可选依赖）。
+     * 使用字段注入以保持现有测试构造函数兼容；测试中为 null 时活动相关方法自动 no-op。
+     */
+    @Autowired(required = false)
+    private MemberPromotionService promotionService;
+
     @Value("${payment.sandbox.enabled:false}")
     private boolean sandboxModeEnabled;
 
@@ -305,6 +312,17 @@ public class PaymentService {
         if (!StringUtils.hasText(targetType)) targetType = "user_account";
         // VIP 订单的计费周期（month/quarter/year），仅 VIP 分支使用，用于按周期取对应价格并保存到订单
         String vipPeriodType = null;
+        // 活动订单快照字段（仅 vip 订单可能填充）
+        Long activityId = null;
+        Long activityPlanId = null;
+        String activityName = null;
+        long originalPriceCent = 0L;
+        long activityPriceCent = 0L;
+        long discountCent = 0L;
+        int isActivityOrder = 0;
+        int activityRuleVersion = 0;
+        // 前端传入的活动套餐配置ID（可选）：非空表示用户走活动价下单
+        Long requestActivityPlanId = parseNullableLong(first(data, "activityPlanId", "activity_plan_id"));
 
         if ("vip".equals(orderType)) {
             targetType = normalizeSubscriptionTarget(targetType);
@@ -319,6 +337,36 @@ public class PaymentService {
             if (amountCent <= 0) throw new BizException(400, "该套餐未配置" + periodLabel(vipPeriodType) + "价格，请联系管理员");
             if (amountCent > MAX_PAYMENT_AMOUNT_CENT) throw new BizException(503, "会员套餐价格配置超出系统允许范围");
             title = boundedText("会员充值-" + text(plan.get("plan_name")), MAX_TITLE_LENGTH);
+            // 活动订单校验：若前端指定 activityPlanId，则服务端重新校验活动状态、价格、名额
+            if (requestActivityPlanId != null && promotionService != null) {
+                Map<String, Object> preview = promotionService.previewActivityPlan(planId, vipPeriodType);
+                if (!Boolean.TRUE.equals(preview.get("available"))) {
+                    String reason = text(preview.get("reason"));
+                    throw new BizException(400, mapActivityUnavailableReason(reason));
+                }
+                // 严格校验：前端传入的 activityPlanId 必须与服务端查到的一致
+                Long serverActivityPlanId = toLong(preview.get("activityPlanId"));
+                if (!requestActivityPlanId.equals(serverActivityPlanId)) {
+                    throw new BizException(409, "活动信息已变更，请刷新页面后重新下单");
+                }
+                Long serverActivityId = toLong(preview.get("activityId"));
+                long finalPriceCent = toLong(preview.get("finalPriceCent"));
+                long serverOriginalCent = toLong(preview.get("originalPriceCent"));
+                int serverRuleVersion = toInt(preview.get("ruleVersion"));
+                if (finalPriceCent <= 0) throw new BizException(400, "活动价格异常，请刷新后重试");
+                if (finalPriceCent > amountCent) {
+                    throw new BizException(400, "活动价高于套餐原价，请刷新页面后重新下单");
+                }
+                activityId = serverActivityId;
+                activityPlanId = serverActivityPlanId;
+                activityName = text(preview.get("activityName"));
+                originalPriceCent = amountCent; // 套餐正常售价（划线原价）
+                activityPriceCent = finalPriceCent;
+                discountCent = Math.max(0, amountCent - finalPriceCent);
+                isActivityOrder = 1;
+                activityRuleVersion = serverRuleVersion;
+                amountCent = finalPriceCent; // 实际支付价改用活动价
+            }
         } else if ("mall_product".equals(orderType)) {
             targetType = "mall_product";
             targetId = parseNullableLong(first(data, "targetId", "target_id", "productId", "product_id"));
@@ -353,10 +401,26 @@ public class PaymentService {
         LocalDateTime expireAt = LocalDateTime.now().plusMinutes(15);
         Map<String, Object> payPayload = buildPayPayload(orderNo, title, amountCent, paymentMethod, providerType, config, expireAt);
         requireSingleWrite("创建支付订单失败",
-                "INSERT INTO payment_order(tenant_id, user_id, order_no, order_type, target_type, target_id, plan_id, token_plan_id, title, amount_cent, token_amount, payment_method, provider_type, payment_config_id, status, client_ip, qr_content, pay_url, expire_time, created_time, updated_time, deleted, period_type) " +
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,NOW(),NOW(),0,?)",
+                "INSERT INTO payment_order(tenant_id, user_id, order_no, order_type, target_type, target_id, plan_id, token_plan_id, title, amount_cent, token_amount, payment_method, provider_type, payment_config_id, status, client_ip, qr_content, pay_url, expire_time, created_time, updated_time, deleted, period_type, " +
+                        "activity_id, activity_plan_id, activity_name, original_price_cent, activity_price_cent, discount_cent, is_activity_order, quota_preoccupied, activity_rule_version) " +
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,NOW(),NOW(),0,?,?,?,?,?,?,?,?,?,?,0,0,?)",
                 tenantId, userId, orderNo, orderType, targetType, targetId, planId, tokenPlanId, title, amountCent, tokenAmount, paymentMethod, providerType, paymentConfigId,
-                boundedText(clientIp, 80), payPayload.get("qrContent"), payPayload.get("payUrl"), expireAt, vipPeriodType);
+                boundedText(clientIp, 80), payPayload.get("qrContent"), payPayload.get("payUrl"), expireAt, vipPeriodType,
+                activityId, activityPlanId, activityName, originalPriceCent > 0 ? originalPriceCent : null,
+                activityPriceCent > 0 ? activityPriceCent : null, discountCent, isActivityOrder, activityRuleVersion > 0 ? activityRuleVersion : null);
+        // 活动订单：创建订单成功后立即预占名额（事务内）
+        if (isActivityOrder == 1 && activityPlanId != null && promotionService != null) {
+            try {
+                promotionService.preoccupyQuota(activityPlanId, orderNo);
+                // 标记 quota_preoccupied=1（与 INSERT 默认值 0 不同，预占成功后置 1）
+                jdbcTemplate.update("UPDATE payment_order SET quota_preoccupied=1 WHERE order_no=? AND deleted=0", orderNo);
+            } catch (BizException e) {
+                // 名额预占失败：订单已写入但名额未占，需释放订单（标记为已关闭）
+                log.warn("活动订单名额预占失败，关闭订单 orderNo={} activityPlanId={} reason={}", orderNo, activityPlanId, e.getMessage());
+                jdbcTemplate.update("UPDATE payment_order SET status=2, updated_time=NOW() WHERE order_no=? AND status=0 AND deleted=0", orderNo);
+                throw e;
+            }
+        }
         return orderDetail(orderNo);
     }
 
@@ -548,7 +612,7 @@ public class PaymentService {
 
     @Transactional
     public Map<String, Object> closeUserOrder(String orderNo) {
-        Map<String, Object> order = queryOne("SELECT id, user_id, status FROM payment_order WHERE order_no=? AND deleted=0 FOR UPDATE", orderNo);
+        Map<String, Object> order = queryOne("SELECT id, user_id, status, is_activity_order, quota_preoccupied, activity_plan_id, order_no FROM payment_order WHERE order_no=? AND deleted=0 FOR UPDATE", orderNo);
         if (order == null) throw new BizException(404, "支付订单不存在");
         ensureCurrentUserOwnsOrder(order);
         int status = storedStatus(order.get("status"), "支付订单状态");
@@ -556,6 +620,8 @@ public class PaymentService {
         if (status == 0) {
             requireSingleWrite("关闭支付订单失败",
                     "UPDATE payment_order SET status=2, updated_time=NOW() WHERE order_no=? AND status=0 AND deleted=0", orderNo);
+            // 活动订单：用户主动关闭后释放预占名额
+            releaseActivityQuotaIfPreoccupied(order, "user_close");
         }
         return orderDetail(orderNo);
     }
@@ -563,7 +629,7 @@ public class PaymentService {
     @Transactional
     public Map<String, Object> closeBridgeOrder(String orderNo) {
         Map<String, Object> order = queryOne(
-                "SELECT id, status FROM payment_order WHERE order_no=? AND deleted=0 FOR UPDATE",
+                "SELECT id, status, is_activity_order, quota_preoccupied, activity_plan_id, order_no FROM payment_order WHERE order_no=? AND deleted=0 FOR UPDATE",
                 orderNo
         );
         if (order == null) throw new BizException(404, "支付订单不存在");
@@ -572,6 +638,8 @@ public class PaymentService {
         if (status == 0) {
             requireSingleWrite("关闭支付订单失败",
                     "UPDATE payment_order SET status=2, updated_time=NOW() WHERE order_no=? AND status=0 AND deleted=0", orderNo);
+            // 活动订单：关闭后释放预占名额
+            releaseActivityQuotaIfPreoccupied(order, "bridge_close");
         }
         return orderDetail(orderNo);
     }
@@ -607,7 +675,75 @@ public class PaymentService {
         requireSingleWrite("确认支付订单失败",
                 "UPDATE payment_order SET status=1, out_trade_no=COALESCE(?, out_trade_no), paid_time=NOW(), updated_time=NOW() WHERE order_no=? AND status=0 AND deleted=0",
                 StringUtils.hasText(gatewayTransactionId) ? gatewayTransactionId : null, orderNo);
+        // 活动订单：支付成功后确认扣减名额（preoccupied-1, sold+1）。幂等：通过 quota_preoccupied 标志控制。
+        confirmActivityQuotaIfPreoccupied(order);
         return orderDetail(orderNo);
+    }
+
+    /**
+     * 活动订单支付成功后确认扣减名额。
+     * 幂等性：仅当 quota_preoccupied=1 时执行，执行后置 0 防止重复扣减。
+     */
+    private void confirmActivityQuotaIfPreoccupied(Map<String, Object> order) {
+        if (promotionService == null) return;
+        int isActivityOrder = storedStatus(order.getOrDefault("is_activity_order", 0), "活动订单标志");
+        int quotaPreoccupied = storedStatus(order.getOrDefault("quota_preoccupied", 0), "名额预占标志");
+        if (isActivityOrder != 1 || quotaPreoccupied != 1) return;
+        Long activityPlanId = storedNullablePositiveLong(order.get("activity_plan_id"), "活动套餐配置 ID");
+        String orderNo = text(order.get("order_no"));
+        if (activityPlanId == null) {
+            log.warn("活动订单缺少 activity_plan_id，跳过名额确认 orderNo={}", orderNo);
+            return;
+        }
+        try {
+            promotionService.confirmQuota(activityPlanId, orderNo);
+            // 置 quota_preoccupied=0，防止重复扣减（已转为 sold_count）
+            jdbcTemplate.update("UPDATE payment_order SET quota_preoccupied=0 WHERE order_no=? AND deleted=0", orderNo);
+        } catch (Exception e) {
+            // 名额确认失败不阻断支付成功（已发放权益），仅记录日志便于人工核对
+            log.error("活动订单名额确认失败 orderNo={} activityPlanId={} errorType={}", orderNo, activityPlanId, e.getClass().getSimpleName(), e);
+        }
+    }
+
+    /**
+     * 订单关闭/超时时释放活动预占名额。
+     * 幂等性：仅当 quota_preoccupied=1 时执行，执行后置 0 防止重复释放。
+     */
+    private void releaseActivityQuotaIfPreoccupied(Map<String, Object> order, String reason) {
+        if (promotionService == null) return;
+        int isActivityOrder = storedStatus(order.getOrDefault("is_activity_order", 0), "活动订单标志");
+        int quotaPreoccupied = storedStatus(order.getOrDefault("quota_preoccupied", 0), "名额预占标志");
+        if (isActivityOrder != 1 || quotaPreoccupied != 1) return;
+        Long activityPlanId = storedNullablePositiveLong(order.get("activity_plan_id"), "活动套餐配置 ID");
+        String orderNo = text(order.get("order_no"));
+        if (activityPlanId == null) {
+            log.warn("活动订单缺少 activity_plan_id，跳过名额释放 orderNo={}", orderNo);
+            return;
+        }
+        try {
+            promotionService.releaseQuota(activityPlanId, orderNo, reason);
+            jdbcTemplate.update("UPDATE payment_order SET quota_preoccupied=0 WHERE order_no=? AND deleted=0", orderNo);
+        } catch (Exception e) {
+            log.error("活动订单名额释放失败 orderNo={} activityPlanId={} reason={} errorType={}",
+                    orderNo, activityPlanId, reason, e.getClass().getSimpleName(), e);
+        }
+    }
+
+    /**
+     * 将活动不可用原因映射为用户友好提示。
+     */
+    private String mapActivityUnavailableReason(String reason) {
+        if (reason == null) return "活动不可用，请刷新页面后重试";
+        switch (reason) {
+            case "no_activity": return "活动已结束或不存在，请按套餐正常价格下单";
+            case "activity_not_started": return "活动尚未开始，请稍后再试";
+            case "activity_ended": return "活动已结束，请按套餐正常价格下单";
+            case "activity_closed": return "活动已关闭，请按套餐正常价格下单";
+            case "quota_full": return "活动名额已满，请稍后再试或选择其他套餐";
+            case "plan_offline": return "套餐已下架，请选择其他套餐";
+            case "price_invalid": return "活动价格异常，请刷新页面后重新下单";
+            default: return "活动不可用，请刷新页面后重试";
+        }
     }
 
     private void activateVip(Map<String, Object> order, String source) {
@@ -1373,6 +1509,28 @@ public class PaymentService {
     private Long parseNullableLong(Object value) {
         if (value == null || String.valueOf(value).isBlank()) return null;
         return requireWholeNumber(value, "ID", 1, Long.MAX_VALUE);
+    }
+
+    /** 安全转 Long（null/空/异常返回 null），用于解析 preview 返回的不确定字段。 */
+    private Long toLong(Object value) {
+        if (value == null || String.valueOf(value).isBlank()) return null;
+        try {
+            if (value instanceof Number n) return n.longValue();
+            return new BigDecimal(String.valueOf(value).trim()).longValueExact();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** 安全转 int（null/空/异常返回 0），用于解析 preview 返回的不确定字段。 */
+    private int toInt(Object value) {
+        if (value == null || String.valueOf(value).isBlank()) return 0;
+        try {
+            if (value instanceof Number n) return n.intValue();
+            return new BigDecimal(String.valueOf(value).trim()).intValueExact();
+        } catch (RuntimeException e) {
+            return 0;
+        }
     }
 
     private long requireWholeNumber(Object value, String field, long min, long max) {

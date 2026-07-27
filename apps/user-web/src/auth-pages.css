@@ -204,12 +204,12 @@
 
 .auth-main {
   flex: 1;
-  width: min(100%, 1560px);
+  width: min(100%, 1820px);
   margin: 0 auto;
-  padding: 22px 34px 20px;
+  padding: 22px 40px 20px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 680px;
-  gap: 80px;
+  grid-template-columns: minmax(0, 1fr) 640px;
+  gap: 140px;
   align-content: center;
   align-items: stretch;
   min-height: 0;
@@ -217,6 +217,8 @@
 
 .auth-showcase {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .auth-copy h1 {
@@ -251,14 +253,14 @@
 
 /* 标题与描述适度缩小，为放大的 3D 插画腾出垂直空间 */
 .auth-copy .auth-hero-title {
-  font-size: clamp(40px, 3.8vw, 62px);
+  font-size: clamp(34px, 3.2vw, 52px);
   line-height: 1.18;
 }
 
 .auth-copy .auth-hero-desc {
-  margin-top: 16px;
-  font-size: 17px;
-  line-height: 1.65;
+  margin-top: 14px;
+  font-size: 15px;
+  line-height: 1.6;
 }
 
 .auth-feature-row {
@@ -322,8 +324,9 @@
 
 .auth-visual {
   position: relative;
-  margin-top: 22px;
-  height: 560px;
+  margin-top: 10px;
+  flex: 1;
+  min-height: 220px;
 }
 
 .auth-visual-layer {
@@ -379,7 +382,7 @@
 }
 
 .auth-visual-security {
-  height: 480px;
+  min-height: 200px;
 }
 
 .auth-visual-security-phone {
@@ -475,11 +478,14 @@
 
 .auth-panel-inner {
   flex: 1;
+  display: flex;
+  flex-direction: column;
   padding: 34px 40px 30px;
   border-radius: 28px;
   background: rgba(255, 255, 255, .9);
   border: 1px solid rgba(220, 229, 244, .98);
   box-shadow: 0 28px 72px rgba(35, 83, 160, .12);
+  min-height: 720px;
 }
 
 .auth-panel-heading {
@@ -1090,7 +1096,7 @@
   .auth-visual,
   .auth-visual-security {
     margin-top: 10px;
-    height: 292px;
+    min-height: 180px;
   }
 
   .auth-visual-chart-left {
@@ -1137,6 +1143,7 @@
   .auth-panel-inner {
     padding: 22px 24px 20px;
     border-radius: 24px;
+    min-height: 620px;
   }
 
   .auth-panel-heading {
@@ -1266,6 +1273,7 @@
   .auth-panel-inner {
     padding: 26px 20px 24px;
     border-radius: 22px;
+    min-height: 0;
   }
 
   .auth-tabs,
@@ -2218,7 +2226,7 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 1025px;
+  width: 1280px;
   max-width: 100%;
   aspect-ratio: 640 / 338;
   height: auto;
@@ -2234,7 +2242,7 @@
 }
 
 .auth-visual-security .auth-illustration {
-  width: 900px;
+  width: 1120px;
   aspect-ratio: 540 / 340;
 }
 

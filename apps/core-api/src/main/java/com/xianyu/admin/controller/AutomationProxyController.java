@@ -1087,6 +1087,66 @@ public class AutomationProxyController {
         }
     }
 
+    /**
+     * 鱼小铺多规格商品发布。
+     * 仅用于鱼小铺账号 + 多规格商品，普通账号请继续使用 /item/publish。
+     * 后端权限校验（鱼小铺账号判断、商品归属）由 Python 端 /api/fish-shop/publish 完成。
+     */
+    @PostMapping("/fish-shop/publish")
+    public Result<Object> fishShopPublish(@RequestBody(required = false) Map<String, Object> body) {
+        if (body == null) body = new java.util.LinkedHashMap<>();
+        injectTenantId(body);
+        try {
+            return Result.ok(automationClient.postInternalForDataOrThrow("/api/fish-shop/publish", body));
+        } catch (Exception ex) {
+            if (ex instanceof BizException bizException) throw bizException;
+            log.error("鱼小铺多规格发布失败, errorType={}, message={}",
+                    ex.getClass().getSimpleName(),
+                    ex.getMessage() == null ? "" : ex.getMessage().replaceAll("[\\r\\n]+", " "));
+            throw new BizException(503, "鱼小铺多规格商品暂时无法发布，请稍后重试");
+        }
+    }
+
+    /**
+     * 鱼小铺多规格商品编辑。
+     * 必须携带 itemId，且商品必须归属当前账号。
+     * 后端权限校验由 Python 端 /api/fish-shop/edit 完成。
+     */
+    @PostMapping("/fish-shop/edit")
+    public Result<Object> fishShopEdit(@RequestBody(required = false) Map<String, Object> body) {
+        if (body == null) body = new java.util.LinkedHashMap<>();
+        injectTenantId(body);
+        try {
+            return Result.ok(automationClient.postInternalForDataOrThrow("/api/fish-shop/edit", body));
+        } catch (Exception ex) {
+            if (ex instanceof BizException bizException) throw bizException;
+            log.error("鱼小铺多规格编辑失败, errorType={}, message={}",
+                    ex.getClass().getSimpleName(),
+                    ex.getMessage() == null ? "" : ex.getMessage().replaceAll("[\\r\\n]+", " "));
+            throw new BizException(503, "鱼小铺多规格商品暂时无法编辑，请稍后重试");
+        }
+    }
+
+    /**
+     * 获取鱼小铺商品完整详情，用于编辑回显。
+     * 优先返回本地编辑快照，其次本地 SKU/规格表，最后本地 xianyu_goods 简略字段。
+     * 后端权限校验由 Python 端 /api/fish-shop/detail 完成。
+     */
+    @PostMapping("/fish-shop/detail")
+    public Result<Object> fishShopDetail(@RequestBody(required = false) Map<String, Object> body) {
+        if (body == null) body = new java.util.LinkedHashMap<>();
+        injectTenantId(body);
+        try {
+            return Result.ok(automationClient.postInternalForDataOrThrow("/api/fish-shop/detail", body));
+        } catch (Exception ex) {
+            if (ex instanceof BizException bizException) throw bizException;
+            log.error("鱼小铺商品详情获取失败, errorType={}, message={}",
+                    ex.getClass().getSimpleName(),
+                    ex.getMessage() == null ? "" : ex.getMessage().replaceAll("[\\r\\n]+", " "));
+            throw new BizException(503, "鱼小铺商品详情暂时无法获取，请稍后重试");
+        }
+    }
+
     @PostMapping("/item/offShelf")
     public Result<Object> itemOffShelf(@RequestBody(required = false) Map<String, Object> body) {
         if (body == null) body = new java.util.LinkedHashMap<>();
@@ -1099,6 +1159,20 @@ public class AutomationProxyController {
         if (body == null) body = new java.util.LinkedHashMap<>();
         injectTenantId(body);
         return Result.ok(automationClient.postInternalForData("/api/item/republish", body));
+    }
+
+    /**
+     * 切换商品的"售整自动上架"开关（Python automation-service 实现）。
+     * 与 PUT /api/goods/{id}/auto-relist（Java 本地直接改库）互补：
+     * - Java 接口速度快，但仅修改本地数据库字段；
+     * - Python 接口同时校验 has_snapshot 并返回更详细的状态信息。
+     * 前端可任选其一，本接口保留以备 Python 链路需要额外校验时使用。
+     */
+    @PostMapping("/item/auto-relist/toggle")
+    public Result<Object> itemToggleAutoRelist(@RequestBody(required = false) Map<String, Object> body) {
+        if (body == null) body = new java.util.LinkedHashMap<>();
+        injectTenantId(body);
+        return Result.ok(automationClient.postInternalForData("/api/item/auto-relist/toggle", body));
     }
 
     @PostMapping("/item/remoteDelete")
@@ -1975,5 +2049,112 @@ public class AutomationProxyController {
     @GetMapping("/announcement/list")
     public Result<Object> announcementList() {
         return Result.ok(contentService.listCommercialHomeAnnouncements());
+    }
+
+    // ==================== 退款管理 ====================
+    // 透传到 Python automation-service 的 /api/refunds/*
+    // 仅用于鱼小铺账号（fish_shop_user=1），普通账号由 Python 端拒绝
+    // 后端权限校验（鱼小铺判断、退款归属、操作白名单）由 Python 端完成
+
+    @GetMapping("/refunds")
+    public Result<Object> listRefunds(
+            @RequestParam(required = false) Long accountId,
+            @RequestParam(defaultValue = "all") String category,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int pageSize) {
+        Map<String, Object> params = new LinkedHashMap<>();
+        if (accountId != null) params.put("accountId", accountId);
+        params.put("category", category);
+        params.put("page", page);
+        params.put("pageSize", pageSize);
+        return Result.ok(automationClient.getInternalForData("/api/refunds", params, 15));
+    }
+
+    @PostMapping("/refunds/sync")
+    public Result<Object> syncRefunds(@RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> payload = body == null ? new LinkedHashMap<>() : new LinkedHashMap<>(body);
+        injectTenantId(payload);
+        // 同步可能耗时较长（多账号全量同步），给予 120 秒超时
+        return Result.ok(automationClient.postInternalForData("/api/refunds/sync", payload, 120));
+    }
+
+    @GetMapping("/refunds/sync-status")
+    public Result<Object> refundSyncStatus(@RequestParam(required = false) Long accountId) {
+        Map<String, Object> params = new LinkedHashMap<>();
+        if (accountId != null) params.put("accountId", accountId);
+        return Result.ok(automationClient.getInternalForData("/api/refunds/sync-status", params, 10));
+    }
+
+    @PostMapping("/refunds/{refundId}/agree")
+    public Result<Object> agreeRefund(@PathVariable("refundId") String refundId,
+                                      @RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> payload = body == null ? new LinkedHashMap<>() : new LinkedHashMap<>(body);
+        injectTenantId(payload);
+        // 同意退款是资金操作，给予 30 秒超时（Python 端会做多重校验）
+        return Result.ok(automationClient.postInternalForData(
+                "/api/refunds/" + refundId + "/agree", payload, 30));
+    }
+
+    @GetMapping("/refunds/fish-shop-accounts")
+    public Result<Object> refundFishShopAccounts() {
+        return Result.ok(automationClient.getInternalForData(
+                "/api/refunds/fish-shop-accounts", Map.of(), 10));
+    }
+
+    // ==================== 评价管理 ====================
+    // 透传到 Python automation-service 的 /api/rates/*
+    // 仅用于鱼小铺账号（fish_shop_user=1），普通账号由 Python 端拒绝
+    // 后端权限校验（鱼小铺判断、订单归属、评价等级白名单）由 Python 端完成
+
+    @GetMapping("/rates")
+    public Result<Object> listRates(
+            @RequestParam(required = false) Long accountId,
+            @RequestParam(defaultValue = "all") String category,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int pageSize) {
+        Map<String, Object> params = new LinkedHashMap<>();
+        if (accountId != null) params.put("accountId", accountId);
+        params.put("category", category);
+        if (keyword != null && !keyword.isBlank()) params.put("keyword", keyword);
+        params.put("page", page);
+        params.put("pageSize", pageSize);
+        return Result.ok(automationClient.getInternalForData("/api/rates", params, 15));
+    }
+
+    @PostMapping("/rates/sync")
+    public Result<Object> syncRates(@RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> payload = body == null ? new LinkedHashMap<>() : new LinkedHashMap<>(body);
+        injectTenantId(payload);
+        // 同步可能耗时较长（多账号全量同步），给予 120 秒超时
+        return Result.ok(automationClient.postInternalForData("/api/rates/sync", payload, 120));
+    }
+
+    @GetMapping("/rates/sync-status")
+    public Result<Object> rateSyncStatus(@RequestParam(required = false) Long accountId) {
+        Map<String, Object> params = new LinkedHashMap<>();
+        if (accountId != null) params.put("accountId", accountId);
+        return Result.ok(automationClient.getInternalForData("/api/rates/sync-status", params, 10));
+    }
+
+    @GetMapping("/rates/overview")
+    public Result<Object> rateOverview(@RequestParam(required = false) Long accountId) {
+        Map<String, Object> params = new LinkedHashMap<>();
+        if (accountId != null) params.put("accountId", accountId);
+        return Result.ok(automationClient.getInternalForData("/api/rates/overview", params, 10));
+    }
+
+    @PostMapping("/rates/create")
+    public Result<Object> createRate(@RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> payload = body == null ? new LinkedHashMap<>() : new LinkedHashMap<>(body);
+        injectTenantId(payload);
+        // 创建评价是写操作，给予 30 秒超时（Python 端会做多重校验）
+        return Result.ok(automationClient.postInternalForData("/api/rates/create", payload, 30));
+    }
+
+    @GetMapping("/rates/fish-shop-accounts")
+    public Result<Object> rateFishShopAccounts() {
+        return Result.ok(automationClient.getInternalForData(
+                "/api/rates/fish-shop-accounts", Map.of(), 10));
     }
 }

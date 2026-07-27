@@ -42,7 +42,7 @@
       @open-profile-center="openProfileCenter"
     />
     <main class="main">
-      <Topbar :user="currentUserInfo" :sse-status="displaySseStatus" @logout="handleLogout" @open-profile-center="openProfileCenter" />
+      <Topbar :user="currentUserInfo" :sse-status="displaySseStatus" @logout="handleLogout" @open-profile-center="openProfileCenter" @open-ai-cs="openAiCs" />
       <MaintenanceBanner />
       <PageHeader v-if="shouldRenderPageHeader" :title="pageHeaderTitle" :subtitle="pageHeaderSubtitle">
         <div v-if="headerActions.length" class="head-actions">
@@ -69,10 +69,11 @@
     @close="paymentVisible = false"
     @paid="handleTokenPaid"
   />
+  <AiCsPanel :visible="aiCsVisible" @close="aiCsVisible = false" />
 </template>
 
 <script setup>
-import { computed, defineAsyncComponent, h, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Sidebar from './components/Sidebar.vue'
 import Topbar from './components/Topbar.vue'
 import PageHeader from './components/PageHeader.vue'
@@ -80,6 +81,7 @@ import AppButton from './components/AppButton.vue'
 import ConfirmModal from './components/ConfirmModal.vue'
 import DraftGuardModal from './components/DraftGuardModal.vue'
 import PaymentModal from './components/PaymentModal.vue'
+import AiCsPanel from './components/AiCsPanel.vue'
 import MobileLite from './components/MobileLite.vue'
 import MaintenanceBanner from './components/MaintenanceBanner.vue'
 import { pageTitles } from './data/nav.js'
@@ -128,7 +130,12 @@ const pageMap = {
   accounts: asyncPage(() => import('./pages/AccountsPage.vue')),
   products: asyncPage(() => import('./pages/ProductsPage.vue')),
   orders: asyncPage(() => import('./pages/OrdersPage.vue')),
+  refunds: asyncPage(() => import('./pages/RefundsPage.vue')),
+  rates: asyncPage(() => import('./pages/RatesPage.vue')),
   'product-publish': asyncPage(() => import('./pages/ProductPublishPage.vue')),
+  // 鱼小铺专属编辑页：路由形态 fish-shop-edit/{accountId}/{itemId}
+  // 由 ProductsPage 商品列表「编辑」按钮进入，仅鱼小铺账号商品可访问
+  'fish-shop-edit': asyncPage(() => import('./pages/FishShopEditPage.vue')),
   opportunities: asyncPage(() => import('./pages/OpportunityPage.vue')),
   messages: asyncPage(() => import('./pages/MessagesPage.vue')),
   'message-center': asyncPage(() => import('./pages/MessagesPage.vue')),
@@ -152,7 +159,6 @@ const pageMap = {
   'settings-notify': asyncPage(() => import('./pages/settings/NotifySettings.vue')),
   vip: asyncPage(() => import('./pages/VipPage.vue')),
   profile: asyncPage(() => import('./pages/ProfileCenterPage.vue')),
-  'user-manual': asyncPage(() => import('./pages/UserManualPage.vue')),
   'feature-unavailable': asyncPage(() => import('./pages/FeatureUnavailablePage.vue'))
 }
 
@@ -160,6 +166,7 @@ const pageMap = {
 // 商业版（线上生产）不设置此变量，settings-sync 不会进入 settingsKeys
 const settingsKeys = [
   'settings-ai-cs',
+  'settings-kb',
   'settings-product',
   ...(import.meta.env.VITE_SHOW_DATA_SYNC === 'true' ? ['settings-sync'] : []),
   'settings-about'
@@ -185,6 +192,7 @@ const mobileLitePages = new Set([
   'workflow',
   'auto-delivery',
   'product-publish',
+  'fish-shop-edit',
   'orders',
   'profile',
   'api-slider-solve'
@@ -199,6 +207,7 @@ const isKnownPage = key => {
     if (key.startsWith('product-detail/')) return true
     if (key.startsWith('data-detail/')) return true
     if (key.startsWith('chat-detail/')) return true
+    if (key.startsWith('fish-shop-edit/')) return true
   }
   return false
 }
@@ -210,6 +219,7 @@ const normalizePageKey = key => {
       if (key.startsWith('product-detail/')) return 'product-detail'
       if (key.startsWith('data-detail/')) return 'data-detail'
       if (key.startsWith('chat-detail/')) return 'chat-detail'
+      if (key.startsWith('fish-shop-edit/')) return 'fish-shop-edit'
     }
     return key
   }
@@ -226,6 +236,7 @@ const getNormalizedKey = (raw) => {
       if (raw.startsWith('product-detail/')) return 'product-detail'
       if (raw.startsWith('data-detail/')) return 'data-detail'
       if (raw.startsWith('chat-detail/')) return 'chat-detail'
+      if (raw.startsWith('fish-shop-edit/')) return 'fish-shop-edit'
     }
     return raw
   }
@@ -243,6 +254,13 @@ const displaySseStatus = ref('disconnected')
 const globalNotice = ref(null)
 // 全局充值弹窗（由 xya-open-payment 事件触发，供 aiTokenGuard 等 Token 不足场景使用）
 const paymentVisible = ref(false)
+// AI 客服"小梦"面板可见性（Topbar 客服按钮触发）
+const aiCsVisible = ref(false)
+// 路由切换时自动收起 AI 客服面板（动画收起，历史保留在组件内，下次打开仍可见）
+// 面板内部使用 v-show 保持挂载，状态不会丢失
+watch(active, () => {
+  if (aiCsVisible.value) aiCsVisible.value = false
+})
 const isMobile = ref(false)
 const mobileDesktopOverride = ref(localStorage.getItem('xya_mobile_desktop_override') === '1')
 // 功能开关拦截信息（传递给 FeatureUnavailablePage）
@@ -324,6 +342,11 @@ function onOpenPayment() {
   paymentVisible.value = true
 }
 
+// 打开 AI 客服"小梦"面板。
+function openAiCs() {
+  aiCsVisible.value = true
+}
+
 // 充值成功回调：关闭弹窗并提示。
 async function handleTokenPaid() {
   paymentVisible.value = false
@@ -357,7 +380,8 @@ async function checkFeatureSwitch(pageKey) {
       return {
         allowed: false,
         reason: info.reason || 'disabled',
-        required: info.required_level || ''
+        required: info.required_level || '',
+        reasonText: info.reason_text || ''
       }
     }
     return { allowed: true }
@@ -369,12 +393,17 @@ async function checkFeatureSwitch(pageKey) {
 
 /**
  * 功能被开关拦截时，弹出提示弹窗（不跳转到占位页）。
+ * - reason=maintenance：提示"正在维护升级中"（对所有用户生效）
  * - reason=disabled：提示"暂未开放"
  * - reason=level：提示"等级不足"，确认后跳转会员中心升级
  */
 async function showFeatureBlockedNotice(switchResult) {
   const reason = switchResult.reason || 'disabled'
   const required = switchResult.required || ''
+  if (reason === 'maintenance') {
+    await globalConfirm.alert('维护中', switchResult.reasonText || '该页面正在维护升级中，请稍后再试。')
+    return
+  }
   if (reason === 'level' && required) {
     const levelLabel = required === 'svp' ? 'SVP' : required === 'vip' ? 'VIP' : required
     const confirmed = await globalConfirm.confirm(
@@ -724,6 +753,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('xya-sse-event', onSseEventForSound)
   window.removeEventListener('xya-toast', onGlobalToast)
   window.removeEventListener('xya-open-payment', onOpenPayment)
+  window.removeEventListener('xya-open-ai-cs', openAiCs)
   import('./composables/useCaptchaSolver.js').then(({ useCaptchaSolver }) => {
     useCaptchaSolver().destroyCaptchaSolverListener()
   })

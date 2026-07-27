@@ -13,6 +13,11 @@
       <path d="M4 18v-5h5" />
       <path d="M19 11a7 7 0 0 0-12-4l-3 3M5 13a7 7 0 0 0 12 4l3-3" />
     </template>
+    <template v-else-if="name === 'refund'">
+      <path d="M3 8a9 9 0 0 1 9-5 9 9 0 0 1 9 9 9 9 0 0 1-9 9 9 9 0 0 1-8-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M8 3 3 8l5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+      <text x="12" y="16" text-anchor="middle" font-size="9" font-weight="700" fill="currentColor">¥</text>
+    </template>
     <circle v-else cx="12" cy="12" r="9" />
   </svg>
 </template>

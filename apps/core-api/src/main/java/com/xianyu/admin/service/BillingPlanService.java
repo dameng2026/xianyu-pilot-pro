@@ -3,6 +3,7 @@ package com.xianyu.admin.service;
 import com.xianyu.admin.common.BizException;
 import com.xianyu.admin.common.PageResult;
 import com.xianyu.admin.common.PageUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,6 +22,13 @@ import java.util.stream.Collectors;
 @Service
 public class BillingPlanService {
     private final JdbcTemplate jdbcTemplate;
+
+    /**
+     * 会员充值活动服务（可选依赖）。
+     * 套餐价格变更时校验是否与进行中活动冲突；套餐下架时通知活动模块。
+     */
+    @Autowired(required = false)
+    private MemberPromotionService promotionService;
 
     public BillingPlanService(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
@@ -137,6 +145,10 @@ public class BillingPlanService {
         long priceYearCent = parsePeriodMoneyCentWithDefault(data, "priceYear", "priceYearCent", "price_year_cent", ((Number) old.get("priceYearCent")).longValue());
         // price_cent 跟随月度价格，兼容旧逻辑
         long priceCent = priceMonthCent;
+        // 活动联动校验：套餐价格变更后，参与进行中活动的套餐其活动价不得高于新原价
+        if (promotionService != null) {
+            promotionService.validatePlanPriceChange(id, priceMonthCent, priceQuarterCent, priceYearCent);
+        }
         jdbcTemplate.update(
                 "UPDATE billing_plan SET plan_name=?, plan_code=?, price_cent=?, duration_days=?, " +
                         "max_storage_mb=?, enable_auto_delivery=?, enable_kami=?, enable_ai_reply=?, enable_workflow=?, " +
@@ -182,7 +194,11 @@ public class BillingPlanService {
     }
 
     public void delete(long id) {
-        jdbcTemplate.update("UPDATE billing_plan SET deleted=1, updated_time=NOW() WHERE id=? AND deleted=0", id);
+        // 活动联动：套餐软删除时通知活动模块（仅记录日志，活动套餐前台通过 INNER JOIN billing_plan status=1 自动停止展示）
+        if (promotionService != null) {
+            promotionService.onPlanOffline(id);
+        }
+        jdbcTemplate.update("UPDATE billing_plan SET deleted=1, status=0, updated_time=NOW() WHERE id=? AND deleted=0", id);
     }
 
     public int batchDelete(List<Long> ids) {

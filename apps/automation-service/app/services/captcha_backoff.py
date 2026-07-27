@@ -23,7 +23,7 @@ from ..core.failure_logging import log_service_failure
 
 logger = logging.getLogger(__name__)
 
-BASE_COOLDOWN_SEC = 30 * 60          # 30 分钟
+BASE_COOLDOWN_SEC = 5 * 60           # 5 分钟（避免账号长时间失联）
 MAX_COOLDOWN_SEC = 6 * 60 * 60       # 6 小时
 _ENSURED = False
 
@@ -129,9 +129,19 @@ async def assert_auto_solve_allowed(
 ) -> Optional[dict[str, Any]]:
     """若处于冷却期返回阻断信息 dict；允许则返回 None。
 
-    冷却限制已取消：始终返回 None，允许立即重试。失败计数仍会记录到
-    xianyu_captcha_backoff 表以便观察，但不再阻断求解。
+    策略：5m → 10m → 20m → 40m → 80m → ... → 6h（封顶）。
+    force=True 时跳过冷却（手动触发场景）。
     """
+    if force:
+        return None
+    st = await get_backoff_status(account_id, tenant_id)
+    if not st.get("allowed"):
+        return {
+            "error": "指数退避冷却中",
+            "remainingSec": st.get("remainingSec", 0),
+            "nextAllowedAt": st.get("nextAllowedAt"),
+            "failCount": st.get("failCount", 0),
+        }
     return None
 
 

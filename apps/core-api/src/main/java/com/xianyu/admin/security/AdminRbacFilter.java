@@ -27,7 +27,7 @@ public class AdminRbacFilter extends OncePerRequestFilter {
             "users", "plans", "licenses", "model-config-general", "model-config-chat",
             "model-config-image", "model-config-image-2", "model-config-image-3",
             "model-config-image-prompts", "notify-channels", "system-settings",
-            "backups", "versions", "xianyu-accounts", "files"
+            "xianyu-accounts"
     );
     private static final String MODULE_PREFIX = "/admin-api/admin/modules/";
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -67,7 +67,9 @@ public class AdminRbacFilter extends OncePerRequestFilter {
                 || hasPathPrefix(path, "/admin-api/open-source-admin")
                 || hasPathPrefix(path, "/admin-api/client-errors")
                 || hasPathPrefix(path, "/admin-api/admin/users")
-                || hasPathPrefix(path, "/admin-api/admin/tenants")) {
+                || hasPathPrefix(path, "/admin-api/admin/tenants")
+                || hasPathPrefix(path, "/admin-api/promotion")
+                || hasPathPrefix(path, "/admin-api/learned-kb")) {
             return true;
         }
         if (!path.startsWith(MODULE_PREFIX)) {

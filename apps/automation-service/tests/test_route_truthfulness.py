@@ -383,7 +383,7 @@ async def test_internal_tenant_scoped_routes_reject_missing_tenant_id(monkeypatc
         pytest.fail("tenant-scoped operation must not run without tenantId")
 
     monkeypatch.setattr(internal, "list_due_tasks", must_not_run)
-    monkeypatch.setattr(internal, "execute_scheduled_task", must_not_run)
+    monkeypatch.setattr(internal, "claim_scheduled_task_lease", must_not_run)
     monkeypatch.setattr(internal, "local_business_search", must_not_run)
     monkeypatch.setattr(internal, "list_workflow_timeline", must_not_run, raising=False)
     monkeypatch.setattr(internal, "list_workflow_state_variables", must_not_run, raising=False)
@@ -675,15 +675,26 @@ def test_auto_category_local_images_are_bound_to_authenticated_tenant():
 
 
 @pytest.mark.asyncio
-async def test_internal_scheduled_task_failure_is_not_wrapped_as_success(monkeypatch):
-    async def unsupported(*_args, **_kwargs):
-        return {
-            "ok": False,
-            "error": "UNSUPPORTED_TASK_TYPE",
-            "message": "不支持的定时任务类型: unknown",
-        }
+async def test_internal_scheduled_task_runs_asynchronously_after_claim(monkeypatch):
+    """异步模式：claim 成功后立即返回 running=true，长耗时任务在后台执行。
 
-    monkeypatch.setattr(internal, "execute_scheduled_task", unsupported)
+    修复背景：原同步模式下，auto_redelivery 等长耗时任务会阻塞 HTTP 请求导致前端超时。
+    现在改为 claim 同步预检 + 后台异步执行 + 立即返回 running 状态。
+    """
+    fake_task = {"id": 77, "task_type": "auto_redelivery", "tenant_id": 1, "task_name": "test"}
+    fake_lease = "lease-token-abc"
+
+    async def _ok_claim(*_args, **_kwargs):
+        return fake_task, fake_lease, {}
+
+    monkeypatch.setattr(internal, "claim_scheduled_task_lease", _ok_claim)
+
+    started_coros = []
+
+    def _track_background(coro):
+        started_coros.append(coro)
+
+    monkeypatch.setattr(internal._asyncio, "create_task", _track_background)
 
     result = await internal.internal_run_task(
         77,
@@ -692,9 +703,20 @@ async def test_internal_scheduled_task_failure_is_not_wrapped_as_success(monkeyp
         _=None,
     )
 
-    assert result.code == 422
-    assert result.data is None
-    assert "不支持" in result.msg
+    # 立即返回 running 状态，不等任务执行完成
+    assert result.code == 200
+    assert result.data is not None
+    assert result.data.get("running") is True
+    assert result.data.get("ok") is True
+    assert result.data.get("taskId") == 77
+    assert "已开始执行" in result.data.get("message", "")
+
+    # 后台任务被启动一次
+    assert len(started_coros) == 1
+
+    # 关闭未 await 的协程，避免 RuntimeWarning
+    for coro in started_coros:
+        coro.close()
 
 
 @pytest.mark.asyncio

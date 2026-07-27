@@ -149,6 +149,25 @@
             </div>
           </div>
 
+          <div v-if="vipPromotionInfo" class="pay-promotion-summary">
+            <div class="pay-promotion-tag">🎉 {{ vipPromotionInfo.activityName || '会员限时活动' }}</div>
+            <div class="pay-promotion-rows">
+              <div v-if="vipPromotionInfo.originalPriceYuan" class="pay-promotion-row">
+                <span>套餐原价</span>
+                <b class="pay-promo-strike">¥{{ formatMoney(vipPromotionInfo.originalPriceYuan) }}</b>
+              </div>
+              <div v-if="vipPromotionInfo.finalPriceYuan" class="pay-promotion-row">
+                <span>活动价</span>
+                <b class="pay-promo-active">¥{{ formatMoney(vipPromotionInfo.finalPriceYuan) }}</b>
+              </div>
+              <div v-if="vipPromotionInfo.discountYuan && Number(vipPromotionInfo.discountYuan) > 0" class="pay-promotion-row">
+                <span>立省</span>
+                <b class="pay-promo-discount">¥{{ formatMoney(vipPromotionInfo.discountYuan) }}</b>
+              </div>
+            </div>
+            <p v-if="vipPromotionInfo.endTime" class="pay-promotion-endtime">⏱ 活动截止：{{ formatPromotionEndTime(vipPromotionInfo.endTime) }}</p>
+          </div>
+
           <div class="pay-summary">
             <span>应付金额</span>
             <strong>{{ amountText }}</strong>
@@ -314,11 +333,31 @@ const canCreate = computed(() => {
 })
 const amountText = computed(() => {
   if (props.orderType === 'vip') {
+    // 活动价优先：服务端 preview 返回的 finalPriceYuan 为权威值
+    const snapshot = props.plan?.promotionSnapshot
+    if (snapshot?.finalPriceYuan) return `¥${formatMoney(snapshot.finalPriceYuan)}`
+    if (props.plan?.hasActivePrice && props.plan?.activityPriceYuan) return `¥${formatMoney(props.plan.activityPriceYuan)}`
     if (props.plan?.price) return props.plan.price
     return props.plan?.priceYuan === null || props.plan?.priceYuan === undefined ? '价格未配置' : `¥${formatMoney(props.plan.priceYuan)}`
   }
   const plan = selectedTokenPlan.value
   return plan ? tokenPlanPrice(plan) : '价格未配置'
+})
+
+// VIP 订单活动信息（用于订单确认页展示）
+const vipPromotionInfo = computed(() => {
+  if (props.orderType !== 'vip') return null
+  const snapshot = props.plan?.promotionSnapshot
+  if (!snapshot) return null
+  return {
+    activityName: snapshot.activityName || '',
+    finalPriceYuan: snapshot.finalPriceYuan || '',
+    originalPriceYuan: snapshot.originalPriceYuan || '',
+    discountYuan: snapshot.originalPriceYuan && snapshot.finalPriceYuan
+      ? (Number(snapshot.originalPriceYuan) - Number(snapshot.finalPriceYuan)).toFixed(2)
+      : '',
+    endTime: snapshot.endTime || ''
+  }
 })
 
 const decoratedTokenPlans = computed(() => {
@@ -434,6 +473,14 @@ async function createOrder() {
     if (props.orderType === 'vip') {
       payload.planId = props.plan.id
       payload.periodType = props.plan.periodType  // 传递用户选择的计费周期 month/quarter/year
+      // 传递活动快照信息：服务端会再次校验活动状态、价格、名额
+      // 任何字段缺失或不一致都会由服务端拒绝，前端传入值仅作订单快照记录
+      const snapshot = props.plan?.promotionSnapshot
+      if (snapshot) {
+        payload.activityId = snapshot.activityId
+        payload.activityPlanId = snapshot.activityPlanId
+        payload.ruleVersion = snapshot.ruleVersion
+      }
     } else {
       payload.tokenPlanId = selectedTokenPlanId.value
     }
@@ -584,6 +631,18 @@ function formatMoney(value) {
   const num = Number(value)
   if (!Number.isFinite(num)) return '—'
   return Number.isInteger(num) ? String(num) : num.toFixed(2).replace(/\.00$/, '')
+}
+
+function formatPromotionEndTime(endTime) {
+  if (!endTime) return ''
+  const date = new Date(endTime)
+  if (Number.isNaN(date.getTime())) return String(endTime)
+  const yyyy = date.getFullYear()
+  const mm = String(date.getMonth() + 1).padStart(2, '0')
+  const dd = String(date.getDate()).padStart(2, '0')
+  const hh = String(date.getHours()).padStart(2, '0')
+  const mi = String(date.getMinutes()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`
 }
 
 onBeforeUnmount(() => {
@@ -1091,6 +1150,77 @@ onBeforeUnmount(() => {
   border: 1px solid #e5e7ef;
   border-radius: 12px;
   margin: 18px 0 16px;
+}
+
+/* 活动信息展示区块 */
+.pay-promotion-summary {
+  margin: 14px 0 6px;
+  padding: 14px 16px 12px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #fff5e6 0%, #ffe9c7 100%);
+  border: 1.5px solid #ffd591;
+  box-shadow: 0 6px 14px rgba(245, 158, 11, 0.1);
+}
+
+.pay-promotion-tag {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #d97706;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+  margin-bottom: 10px;
+}
+
+.pay-promotion-rows {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.pay-promotion-row {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.7);
+  text-align: center;
+}
+
+.pay-promotion-row span {
+  font-size: 11px;
+  color: #92400e;
+  line-height: 1.2;
+}
+
+.pay-promotion-row b {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.pay-promo-strike {
+  color: #9ca3af;
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
+.pay-promo-active {
+  color: #d97706;
+}
+
+.pay-promo-discount {
+  color: #16a34a;
+}
+
+.pay-promotion-endtime {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #92400e;
+  text-align: right;
+  line-height: 1.4;
 }
 
 .pay-summary span {
@@ -1639,6 +1769,23 @@ onBeforeUnmount(() => {
 
   .pay-actions {
     display: grid;
+  }
+
+  .pay-promotion-rows {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .pay-promotion-row {
+    padding: 6px 10px;
+  }
+
+  .pay-promotion-row b {
+    font-size: 14px;
+  }
+
+  .pay-promotion-endtime {
+    text-align: center;
   }
 }
 </style>

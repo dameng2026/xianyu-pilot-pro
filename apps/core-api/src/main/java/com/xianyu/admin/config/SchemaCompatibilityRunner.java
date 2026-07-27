@@ -59,6 +59,9 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
         ensureMiscTables();
         ensureOpenSourceBridgeTables();
         ensureMallTables();
+        ensureAiCsTables();
+        ensureRateTables();
+        ensureRefundTables();
         ensureCompatibilityColumns();
         backfillCompatibilityData();
         if (!failures.isEmpty()) {
@@ -1320,6 +1323,43 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
                 """, "ai_scene_sell_config");
 
         createTable("""
+                CREATE TABLE IF NOT EXISTS ai_model_tier_price (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    module_key VARCHAR(80) NOT NULL,
+                    vip_level INT NOT NULL DEFAULT 0,
+                    tokens_per_call BIGINT NOT NULL DEFAULT 3,
+                    created_time DATETIME,
+                    updated_time DATETIME,
+                    UNIQUE KEY uk_tier_module_level (module_key, vip_level),
+                    INDEX idx_tier_module (module_key)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """, "ai_model_tier_price");
+
+        // 迁移现有 ai_model_price_config.tokens_per_call 到 ai_model_tier_price 三档（默认 3）
+        // 仅在 ai_model_tier_price 中 model-config-general 三档记录不存在时插入
+        try {
+            Long existingGeneral = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM ai_model_tier_price WHERE module_key='model-config-general'",
+                    Long.class);
+            if (existingGeneral != null && existingGeneral == 0) {
+                Long currentTokensPerCall = jdbcTemplate.queryForObject(
+                        "SELECT COALESCE(tokens_per_call, 3) FROM ai_model_price_config " +
+                                "WHERE deleted=0 AND module_key='model-config-general' ORDER BY id DESC LIMIT 1",
+                        Long.class);
+                long initialTokens = currentTokensPerCall != null && currentTokensPerCall > 0
+                        ? currentTokensPerCall : 3L;
+                jdbcTemplate.update("INSERT INTO ai_model_tier_price(module_key, vip_level, tokens_per_call, created_time, updated_time) " +
+                        "VALUES('model-config-general', 0, ?, NOW(), NOW())", initialTokens);
+                jdbcTemplate.update("INSERT INTO ai_model_tier_price(module_key, vip_level, tokens_per_call, created_time, updated_time) " +
+                        "VALUES('model-config-general', 1, ?, NOW(), NOW())", initialTokens);
+                jdbcTemplate.update("INSERT INTO ai_model_tier_price(module_key, vip_level, tokens_per_call, created_time, updated_time) " +
+                        "VALUES('model-config-general', 2, ?, NOW(), NOW())", initialTokens);
+            }
+        } catch (Exception e) {
+            log.warn("迁移 ai_model_tier_price 默认数据失败（可忽略，将使用代码层默认值 3）: {}", e.getMessage());
+        }
+
+        createTable("""
                 CREATE TABLE IF NOT EXISTS ai_scene_plan_benefit (
                     id BIGINT PRIMARY KEY AUTO_INCREMENT,
                     tenant_id BIGINT NULL,
@@ -1703,6 +1743,720 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
                 "WHERE NOT EXISTS (SELECT 1 FROM ai_model_price_config WHERE module_key = 'api-slider-solve' AND tenant_id IS NULL AND deleted = 0)");
     }
 
+    /**
+     * AI 客服（小梦）相关表：会话、消息、扣费配置、知识库分类/条目、每日统计快照。
+     * 对应迁移 V1.39__add_ai_cs_tables.sql，运行时幂等建表并初始化默认配置与 12 个预设知识库分类。
+     */
+    private void ensureAiCsTables() {
+        // 1. AI 客服会话表
+        createTable("""
+                CREATE TABLE IF NOT EXISTS ai_cs_session (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    session_token VARCHAR(64) NOT NULL UNIQUE COMMENT '会话标识（前端持有）',
+                    user_id BIGINT NOT NULL COMMENT '所属用户',
+                    tenant_id BIGINT NOT NULL COMMENT '租户隔离',
+                    status TINYINT NOT NULL DEFAULT 1 COMMENT '1=活跃 0=已关闭',
+                    message_count INT NOT NULL DEFAULT 0 COMMENT '当前会话消息计数',
+                    casual_count INT NOT NULL DEFAULT 0 COMMENT '连续闲聊计数',
+                    casual_reminded TINYINT NOT NULL DEFAULT 0 COMMENT '本会话是否已提醒过闲聊',
+                    compressed_summary TEXT NULL COMMENT '历史压缩摘要',
+                    last_active_time DATETIME NULL,
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_cs_session_user(user_id, status, last_active_time),
+                    INDEX idx_cs_session_tenant(tenant_id, created_time)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='AI 客服会话'
+                """, "ai_cs_session");
+
+        // 2. AI 客服消息表
+        createTable("""
+                CREATE TABLE IF NOT EXISTS ai_cs_message (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    session_id BIGINT NOT NULL,
+                    user_id BIGINT NOT NULL,
+                    tenant_id BIGINT NOT NULL,
+                    role VARCHAR(16) NOT NULL COMMENT 'user / assistant / system',
+                    content MEDIUMTEXT NOT NULL,
+                    tokens_charged INT NOT NULL DEFAULT 0 COMMENT '本条消息扣费 Token（assistant 才扣费，0 表示未扣费）',
+                    is_casual TINYINT NOT NULL DEFAULT 0 COMMENT '是否被判定为闲聊（0/1）',
+                    tool_calls TEXT NULL COMMENT 'AI 触发的工具调用 JSON',
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_cs_msg_session(session_id, id),
+                    INDEX idx_cs_msg_user(user_id, created_time)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='AI 客服消息'
+                """, "ai_cs_message");
+
+        // 3. AI 客服计费配置表（按租户隔离，tenant_id=NULL 表示全局默认）
+        createTable("""
+                CREATE TABLE IF NOT EXISTS ai_cs_billing_config (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    tenant_id BIGINT NULL COMMENT '租户隔离；NULL 表示全局默认',
+                    per_message_tokens INT NOT NULL DEFAULT 3 COMMENT '每条成功回复扣费 Token 数',
+                    max_context_messages INT NOT NULL DEFAULT 50 COMMENT '单会话上下文上限',
+                    casual_threshold INT NOT NULL DEFAULT 5 COMMENT '连续闲聊提醒阈值',
+                    casual_reminder_text TEXT NULL COMMENT '闲聊提醒文案',
+                    daily_free_quota INT NOT NULL DEFAULT 10 COMMENT '用户每日免费额度（条数），超出后按 per_message_tokens 扣费',
+                    enabled TINYINT NOT NULL DEFAULT 1 COMMENT '客服总开关',
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_cs_billing_tenant(tenant_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='AI 客服计费/行为配置'
+                """, "ai_cs_billing_config");
+        // 兼容旧库：若 ai_cs_billing_config 已存在但缺少 daily_free_quota 字段，则补列
+        addColumnIfMissing("ai_cs_billing_config", "daily_free_quota",
+                "INT NOT NULL DEFAULT 10 COMMENT '用户每日免费额度（条数），超出后按 per_message_tokens 扣费'");
+
+        // 4. AI 客服知识库表（单表设计，category 字段标识分类）
+        createTable("""
+                CREATE TABLE IF NOT EXISTS ai_cs_knowledge (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    tenant_id BIGINT NULL COMMENT '租户隔离；NULL 表示全局共享',
+                    category VARCHAR(64) NOT NULL COMMENT '分类 key（如 system_usage / xianyu_account / auto_reply）',
+                    title VARCHAR(255) NOT NULL,
+                    content MEDIUMTEXT NOT NULL,
+                    keywords VARCHAR(512) NULL COMMENT '检索关键词，逗号分隔',
+                    priority INT NOT NULL DEFAULT 50 COMMENT '优先级，数字越大越优先',
+                    enabled TINYINT NOT NULL DEFAULT 1,
+                    sort_order INT NOT NULL DEFAULT 0,
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_cs_kb_category(category, enabled, sort_order),
+                    INDEX idx_cs_kb_tenant(tenant_id, category)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='AI 客服知识库'
+                """, "ai_cs_knowledge");
+
+        // 5. AI 客服每日统计表
+        createTable("""
+                CREATE TABLE IF NOT EXISTS ai_cs_daily_stat (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    stat_date DATE NOT NULL,
+                    user_id BIGINT NOT NULL,
+                    tenant_id BIGINT NOT NULL,
+                    session_count INT NOT NULL DEFAULT 0,
+                    user_message_count INT NOT NULL DEFAULT 0,
+                    assistant_message_count INT NOT NULL DEFAULT 0,
+                    tokens_charged INT NOT NULL DEFAULT 0,
+                    casual_count INT NOT NULL DEFAULT 0,
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_cs_daily(stat_date, user_id),
+                    INDEX idx_cs_daily_tenant(tenant_id, stat_date)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='AI 客服每日统计'
+                """, "ai_cs_daily_stat");
+
+        // 6. AI 客服工具调用日志表
+        createTable("""
+                CREATE TABLE IF NOT EXISTS ai_cs_tool_call (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    session_id BIGINT NOT NULL,
+                    user_id BIGINT NOT NULL,
+                    tenant_id BIGINT NOT NULL,
+                    tool_name VARCHAR(64) NOT NULL,
+                    arguments TEXT NULL COMMENT '调用参数 JSON',
+                    status VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'pending / confirmed / executed / rejected / failed',
+                    result TEXT NULL COMMENT '执行结果 JSON',
+                    requires_confirm TINYINT NOT NULL DEFAULT 1 COMMENT '是否需要用户确认',
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_cs_tool_session(session_id, status),
+                    INDEX idx_cs_tool_user(user_id, created_time)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='AI 客服工具调用日志'
+                """, "ai_cs_tool_call");
+
+        // 7. 预置 12 个知识库分类的种子条目（每个分类一条概览）
+        executeQuietly("INSERT INTO ai_cs_knowledge(tenant_id, category, title, content, keywords, priority, enabled, sort_order, created_time, updated_time) "
+                + "SELECT NULL, 'system_usage', '系统使用总览', '闲鱼助手是面向闲鱼卖家的全功能运营工具，涵盖账号管理、商品发布、自动回复、自动发货、工作流、定时任务、AI 客服等。用户登录后可在左侧导航栏切换各功能模块。', '系统,使用,总览,功能,模块', 100, 1, 1, NOW(), NOW() "
+                + "WHERE NOT EXISTS (SELECT 1 FROM ai_cs_knowledge WHERE tenant_id IS NULL AND category='system_usage' AND title='系统使用总览')");
+        executeQuietly("INSERT INTO ai_cs_knowledge(tenant_id, category, title, content, keywords, priority, enabled, sort_order, created_time, updated_time) "
+                + "SELECT NULL, 'xianyu_account', '闲鱼账号管理', '在【账号管理】页面可添加闲鱼账号。添加方式有三种：A.扫码登录（推荐）B.Cookie 登录 C.手机号登录。账号添加后会自动同步商品、订单、消息。Cookie 失效时需重新登录。', '闲鱼,账号,添加,扫码,cookie,登录', 100, 1, 2, NOW(), NOW() "
+                + "WHERE NOT EXISTS (SELECT 1 FROM ai_cs_knowledge WHERE tenant_id IS NULL AND category='xianyu_account' AND title='闲鱼账号管理')");
+        executeQuietly("INSERT INTO ai_cs_knowledge(tenant_id, category, title, content, keywords, priority, enabled, sort_order, created_time, updated_time) "
+                + "SELECT NULL, 'product_publish', '商品发布与鱼小铺多规格', '在【发布商品】页面可发布普通商品或鱼小铺多规格商品。鱼小铺账号支持多规格（颜色/尺寸/款式等）。商品发布前必须先生成 AI 封面图。系统会自动同步闲鱼商品到本地。', '商品,发布,鱼小铺,多规格,封面,同步', 100, 1, 3, NOW(), NOW() "
+                + "WHERE NOT EXISTS (SELECT 1 FROM ai_cs_knowledge WHERE tenant_id IS NULL AND category='product_publish' AND title='商品发布与鱼小铺多规格')");
+        executeQuietly("INSERT INTO ai_cs_knowledge(tenant_id, category, title, content, keywords, priority, enabled, sort_order, created_time, updated_time) "
+                + "SELECT NULL, 'auto_reply', '自动回复配置', '在【自动回复】页面可创建关键词/正则匹配规则。支持商品级作用域、工作时段设置、转人工。AI 自动回复使用通用模型，每条成功回复扣 3 Token。', '自动回复,关键词,正则,作用域,工作时段,转人工', 100, 1, 4, NOW(), NOW() "
+                + "WHERE NOT EXISTS (SELECT 1 FROM ai_cs_knowledge WHERE tenant_id IS NULL AND category='auto_reply' AND title='自动回复配置')");
+        executeQuietly("INSERT INTO ai_cs_knowledge(tenant_id, category, title, content, keywords, priority, enabled, sort_order, created_time, updated_time) "
+                + "SELECT NULL, 'auto_delivery', '自动发货配置', '在【自动发货】页面可配置发货规则。支持 6 种发货模板：文本、卡密、链接、附件、组合、声明。订单支付后自动触发发货。发货记录可在【发货记录】页面查看。', '自动发货,发货,模板,卡密,链接,声明', 100, 1, 5, NOW(), NOW() "
+                + "WHERE NOT EXISTS (SELECT 1 FROM ai_cs_knowledge WHERE tenant_id IS NULL AND category='auto_delivery' AND title='自动发货配置')");
+        executeQuietly("INSERT INTO ai_cs_knowledge(tenant_id, category, title, content, keywords, priority, enabled, sort_order, created_time, updated_time) "
+                + "SELECT NULL, 'card_key', '卡密管理', '在【卡密管理】页面可创建卡密组、批量导入卡密。卡密组可绑定到商品的发货规则，订单触发时自动取出一张卡密发送给买家。', '卡密,卡密组,导入,绑定,发货', 100, 1, 6, NOW(), NOW() "
+                + "WHERE NOT EXISTS (SELECT 1 FROM ai_cs_knowledge WHERE tenant_id IS NULL AND category='card_key' AND title='卡密管理')");
+        executeQuietly("INSERT INTO ai_cs_knowledge(tenant_id, category, title, content, keywords, priority, enabled, sort_order, created_time, updated_time) "
+                + "SELECT NULL, 'workflow', '工作流设计', '在【工作流】页面可设计自动化流程。支持多种节点类型：触发器、条件、动作、延迟。工作流比自动回复更强大，可串联多步骤。工作流与自动回复的区别：自动回复是单条消息响应，工作流是多步骤流程。', '工作流,节点,触发器,条件,动作,流程', 100, 1, 7, NOW(), NOW() "
+                + "WHERE NOT EXISTS (SELECT 1 FROM ai_cs_knowledge WHERE tenant_id IS NULL AND category='workflow' AND title='工作流设计')");
+        executeQuietly("INSERT INTO ai_cs_knowledge(tenant_id, category, title, content, keywords, priority, enabled, sort_order, created_time, updated_time) "
+                + "SELECT NULL, 'scheduled_task', '定时任务配置', '在【定时任务】页面可创建定时任务。支持 cron 表达式、固定间隔。常见任务：自动重发已售完商品、自动同步商品数据、自动清理过期记录。', '定时任务,cron,间隔,自动重发,同步', 100, 1, 8, NOW(), NOW() "
+                + "WHERE NOT EXISTS (SELECT 1 FROM ai_cs_knowledge WHERE tenant_id IS NULL AND category='scheduled_task' AND title='定时任务配置')");
+        executeQuietly("INSERT INTO ai_cs_knowledge(tenant_id, category, title, content, keywords, priority, enabled, sort_order, created_time, updated_time) "
+                + "SELECT NULL, 'ai_customer_service', 'AI 客服配置', 'AI 客服小梦对接后台通用模型。每条成功回复扣 3 Token（按次计费）。上下文默认 50 条，超出可新建会话或压缩上下文（不扣费）。连续闲聊 5 条后礼貌提醒一次。', 'ai客服,小梦,通用模型,token,上下文,闲聊', 100, 1, 9, NOW(), NOW() "
+                + "WHERE NOT EXISTS (SELECT 1 FROM ai_cs_knowledge WHERE tenant_id IS NULL AND category='ai_customer_service' AND title='AI 客服配置')");
+        executeQuietly("INSERT INTO ai_cs_knowledge(tenant_id, category, title, content, keywords, priority, enabled, sort_order, created_time, updated_time) "
+                + "SELECT NULL, 'membership', '会员权益说明', '会员分三档：普通（免费）/ VIP / SVP。普通用户有基础功能限制；VIP 解锁全部功能、优先求解权；SVP 为最高等级，享最高优先级与专属服务。Token 充值后可用于 AI 功能调用。升级路径：在个人中心选择套餐升级。具体权益差异请以系统实际展示为准。', '会员,vip,svp,普通,token,充值,升级,权益', 100, 1, 10, NOW(), NOW() "
+                + "WHERE NOT EXISTS (SELECT 1 FROM ai_cs_knowledge WHERE tenant_id IS NULL AND category='membership' AND title='会员权益说明')");
+        executeQuietly("INSERT INTO ai_cs_knowledge(tenant_id, category, title, content, keywords, priority, enabled, sort_order, created_time, updated_time) "
+                + "SELECT NULL, 'troubleshoot', '故障排查指南', '常见故障：1.Cookie 失效→重新登录账号 2.WS 掉线→检查网络或重启服务 3.滑块求解失败→切换求解方式或手动提取 Cookie 4.多账号同时掉线→检查 IP 是否被风控 5.消息不同步→检查 WS 连接状态。', '故障,排查,cookie,ws,滑块,掉线,风控', 100, 1, 11, NOW(), NOW() "
+                + "WHERE NOT EXISTS (SELECT 1 FROM ai_cs_knowledge WHERE tenant_id IS NULL AND category='troubleshoot' AND title='故障排查指南')");
+        executeQuietly("INSERT INTO ai_cs_knowledge(tenant_id, category, title, content, keywords, priority, enabled, sort_order, created_time, updated_time) "
+                + "SELECT NULL, 'faq', '常见问题', 'Q:如何添加闲鱼账号？A:在账号管理页面点击添加，选择扫码/Cookie/手机号登录。Q:Token 怎么充值？A:点击右上角余额或充值按钮。Q:商品为什么不同步？A:检查账号 Cookie 是否失效。Q:自动回复不生效？A:检查规则启用状态和工作时段设置。', '常见问题,faq,添加账号,充值,同步,自动回复', 100, 1, 12, NOW(), NOW() "
+                + "WHERE NOT EXISTS (SELECT 1 FROM ai_cs_knowledge WHERE tenant_id IS NULL AND category='faq' AND title='常见问题')");
+
+        // 8. 加载 V1.45 迁移文件中的详细知识库条目（35 条，覆盖 12 个分类的操作步骤/参数限制/常见错误/业务规则）
+        //    SQL 文件为唯一权威来源，Java 仅负责读取并执行，避免重复维护
+        seedAiCsKnowledgeBaseFromMigrationV1_45();
+
+        // 9. 加载 V1.46 深度扩展知识库条目（43 条，覆盖 17 个分类的深度操作步骤/API 清单/字段限制/故障排查）
+        //    针对 V1.45 的深度补充：路由系统、移动端、SSE、账号 API 清单、商品发布字段、订单 API 清单、
+        //    工作流操作 API、定时任务字段、AI 客服工具调用、商机搜索、数据面板、在线消息、FAQ 等
+        seedAiCsKnowledgeBaseFromMigrationV1_46();
+
+        // 10. KB 学习相关 5 张表（V1.43）：与 ensureAiCsTables 区分开，这些表服务于自主学习作业
+        ensureLearnedKbTables();
+    }
+
+    /**
+     * 创建 AI 客服自主学习知识库相关的 5 张表（V1.43）。
+     *
+     * <p>SchemaCompatibilityRunner 不依赖 Flyway，需要在启动时幂等创建。
+     * 表结构必须与 V1.43__add_ai_cs_learned_kb.sql 保持一致。
+     */
+    private void ensureLearnedKbTables() {
+        createTable("""
+                CREATE TABLE IF NOT EXISTS ai_cs_kb_category (
+                    id              BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    name            VARCHAR(64) NOT NULL COMMENT '分类名称（AI 自动生成）',
+                    name_hash       CHAR(32) NOT NULL COMMENT '分类名 MD5，用于去重',
+                    parent_id       BIGINT NULL COMMENT '父分类 ID，支持二级分类（NULL 为一级）',
+                    sort_order      INT NOT NULL DEFAULT 0,
+                    entry_count     INT NOT NULL DEFAULT 0 COMMENT '该分类下条目数（冗余计数）',
+                    source          VARCHAR(16) NOT NULL DEFAULT 'ai' COMMENT 'ai=AI 自动生成 / manual=后台手动',
+                    deleted         TINYINT NOT NULL DEFAULT 0,
+                    created_time    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_time    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_kb_cat_name_hash (name_hash, deleted),
+                    INDEX idx_kb_cat_parent (parent_id, sort_order)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='AI 客服学习 KB 动态分类表'
+                """, "ai_cs_kb_category");
+
+        createTable("""
+                CREATE TABLE IF NOT EXISTS ai_cs_learned_kb (
+                    id              BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    category_id     BIGINT NULL COMMENT '关联 ai_cs_kb_category.id',
+                    question        VARCHAR(1000) NOT NULL COMMENT '买家问题（已脱敏）',
+                    answer          MEDIUMTEXT NOT NULL COMMENT '卖家回复（已脱敏）',
+                    tags            VARCHAR(512) NULL COMMENT 'AI 标签，逗号分隔',
+                    source_summary  VARCHAR(500) NULL COMMENT '一句话摘要',
+                    content_hash    CHAR(32) NOT NULL COMMENT 'question+answer 的 MD5',
+                    score           INT NOT NULL DEFAULT 50 COMMENT '价值评分 0-100',
+                    review_status   VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'pending/approved/rejected',
+                    reviewed_by     BIGINT NULL,
+                    reviewed_time   DATETIME NULL,
+                    reject_reason   VARCHAR(255) NULL,
+                    enabled         TINYINT NOT NULL DEFAULT 1,
+                    vector_indexed  TINYINT NOT NULL DEFAULT 0 COMMENT '是否已写入 RAG 向量库',
+                    vector_error    VARCHAR(255) NULL,
+                    source_count    INT NOT NULL DEFAULT 1 COMMENT '该 Q&A 被多少会话提取出来',
+                    source_conv_ids TEXT NULL COMMENT '来源会话 ID 列表（JSON 数组，最多 20 个）',
+                    learn_batch_id  VARCHAR(64) NOT NULL COMMENT '学习批次 ID',
+                    sensitive_filtered TINYINT NOT NULL DEFAULT 1 COMMENT '是否已完成敏感信息过滤',
+                    deleted         TINYINT NOT NULL DEFAULT 0,
+                    created_time    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_time    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_learned_kb_hash (content_hash, deleted),
+                    INDEX idx_learned_kb_cat (category_id, enabled, score),
+                    INDEX idx_learned_kb_status (review_status, enabled, vector_indexed),
+                    INDEX idx_learned_kb_batch (learn_batch_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='AI 客服学习知识库主表（跨租户共享）'
+                """, "ai_cs_learned_kb");
+
+        createTable("""
+                CREATE TABLE IF NOT EXISTS ai_cs_user_kb (
+                    id              BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    tenant_id       BIGINT NOT NULL,
+                    user_id         BIGINT NOT NULL,
+                    title           VARCHAR(255) NOT NULL,
+                    content         MEDIUMTEXT NOT NULL,
+                    category        VARCHAR(64) NULL,
+                    tags            VARCHAR(512) NULL,
+                    vector_indexed  TINYINT NOT NULL DEFAULT 0,
+                    vector_error    VARCHAR(255) NULL,
+                    enabled         TINYINT NOT NULL DEFAULT 1,
+                    deleted         TINYINT NOT NULL DEFAULT 0,
+                    created_time    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_time    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_user_kb_user (tenant_id, user_id, enabled, deleted),
+                    INDEX idx_user_kb_vector (vector_indexed, deleted)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户私有知识库表（仅本人可见）'
+                """, "ai_cs_user_kb");
+
+        createTable("""
+                CREATE TABLE IF NOT EXISTS ai_cs_user_kb_binding (
+                    id              BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    tenant_id       BIGINT NOT NULL,
+                    user_id         BIGINT NOT NULL,
+                    kb_type         VARCHAR(16) NOT NULL COMMENT 'learned=平台学习 KB / user=用户私有 KB',
+                    kb_id           BIGINT NOT NULL,
+                    enabled         TINYINT NOT NULL DEFAULT 1,
+                    bound_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted         TINYINT NOT NULL DEFAULT 0,
+                    UNIQUE KEY uk_user_kb_binding (tenant_id, user_id, kb_type, kb_id, deleted),
+                    INDEX idx_binding_user (tenant_id, user_id, enabled, deleted)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户启用的知识库绑定关系'
+                """, "ai_cs_user_kb_binding");
+
+        createTable("""
+                CREATE TABLE IF NOT EXISTS ai_cs_kb_learning_log (
+                    id                  BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    batch_id            VARCHAR(64) NOT NULL,
+                    started_at          DATETIME NOT NULL,
+                    finished_at         DATETIME NULL,
+                    status              VARCHAR(16) NOT NULL COMMENT 'running/success/failed/partial',
+                    total_conversations INT NOT NULL DEFAULT 0,
+                    kept_conversations  INT NOT NULL DEFAULT 0,
+                    rejected_by_ai_ratio INT NOT NULL DEFAULT 0,
+                    extracted_items     INT NOT NULL DEFAULT 0,
+                    deduplicated_items  INT NOT NULL DEFAULT 0,
+                    llm_tokens_used     INT NOT NULL DEFAULT 0,
+                    llm_cost_yuan       DECIMAL(10,4) NOT NULL DEFAULT 0,
+                    error_message       TEXT NULL,
+                    config_snapshot     JSON NULL,
+                    deleted             TINYINT NOT NULL DEFAULT 0,
+                    created_time        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_learning_log_batch (batch_id),
+                    INDEX idx_learning_log_status (status, started_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='AI 客服 KB 学习作业审计日志'
+                """, "ai_cs_kb_learning_log");
+
+        // V1.47: 客服知识库分类化改造（幂等）
+        ensureLearnedKbCategoryV1_47();
+    }
+
+    /**
+     * V1.47: 客服知识库分类化改造。
+     *
+     * <p>1. ai_cs_kb_category 扩展 code/keywords/is_system 字段
+     * <p>2. ai_cs_learned_kb 扩展 conversation_turn_count 字段
+     * <p>3. 预定义 15 个业务场景分类（is_system=1，不可删）
+     * <p>4. 历史数据迁移：现有 LLM 自动分类归到最接近的预定义分类
+     *
+     * <p>幂等：可重复执行，已存在的字段/分类会跳过。
+     */
+    private void ensureLearnedKbCategoryV1_47() {
+        // 1. ai_cs_kb_category 扩展字段
+        addColumnIfMissing("ai_cs_kb_category", "code",
+            "VARCHAR(32) NULL COMMENT '分类业务代码（预定义分类的唯一标识）'");
+        addColumnIfMissing("ai_cs_kb_category", "keywords",
+            "JSON NULL COMMENT '关键词规则数组，用于检索时分类预过滤'");
+        addColumnIfMissing("ai_cs_kb_category", "is_system",
+            "TINYINT NOT NULL DEFAULT 0 COMMENT '1=预定义不可删，0=可删'");
+
+        // 2. ai_cs_learned_kb 扩展字段
+        addColumnIfMissing("ai_cs_learned_kb", "conversation_turn_count",
+            "INT NOT NULL DEFAULT 0 COMMENT '原始对话轮数'");
+
+        // 3. 预定义 15 个业务场景分类（幂等插入）
+        // 使用 name_hash 唯一约束保证幂等：同名分类已存在则 INSERT IGNORE 跳过
+        String[][] predefinedCategories = {
+            {"库存查询", "stock_query", "[\"库存\",\"有货\",\"现货\",\"还有吗\",\"没货\",\"缺货\",\"断货\",\"在不在\"]", "1"},
+            {"发货跟踪", "shipping_track", "[\"发货\",\"物流\",\"快递\",\"什么时候发\",\"单号\",\"运单\",\"发出\",\"揽收\"]", "2"},
+            {"退款售后", "refund_aftersale", "[\"退款\",\"退货\",\"换货\",\"质量\",\"坏了\",\"破损\",\"不想要\",\"退钱\"]", "3"},
+            {"商品咨询", "product_consult", "[\"规格\",\"材质\",\"尺寸\",\"功能\",\"详情\",\"什么样\",\"多大\",\"多重\"]", "4"},
+            {"价格优惠", "price_discount", "[\"便宜点\",\"优惠\",\"满减\",\"折扣\",\"券\",\"降价\",\"打折\",\"少点\"]", "5"},
+            {"账号登录", "account_login", "[\"登录\",\"cookie\",\"失效\",\"掉线\",\"登不上\",\"扫码\",\"二维码\"]", "6"},
+            {"卡密发货", "card_key_delivery", "[\"卡密\",\"激活码\",\"自动发货\",\"虚拟商品\",\"兑换码\"]", "7"},
+            {"工作流配置", "workflow_config", "[\"工作流\",\"节点\",\"流程\",\"触发\",\"条件\"]", "8"},
+            {"定时任务", "scheduled_task", "[\"定时\",\"上架\",\"定时回复\",\"计划任务\",\"每天\"]", "9"},
+            {"自动回复", "auto_reply", "[\"自动回复\",\"模板\",\"AI回复\",\"智能回复\",\"话术\"]", "10"},
+            {"自动发货", "auto_delivery", "[\"自动发货\",\"发货规则\",\"自动发货设置\"]", "11"},
+            {"会员充值", "membership_recharge", "[\"Token\",\"充值\",\"VIP\",\"会员\",\"SVP\",\"余额\"]", "12"},
+            {"系统使用", "system_usage", "[\"怎么用\",\"功能\",\"操作\",\"使用\",\"教程\",\"怎么操作\"]", "13"},
+            {"故障排查", "troubleshoot", "[\"报错\",\"错误\",\"不能用\",\"失败\",\"异常\",\"bug\",\"崩溃\"]", "14"},
+            {"其他", "other", "[\"其他\",\"其它\",\"杂项\"]", "99"}
+        };
+
+        for (String[] cat : predefinedCategories) {
+            String name = cat[0];
+            String code = cat[1];
+            String keywords = cat[2];
+            int sortOrder = Integer.parseInt(cat[3]);
+            String nameHash = md5Hash(name);
+            try {
+                // 幂等：name_hash 唯一约束保证同名分类只插入一次
+                // 若已存在（如 LLM 之前生成过同名分类），则补充 code/keywords/is_system 字段
+                int inserted = jdbcTemplate.update(
+                    "INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, " +
+                    "sort_order, source, deleted, created_time, updated_time) " +
+                    "VALUES (?, ?, ?, ?, 1, ?, 'manual', 0, NOW(), NOW())",
+                    name, nameHash, code, keywords, sortOrder
+                );
+                if (inserted == 0) {
+                    // 已存在同名分类，补充 code/keywords/is_system 字段（若为空）
+                    jdbcTemplate.update(
+                        "UPDATE ai_cs_kb_category SET code=COALESCE(code, ?), " +
+                        "keywords=COALESCE(keywords, ?), is_system=1, sort_order=? " +
+                        "WHERE name_hash=? AND deleted=0 AND (code IS NULL OR code=?)",
+                        code, keywords, sortOrder, nameHash, code
+                    );
+                }
+            } catch (Exception e) {
+                recordFailure("seed predefined category " + code, e);
+            }
+        }
+
+        // 4. 更新 entry_count 冗余计数
+        try {
+            jdbcTemplate.update(
+                "UPDATE ai_cs_kb_category c SET entry_count = " +
+                "(SELECT COUNT(*) FROM ai_cs_learned_kb k WHERE k.category_id=c.id AND k.deleted=0) " +
+                "WHERE c.deleted=0"
+            );
+        } catch (Exception e) {
+            recordFailure("refresh ai_cs_kb_category.entry_count V1.47", e);
+        }
+    }
+
+    private static String md5Hash(String s) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
+            byte[] bytes = md.digest(s.getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : bytes) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 从 V1.46 迁移文件加载深度扩展知识库条目。
+     *
+     * <p>SQL 文件位于 classpath:db/migration/V1.46__deepen_ai_cs_knowledge_base.sql，
+     * 包含 43 条 INSERT ... WHERE NOT EXISTS 语句（幂等可重入），覆盖 17 个分类：
+     * system_usage、xianyu_account、product_publish、orders、auto_reply、auto_delivery、
+     * card_key、delivery_source、workflow、scheduled_task、ai_customer_service、
+     * opportunity、membership、data_panel、messages、troubleshoot、faq。
+     *
+     * <p>本方法读取文件并按分号分割后逐条执行，单条失败不影响其他语句（与 executeQuietly 行为一致）。
+     *
+     * <p>注：本迁移文件的所有 content 字段均不含 ASCII 分号（使用中文标点），可安全按 ; 分割。
+     */
+    private void seedAiCsKnowledgeBaseFromMigrationV1_46() {
+        try {
+            var resource = new org.springframework.core.io.ClassPathResource(
+                    "db/migration/V1.46__deepen_ai_cs_knowledge_base.sql"
+            );
+            if (!resource.exists()) {
+                log.debug("V1.46 knowledge base migration file not found on classpath, skipping");
+                return;
+            }
+            String sql;
+            try (var is = resource.getInputStream()) {
+                sql = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+            if (sql == null || sql.isBlank()) {
+                return;
+            }
+            int executed = 0;
+            int skipped = 0;
+            for (String stmt : sql.split(";")) {
+                // 移除注释行（-- 开头）和空行
+                StringBuilder clean = new StringBuilder();
+                for (String line : stmt.split("\n")) {
+                    String trimmedLine = line.trim();
+                    if (trimmedLine.startsWith("--") || trimmedLine.isEmpty()) {
+                        continue;
+                    }
+                    clean.append(line).append("\n");
+                }
+                String finalStmt = clean.toString().trim();
+                if (finalStmt.isEmpty()) {
+                    continue;
+                }
+                try {
+                    jdbcTemplate.execute(finalStmt);
+                    executed++;
+                } catch (Exception e) {
+                    // 单条失败不阻塞其他语句；常见原因：唯一约束冲突（已存在）等
+                    skipped++;
+                    log.debug("V1.46 knowledge seed statement skipped: {}", e.getMessage());
+                }
+            }
+            log.info("V1.46 knowledge base seed: executed={}, skipped={}", executed, skipped);
+        } catch (Exception e) {
+            log.warn("V1.46 knowledge base seed failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 从 V1.45 迁移文件加载详细知识库条目。
+     *
+     * <p>SQL 文件位于 classpath:db/migration/V1.45__expand_ai_cs_knowledge_base.sql，
+     * 包含 35 条 INSERT ... WHERE NOT EXISTS 语句（幂等可重入）。本方法读取文件并按分号分割后逐条执行，
+     * 单条失败不影响其他语句（与 executeQuietly 行为一致）。
+     *
+     * <p>注：本迁移文件的所有 content 字段均不含 ASCII 分号（使用中文标点），可安全按 ; 分割。
+     */
+    private void seedAiCsKnowledgeBaseFromMigrationV1_45() {
+        try {
+            var resource = new org.springframework.core.io.ClassPathResource(
+                    "db/migration/V1.45__expand_ai_cs_knowledge_base.sql"
+            );
+            if (!resource.exists()) {
+                log.debug("V1.45 knowledge base migration file not found on classpath, skipping");
+                return;
+            }
+            String sql;
+            try (var is = resource.getInputStream()) {
+                sql = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+            if (sql == null || sql.isBlank()) {
+                return;
+            }
+            int executed = 0;
+            int skipped = 0;
+            for (String stmt : sql.split(";")) {
+                // 移除注释行（-- 开头）和空行
+                StringBuilder clean = new StringBuilder();
+                for (String line : stmt.split("\n")) {
+                    String trimmedLine = line.trim();
+                    if (trimmedLine.startsWith("--") || trimmedLine.isEmpty()) {
+                        continue;
+                    }
+                    clean.append(line).append("\n");
+                }
+                String finalStmt = clean.toString().trim();
+                if (finalStmt.isEmpty()) {
+                    continue;
+                }
+                try {
+                    jdbcTemplate.execute(finalStmt);
+                    executed++;
+                } catch (Exception e) {
+                    // 单条失败不阻塞其他语句；常见原因：唯一约束冲突（已存在）等
+                    skipped++;
+                    log.debug("V1.45 knowledge seed statement skipped: {}", e.getMessage());
+                }
+            }
+            log.info("V1.45 knowledge base seed: executed={}, skipped={}", executed, skipped);
+        } catch (Exception e) {
+            log.warn("V1.45 knowledge base seed failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 评价管理表：评价记录 + 同步任务追踪 + 账号级同步状态。
+     *
+     * 与 automation-service/migrations/V1.23__add_rate_management_tables.sql 保持一致。
+     * 评价记录以 (tenant_id, account_id, external_order_id) 唯一标识，
+     * 一个订单只允许一次卖家评价（has_seller_rate 字段标识是否已评价）。
+     */
+    private void ensureRateTables() {
+        // 1. 评价记录表
+        createTable("""
+                CREATE TABLE IF NOT EXISTS xianyu_rate (
+                    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+                    tenant_id BIGINT NOT NULL COMMENT '租户ID',
+                    account_id BIGINT NOT NULL COMMENT '所属闲鱼账号ID',
+                    external_order_id VARCHAR(64) NOT NULL COMMENT '订单ID（字符串存储避免大整数精度丢失）',
+                    external_item_id VARCHAR(64) NULL COMMENT '商品ID（字符串存储）',
+                    buyer_id VARCHAR(120) NULL COMMENT '买家ID（字符串存储）',
+                    buyer_nick VARCHAR(255) NULL COMMENT '买家昵称（脱敏存储）',
+                    buyer_icon TEXT NULL COMMENT '买家头像URL',
+                    item_title VARCHAR(500) NULL COMMENT '商品标题',
+                    item_pic_url TEXT NULL COMMENT '商品图片URL',
+                    item_info_lines TEXT NULL COMMENT '商品规格补充信息',
+                    order_status VARCHAR(64) NULL COMMENT '订单状态',
+                    seller_rate_status VARCHAR(16) NULL COMMENT '卖家评价状态码（原始字符串存储，无确认映射）',
+                    in_refund VARCHAR(16) NULL COMMENT '是否在退款中（原始字符串）',
+                    consign_time DATETIME NULL COMMENT '发货时间',
+                    order_create_time DATETIME NULL COMMENT '订单创建时间',
+                    pay_success_time DATETIME NULL COMMENT '支付成功时间',
+                    finish_time DATETIME NULL COMMENT '交易完成时间',
+                    logistics_company VARCHAR(128) NULL COMMENT '物流公司',
+                    logistics_mail_no VARCHAR(128) NULL COMMENT '物流单号（脱敏存储）',
+                    buyer_rate_content TEXT NULL COMMENT '买家评价内容（seller=false 的 feedBack）',
+                    buyer_rate_level VARCHAR(16) NULL COMMENT '买家评价等级',
+                    buyer_rate_time DATETIME NULL COMMENT '买家评价时间',
+                    buyer_rate_images TEXT NULL COMMENT '买家评价图片列表 JSON',
+                    seller_rate_content TEXT NULL COMMENT '卖家评价内容（seller=true 的 feedBack）',
+                    seller_rate_level VARCHAR(16) NULL COMMENT '卖家评价等级',
+                    seller_rate_time DATETIME NULL COMMENT '卖家评价时间',
+                    seller_rate_images TEXT NULL COMMENT '卖家评价图片列表 JSON',
+                    seller_rate_id VARCHAR(64) NULL COMMENT '卖家评价ID',
+                    has_seller_rate TINYINT NOT NULL DEFAULT 0 COMMENT '是否已存在卖家评价：1=已评价, 0=未评价',
+                    rate_reviewable TINYINT NOT NULL DEFAULT 0 COMMENT '当前订单是否可评价：1=可评价, 0=不可评价',
+                    raw_json TEXT NULL COMMENT '原始响应记录（脱敏后）',
+                    sync_status VARCHAR(32) NOT NULL DEFAULT 'synced' COMMENT '同步状态：synced=已同步, pending_refresh=待刷新',
+                    last_synced_time DATETIME(6) NULL COMMENT '最后一次同步时间',
+                    deleted TINYINT NOT NULL DEFAULT 0 COMMENT '软删除',
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '本项目记录创建时间',
+                    updated_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '本项目记录更新时间',
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_rate_tenant_account_order (tenant_id, account_id, external_order_id),
+                    KEY idx_rate_tenant_account (tenant_id, account_id, deleted),
+                    KEY idx_rate_tenant_status (tenant_id, deleted, rate_reviewable),
+                    KEY idx_rate_tenant_time (tenant_id, deleted, finish_time),
+                    KEY idx_rate_sync_status (tenant_id, account_id, sync_status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='闲鱼评价记录（多账号聚合，按 account_id+external_order_id 唯一）'
+                """, "xianyu_rate");
+
+        // 2. 评价同步任务追踪表
+        createTable("""
+                CREATE TABLE IF NOT EXISTS xianyu_rate_sync_task (
+                    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+                    sync_id VARCHAR(80) NOT NULL COMMENT '同步任务ID（唯一）',
+                    tenant_id BIGINT NOT NULL COMMENT '租户ID',
+                    account_id BIGINT NULL COMMENT '账号ID（NULL 表示全部账号聚合任务）',
+                    scope VARCHAR(20) NOT NULL DEFAULT 'single' COMMENT '同步范围：single=单账号, all=全部账号',
+                    status VARCHAR(30) NOT NULL DEFAULT 'queued' COMMENT '任务状态：queued/running/completed/failed',
+                    progress INT NOT NULL DEFAULT 0 COMMENT '进度百分比 0-100',
+                    total_count INT NOT NULL DEFAULT 0 COMMENT '本次同步的评价总数',
+                    new_count INT NOT NULL DEFAULT 0 COMMENT '新增评价数',
+                    updated_count INT NOT NULL DEFAULT 0 COMMENT '更新评价数',
+                    failed_count INT NOT NULL DEFAULT 0 COMMENT '失败账号数（全部账号模式）',
+                    succeeded_count INT NOT NULL DEFAULT 0 COMMENT '成功账号数（全部账号模式）',
+                    duration_seconds FLOAT NOT NULL DEFAULT 0 COMMENT '同步耗时（秒）',
+                    error_message TEXT NULL COMMENT '错误信息（脱敏）',
+                    started_time DATETIME(6) NULL COMMENT '开始时间',
+                    finished_time DATETIME(6) NULL COMMENT '完成时间',
+                    deleted TINYINT NOT NULL DEFAULT 0,
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_rate_sync_id (sync_id),
+                    KEY idx_rate_sync_tenant (tenant_id, deleted),
+                    KEY idx_rate_sync_account (tenant_id, account_id, status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='评价同步任务追踪'
+                """, "xianyu_rate_sync_task");
+
+        // 3. 账号级评价同步状态表
+        createTable("""
+                CREATE TABLE IF NOT EXISTS xianyu_rate_account_state (
+                    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+                    tenant_id BIGINT NOT NULL COMMENT '租户ID',
+                    account_id BIGINT NOT NULL COMMENT '闲鱼账号ID',
+                    last_sync_time DATETIME(6) NULL COMMENT '最后一次成功同步时间',
+                    last_sync_status VARCHAR(30) NULL COMMENT '最后一次同步状态：success/failed/partial',
+                    last_sync_error VARCHAR(500) NULL COMMENT '最后一次同步错误信息（脱敏）',
+                    last_total_count INT NULL COMMENT '最后一次同步的评价总数',
+                    is_syncing TINYINT NOT NULL DEFAULT 0 COMMENT '是否正在同步（1=同步中，用于任务去重）',
+                    sync_started_time DATETIME(6) NULL COMMENT '当前同步任务开始时间',
+                    last_full_sync_time DATETIME(6) NULL COMMENT '最后一次完整同步时间',
+                    deleted TINYINT NOT NULL DEFAULT 0,
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_rate_state_account (tenant_id, account_id),
+                    KEY idx_rate_state_syncing (tenant_id, is_syncing)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='账号级评价同步状态'
+                """, "xianyu_rate_account_state");
+    }
+
+    /**
+     * 退款管理表：退款记录 + 同步任务追踪 + 账号级同步状态。
+     *
+     * 与 automation-service/migrations/V1.22__add_refund_management_tables.sql 保持一致。
+     * 退款记录以 (tenant_id, account_id, external_refund_id) 唯一标识，支持多账号聚合。
+     * 仅鱼小铺账号（fish_shop_user=1）允许调用退款接口；普通账号由 Python 端拒绝。
+     */
+    private void ensureRefundTables() {
+        // 1. 退款记录表
+        createTable("""
+                CREATE TABLE IF NOT EXISTS xianyu_refund (
+                    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+                    tenant_id BIGINT NOT NULL COMMENT '租户ID',
+                    account_id BIGINT NOT NULL COMMENT '所属闲鱼账号ID',
+                    external_refund_id VARCHAR(64) NOT NULL COMMENT '闲鱼退款ID（refundInfoVO.refundId，字符串存储避免大整数精度丢失）',
+                    external_order_id VARCHAR(64) NULL COMMENT '订单ID（commonData.orderId，字符串存储）',
+                    external_item_id VARCHAR(64) NULL COMMENT '商品ID（commonData.itemId，字符串存储）',
+                    item_title VARCHAR(500) NULL COMMENT '商品标题（itemVO.title）',
+                    item_pic_url TEXT NULL COMMENT '商品图片URL（itemVO.itemPicUrl）',
+                    item_info_lines TEXT NULL COMMENT '商品规格补充信息（itemVO.itemInfoLines）',
+                    buy_num VARCHAR(32) NULL COMMENT '购买件数（priceVO.buyNum，保留原始字符串）',
+                    refund_fee DECIMAL(18,4) NULL COMMENT '退款金额（priceVO.refundFee，十进制存储避免浮点误差）',
+                    auction_price DECIMAL(18,4) NULL COMMENT '商品成交单价（priceVO.auctionPrice）',
+                    order_status VARCHAR(64) NULL COMMENT '退款大类（commonData.orderStatus）',
+                    order_simple_remark VARCHAR(255) NULL COMMENT '订单退款简要状态（commonData.orderSimpleRemark）',
+                    refund_status VARCHAR(64) NULL COMMENT '退款详细状态（refundInfoVO.refundStatus）',
+                    refund_status_desc VARCHAR(500) NULL COMMENT '状态倒计时或补充说明（refundInfoVO.refundStatusDesc）',
+                    common_refund_status VARCHAR(64) NULL COMMENT '服务端状态代码（commonData.refundStatus）',
+                    refund_reason VARCHAR(500) NULL COMMENT '退款原因（refundInfoVO.reason）',
+                    cs_status VARCHAR(64) NULL COMMENT '客服介入状态（refundInfoVO.csStatus）',
+                    logistics_company VARCHAR(128) NULL COMMENT '物流公司（commonData.companyName）',
+                    logistics_mail_no VARCHAR(128) NULL COMMENT '物流单号（commonData.mailNo，脱敏存储）',
+                    consign_time DATETIME NULL COMMENT '发货时间（commonData.consignTime）',
+                    refund_create_time DATETIME NULL COMMENT '退款申请时间（refundInfoVO.gmtCreate）',
+                    common_create_time DATETIME NULL COMMENT '订单创建时间回退字段（commonData.createTime）',
+                    buyer_nick VARCHAR(255) NULL COMMENT '买家昵称（buyerInfoVO.userNick，脱敏存储）',
+                    right_buttons_json TEXT NULL COMMENT '操作按钮列表（rightVO.btnList 的 JSON）',
+                    ext_total_refund_fee DECIMAL(18,4) NULL COMMENT '当前查询范围的退款总金额（data.data.ext.totalRefundFee，仅单账号有意义）',
+                    raw_json TEXT NULL COMMENT '原始响应记录（脱敏后的退款记录 JSON）',
+                    sync_status VARCHAR(32) NOT NULL DEFAULT 'synced' COMMENT '同步状态：synced=已同步, pending_refresh=待刷新',
+                    last_synced_time DATETIME(6) NULL COMMENT '最后一次同步时间',
+                    deleted TINYINT NOT NULL DEFAULT 0 COMMENT '软删除：退款历史通常不物理删除',
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                    updated_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_refund_tenant_account_external (tenant_id, account_id, external_refund_id),
+                    KEY idx_refund_tenant_account (tenant_id, account_id, deleted),
+                    KEY idx_refund_tenant_status (tenant_id, deleted, order_status),
+                    KEY idx_refund_tenant_time (tenant_id, deleted, refund_create_time),
+                    KEY idx_refund_sync_status (tenant_id, account_id, sync_status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='闲鱼退款记录（多账号聚合，按 account_id+external_refund_id 唯一）'
+                """, "xianyu_refund");
+
+        // 2. 退款同步任务追踪表
+        createTable("""
+                CREATE TABLE IF NOT EXISTS xianyu_refund_sync_task (
+                    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+                    sync_id VARCHAR(80) NOT NULL COMMENT '同步任务ID（唯一）',
+                    tenant_id BIGINT NOT NULL COMMENT '租户ID',
+                    account_id BIGINT NULL COMMENT '账号ID（NULL 表示全部账号聚合任务）',
+                    scope VARCHAR(20) NOT NULL DEFAULT 'single' COMMENT '同步范围：single=单账号, all=全部账号',
+                    status VARCHAR(30) NOT NULL DEFAULT 'queued' COMMENT '任务状态：queued/running/completed/failed',
+                    progress INT NOT NULL DEFAULT 0 COMMENT '进度百分比 0-100',
+                    total_count INT NOT NULL DEFAULT 0 COMMENT '本次同步的退款总数',
+                    new_count INT NOT NULL DEFAULT 0 COMMENT '新增退款数',
+                    updated_count INT NOT NULL DEFAULT 0 COMMENT '更新退款数',
+                    failed_count INT NOT NULL DEFAULT 0 COMMENT '失败账号数（全部账号模式）',
+                    succeeded_count INT NOT NULL DEFAULT 0 COMMENT '成功账号数（全部账号模式）',
+                    duration_seconds FLOAT NOT NULL DEFAULT 0 COMMENT '同步耗时（秒）',
+                    error_message TEXT NULL COMMENT '错误信息（脱敏）',
+                    started_time DATETIME(6) NULL COMMENT '开始时间',
+                    finished_time DATETIME(6) NULL COMMENT '完成时间',
+                    deleted TINYINT NOT NULL DEFAULT 0,
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_refund_sync_id (sync_id),
+                    KEY idx_refund_sync_tenant (tenant_id, deleted),
+                    KEY idx_refund_sync_account (tenant_id, account_id, status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='退款同步任务追踪'
+                """, "xianyu_refund_sync_task");
+
+        // 3. 账号级退款同步状态表
+        createTable("""
+                CREATE TABLE IF NOT EXISTS xianyu_refund_account_state (
+                    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+                    tenant_id BIGINT NOT NULL COMMENT '租户ID',
+                    account_id BIGINT NOT NULL COMMENT '闲鱼账号ID',
+                    last_sync_time DATETIME(6) NULL COMMENT '最后一次成功同步时间',
+                    last_sync_status VARCHAR(30) NULL COMMENT '最后一次同步状态：success/failed/partial',
+                    last_sync_error VARCHAR(500) NULL COMMENT '最后一次同步错误信息（脱敏）',
+                    last_total_count INT NULL COMMENT '最后一次同步的退款总数',
+                    is_syncing TINYINT NOT NULL DEFAULT 0 COMMENT '是否正在同步（1=同步中，用于任务去重）',
+                    sync_started_time DATETIME(6) NULL COMMENT '当前同步任务开始时间',
+                    last_full_sync_time DATETIME(6) NULL COMMENT '最后一次完整同步时间（用于区分快速刷新和完整校验）',
+                    deleted TINYINT NOT NULL DEFAULT 0,
+                    created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_refund_state_account (tenant_id, account_id),
+                    KEY idx_refund_state_syncing (tenant_id, is_syncing)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='账号级退款同步状态'
+                """, "xianyu_refund_account_state");
+    }
+
     private void ensureCompatibilityColumns() {
         // billing_plan：V1.26 自定义介绍文本与周期类型 + V1.29 月/季/年三档价格
         addColumnIfMissing("billing_plan", "features_text", "TEXT NULL COMMENT '自定义套餐介绍文本（换行分隔多条权益）'");
@@ -1716,6 +2470,17 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
         executeQuietly("UPDATE billing_plan SET price_year_cent = price_cent WHERE period_type = 'year' AND price_cent > 0 AND price_year_cent = 0 AND deleted = 0");
 
         addColumnIfMissing("mall_product", "copy", "TEXT NULL");
+
+        // 售整自动上架功能字段（V1.38）
+        addColumnIfMissing("xianyu_goods", "auto_relist_enabled", "TINYINT NOT NULL DEFAULT 0 COMMENT '售整自动上架开关：0关 1开'");
+        addColumnIfMissing("xianyu_goods", "next_relist_goods_id", "BIGINT NULL COMMENT '重发后的新商品记录ID'");
+        addColumnIfMissing("xianyu_goods", "relist_source_goods_id", "BIGINT NULL COMMENT '本商品是从哪个原商品重发来的'");
+        addColumnIfMissing("xianyu_goods", "last_relist_at", "DATETIME NULL COMMENT '上次重发时间'");
+        addColumnIfMissing("xianyu_goods", "has_snapshot", "TINYINT NOT NULL DEFAULT 0 COMMENT '是否有完整数据快照'");
+        addColumnIfMissing("xianyu_goods", "original_quantity", "INT NULL COMMENT '商品原始库存'");
+        createIndexIfMissing("xianyu_goods", "idx_auto_relist_enabled",
+                "CREATE INDEX idx_auto_relist_enabled ON xianyu_goods(auto_relist_enabled, status, next_relist_goods_id)");
+
         addColumnIfMissing("xianyu_account", "created_by_user_id", "BIGINT NULL");
         addColumnIfMissing("xianyu_account", "risk_level", "TINYINT DEFAULT 0");
         addColumnIfMissing("xianyu_account", "disabled_by_admin", "TINYINT DEFAULT 0");

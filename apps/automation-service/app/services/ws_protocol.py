@@ -1152,6 +1152,22 @@ def validate_parsed_message(msg: dict) -> dict:
         logger.warning(
             "validate: sender_user_id 等于卖家自己, 修正 direction=OUT"
         )
+    elif (
+        not sender_user_id_normalized
+        and receiver_user_id
+        and seller_external_uid_normalized
+    ):
+        # 自问自答防护：sender_user_id 为空时，通过 receiverUserId 反向推断发送者。
+        # 场景：IM 回环消息可能因协议变体导致 senderUserId 字段缺失，
+        # 此时若 receiverUserId 等于卖家自己，说明是买家发给我的（保持 IN）；
+        # 若 receiverUserId 不等于卖家自己（即买家），说明是自己发出的（修正为 OUT）。
+        receiver_user_id_normalized = receiver_user_id.replace("@goofish", "").strip()
+        if receiver_user_id_normalized and receiver_user_id_normalized != seller_external_uid_normalized:
+            violations.append("receiver_is_buyer_self_missing")
+            msg["direction"] = "OUT"  # 自己发给买家（senderUserId 缺失的回环消息）
+            logger.warning(
+                "validate: sender_user_id 为空且 receiverUserId 指向买家, 修正 direction=OUT (防止自问自答)"
+            )
 
     # 校验4: sender/receiver/pnm 为空并不一定是失败。
     # 闲鱼官方消息列表里经常只给 sId + msgContent（用户截图中的会话正是这种结构），

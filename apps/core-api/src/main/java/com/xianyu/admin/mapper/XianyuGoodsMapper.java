@@ -70,14 +70,16 @@ public interface XianyuGoodsMapper {
     @Select("SELECT * FROM xianyu_goods WHERE tenant_id = #{tenantId} AND id = #{id} AND deleted = 0")
     XianyuGoods findById(@Param("tenantId") Long tenantId, @Param("id") Long id);
 
-    @Insert("INSERT INTO xianyu_goods(tenant_id, account_id, external_goods_id, title, price, sold_price, cover_pic, image_url, stock, quantity, exposure_count, view_count, want_count, detail_url, detail_info, description, category, sort_order, status, deleted, created_time, updated_time) " +
-            "VALUES(#{tenantId}, #{accountId}, #{externalGoodsId}, #{title}, #{price}, #{soldPrice}, #{coverPic}, #{imageUrl}, #{stock}, #{quantity}, #{exposureCount}, #{viewCount}, #{wantCount}, #{detailUrl}, #{detailInfo}, #{description}, #{category}, #{sortOrder}, #{status}, 0, NOW(), NOW())")
+    @Insert("INSERT INTO xianyu_goods(tenant_id, account_id, external_goods_id, title, price, sold_price, cover_pic, image_url, stock, quantity, exposure_count, view_count, want_count, exposure_count_30d, view_count_30d, detail_url, detail_info, description, category, sort_order, status, deleted, created_time, gmt_create, updated_time) " +
+            "VALUES(#{tenantId}, #{accountId}, #{externalGoodsId}, #{title}, #{price}, #{soldPrice}, #{coverPic}, #{imageUrl}, #{stock}, #{quantity}, #{exposureCount}, #{viewCount}, #{wantCount}, #{exposureCount30d}, #{viewCount30d}, #{detailUrl}, #{detailInfo}, #{description}, #{category}, #{sortOrder}, #{status}, 0, NOW(), #{gmtCreate}, NOW())")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(XianyuGoods goods);
 
     @Update("UPDATE xianyu_goods SET account_id = #{accountId}, external_goods_id = #{externalGoodsId}, title = #{title}, price = #{price}, sold_price = #{soldPrice}, cover_pic = #{coverPic}, " +
             "image_url = #{imageUrl}, stock = #{stock}, quantity = #{quantity}, exposure_count = #{exposureCount}, view_count = #{viewCount}, want_count = #{wantCount}, " +
-            "detail_url = #{detailUrl}, detail_info = #{detailInfo}, description = #{description}, category = #{category}, sort_order = #{sortOrder}, status = #{status}, updated_time = NOW() " +
+            "exposure_count_30d = #{exposureCount30d}, view_count_30d = #{viewCount30d}, " +
+            "detail_url = #{detailUrl}, detail_info = #{detailInfo}, description = #{description}, category = #{category}, sort_order = #{sortOrder}, status = #{status}, " +
+            "gmt_create = #{gmtCreate}, updated_time = NOW() " +
             "WHERE tenant_id = #{tenantId} AND id = #{id} AND deleted = 0")
     int update(XianyuGoods goods);
 
@@ -89,6 +91,15 @@ public interface XianyuGoodsMapper {
 
     @Select("SELECT * FROM xianyu_goods WHERE tenant_id = #{tenantId} AND account_id = #{accountId} AND external_goods_id = #{externalGoodsId} AND deleted = 0")
     XianyuGoods findByExternalGoodsId(@Param("tenantId") Long tenantId, @Param("accountId") Long accountId, @Param("externalGoodsId") String externalGoodsId);
+
+    /**
+     * 更新售整自动上架开关。仅修改 auto_relist_enabled，不触碰其他字段。
+     */
+    @Update("UPDATE xianyu_goods SET auto_relist_enabled = #{enabled}, updated_time = NOW() " +
+            "WHERE id = #{id} AND tenant_id = #{tenantId} AND deleted = 0")
+    int updateAutoRelistEnabled(@Param("id") Long id,
+                                @Param("enabled") Integer enabled,
+                                @Param("tenantId") Long tenantId);
 
     @Select("SELECT COUNT(*) FROM xianyu_goods WHERE tenant_id = #{tenantId} AND deleted = 0")
     int countAll(@Param("tenantId") Long tenantId);

@@ -125,25 +125,32 @@ public class ApiSliderSolveService {
         Long userId = resolveTenantUserId(tenantId);
         if (userId == null) throw new BizException(503, "租户主用户不可用");
 
+        // 预先生成 requestId，保证预检失败时也能持久化记录
+        String requestId = "req_" + UUID.randomUUID().toString().replace("-", "").substring(0, 24);
+
         // 2. 准入检查
         String pendingKey = PENDING_KEY_PREFIX + tenantId;
         long pendingCount = getCurrentPending(pendingKey);
         long tokenBalance = queryTokenBalance(userId, tenantId);
         long required = (pendingCount + 1) * perCallTokens;
         if (tokenBalance < required) {
+            // 预检失败：持久化 precheck_rejected 记录，确保后台/前台记录页面可见
+            insertPrecheckRejectedRecord(tenantId, apiKeyPrefix, requestId, clientIp,
+                    "余额不足。当前排队/处理中 " + pendingCount + " 个请求，本次共需 " + required + " Token，您的余额为 " + tokenBalance);
             Map<String, Object> err = new LinkedHashMap<>();
             err.put("ok", false);
-            err.put("status", "insufficient_balance");
+            err.put("status", "precheck_rejected");
             err.put("error", "余额不足。当前排队/处理中 " + pendingCount + " 个请求，本次共需 " + required + " Token，您的余额为 " + tokenBalance + "。请充值或等待队列消化。");
             err.put("pendingCount", pendingCount);
             err.put("requiredTokens", required);
             err.put("balanceTokens", tokenBalance);
+            err.put("recordId", requestId);
+            err.put("tokenCharged", 0);
             return err;
         }
 
         // 3. 接受请求：pending_count += 1
         redisTemplate.opsForValue().increment(pendingKey);
-        String requestId = "req_" + UUID.randomUUID().toString().replace("-", "").substring(0, 24);
         String cookie = (String) body.get("cookie");
         String targetUrl = (String) body.getOrDefault("targetUrl", "https://www.goofish.com");
         long timeoutMs = toLong(body.get("timeoutMs"), 90000L);
@@ -173,7 +180,22 @@ public class ApiSliderSolveService {
                     .retrieve()
                     .toEntity(Map.class);
 
-            Map<String, Object> result = resp.getBody() != null ? resp.getBody() : new HashMap<>();
+            // 按项目规则"Java 网关代理 Python 服务时必须拆包 ResultObject {code,msg,data}，仅返回 data 字段"：
+            // Python 端返回 ResultObject {code, msg, data}，业务字段（status/solved/cookies/error/...）位于 data 子对象。
+            // 此处拆包：若顶层存在 data 子对象（Map 类型），则以 data 为业务结果；否则兼容直接返回扁平格式的情况。
+            Map<String, Object> respBody = resp.getBody() != null ? resp.getBody() : new HashMap<>();
+            Object dataObj = respBody.get("data");
+            Map<String, Object> result;
+            if (dataObj instanceof Map<?, ?> dataMap) {
+                // 拆包 ResultObject：仅保留 data 子对象的业务字段，对外返回扁平结构
+                result = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> entry : dataMap.entrySet()) {
+                    result.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            } else {
+                // 兼容直接返回扁平格式（无 ResultObject 包装）的情况
+                result = respBody;
+            }
             String status = (String) result.getOrDefault("status", "fail");
             boolean success = "success".equals(status);
 
@@ -267,8 +289,8 @@ public class ApiSliderSolveService {
                     tokens, userId, tenantId, tokens);
             if (affected != 1) return false;
             int ledger = jdbcTemplate.update(
-                    "INSERT INTO token_balance_ledger (user_id, tenant_id, change_amount, change_type, ref_type, ref_no, remark, created_time, updated_time) " +
-                            "VALUES (?, ?, ?, 'consume', 'api_slider', ?, 'API滑块求解扣费', NOW(), NOW())",
+                    "INSERT INTO token_balance_ledger (user_id, tenant_id, change_amount, change_type, ref_type, ref_no, remark, created_time) " +
+                            "VALUES (?, ?, ?, 'consume', 'api_slider', ?, 'API滑块求解扣费', NOW())",
                     userId, tenantId, -tokens, requestId);
             if (ledger != 1) throw new IllegalStateException("token ledger insert failed");
             int record = jdbcTemplate.update(
@@ -284,6 +306,29 @@ public class ApiSliderSolveService {
         jdbcTemplate.update(
                 "UPDATE xianyu_api_captcha_solve_record SET token_charge_failed=1, updated_at=NOW() WHERE request_id=? AND tenant_id=?",
                 requestId, tenantId);
+    }
+
+    /**
+     * 预检失败（余额不足）时插入 precheck_rejected 记录。
+     * 此场景不经过 Python automation-service，需由 Java 网关直接持久化，
+     * 确保后台/前台记录页面能看到预检拒绝记录。
+     */
+    private void insertPrecheckRejectedRecord(Long tenantId, String apiKeyPrefix, String requestId,
+                                              String clientIp, String reason) {
+        try {
+            jdbcTemplate.update(
+                    "INSERT INTO xianyu_api_captcha_solve_record " +
+                            "(tenant_id, api_key_prefix, client_ip, request_id, event_desc, trigger_scene, " +
+                            "result, status, engine, retry_count, priority, failure_reason, error_message, " +
+                            "token_charged, token_charge_failed, queued_at, started_at, finished_at, " +
+                            "created_at, updated_at, deleted) " +
+                            "VALUES (?, ?, ?, ?, 'external api slider solve', 'api', " +
+                            "'precheck_rejected', 'precheck_rejected', 'Playwright', 0, 0, 'precheck_rejected', ?, " +
+                            "0, 0, NOW(), NOW(), NOW(), NOW(), NOW(), 0)",
+                    tenantId, apiKeyPrefix, clientIp, requestId, sanitizeError(reason));
+        } catch (Exception e) {
+            log.warn("insert precheck_rejected record failed tenant={} req={}: {}", tenantId, requestId, e.getMessage());
+        }
     }
 
     private record ChargeResult(int tokenCharged, boolean failed) {}

@@ -231,8 +231,17 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-dev-only-redis-password-change-me}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN must be set}
       COOKIE_CRYPTO_SECRET: ${COOKIE_CRYPTO_SECRET:?COOKIE_CRYPTO_SECRET must be set}
+      # 保留 HEADLESS=true 作为滑块求解（sliderSolver.ts）的默认配置。
+      # 滑块求解在该模式下成功率非常高，严禁改动此环境变量。
+      # 商机发掘店铺爬取（goofish.ts）不读取此变量，自行根据 DISPLAY 决定 headless，
+      # 以便在 Xvfb 提供显示器时使用有头模式降低 Baxia 风控触发率。
       HEADLESS: "true"
-    command: ["node", "dist/worker.js"]
+    # 用 xvfb-run 包装启动命令，自动启动 Xvfb 虚拟显示器并设置 DISPLAY 环境变量。
+    # 原因：worker 容器也负责执行店铺爬取任务（crawlGoofishStoreDetailed），
+    # 该场景下 headless=true 会触发 Baxia 风控（"店铺头部接口非成功"），
+    # 需要通过 Xvfb 提供 DISPLAY 让 goofish.ts 切换到 headed 模式。
+    # 与 crawler-service 容器保持一致，不影响 sliderSolver.ts（它读 HEADLESS=true）。
+    command: ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24 -ac", "node", "dist/worker.js"]
     healthcheck:
       test: ["CMD", "node", "dist/healthcheck.js"]
       interval: 30s
@@ -295,7 +304,7 @@ services:
       OPEN_SOURCE_BRIDGE_SITE_NAME: ${OPEN_SOURCE_BRIDGE_SITE_NAME:-开源版}
       XIANYU_UPLOAD_ROOT_DIR: /app/uploads
     ports:
-      - "127.0.0.1:${BACKEND_PORT:-18080}:18080"
+      - "${BACKEND_PORT:-18080}:18080"
     volumes:
       - uploads_data:/app/uploads
     healthcheck:
@@ -317,8 +326,14 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
+      - /var/cache/nginx:rw,noexec,nosuid,size=64m,uid=101,gid=101,mode=0777
+      - /run:rw,noexec,nosuid,size=4m
     depends_on:
       backend:
         condition: service_healthy
@@ -342,8 +357,14 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
+      - /var/cache/nginx:rw,noexec,nosuid,size=64m,uid=101,gid=101,mode=0777
+      - /run:rw,noexec,nosuid,size=4m
     depends_on:
       backend:
         condition: service_healthy

@@ -542,15 +542,25 @@ class TestBuildPriceUpdatePayload:
 
 
 class TestSafeQuantity:
-    """安全读取库存测试"""
+    """安全读取库存测试。
+    需求要求：库存 0 是合法值可以提交；但库存数据缺失/None/无效时不允许提交 0，
+    必须抛出异常以阻止调用改价接口，避免误传 0 覆盖真实库存。
+    """
 
     def test_safe_quantity_normal(self):
+        import pytest as pt
         from app.services.xianyu_goods_sync import XianyuItemOperator
+        # 合法库存（包括 0）应正常返回
         assert XianyuItemOperator._safe_quantity({"quantity": 10}) == 10
         assert XianyuItemOperator._safe_quantity({"quantity": "5"}) == 5
         assert XianyuItemOperator._safe_quantity({"quantity": 0}) == 0
-        assert XianyuItemOperator._safe_quantity({"quantity": None}) == 0
-        assert XianyuItemOperator._safe_quantity({}) == 0
+        # 库存数据缺失/None/无效时应抛出异常，不允许提交 0
+        with pt.raises(RuntimeError, match="库存数据缺失"):
+            XianyuItemOperator._safe_quantity({"quantity": None})
+        with pt.raises(RuntimeError, match="库存数据缺失"):
+            XianyuItemOperator._safe_quantity({})
+        with pt.raises(RuntimeError, match="库存数据格式异常"):
+            XianyuItemOperator._safe_quantity({"quantity": "abc"})
 
 
 class TestXianyuItemOperatorUpdatePrice:
@@ -561,7 +571,13 @@ class TestXianyuItemOperatorUpdatePrice:
     def test_update_price_success(self, mock_find, mock_call_api):
         from app.services.xianyu_goods_sync import XianyuItemOperator
         mock_find.return_value = {"itemId": "12345", "quantity": 10}
-        mock_call_api.return_value = {"ret": ["SUCCESS::调用成功"]}
+        # 完整的成功响应：ret 包含 SUCCESS、data.code=success、data.data=true
+        mock_call_api.return_value = {
+            "api": "mtop.alibaba.idle.seller.pc.item.info.update",
+            "data": {"code": "success", "data": True, "msg": "成功"},
+            "ret": ["SUCCESS::调用成功"],
+            "v": "1.0",
+        }
 
         operator = XianyuItemOperator("_m_h5_tk=abc123_456", is_fish_shop=True)
         result = operator.update_price("12345", "99.99")
@@ -569,6 +585,12 @@ class TestXianyuItemOperatorUpdatePrice:
         assert result is True
         mock_find.assert_called_once_with("12345")
         mock_call_api.assert_called_once()
+        # 验证提交给 API 的 payload 使用了搜索接口返回的最新库存（不硬编码）
+        sent_payload = mock_call_api.call_args.args[2]
+        assert sent_payload["itemId"] == "12345"
+        assert sent_payload["quantity"] == 10
+        assert sent_payload["price"] == "99.99"
+        assert "itemSkuListStr" not in sent_payload
 
     def test_update_price_not_fish_shop(self):
         from app.services.xianyu_goods_sync import XianyuItemOperator
@@ -586,6 +608,226 @@ class TestXianyuItemOperatorUpdatePrice:
         import pytest as pt
         with pt.raises(RuntimeError, match="未找到商品"):
             operator.update_price("12345", "99.99")
+
+    @patch.object(XianyuItemOperator, '_find_seller_item')
+    def test_update_price_multi_spec_rejected(self, mock_find):
+        """多规格商品（idleItemSkuList 非空）应被拒绝行内改价，不调用改价接口"""
+        import pytest as pt
+        from app.services.xianyu_goods_sync import (
+            XianyuItemOperator,
+            XianyuMultiSpecNotSupportedError,
+        )
+        mock_find.return_value = {
+            "itemId": "12345",
+            "quantity": 10,
+            "idleItemSkuList": [
+                {"skuId": "sku1", "quantity": 5, "price": "99.00"},
+                {"skuId": "sku2", "quantity": 5, "price": "99.00"},
+            ],
+        }
+
+        operator = XianyuItemOperator("_m_h5_tk=abc123_456", is_fish_shop=True)
+        with pt.raises(XianyuMultiSpecNotSupportedError, match="多规格"):
+            operator.update_price("12345", "88.00")
+
+    @patch.object(XianyuItemOperator, '_call_api')
+    @patch.object(XianyuItemOperator, '_find_seller_item')
+    def test_update_price_business_failure(self, mock_find, mock_call_api):
+        """HTTP 200 但业务失败（data.code != success 或 data.data != true）应抛错"""
+        import pytest as pt
+        from app.services.xianyu_goods_sync import (
+            XianyuItemOperator,
+            XianyuProviderRejectedError,
+        )
+        mock_find.return_value = {"itemId": "12345", "quantity": 10}
+        # HTTP 200 但业务失败：ret 包含 SUCCESS，但 data.data 为 false
+        mock_call_api.return_value = {
+            "ret": ["SUCCESS::调用成功"],
+            "data": {"code": "fail", "data": False, "msg": "商品状态异常"},
+        }
+
+        operator = XianyuItemOperator("_m_h5_tk=abc123_456", is_fish_shop=True)
+        with pt.raises(XianyuProviderRejectedError):
+            operator.update_price("12345", "99.99")
+
+    @patch.object(XianyuItemOperator, '_call_api')
+    @patch.object(XianyuItemOperator, '_find_seller_item')
+    def test_update_price_uses_latest_quantity(self, mock_find, mock_call_api):
+        """改价时 quantity 必须使用搜索接口返回的最新库存，不硬编码 999 或 0"""
+        from app.services.xianyu_goods_sync import XianyuItemOperator
+        mock_find.return_value = {"itemId": "987654", "quantity": 42}
+        mock_call_api.return_value = {
+            "ret": ["SUCCESS::调用成功"],
+            "data": {"code": "success", "data": True, "msg": "成功"},
+        }
+
+        operator = XianyuItemOperator("_m_h5_tk=abc123_456", is_fish_shop=True)
+        operator.update_price("987654", "1.88")
+
+        sent_payload = mock_call_api.call_args.args[2]
+        # 必须使用搜索接口返回的库存 42，而不是 999、0 或其他默认值
+        assert sent_payload["quantity"] == 42
+        # price 字段使用元金额，不转换为分
+        assert sent_payload["price"] == "1.88"
+        # 不使用 priceInCent 字段
+        assert "priceInCent" not in sent_payload
+
+    @patch.object(XianyuItemOperator, '_call_api')
+    @patch.object(XianyuItemOperator, '_find_seller_item')
+    def test_update_price_quantity_zero_is_valid(self, mock_find, mock_call_api):
+        """库存 0 是合法的当前库存，可以作为 quantity 提交"""
+        from app.services.xianyu_goods_sync import XianyuItemOperator
+        mock_find.return_value = {"itemId": "111", "quantity": 0}
+        mock_call_api.return_value = {
+            "ret": ["SUCCESS::调用成功"],
+            "data": {"code": "success", "data": True, "msg": "成功"},
+        }
+
+        operator = XianyuItemOperator("_m_h5_tk=abc123_456", is_fish_shop=True)
+        operator.update_price("111", "5.00")
+
+        sent_payload = mock_call_api.call_args.args[2]
+        assert sent_payload["quantity"] == 0
+
+    @patch.object(XianyuItemOperator, '_call_api')
+    @patch.object(XianyuItemOperator, '_find_seller_item')
+    def test_update_price_missing_quantity_does_not_call_api(self, mock_find, mock_call_api):
+        """商品数据中没有 quantity 字段时不调用改价接口，避免误传 0 覆盖真实库存"""
+        import pytest as pt
+        from app.services.xianyu_goods_sync import XianyuItemOperator
+        # 搜索接口返回的商品数据中没有 quantity 字段（不可靠）
+        mock_find.return_value = {"itemId": "12345"}
+
+        operator = XianyuItemOperator("_m_h5_tk=abc123_456", is_fish_shop=True)
+        with pt.raises(RuntimeError, match="库存数据缺失"):
+            operator.update_price("12345", "9.90")
+        # 必须没有调用改价接口
+        mock_call_api.assert_not_called()
+
+    @patch.object(XianyuItemOperator, '_call_api')
+    @patch.object(XianyuItemOperator, '_find_seller_item')
+    def test_update_price_none_quantity_does_not_call_api(self, mock_find, mock_call_api):
+        """商品数据中 quantity 为 None 时不调用改价接口"""
+        import pytest as pt
+        from app.services.xianyu_goods_sync import XianyuItemOperator
+        mock_find.return_value = {"itemId": "12345", "quantity": None}
+
+        operator = XianyuItemOperator("_m_h5_tk=abc123_456", is_fish_shop=True)
+        with pt.raises(RuntimeError, match="库存数据缺失"):
+            operator.update_price("12345", "9.90")
+        mock_call_api.assert_not_called()
+
+    @patch('app.services.xianyu_goods_sync.requests.post')
+    @patch.object(XianyuItemOperator, '_find_seller_item')
+    def test_update_price_sign_uses_same_data_string(self, mock_find, mock_post):
+        """签名使用的 data 字符串必须与 POST 表单 data 字段完全一致"""
+        import json
+        from app.services.xianyu_goods_sync import XianyuItemOperator
+        mock_find.return_value = {"itemId": "12345", "quantity": 10}
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "ret": ["SUCCESS::调用成功"],
+            "data": {"code": "success", "data": True, "msg": "成功"},
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_post.return_value = mock_response
+
+        operator = XianyuItemOperator("_m_h5_tk=abc123_456", is_fish_shop=True)
+        # 捕获 _build_sign 调用时的 data_json
+        captured_data_json = []
+        original_build_sign = operator._build_sign
+
+        def spy_build_sign(t_ms, data_json):
+            captured_data_json.append(data_json)
+            return original_build_sign(t_ms, data_json)
+
+        with patch.object(operator, '_build_sign', side_effect=spy_build_sign):
+            operator.update_price("12345", "99.99")
+
+        # 验证签名时使用的 data 字符串与 POST 表单 data 字段一致
+        assert len(captured_data_json) == 1
+        assert mock_post.call_count == 1
+        # 提交到表单 data 字段的字符串
+        post_data = mock_post.call_args.kwargs.get("data")
+        assert isinstance(post_data, dict), f"POST data 参数应为 dict，实际: {type(post_data)}"
+        submitted_data_json = post_data.get("data")
+        assert submitted_data_json is not None, "POST data 字段缺少 data 键"
+        # 签名时使用的 data 字符串必须与 POST 表单 data 字段完全一致
+        assert captured_data_json[0] == submitted_data_json
+
+
+class TestVerifyPriceUpdateSuccess:
+    """改价业务成功响应验证测试"""
+
+    def test_success_response(self):
+        from app.services.xianyu_goods_sync import XianyuItemOperator
+        response = {
+            "api": "mtop.alibaba.idle.seller.pc.item.info.update",
+            "data": {"code": "success", "data": True, "msg": "成功"},
+            "ret": ["SUCCESS::调用成功"],
+            "v": "1.0",
+        }
+        # 不抛异常即通过
+        XianyuItemOperator._verify_price_update_success(response)
+
+    def test_missing_success_in_ret(self):
+        from app.services.xianyu_goods_sync import (
+            XianyuItemOperator,
+            XianyuProviderRejectedError,
+        )
+        import pytest as pt
+        response = {
+            "ret": ["FAIL::调用失败"],
+            "data": {"code": "success", "data": True},
+        }
+        with pt.raises(XianyuProviderRejectedError, match="返回失败"):
+            XianyuItemOperator._verify_price_update_success(response)
+
+    def test_data_code_not_success(self):
+        from app.services.xianyu_goods_sync import (
+            XianyuItemOperator,
+            XianyuProviderRejectedError,
+        )
+        import pytest as pt
+        response = {
+            "ret": ["SUCCESS::调用成功"],
+            "data": {"code": "fail", "data": True},
+        }
+        with pt.raises(XianyuProviderRejectedError, match="业务失败"):
+            XianyuItemOperator._verify_price_update_success(response)
+
+    def test_data_data_not_true(self):
+        from app.services.xianyu_goods_sync import (
+            XianyuItemOperator,
+            XianyuProviderRejectedError,
+        )
+        import pytest as pt
+        response = {
+            "ret": ["SUCCESS::调用成功"],
+            "data": {"code": "success", "data": False},
+        }
+        with pt.raises(XianyuProviderRejectedError, match="false"):
+            XianyuItemOperator._verify_price_update_success(response)
+
+    def test_response_not_dict(self):
+        from app.services.xianyu_goods_sync import (
+            XianyuItemOperator,
+            XianyuProviderRejectedError,
+        )
+        import pytest as pt
+        with pt.raises(XianyuProviderRejectedError, match="格式异常"):
+            XianyuItemOperator._verify_price_update_success("not a dict")
+
+    def test_data_body_not_dict(self):
+        from app.services.xianyu_goods_sync import (
+            XianyuItemOperator,
+            XianyuProviderRejectedError,
+        )
+        import pytest as pt
+        response = {"ret": ["SUCCESS::调用成功"], "data": "invalid"}
+        with pt.raises(XianyuProviderRejectedError, match="格式异常"):
+            XianyuItemOperator._verify_price_update_success(response)
 
 
 class TestFindSellerItem:

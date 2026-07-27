@@ -118,9 +118,10 @@ public interface ApiSliderSolveRecordMapper {
 
     /**
      * 扫描僵尸记录（对账定时任务用）
+     * 注：@Select 注解中是普通字符串而非 XML，< 不需要转义为 &lt;
      */
     @Select("SELECT id, tenant_id, request_id FROM xianyu_api_captcha_solve_record " +
             "WHERE status IN ('queued','retrying') AND queued_at IS NOT NULL " +
-            "AND queued_at &lt; DATE_SUB(NOW(), INTERVAL 10 MINUTE) AND COALESCE(deleted,0) = 0")
+            "AND queued_at < DATE_SUB(NOW(), INTERVAL 10 MINUTE) AND COALESCE(deleted,0) = 0")
     List<Map<String, Object>> selectStaleRecords();
 }

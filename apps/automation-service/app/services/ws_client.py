@@ -41,7 +41,9 @@ logger = logging.getLogger(__name__)
 
 WS_URL = "wss://wss-goofish.dingtalk.com/"
 HEARTBEAT_INTERVAL = 15  # 心跳间隔（秒）
-RECONNECT_DELAY = 5  # 重连延迟（秒）
+RECONNECT_DELAY_INITIAL = 5       # 初始重连延迟（秒）
+RECONNECT_DELAY_MAX = 300         # 最大重连延迟（5 分钟，避免长时间失联）
+RECONNECT_BACKOFF_FACTOR = 2      # 退避倍数
 MESSAGE_TIMEOUT = 10  # 发送消息超时（秒）
 
 # ackDiff 短轮询间隔（秒）：服务端无新消息时，客户端等待多长时间再发下一轮 ackDiff。
@@ -676,10 +678,12 @@ class XianyuWebSocketClient:
             )
 
     async def _connect_loop(self):
-        """连接循环（自动重连）。"""
+        """连接循环（自动重连，指数退避）。"""
+        reconnect_delay = RECONNECT_DELAY_INITIAL
         while self._running:
             try:
                 await self._connect()
+                reconnect_delay = RECONNECT_DELAY_INITIAL  # 成功后重置退避
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -691,8 +695,12 @@ class XianyuWebSocketClient:
                 )
 
             if self._running:
-                logger.info("WS 将在 %d 秒后重连 accountId=%d", RECONNECT_DELAY, self.account_id)
-                await asyncio.sleep(RECONNECT_DELAY)
+                logger.info("WS 将在 %d 秒后重连 accountId=%d", reconnect_delay, self.account_id)
+                await asyncio.sleep(reconnect_delay)
+                reconnect_delay = min(
+                    reconnect_delay * RECONNECT_BACKOFF_FACTOR,
+                    RECONNECT_DELAY_MAX,
+                )
 
     async def _send_and_wait(self, msg: dict[str, Any], timeout: float = MESSAGE_TIMEOUT) -> dict[str, Any]:
         if not self._connected or not self._ws:
@@ -821,7 +829,7 @@ class XianyuWebSocketClient:
             logger.error("获取 WebSocket Token 失败 accountId=%d", self.account_id)
             # 关键修复：Token 获取失败时持久化离线状态，避免 ws_status 保持旧值 1 误导前端
             await self._persist_ws_offline("token_failed: 获取 WebSocket Token 失败")
-            await asyncio.sleep(RECONNECT_DELAY)
+            # 不在此处 sleep，由 _connect_loop 的指数退避统一控制重连节奏
             return
 
         # === 关键：确保 cookie 中的 _m_h5_tk 与 accessToken 匹配 ===

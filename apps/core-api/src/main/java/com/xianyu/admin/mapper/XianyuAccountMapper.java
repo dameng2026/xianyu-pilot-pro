@@ -11,7 +11,7 @@ import java.util.Map;
 public interface XianyuAccountMapper {
 
     @Select("<script>" +
-            "SELECT a.*, m.level AS membership_level, m.expired_time AS membership_expired_time, " +
+            "SELECT DISTINCT a.*, m.level AS membership_level, m.expired_time AS membership_expired_time, " +
             "m.status AS membership_status, auth.cookie_status, auth.last_login_status_code, " +
             "auth.last_login_status_message, auth.last_login_check_time, r.online_status, r.ws_status, r.ws_latency_ms, " +
             "r.last_heartbeat_time, r.last_online_time, " +
@@ -38,8 +38,11 @@ public interface XianyuAccountMapper {
                                    @Param("limit") int limit);
 
     @Select("<script>" +
-            "SELECT a.id, a.external_uid, a.nickname, a.display_name, a.avatar_url, a.province, a.city, " +
+            "SELECT DISTINCT a.id, a.external_uid, a.nickname, a.display_name, a.avatar_url, a.province, a.city, " +
             "a.account_level, a.remark, a.status, a.message_expire_time, a.scheduled_redelivery, a.auto_polish, " +
+            "a.fish_shop_user, a.fish_shop_score, a.seller_level, a.ip_location, a.introduction, " +
+            "a.followers, a.following, a.praise_ratio, a.review_num, a.sold_count, " +
+            "a.created_time, " +
             "auth.cookie_status, auth.last_login_status_code, auth.last_login_status_message, auth.last_login_check_time, " +
             "r.online_status, r.ws_status, r.ws_latency_ms, r.last_heartbeat_time, r.last_online_time, " +
             "h.health_score, h.api_success_rate, h.avg_response_ms " +

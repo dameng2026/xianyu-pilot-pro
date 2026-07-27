@@ -5,7 +5,7 @@
       <div class="page-title-row">
         <div>
           <h2>功能管理</h2>
-          <p>按账号等级控制前台各功能页面的访问开关。第一列为功能名称，后续列分别为普通用户、VIP、SVP 的独立开关，最后一列"全部"为快捷开关：开启时三列全部打开，关闭时三列全部关闭。关闭"全部"后可单独控制各级别。</p>
+          <p>按账号等级控制前台各功能页面的访问开关。第一列为功能名称，后续列分别为普通用户、VIP、SVP 的独立开关，"全部"为快捷开关：开启时三列全部打开，关闭时三列全部关闭。"维护"列开启后，所有用户进入该页面都会弹窗提示"正在维护升级中"，优先级高于等级开关，常用于功能升级、故障应急等场景。</p>
         </div>
         <div class="toolbar-actions">
           <ElButton :disabled="configState !== 'ready'" @click="loadConfig">
@@ -78,6 +78,19 @@
                 active-text="开"
                 inactive-text="关"
                 @change="(val: boolean) => onAllChange(row as FeatureSwitchItem, val)"
+              />
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="维护" width="100" align="center">
+            <template #default="{ row }">
+              <ElSwitch
+                v-model="row.maintenance"
+                :active-value="true"
+                :inactive-value="false"
+                inline-prompt
+                active-text="维护"
+                inactive-text="—"
+                class="maintenance-switch"
               />
             </template>
           </ElTableColumn>
@@ -242,4 +255,12 @@ onMounted(loadConfig)
 .feature-key { font-size: 12px; color: var(--el-text-color-secondary); }
 .reason-placeholder { color: var(--el-text-color-placeholder); font-size: 13px; }
 .empty-state { padding: 16px 0; text-align: center; color: var(--el-text-color-secondary); font-size: 13px; }
+/* 维护开关：开启时使用红色（danger）醒目提示 */
+.maintenance-switch.is-checked :deep(.el-switch__core) {
+  background-color: var(--el-color-danger) !important;
+  border-color: var(--el-color-danger) !important;
+}
+.maintenance-switch :deep(.el-switch__label) {
+  color: var(--el-color-danger);
+}
 </style>

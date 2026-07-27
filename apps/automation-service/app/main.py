@@ -66,6 +66,19 @@ def runtime_compatibility_columns():
         "xianyu_goods": {
             "image_urls": "JSON NULL COMMENT '图片URL列表'",
             "raw_payload": "JSON NULL COMMENT '原始商品数据快照'",
+            # 售整自动上架功能字段（V1.20）
+            "auto_relist_enabled": "INT NOT NULL DEFAULT 0 COMMENT '售整自动上架开关：0关 1开'",
+            "next_relist_goods_id": "BIGINT NULL COMMENT '重发后的新商品记录ID'",
+            "relist_source_goods_id": "BIGINT NULL COMMENT '本商品是从哪个原商品重发来的'",
+            "last_relist_at": "DATETIME NULL COMMENT '上次重发时间'",
+            "has_snapshot": "INT NOT NULL DEFAULT 0 COMMENT '是否有完整数据快照'",
+            "original_quantity": "INT NULL COMMENT '商品原始库存'",
+            # 鱼小铺商品编辑能力字段（V1.21）
+            "can_edit": "TINYINT NOT NULL DEFAULT 1 COMMENT '鱼小铺商品是否支持编辑：1=可编辑，0=不可编辑'",
+            "edit_note": "VARCHAR(500) NOT NULL DEFAULT '' COMMENT '鱼小铺商品不可编辑时的提示文案'",
+        },
+        "xianyu_goods_edit_snapshot": {
+            "account_type": "VARCHAR(16) NOT NULL DEFAULT 'fish_shop' COMMENT '账号类型：fish_shop / normal'",
         },
     }
 
@@ -280,6 +293,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log_service_failure(logger, e, operation="start_ws_health_check")
 
+    # 启动售整自动上架调度器
+    # 每 3 分钟扫描所有 auto_relist_enabled=1 且 has_snapshot=1 且 status in (0,2) 且
+    # next_relist_goods_id IS NULL 且 original_quantity=1 的商品，调用发布接口重发。
+    # 重发后新商品继承 auto_relist_enabled=1，支持链式重发。
+    relist_scheduler_started = False
+    try:
+        from .services.relist_scheduler import start_relist_scheduler, stop_relist_scheduler
+        await start_relist_scheduler()
+        relist_scheduler_started = True
+        logger.info("售整自动上架调度器已启动")
+    except Exception as e:
+        log_service_failure(logger, e, operation="start_relist_scheduler")
+
     yield
 
     storage_reconcile_task.cancel()
@@ -349,6 +375,13 @@ async def lifespan(app: FastAPI):
             await stop_dispatcher()
         except Exception:
             logger.warning("关闭 Cookie/Token 刷新调度器失败，继续关闭流程")
+
+    # 停止售整自动上架调度器
+    if relist_scheduler_started:
+        try:
+            await stop_relist_scheduler()
+        except Exception:
+            logger.warning("关闭售整自动上架调度器失败，继续关闭流程")
 
     # 停止 WebSocket 连接
     if ws_task is not None:

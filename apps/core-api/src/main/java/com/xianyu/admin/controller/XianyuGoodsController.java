@@ -116,6 +116,24 @@ public class XianyuGoodsController {
         return Result.ok(result);
     }
 
+    /**
+     * 更新售整自动上架开关。
+     * Body: {"enabled": true/false}
+     * 开启后，当库存为 1 的商品被买走时，系统将用完整快照数据自动重新发布。
+     */
+    @PutMapping("/{id}/auto-relist")
+    public Result<Void> updateAutoRelist(@PathVariable Long id,
+                                          @RequestBody(required = false) Map<String, Object> body) {
+        Long tenantId = TenantContext.getCurrentTenantId();
+        Object enabledObj = body == null ? null : body.get("enabled");
+        if (enabledObj == null) {
+            throw new com.xianyu.admin.common.BizException(400, "enabled 字段必填");
+        }
+        Boolean enabled = Boolean.valueOf(String.valueOf(enabledObj));
+        goodsService.updateAutoRelistEnabled(id, enabled, tenantId);
+        return Result.ok(null);
+    }
+
     private String getClientIp(HttpServletRequest request) {
         return com.xianyu.admin.security.ClientIpResolver.resolve(request);
     }

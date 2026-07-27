@@ -419,7 +419,7 @@ async def get_captcha_queue_status(
             "retrying": retrying_count,
             "timeout": timeout_count,
             "precheckRejected": precheck_rejected_count,
-            "workers": 2,  # SOLVE_WORKER_CONCURRENCY
+            "workers": 4,  # SOLVE_WORKER_CONCURRENCY（对齐 crawler-service 单租户并发上限 CRAWLER_BROWSER_CONCURRENCY_PER_TENANT=4）
             "tenantId": None if target_summary else tenant_id,
         })
     except Exception as e:

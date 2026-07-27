@@ -506,15 +506,75 @@ async function run(id) {
     if (!data || typeof data !== 'object' || Array.isArray(data) || data.ok !== true) {
       throw new Error(data?.message || '任务运行响应未确认执行成功')
     }
-    const runMessage = data.message || `任务 #${id} 已执行`
-    const reloaded = await load()
-    if (reloaded) success.value = runMessage
-    else error.value = `${runMessage}，但任务列表刷新失败，请重新加载确认最新状态。`
+
+    // 兼容两种模式：
+    // 1. 新异步模式（data.running=true）：任务已开始后台执行，启动轮询查看最终结果
+    // 2. 旧同步模式（无 running 字段）：任务已执行完成，直接刷新列表
+    if (data.running === true) {
+      success.value = data.message || `任务 #${id} 已开始执行，正在后台运行...`
+      await pollTaskRunningStatus(id)
+    } else {
+      const runMessage = data.message || `任务 #${id} 已执行`
+      const reloaded = await load()
+      if (reloaded) success.value = runMessage
+      else error.value = `${runMessage}，但任务列表刷新失败，请重新加载确认最新状态。`
+    }
   } catch (requestError) {
     error.value = requestError.message || '运行定时任务失败'
   } finally {
     busyId.value = null
   }
+}
+
+// 后台运行任务状态轮询：每 5 秒刷新一次，最多轮询 60 次（5 分钟）
+// 检测到 lastStatus 变为 success/failed/disabled_after_failures 时停止
+const RUNNING_POLL_INTERVAL = 5000
+const RUNNING_POLL_MAX_ATTEMPTS = 60
+let runningPollTimer = null
+
+function stopRunningPoll() {
+  if (runningPollTimer) {
+    clearTimeout(runningPollTimer)
+    runningPollTimer = null
+  }
+}
+
+async function pollTaskRunningStatus(taskId) {
+  let attempts = 0
+  while (attempts < RUNNING_POLL_MAX_ATTEMPTS) {
+    await new Promise(resolve => {
+      runningPollTimer = setTimeout(resolve, RUNNING_POLL_INTERVAL)
+    })
+    // 组件卸载时 stopRunningPoll 会清空 timer 并使 resolve 后的检查失败
+    if (!runningPollTimer) return
+    runningPollTimer = null
+    attempts++
+
+    try {
+      const res = await getScheduledTasks({ current: current.value, size: pageSize.value })
+      const data = res?.data
+      const list = Array.isArray(data) ? data : data?.records || data?.list || data?.rows || data?.items
+      if (!Array.isArray(list)) continue
+      const refreshed = camelizeKeys(list)
+      tasks.value = refreshed
+      const target = refreshed.find(t => Number(t.id) === Number(taskId))
+      if (!target) continue
+      const status = target.lastStatus
+      if (status === 'success') {
+        success.value = target.lastResult || `任务 #${taskId} 执行完成`
+        return
+      }
+      if (status === 'failed' || status === 'disabled_after_failures') {
+        error.value = target.lastResult || `任务 #${taskId} 执行失败`
+        return
+      }
+      // status === 'running' 或其他状态：继续轮询
+    } catch {
+      // 单次轮询失败不中断后续尝试
+    }
+  }
+  // 超时仍未结束
+  error.value = `任务 #${taskId} 仍在执行中，请稍后在任务列表查看运行结果`
 }
 
 async function remove(id) {
@@ -587,6 +647,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('xya-header-action', onHeaderAction)
+  stopRunningPoll()
 })
 </script>
 

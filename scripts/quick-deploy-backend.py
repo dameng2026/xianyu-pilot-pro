@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Quick backend deploy: upload changed source files and rebuild the backend Docker container."""
+"""Deploy API slider solve fixes: upload Java + Python files and rebuild affected containers."""
 import json
 import sys
 import time
@@ -12,7 +12,10 @@ CONFIG_PATH = REPO_ROOT / ".deploy.prod.json"
 
 # Files changed in this release
 CHANGED_FILES = [
-    "apps/core-api/src/main/java/com/xianyu/admin/mapper/XianyuGoodsMapper.java",
+    # Java: precheck_rejected record creation + status mapping fix
+    "apps/core-api/src/main/java/com/xianyu/admin/service/ApiSliderSolveService.java",
+    # Python: timeout detection + record creation order fix
+    "apps/automation-service/app/services/captcha_api_solver.py",
 ]
 
 
@@ -41,12 +44,16 @@ def main():
     for rel_path in CHANGED_FILES:
         local_path = REPO_ROOT / rel_path
         remote_path = f"{project_dir}/{rel_path}"
+        # Ensure remote directory exists
+        remote_dir = "/".join(remote_path.split("/")[:-1])
+        stdin, stdout, stderr = client.exec_command(f"mkdir -p {remote_dir}", timeout=10)
+        stdout.channel.recv_exit_status()
         print(f"[deploy] Upload: {local_path} -> {remote_path}")
         sftp.put(str(local_path), remote_path)
     sftp.close()
     print("[deploy] All files uploaded.")
 
-    # Rebuild and restart the backend container
+    # Rebuild and restart the backend (Java) container
     compose_cmd = (
         f"cd {project_dir} && "
         f"docker compose -f docker-compose.yml -f docker-compose.prod.yml "
@@ -65,9 +72,9 @@ def main():
         print(f"[deploy] Build failed with exit code {exit_code}")
         client.close()
         sys.exit(1)
-    print("[deploy] Build successful.")
+    print("[deploy] Backend build successful.")
 
-    # Restart the container
+    # Restart the backend container
     restart_cmd = (
         f"cd {project_dir} && "
         f"docker compose -f docker-compose.yml -f docker-compose.prod.yml "
@@ -86,9 +93,31 @@ def main():
         print(f"[deploy] Restart failed with exit code {exit_code}")
         client.close()
         sys.exit(1)
-    print("[deploy] Container restarted.")
+    print("[deploy] Backend container restarted.")
 
-    # Wait for health
+    # Restart the automation + automation-worker containers (Python files changed)
+    for svc in ("automation", "automation-worker"):
+        restart_cmd = (
+            f"cd {project_dir} && "
+            f"docker compose -f docker-compose.yml -f docker-compose.prod.yml "
+            f"--env-file {compose_env} up -d --no-deps --force-recreate {svc}"
+        )
+        print(f"[deploy] Restarting {svc} container...")
+        stdin, stdout, stderr = client.exec_command(
+            f"bash -lc {repr(restart_cmd)}", timeout=120
+        )
+        exit_code = stdout.channel.recv_exit_status()
+        for line in stdout:
+            print(line, end="")
+        for line in stderr:
+            print(line, end="", file=sys.stderr)
+        if exit_code != 0:
+            print(f"[deploy] {svc} restart failed with exit code {exit_code}")
+            client.close()
+            sys.exit(1)
+        print(f"[deploy] {svc} container restarted.")
+
+    # Wait for backend health
     print("[deploy] Waiting for backend to become healthy...")
     health_url = "http://127.0.0.1:18080/api/health"
     for attempt in range(30):
@@ -103,13 +132,6 @@ def main():
         print(f"[deploy] Attempt {attempt + 1}/30: not healthy yet...")
     else:
         print("[deploy] WARNING: Backend did not become healthy within 150 seconds")
-        # Check container status
-        stdin, stdout, stderr = client.exec_command(
-            f"cd {project_dir} && docker compose -f docker-compose.yml -f docker-compose.prod.yml "
-            f"--env-file {compose_env} ps backend",
-            timeout=30,
-        )
-        print(stdout.read().decode("utf-8", "ignore"))
 
     # Check fresh logs for errors
     print("[deploy] Checking recent backend logs for errors...")
@@ -122,7 +144,20 @@ def main():
     if log_errors.strip():
         print(f"[deploy] Recent errors in logs:\n{log_errors}")
     else:
-        print("[deploy] No errors found in recent logs.")
+        print("[deploy] No errors found in recent backend logs.")
+
+    # Check automation logs
+    print("[deploy] Checking recent automation logs for errors...")
+    stdin, stdout, stderr = client.exec_command(
+        f"cd {project_dir} && docker compose -f docker-compose.yml -f docker-compose.prod.yml "
+        f"--env-file {compose_env} logs --tail=30 automation 2>&1 | grep -i 'error\\|exception\\|traceback' | tail -10 || true",
+        timeout=30,
+    )
+    log_errors = stdout.read().decode("utf-8", "ignore")
+    if log_errors.strip():
+        print(f"[deploy] Recent errors in automation logs:\n{log_errors}")
+    else:
+        print("[deploy] No errors found in recent automation logs.")
 
     client.close()
     print("[deploy] Done.")

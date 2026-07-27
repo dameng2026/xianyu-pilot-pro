@@ -21,12 +21,19 @@ async def create_api_record(
     client_ip: Optional[str] = None,
     event_desc: str = "external api slider solve",
 ) -> None:
-    """创建 API 求解记录，status=queued"""
+    """创建 API 求解记录，status=queued
+
+    显式提供 token_charged=0 / token_charge_failed=0，避免线上历史表结构
+    缺失 DEFAULT 0 时 INSERT 报 "Field 'token_charged' doesn't have a default value"。
+    """
     sql = text(
         "INSERT INTO xianyu_api_captcha_solve_record "
         "(tenant_id, api_key_prefix, client_ip, request_id, event_desc, trigger_scene, "
-        "result, status, engine, retry_count, priority, failure_reason, queued_at, created_at, updated_at, deleted) "
-        "VALUES (:tid, :prefix, :ip, :rid, :edesc, 'api', '', 'queued', 'Playwright', 0, 0, '', NOW(), NOW(), NOW(), 0)"
+        "result, status, engine, retry_count, priority, failure_reason, "
+        "token_charged, token_charge_failed, "
+        "queued_at, created_at, updated_at, deleted) "
+        "VALUES (:tid, :prefix, :ip, :rid, :edesc, 'api', '', 'queued', 'Playwright', 0, 0, '', "
+        "0, 0, NOW(), NOW(), NOW(), 0)"
     )
     params = {
         "tid": tenant_id, "prefix": api_key_prefix, "ip": client_ip,

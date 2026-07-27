@@ -33,8 +33,16 @@ export async function fetchGoofishItemDetail(
   const detailUrl = `https://www.goofish.com/item?id=${itemId}`;
   console.log(`[ItemDetailCrawler] 开始获取商品详情: itemId=${itemId}, hasCookie=${!!cookieStr}`);
 
-  const headless = process.env.HEADLESS !== 'false';
+  // 关键：商机发掘商品详情获取独立决定 headless 模式，不读取 sliderSolver.ts 使用的 HEADLESS 环境变量。
+  // 原因：sliderSolver.ts 在 HEADLESS=true 下成功率非常高，严禁影响；
+  // 而商品详情获取在 headless 模式下 Baxia 风控识别率高，必须在 Xvfb 提供 DISPLAY 时切到 headed 模式。
+  const isHeadedAvailable =
+    process.platform === 'win32' ||
+    process.platform === 'darwin' ||
+    Boolean(process.env.DISPLAY && process.env.DISPLAY.trim());
+  const headless = !isHeadedAvailable;
   const isWindows = process.platform === 'win32';
+  const isLinux = process.platform !== 'win32' && process.platform !== 'darwin';
   let browser: Browser | null = null;
 
   let detailResolve!: (detail: GoofishItemDetail) => void;
@@ -46,8 +54,11 @@ export async function fetchGoofishItemDetail(
   try {
     browser = await chromium.launch({
       headless,
-      chromiumSandbox: true,
-      ...(isWindows && !headless ? { channel: 'chrome' } : {}),
+      chromiumSandbox: !isLinux,
+      ...((isWindows || isLinux) ? { channel: 'chrome' } : {}),
+      args: [
+        ...(isLinux ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-crash-reporter', '--disable-crashpad', '--disable-breakpad', '--disable-features=Crashpad'] : []),
+      ],
     });
 
     const contextOptions: BrowserContextOptions = {

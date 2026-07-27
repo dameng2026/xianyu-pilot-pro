@@ -101,23 +101,10 @@
           passText: '校验通过'
         },
         {
-          prop: 'perCallPrice',
-          label: '按次计费价格（元）',
-          placeholder: '通用模型统一按次计费，默认 0.03 元/次（兑换比例 100 时扣 3 Token）',
-          type: 'number',
-          min: 0,
-          step: 0.0001,
-          required: true,
-          passText: '校验通过'
-        },
-        {
-          prop: 'tokenExchangeRate',
-          label: '兑换比例（Token/元）',
-          type: 'number',
-          min: 1,
-          step: 1,
-          required: true,
-          passText: '校验通过'
+          prop: '_feeSettingsTip',
+          label: '费用配置',
+          type: 'tip',
+          placeholder: '通用模型的扣费 Token 数已迁移至「费用设置 → 通用模型按用户等级定价」卡片，支持按 VIP 等级（普通/VIP/SVP）差异化配置。'
         },
         {
           prop: 'polishKeywords',

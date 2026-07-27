@@ -11,6 +11,7 @@
 import { computed } from 'vue'
 import ConfigNav from '../components/ConfigNav.vue'
 import AiCsSettings from './settings/AiCsSettings.vue'
+import KnowledgeBaseSettings from './settings/KnowledgeBaseSettings.vue'
 import ProductOpSettings from './settings/ProductOpSettings.vue'
 import NotifySettings from './settings/NotifySettings.vue'
 import SyncSettings from './settings/SyncSettings.vue'
@@ -21,6 +22,7 @@ const emit = defineEmits(['navigate'])
 
 const map = {
   'settings-ai-cs': AiCsSettings,
+  'settings-kb': KnowledgeBaseSettings,
   'settings-product': ProductOpSettings,
   'settings-sync': SyncSettings,
   'settings-about': AboutSettings,

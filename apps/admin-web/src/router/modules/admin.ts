@@ -30,6 +30,7 @@ export const adminRoutes: AppRouteRecord[] = [
     meta: { title: '套餐与授权', icon: 'ri:vip-crown-line', roles: SUPER_ONLY },
     children: [
       { path: 'plans', name: 'AdminPlans', component: moduleComponent, meta: { title: '套餐管理', icon: 'ri:price-tag-3-line', moduleKey: 'plans', roles: SUPER_ONLY } as any },
+      { path: 'promotion', name: 'AdminPromotion', component: '/admin/promotion/index', meta: { title: '会员充值活动', icon: 'ri:gift-2-line', roles: SUPER_ONLY } as any },
       { path: 'token-plans', name: 'AdminTokenPlans', component: '/admin/token-plans/index', meta: { title: 'Token 套餐', icon: 'ri:coin-line', roles: SUPER_ONLY } as any },
       { path: 'payment-config', name: 'AdminPaymentConfig', component: '/admin/payment-config/index', meta: { title: '支付配置', icon: 'ri:bank-card-line', roles: SUPER_ONLY } as any },
       { path: 'recharge-records', name: 'AdminRechargeRecords', component: '/admin/recharge-records/index', meta: { title: '充值记录', icon: 'ri:bank-card-2-line', roles: SUPER_ONLY } as any },
@@ -65,7 +66,9 @@ export const adminRoutes: AppRouteRecord[] = [
       { path: 'usage', name: 'AdminAiUsage', component: '/admin/ai-usage/index', meta: { title: 'AI 调用日志', icon: 'ri:line-chart-line', roles: ADMIN_OPERATORS } as any },
       { path: 'token', name: 'AdminAiToken', component: '/admin/ai-token/index', meta: { title: 'Token 用量', icon: 'ri:token-swap-line', roles: ADMIN_OPERATORS } as any },
       { path: 'image-prompt-categories', name: 'AdminImagePromptCategories', component: moduleComponent, meta: { title: '生图类目提示词', icon: 'ri:image-2-line', moduleKey: 'model-config-image-prompts', roles: SUPER_ONLY } as any },
-      { path: 'rag', name: 'AdminRag', component: moduleComponent, meta: { title: 'RAG 知识库', icon: 'ri:book-open-line', moduleKey: 'rag', roles: ADMIN_OPERATORS } as any },
+      { path: 'ai-cs', name: 'AdminAiCs', component: '/admin/ai-cs/index', meta: { title: 'AI 客服配置', icon: 'ri:customer-service-2-line', roles: ADMIN_OPERATORS } as any },
+      { path: 'rag', name: 'AdminRag', component: '/admin/ai-cs/index', meta: { title: 'RAG 知识库', icon: 'ri:book-open-line', roles: ADMIN_OPERATORS, activeTab: 'knowledge' } as any },
+      { path: 'learned-kb', name: 'AdminLearnedKb', component: '/admin/learned-kb/index', meta: { title: '学习知识库', icon: 'ri:book-2-line', roles: ADMIN_OPERATORS } as any },
       { path: 'sensitive-words', name: 'AdminSensitiveWords', component: moduleComponent, meta: { title: '敏感词策略', icon: 'ri:forbid-line', moduleKey: 'sensitive-words', roles: ADMIN_OPERATORS } as any }
     ]
   },
@@ -87,9 +90,7 @@ export const adminRoutes: AppRouteRecord[] = [
       { path: 'channels', name: 'AdminNotifyChannels', component: moduleComponent, meta: { title: '通知渠道', icon: 'ri:notification-3-line', moduleKey: 'notify-channels', roles: SUPER_ONLY } as any },
       { path: 'sms-config', name: 'AdminSmsConfig', component: '/system/sms-config', meta: { title: '短信配置草稿', icon: 'ri:message-3-line', roles: SUPER_ONLY } as any },
       { path: 'email-config', name: 'AdminEmailConfig', component: '/system/email-config', meta: { title: '邮件配置草稿', icon: 'ri:mail-line', roles: SUPER_ONLY } as any },
-      { path: 'notify-logs', name: 'AdminNotifyLogs', component: '/admin/ops/notification-logs/index', meta: { title: '通知发送记录', icon: 'ri:file-list-line', roles: ADMIN_OPERATORS } as any },
-      { path: 'risk-events', name: 'AdminRiskEvents', component: moduleComponent, meta: { title: '风控事件', icon: 'ri:alert-line', moduleKey: 'risk-events', roles: ADMIN_OPERATORS } as any },
-      { path: 'alerts', name: 'AdminAlerts', component: moduleComponent, meta: { title: '异常告警', icon: 'ri:error-warning-line', moduleKey: 'alerts', roles: ADMIN_OPERATORS } as any }
+      { path: 'notify-logs', name: 'AdminNotifyLogs', component: '/admin/ops/notification-logs/index', meta: { title: '通知发送记录', icon: 'ri:file-list-line', roles: ADMIN_OPERATORS } as any }
     ]
   },
   {
@@ -102,10 +103,7 @@ export const adminRoutes: AppRouteRecord[] = [
       { path: 'feature-switch', name: 'AdminFeatureSwitch', component: '/admin/ops/feature-switch/index', meta: { title: '功能管理', icon: 'ri:toggle-line', roles: SUPER_ONLY } as any },
       { path: 'audit-logs', name: 'AdminAuditLogs', component: '/admin/ops/audit-logs/index', meta: { title: '操作审计日志', icon: 'ri:shield-check-line', roles: ADMIN_OPERATORS } as any },
       { path: 'client-errors', name: 'AdminClientErrors', component: '/admin/ops/client-errors/index', meta: { title: '前端错误日志', icon: 'ri:bug-line', roles: SUPER_ONLY } as any },
-      { path: 'runtime', name: 'AdminRuntime', component: moduleComponent, meta: { title: '运行日志', icon: 'ri:terminal-box-line', moduleKey: 'runtime', roles: ADMIN_OPERATORS } as any },
-      { path: 'backups', name: 'AdminBackups', component: moduleComponent, meta: { title: '数据备份', icon: 'ri:database-2-line', moduleKey: 'backups', roles: SUPER_ONLY } as any },
-      { path: 'files', name: 'AdminFiles', component: moduleComponent, meta: { title: '文件管理', icon: 'ri:folder-line', moduleKey: 'files', roles: SUPER_ONLY } as any },
-      { path: 'versions', name: 'AdminVersions', component: moduleComponent, meta: { title: '版本管理', icon: 'ri:git-commit-line', moduleKey: 'versions', roles: SUPER_ONLY } as any }
+      { path: 'data-management', name: 'AdminDataManagement', component: '/admin/ops/data-management/index', meta: { title: '数据管理', icon: 'ri:delete-bin-2-line', roles: SUPER_ONLY } as any }
     ]
   },
   {

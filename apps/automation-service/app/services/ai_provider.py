@@ -482,3 +482,134 @@ async def generate_text(scene: str, system_prompt: str, user_prompt: str, temper
         "error": "AI 服务暂不可用，请稍后重试",
     })
     return result
+
+
+async def _invoke_general_model_for_learning(
+    db,
+    system_prompt: str,
+    user_prompt: str,
+    config: dict,
+) -> tuple[str, int, float]:
+    """调用通用文本模型（按次计费），返回 (response_text, tokens_used, cost_yuan)。
+
+    复用既有的通用模型 HTTP 调用栈（generate_text），scene="kb_learning"。
+    通用模型按次计费：默认 0.03 元/次，扣 Token 由 Java AiBillingService 统一处理。
+    """
+    # 复用既有的 generate_text（内部已处理配置加载、HTTP 调用、重试、错误兜底）
+    result = await generate_text(
+        scene="kb_learning",
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        temperature=0.3,  # 提取任务用低温度，确保 JSON 输出稳定
+    )
+
+    if not result.get("ok"):
+        logger.warning(
+            "kb-learning LLM call failed: errorCode=%s error=%s",
+            result.get("errorCode"),
+            result.get("error"),
+        )
+        return "", 0, 0.0
+
+    response_text = str(result.get("content") or "")
+    usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+    # 优先 total_tokens；缺失时回退 prompt_tokens + completion_tokens；都没有则 0
+    if isinstance(usage.get("total_tokens"), (int, float)):
+        tokens_used = int(usage.get("total_tokens"))
+    else:
+        tokens_used = int(usage.get("prompt_tokens") or 0) + int(usage.get("completion_tokens") or 0)
+
+    # 通用模型按次计费：默认 0.03 元/次，可由后台 perCallPrice 覆盖
+    per_call_price = 0.03
+    try:
+        cfg_price = float((config or {}).get("perCallPrice", 0))
+        if cfg_price > 0:
+            per_call_price = cfg_price
+    except (TypeError, ValueError):
+        pass
+    cost_yuan = per_call_price
+
+    return response_text, tokens_used, cost_yuan
+
+
+async def call_llm_for_learning(
+    db,
+    conversations: list[dict],
+    config: dict,
+) -> tuple[list[dict], int, float]:
+    """调用通用模型提取 Q&A。
+
+    Returns:
+        (extracted_items, tokens_used, cost_yuan)
+    """
+    # 1. 构造对话文本
+    conv_blocks = []
+    for i, conv in enumerate(conversations, 1):
+        msgs_text = "\n".join(
+            f"  {'[卖家]' if m['is_auto_reply'] else '[买家]' if not m['is_auto_reply'] else '[卖家]'} {m['sender']}: {m['content']}"
+            for m in conv["messages"]
+        )
+        conv_blocks.append(f"对话 {i}:\n{msgs_text}")
+    conversations_text = "\n\n".join(conv_blocks)
+
+    # 2. 构造 prompt
+    system_prompt = """你是知识库提取助手。以下是一段真实的买家-卖家对话。
+请提取其中有价值的问答对（买家提问 + 卖家优质回复）。
+
+要求:
+1. 仅提取能体现真实销售技巧、产品知识、问题解决能力的 Q&A
+2. 跳过纯闲聊、问候、表情、无意义对话
+3. 对 Q&A 中的敏感信息脱敏:
+   - 手机号 → [手机号]
+   - 微信号/QQ号 → [联系方式]
+   - 收货地址 → [地址]
+   - 银行卡/身份证 → [敏感信息]
+   - 真实姓名 → [姓名]
+4. 为每个 Q&A 进行分类，category_code 必须从以下预定义分类中选择:
+   - stock_query: 库存查询（库存、有货、现货、缺货等）
+   - shipping_track: 发货跟踪（发货、物流、快递、单号等）
+   - refund_aftersale: 退款售后（退款、退货、换货、质量问题等）
+   - product_consult: 商品咨询（规格、材质、尺寸、功能等）
+   - price_discount: 价格优惠（优惠、折扣、满减、券等）
+   - account_login: 账号登录（登录、cookie、失效、掉线等）
+   - card_key_delivery: 卡密发货（卡密、激活码、虚拟商品等）
+   - workflow_config: 工作流配置（工作流、节点、流程等）
+   - scheduled_task: 定时任务（定时、上架、定时回复等）
+   - auto_reply: 自动回复（自动回复、模板、AI回复等）
+   - auto_delivery: 自动发货（自动发货、发货规则等）
+   - membership_recharge: 会员充值（Token、充值、VIP、会员等）
+   - system_usage: 系统使用（怎么用、功能、操作、教程等）
+   - troubleshoot: 故障排查（报错、错误、不能用、失败等）
+   - other: 其他（无法归入以上分类的）
+   若对话内容确实不属于以上任何分类，可使用 other。严禁自创分类名。
+5. 为每个 Q&A 生成:
+   - category_code: 上方预定义分类的 code（如 stock_query）
+   - score: 0-100 价值评分
+   - tags: 3-5 个标签（逗号分隔）
+   - source_summary: 一句话摘要
+6. 输出严格 JSON 数组格式，无其他文字
+
+输出格式示例:
+[{"question":"...","answer":"...","category_code":"stock_query","score":80,"tags":"...","source_summary":"..."}]
+"""
+
+    user_prompt = f"以下是需要分析的 {len(conversations)} 个对话：\n\n{conversations_text}"
+
+    # 3. 调用通用模型（按次计费）
+    response_text, tokens_used, cost_yuan = await _invoke_general_model_for_learning(
+        db, system_prompt, user_prompt, config
+    )
+
+    # 4. 解析 JSON
+    try:
+        # 容错：去除可能的 markdown 代码块包装
+        cleaned = response_text.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        items = json.loads(cleaned)
+        if not isinstance(items, list):
+            return [], tokens_used, cost_yuan
+        return items, tokens_used, cost_yuan
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("kb-learning LLM response not valid JSON: %s", exc)
+        return [], tokens_used, cost_yuan

@@ -36,3 +36,13 @@ export function deleteGoodsLocal(id) {
 export function deleteGoodsRemote(id, data = {}) {
   return request({ url: `/goods/${id}/remote`, method: 'delete', data })
 }
+
+/**
+ * 更新售整自动上架开关（Java 直接修改本地 DB，速度快）。
+ * 与 /item/auto-relist/toggle（Python 链路）互补，前端默认走此接口。
+ * @param {number} id 商品主键 ID（xianyu_goods.id，非 external_goods_id）
+ * @param {boolean} enabled 是否开启
+ */
+export function updateGoodsAutoRelist(id, enabled) {
+  return request({ url: `/goods/${id}/auto-relist`, method: 'put', data: { enabled } })
+}

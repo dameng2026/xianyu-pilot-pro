@@ -133,14 +133,21 @@ async def test_continue_workflow_persistence_uses_stable_failure(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_scheduled_task_does_not_echo_runtime_failure_message(monkeypatch):
-    async def _fail(*_args, **_kwargs):
-        return {
+    # 异步模式下，claim 阶段失败时返回的错误消息不应包含敏感信息
+    async def _fail_claim(*_args, **_kwargs):
+        return None, None, {
             "ok": False,
             "error": "RUNTIME_FAILURE",
             "message": "provider response body Authorization=secret-token",
         }
 
-    monkeypatch.setattr(internal, "execute_scheduled_task", _fail)
+    # 后台任务不应被启动（claim 已失败）
+    def _reject_background_task(coro):
+        coro.close()
+        pytest.fail("background task must not start when claim fails")
+
+    monkeypatch.setattr(internal, "claim_scheduled_task_lease", _fail_claim)
+    monkeypatch.setattr(internal._asyncio, "create_task", _reject_background_task)
 
     result = await internal.internal_run_task(
         1,
@@ -158,16 +165,22 @@ async def test_scheduled_task_does_not_echo_runtime_failure_message(monkeypatch)
 async def test_manual_scheduled_task_conflict_returns_409_and_requests_manual_claim(monkeypatch):
     captured = {}
 
-    async def _conflict(*_args, **kwargs):
+    async def _conflict_claim(*_args, **kwargs):
         captured.update(kwargs)
-        return {
+        return None, None, {
             "ok": False,
             "claimed": False,
             "error": "TASK_ALREADY_RUNNING",
             "message": "internal lease detail",
         }
 
-    monkeypatch.setattr(internal, "execute_scheduled_task", _conflict)
+    # 后台任务不应被启动（claim 已失败）
+    def _reject_background_task(coro):
+        coro.close()
+        pytest.fail("background task must not start on conflict")
+
+    monkeypatch.setattr(internal, "claim_scheduled_task_lease", _conflict_claim)
+    monkeypatch.setattr(internal._asyncio, "create_task", _reject_background_task)
 
     result = await internal.internal_run_task(
         1,

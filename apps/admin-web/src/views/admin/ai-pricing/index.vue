@@ -57,6 +57,74 @@
       </ElCard>
     </div>
 
+    <!-- 通用模型按用户等级定价 -->
+    <ElCard shadow="never" class="section-card tier-price-card">
+      <template #header>
+        <div class="tier-header">
+          <div>
+            <span>通用模型按用户等级定价</span>
+            <p class="tier-subtitle">每次调用通用模型扣减的 Token 数，按用户 VIP 等级差异化配置</p>
+          </div>
+          <ElButton type="primary" :loading="tierSaving" @click="onTierSave">保存配置</ElButton>
+        </div>
+      </template>
+      <AdminDataState v-if="tierState === 'loading'" state="loading" title="正在读取三档定价配置" compact />
+      <AdminDataState
+        v-else-if="tierState === 'error'"
+        state="error"
+        title="三档定价配置暂不可用"
+        :description="tierError"
+        retry-text="重试"
+        compact
+        @retry="loadTierConfig"
+      />
+      <ElForm v-else label-width="140px" label-position="right">
+        <ElRow :gutter="16">
+          <ElCol :span="8">
+            <ElFormItem label="普通用户">
+              <ElInputNumber
+                v-model="tierForm.normal"
+                :min="0"
+                :step="1"
+                controls-position="right"
+                style="width: 100%"
+              />
+              <div class="form-tip">vip_level=0，每次扣费 Token 数</div>
+            </ElFormItem>
+          </ElCol>
+          <ElCol :span="8">
+            <ElFormItem label="VIP 用户">
+              <ElInputNumber
+                v-model="tierForm.vip"
+                :min="0"
+                :step="1"
+                controls-position="right"
+                style="width: 100%"
+              />
+              <div class="form-tip">vip_level=1，每次扣费 Token 数</div>
+            </ElFormItem>
+          </ElCol>
+          <ElCol :span="8">
+            <ElFormItem label="SVP 用户">
+              <ElInputNumber
+                v-model="tierForm.svp"
+                :min="0"
+                :step="1"
+                controls-position="right"
+                style="width: 100%"
+              />
+              <div class="form-tip">vip_level=2，每次扣费 Token 数</div>
+            </ElFormItem>
+          </ElCol>
+        </ElRow>
+        <ElAlert type="info" :closable="false" show-icon class="tier-tip-alert">
+          <template #title>
+            <span>该配置仅对「通用模型（model-config-general）」生效。普通/VIP/SVP 用户调用通用模型时分别按对应档位扣费。</span>
+          </template>
+        </ElAlert>
+      </ElForm>
+    </ElCard>
+
     <!-- 说明条 -->
     <ElAlert type="info" :closable="false" class="tip-alert" show-icon>
       <template #title>
@@ -412,10 +480,13 @@
     deleteModelPrice,
     getBillingSummary,
     getModelPricesPage,
+    getTierConfig,
     saveModelPrice,
+    saveTierConfig,
     type BillingSummary,
     type ModelPriceForm,
     type ModelPriceRow,
+    type TierPriceConfig,
   } from '@/api/billing'
   import AdminDataState from '@/components/business/admin-data-state/index.vue'
 
@@ -501,6 +572,16 @@
   })
   const sliderPerCallTokens = computed(() => Math.max(1, Math.round((sliderForm.perCallPrice || 0) * 100)))
 
+  // 通用模型按用户等级定价
+  const tierForm = reactive<{ normal: number; vip: number; svp: number }>({
+    normal: 3,
+    vip: 3,
+    svp: 3,
+  })
+  const tierState = ref<'loading' | 'ready' | 'error'>('loading')
+  const tierError = ref('')
+  const tierSaving = ref(false)
+
   onMounted(() => {
     loadAll()
   })
@@ -508,7 +589,7 @@
   async function loadAll() {
     loading.value = true
     try {
-      await Promise.all([loadSummary(), loadList()])
+      await Promise.all([loadSummary(), loadList(), loadTierConfig()])
     } finally {
       loading.value = false
     }
@@ -665,6 +746,44 @@
       ElMessage.error(getErrorMessage(error, '保存失败'))
     } finally {
       sliderSaving.value = false
+    }
+  }
+
+  async function loadTierConfig() {
+    tierState.value = 'loading'
+    tierError.value = ''
+    try {
+      const data = await getTierConfig('model-config-general')
+      tierForm.normal = finiteNumber(data?.normal) ?? 3
+      tierForm.vip = finiteNumber(data?.vip) ?? 3
+      tierForm.svp = finiteNumber(data?.svp) ?? 3
+      tierState.value = 'ready'
+    } catch (error: unknown) {
+      tierError.value = getErrorMessage(error, '三档定价配置读取失败，请稍后重试。')
+      tierState.value = 'error'
+    }
+  }
+
+  async function onTierSave() {
+    if (tierState.value !== 'ready') {
+      ElMessage.error('三档定价配置尚未成功读取，已阻止保存')
+      return
+    }
+    tierSaving.value = true
+    try {
+      const payload: TierPriceConfig = {
+        moduleKey: 'model-config-general',
+        normal: tierForm.normal,
+        vip: tierForm.vip,
+        svp: tierForm.svp,
+      }
+      await saveTierConfig(payload)
+      ElMessage.success('保存成功')
+      await loadTierConfig()
+    } catch (error: unknown) {
+      ElMessage.error(getErrorMessage(error, '保存失败'))
+    } finally {
+      tierSaving.value = false
     }
   }
 
@@ -867,6 +986,26 @@
     font-size: 12px;
     line-height: 1.4;
     margin-top: 4px;
+  }
+  .tier-price-card {
+    margin-bottom: 16px;
+  }
+  .tier-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .tier-header span {
+    font-weight: 600;
+  }
+  .tier-subtitle {
+    margin: 4px 0 0;
+    color: var(--el-text-color-secondary);
+    font-size: 13px;
+  }
+  .tier-tip-alert {
+    margin-top: 12px;
   }
   @media (max-width: 1200px) {
     .summary-grid {

@@ -8,6 +8,8 @@ export const navGroups = [
     { key: 'products', label: '商品管理', icon: 'product' },
     { key: 'product-publish', label: '发布商品', icon: 'publish', child: true },
     { key: 'orders', label: '订单管理', icon: 'record' },
+    { key: 'refunds', label: '退款管理', icon: 'refund' },
+    { key: 'rates', label: '评价管理', icon: 'refund' },
     { key: 'opportunities', label: '商机发掘', icon: 'opportunity' }
   ]},
   { title: '消息', items: [
@@ -43,6 +45,8 @@ const showDataSync = import.meta.env.VITE_SHOW_DATA_SYNC === 'true'
 
 export const settingsTabs = [
   { key: 'settings-ai-cs', label: 'AI客服配置', icon: 'message' },
+  { key: 'settings-xiaomeng', label: '小梦助手', icon: 'help' },
+  { key: 'settings-kb', label: '客服知识库', icon: 'help' },
   { key: 'settings-product', label: '商品操作', icon: 'product' },
   ...(showDataSync ? [{ key: 'settings-sync', label: '数据同步', icon: 'data' }] : []),
   { key: 'settings-about', label: '关于', icon: 'help' }
@@ -54,6 +58,8 @@ export const pageTitles = {
   accounts: ['闲鱼账号', '管理账号状态、登录情况与连接健康度'],
   products: ['商品管理', '管理商品信息、同步状态、自动发货与自动回复配置'],
   orders: ['订单管理', '集中查看订单状态、买家信息、发货情况与异常提醒'],
+  refunds: ['退款管理', '查看与处理鱼小铺账号的买家退款申请（仅鱼小铺账号可用）'],
+  rates: ['评价管理', '集中查看买家评价并对未评价订单进行卖家评价（仅鱼小铺账号可用）'],
   'product-publish': ['发布商品', '创建并发布闲鱼商品'],
   opportunities: ['商机发掘', '发现高潜力商品与经营机会'],
   messages: ['在线消息', '集中处理买家咨询与消息会话'],
@@ -75,12 +81,13 @@ export const pageTitles = {
   'slider-solve-records': ['滑块求解', '查看滑块自动求解的触发场景、处理结果与验证状态'],
   'api-slider-solve': ['API滑块求解', '开放滑块求解能力，对接外部系统，独立记录 API 求解与 Token 消费情况'],
   feedback: ['反馈建议', '提交产品建议、Bug 反馈与功能诉求'],
-  'settings-ai-cs': ['系统设置 / AI客服配置', '管理 AI 客服相关配置'],
+  'settings-ai-cs': ['系统设置 / AI客服配置', '管理自动回复买家的 AI 客服配置（人设、工作时段、转人工策略等）'],
+  'settings-xiaomeng': ['系统设置 / 小梦助手', '管理前台右下角小梦运营助手（卖家工具，独立于买家自动回复）'],
+  'settings-kb': ['系统设置 / 客服知识库', '管理客服知识库'],
   'settings-product': ['系统设置 / 商品操作', '管理商品相关系统级配置'],
   'settings-sync': ['系统设置 / 数据同步', '将本地配置一键同步到线上服务器'],
   'settings-notify': ['', ''],
   'settings-about': ['系统设置 / 关于', '查看版本信息与服务支持'],
   vip: ['VIP会员中心', '查看会员能力与套餐信息'],
-  profile: ['个人中心', '管理账号资料、安全设置与余额信息'],
-  'user-manual': ['使用手册', '深入浅出地讲解闲鱼助手全部功能与最佳实践，帮助新用户快速上手']
+  profile: ['个人中心', '管理账号资料、安全设置与余额信息']
 }

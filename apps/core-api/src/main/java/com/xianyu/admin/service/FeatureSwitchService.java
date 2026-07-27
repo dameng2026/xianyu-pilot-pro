@@ -71,7 +71,11 @@ public class FeatureSwitchService {
         list.add(feature("connections", "连接状态", "account", true, true, true));
         list.add(feature("products", "商品管理", "account", true, true, true));
         list.add(feature("orders", "订单管理", "account", true, true, true));
+        list.add(feature("refunds", "退款管理", "account", true, true, true));
+        list.add(feature("rates", "评价管理", "account", true, true, true));
         list.add(feature("product-publish", "商品发布", "account", true, true, true));
+        // 鱼小铺专属编辑页：由商品列表「编辑」按钮进入，仅鱼小铺账号商品可访问
+        list.add(feature("fish-shop-edit", "鱼小铺编辑", "account", true, true, true));
         // 消息与商机：商机发掘仅 VIP 及以上可用
         list.add(feature("messages", "消息中心", "message", true, true, true));
         list.add(feature("message-center", "会话收件箱", "message", true, true, true));
@@ -102,8 +106,12 @@ public class FeatureSwitchService {
         list.add(feature("slider-solve-records", "滑块求解记录", "system", true, true, true));
         list.add(feature("manual-slider-solve", "手动滑块求解", "system", false, true, true));
         list.add(feature("auto-slider-solve", "自动滑块求解", "system", false, true, true));
+        list.add(feature("api-slider-solve", "API滑块求解", "system", true, true, true));
         list.add(feature("feedback", "反馈建议", "system", true, true, true));
         list.add(feature("settings-notify", "通知设置", "system", true, true, true));
+        list.add(feature("settings-ai-cs", "AI客服配置", "system", true, true, true));
+        list.add(feature("settings-product", "商品操作", "system", true, true, true));
+        list.add(feature("settings-about", "关于", "system", true, true, true));
         list.add(feature("user-manual", "使用手册", "system", true, true, true));
         list.add(feature("profile", "系统设置", "system", true, true, true));
         // 会员（所有等级可见，用于查看权益与升级入口）
@@ -125,6 +133,7 @@ public class FeatureSwitchService {
         m.put("normal", normal);
         m.put("vip", vip);
         m.put("svp", svp);
+        m.put("maintenance", false);  // 维护开关：默认关闭，开启后所有用户进入该页面均弹窗拦截
         return m;
     }
 
@@ -133,6 +142,9 @@ public class FeatureSwitchService {
 
     /** reason 字段默认值（管理员未填写时使用） */
     private static final String DEFAULT_MANUAL_REASON = "您的会员等级未开启手动滑块求解功能";
+
+    /** 维护模式默认提示文案（reason=maintenance 时返回给前端弹窗） */
+    private static final String DEFAULT_MAINTENANCE_MESSAGE = "该页面正在维护升级中，请稍后再试";
 
     /**
      * 管理端：列出所有功能开关（合并默认值）。
@@ -160,6 +172,10 @@ public class FeatureSwitchService {
                 }
                 if (override.containsKey("title")) merged.put("title", override.get("title"));
                 if (override.containsKey("group")) merged.put("group", override.get("group"));
+                // 维护开关：所有功能均支持，合并存储覆盖值
+                if (override.containsKey("maintenance")) {
+                    merged.put("maintenance", boolOr(override.get("maintenance"), false));
+                }
                 // 仅 REASON_SUPPORTED_KEYS 中的功能保留 reason 字段
                 if (REASON_SUPPORTED_KEYS.contains(key) && override.containsKey("reason")) {
                     merged.put("reason", sanitizeReason(String.valueOf(override.get("reason"))));
@@ -169,6 +185,8 @@ public class FeatureSwitchService {
             if (REASON_SUPPORTED_KEYS.contains(key) && !merged.containsKey("reason")) {
                 merged.put("reason", "");
             }
+            // 确保所有功能都返回 maintenance 字段（默认 false）
+            if (!merged.containsKey("maintenance")) merged.put("maintenance", false);
             result.add(merged);
         }
         // 允许后台预置清单之外的自定义条目（向前兼容）
@@ -179,6 +197,7 @@ public class FeatureSwitchService {
             for (String level : LEVELS_ASC) {
                 if (!extra.containsKey(level)) extra.put(level, true);
             }
+            if (!extra.containsKey("maintenance")) extra.put("maintenance", false);
             result.add(extra);
         }
         return result;
@@ -190,12 +209,13 @@ public class FeatureSwitchService {
      *   {
      *     "level": "normal|vip|svp",
      *     "accessible": { "<pageKey>": true, ... },
-     *     "blocked": { "<pageKey>": { "reason": "disabled|level", "required_level": "vip" } }
+     *     "blocked": { "<pageKey>": { "reason": "disabled|level|maintenance", "required_level": "vip", "reason_text"?: "..." } }
      *   }
      *
-     * 判定逻辑：
-     *   - 用户等级对应的开关为 true → 可访问
-     *   - 用户等级对应的开关为 false：
+     * 判定逻辑（按优先级）：
+     *   1. 维护开关 maintenance=true → 所有用户拦截，reason=maintenance
+     *   2. 用户等级对应的开关为 true → 可访问
+     *   3. 用户等级对应的开关为 false：
      *     - 存在更高级别开关为 true → reason=level, required_level=第一个开启的更高级别
      *     - 所有级别都为 false → reason=disabled
      */
@@ -210,6 +230,16 @@ public class FeatureSwitchService {
 
         for (Map<String, Object> def : DEFAULT_FEATURES) {
             String key = String.valueOf(def.get("key"));
+            // 维护开关优先级最高：开启时对所有等级用户拦截
+            if (resolveMaintenance(key, def, stored)) {
+                accessible.put(key, false);
+                Map<String, Object> info = new LinkedHashMap<>();
+                info.put("reason", "maintenance");
+                info.put("required_level", normalizeLevel(userLevel));
+                info.put("reason_text", DEFAULT_MAINTENANCE_MESSAGE);
+                blocked.put(key, info);
+                continue;
+            }
             Map<String, Boolean> levelSwitches = resolveLevelSwitches(key, def, stored);
 
             boolean userAllowed = boolOr(levelSwitches.get(normalizeLevel(userLevel)), true);
@@ -267,6 +297,14 @@ public class FeatureSwitchService {
         } catch (Exception e) {
             log.warn("getFeatureStatusForUser 读取存储配置失败，降级放行 featureKey={}", featureKey);
             result.put("allowed", true);
+            return result;
+        }
+        // 维护开关优先级最高：开启时对所有等级用户拦截
+        if (resolveMaintenance(featureKey, def, stored)) {
+            result.put("allowed", false);
+            result.put("reason", "maintenance");
+            result.put("required_level", normalizeLevel(userLevel));
+            result.put("reason_text", DEFAULT_MAINTENANCE_MESSAGE);
             return result;
         }
         Map<String, Boolean> levelSwitches = resolveLevelSwitches(featureKey, def, stored);
@@ -355,6 +393,7 @@ public class FeatureSwitchService {
             for (String level : LEVELS_ASC) {
                 f.put(level, def.get(level));
             }
+            f.put("maintenance", false);
             features.put(String.valueOf(def.get("key")), f);
         }
         Map<String, Object> root = new LinkedHashMap<>();
@@ -387,6 +426,19 @@ public class FeatureSwitchService {
             result.put(level, val);
         }
         return result;
+    }
+
+    /**
+     * 解析某功能的维护开关状态（合并默认值与存储覆盖）。
+     * 维护开关开启时，对所有等级用户拦截，优先级高于等级开关。
+     */
+    private boolean resolveMaintenance(String key, Map<String, Object> def, Map<String, Map<String, Object>> stored) {
+        boolean val = boolOr(def.get("maintenance"), false);
+        Map<String, Object> override = stored.get(key);
+        if (override != null && override.containsKey("maintenance")) {
+            val = boolOr(override.get("maintenance"), val);
+        }
+        return val;
     }
 
     /**
@@ -478,6 +530,8 @@ public class FeatureSwitchService {
             }
             if (f.containsKey("title")) m.put("title", f.get("title"));
             if (f.containsKey("group")) m.put("group", f.get("group"));
+            // 维护开关：所有功能均支持持久化
+            m.put("maintenance", boolOr(f.get("maintenance"), false));
             // 仅 REASON_SUPPORTED_KEYS 中的功能保留 reason 字段
             if (REASON_SUPPORTED_KEYS.contains(key)) {
                 Object reasonVal = f.get("reason");

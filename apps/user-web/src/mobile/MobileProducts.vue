@@ -216,6 +216,26 @@
         <MIcon name="copy" :size="18" />
         <span>复制发布新商品</span>
       </button>
+      <div class="m-action-item m-action-toggle-row">
+        <div class="m-action-toggle-info">
+          <MIcon name="repeat" :size="18" />
+          <div class="m-action-toggle-text">
+            <div class="m-action-toggle-title">售整自动上架</div>
+            <div class="m-action-toggle-desc">库存为1售出后自动重发</div>
+          </div>
+        </div>
+        <span v-if="isAutoRelistOn(showProductMenu) === null" class="m-action-toggle-unknown">未知</span>
+        <button
+          v-else
+          class="m-toggle-switch"
+          :class="{ on: isAutoRelistOn(showProductMenu) === true, loading: showProductMenu?._relisting }"
+          :disabled="showProductMenu?._relisting"
+          :aria-label="isAutoRelistOn(showProductMenu) ? '关闭售整自动上架' : '开启售整自动上架'"
+          @click.stop="toggleAutoRelist(showProductMenu)"
+        >
+          <span class="m-toggle-knob"></span>
+        </button>
+      </div>
       <button class="m-action-item m-action-danger" @click="doDeleteProduct">
         <MIcon name="trash" :size="18" />
         <span>删除商品</span>
@@ -302,7 +322,7 @@
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import MIcon from './MIcon.vue'
 import MobileUnavailableState from './MobileUnavailableState.vue'
-import { getGoods, getGoodsStats, deleteGoodsLocal } from '../api/goods.js'
+import { getGoods, getGoodsStats, deleteGoodsLocal, updateGoodsAutoRelist } from '../api/goods.js'
 import { offShelfItem, republishItem } from '../api/items.js'
 import { resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
 import { recordsOf, totalOf, unwrap } from '../utils/apiData.js'
@@ -621,6 +641,40 @@ async function toggleOnShelf(prod) {
     showToast(e?.message || '操作失败', 'error')
   } finally {
     prod._toggling = false
+  }
+}
+
+// ===== 售整自动上架 =====
+function isAutoRelistOn(prod) {
+  if (!prod) return null
+  const v = prod.autoRelistEnabled
+  if (v === true || Number(v) === 1) return true
+  if (v === false || v === 0 || v === '0') return false
+  return null
+}
+
+async function toggleAutoRelist(prod) {
+  if (!prod || prod._relisting) return
+  const current = isAutoRelistOn(prod)
+  if (current === null) {
+    showToast('当前商品自动上架状态未知，请先同步商品数据', 'error')
+    return
+  }
+  const nextEnabled = !current
+  // 开启时检查是否有完整快照（无快照则无法重发）
+  if (nextEnabled && Number(prod.hasSnapshot) === 0) {
+    showToast('当前商品缺少完整数据快照，请先同步商品后再开启', 'error')
+    return
+  }
+  prod._relisting = true
+  try {
+    await updateGoodsAutoRelist(prod.id, nextEnabled)
+    prod.autoRelistEnabled = nextEnabled ? 1 : 0
+    showToast(`已${nextEnabled ? '开启' : '关闭'}售整自动上架`)
+  } catch (e) {
+    showToast(e?.message || '切换售整自动上架失败', 'error')
+  } finally {
+    prod._relisting = false
   }
 }
 
@@ -1530,6 +1584,55 @@ onMounted(() => {
   margin-top: var(--m-space-1);
   border-radius: 0;
 }
+
+/* ===== 售整自动上架菜单项 ===== */
+.m-action-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--m-space-3);
+  padding: var(--m-space-3) var(--m-space-4);
+  border-radius: var(--m-radius-lg);
+}
+
+.m-action-toggle-info {
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-3);
+  flex: 1;
+  min-width: 0;
+}
+
+.m-action-toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.m-action-toggle-title {
+  font-size: var(--m-font-size-h3);
+  color: var(--m-color-text-primary);
+  font-weight: var(--m-font-weight-medium);
+  line-height: 1.3;
+}
+
+.m-action-toggle-desc {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  line-height: 1.3;
+}
+
+.m-action-toggle-unknown {
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-text-tertiary);
+  background: var(--m-color-bg-subtle);
+  padding: 4px 10px;
+  border-radius: var(--m-radius-sm);
+  flex-shrink: 0;
+}
+
+/* 菜单内的 toggle 开关复用 .m-toggle-switch 样式，无需额外定义 */
 
 .m-bottom-sheet {
   position: fixed;

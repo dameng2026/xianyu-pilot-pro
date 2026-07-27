@@ -769,8 +769,16 @@ function extractUserIdFromUrl(urlStr: string): string | undefined {
  * Cookie 注入方式与店铺爬取保持一致（domain 为 .goofish.com 等）。
  */
 export async function resolveStoreUserId(rawUrl: string, cookieHeader?: string): Promise<string> {
-  const headless = process.env.HEADLESS !== 'false';
+  // 关键：商机发掘店铺搜索独立决定 headless 模式，不读取 sliderSolver.ts 使用的 HEADLESS 环境变量。
+  // 原因：sliderSolver.ts 在 HEADLESS=true 下成功率非常高，严禁影响；
+  // 而店铺搜索在 headless 模式下 Baxia 风控识别率高，必须在 Xvfb 提供 DISPLAY 时切到 headed 模式。
+  const isHeadedAvailable =
+    process.platform === 'win32' ||
+    process.platform === 'darwin' ||
+    Boolean(process.env.DISPLAY && process.env.DISPLAY.trim());
+  const headless = !isHeadedAvailable;
   const isWindows = process.platform === 'win32';
+  const isLinux = process.platform !== 'win32' && process.platform !== 'darwin';
   let browser: Browser | null = null;
 
   console.log(`[Crawler] 启动浏览器解析店铺 userId: headless=${headless}`);
@@ -778,9 +786,12 @@ export async function resolveStoreUserId(rawUrl: string, cookieHeader?: string):
   try {
     browser = await chromium.launch({
       headless,
-      chromiumSandbox: true,
-      ...(isWindows && !headless ? { channel: 'chrome' } : {}),
-      args: ['--disable-blink-features=AutomationControlled'],
+      chromiumSandbox: !isLinux,
+      ...((isWindows || isLinux) ? { channel: 'chrome' } : {}),
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        ...(isLinux ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-crash-reporter', '--disable-crashpad', '--disable-breakpad', '--disable-features=Crashpad'] : []),
+      ],
     });
 
     const context = await browser.newContext({
@@ -964,8 +975,16 @@ async function fetchItemDescription(
  */
 export async function crawlGoofishStoreDetailed(url: string, cookieHeader?: string): Promise<CrawlGoofishStoreResult> {
   const { userId, normalizedUrl } = parseGoofishStoreUrl(url);
-  const headless = process.env.HEADLESS !== 'false';
+  // 关键：商机发掘店铺搜索独立决定 headless 模式，不读取 sliderSolver.ts 使用的 HEADLESS 环境变量。
+  // 原因：sliderSolver.ts 在 HEADLESS=true 下成功率非常高，严禁影响；
+  // 而店铺搜索在 headless 模式下 Baxia 风控识别率高，必须在 Xvfb 提供 DISPLAY 时切到 headed 模式。
+  const isHeadedAvailable =
+    process.platform === 'win32' ||
+    process.platform === 'darwin' ||
+    Boolean(process.env.DISPLAY && process.env.DISPLAY.trim());
+  const headless = !isHeadedAvailable;
   const isWindows = process.platform === 'win32';
+  const isLinux = process.platform !== 'win32' && process.platform !== 'darwin';
   const diagnostics: CrawlDiagnostics = { networkCandidateCount: 0, domCandidateCount: 0 };
   const expectedItemCount = await fetchExpectedStoreItemCount(userId, cookieHeader);
   diagnostics.expectedItemCount = expectedItemCount;
@@ -979,9 +998,12 @@ export async function crawlGoofishStoreDetailed(url: string, cookieHeader?: stri
   try {
     browser = await chromium.launch({
       headless,
-      chromiumSandbox: true,
-      ...(isWindows && !headless ? { channel: 'chrome' } : {}),
-      args: ['--disable-blink-features=AutomationControlled'],
+      chromiumSandbox: !isLinux,
+      ...((isWindows || isLinux) ? { channel: 'chrome' } : {}),
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        ...(isLinux ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-crash-reporter', '--disable-crashpad', '--disable-breakpad', '--disable-features=Crashpad'] : []),
+      ],
     });
 
     const context = await browser.newContext({

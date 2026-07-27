@@ -1097,8 +1097,9 @@ public class ImageGenerationService {
     /**
      * 将 result_urls 转为标准图片列表。
      *
-     * 始终使用代理 URL（/api/proxy-image/{token}），不返回本地缓存路径。
-     * 本地缓存仅作为代理服务的内部加速，前端通过代理 URL 访问统一入口。
+     * 优先使用代理 URL（/api/proxy-image/{token}）；若代理注册因 URL 策略校验失败
+     * （如中转站返回 HTTP/非标端口/内网域名等），降级返回原始 URL，避免因代理
+     * 注册异常导致整个方法被判定失败、触发方法链切换与重复生图。
      */
     private List<Map<String, Object>> processResultUrls(List<String> resultUrls) {
         List<Map<String, Object>> images = new ArrayList<>();
@@ -1112,9 +1113,18 @@ public class ImageGenerationService {
             } catch (Exception e) {
                 log.debug("[生图] 内部缓存忽略异常, errorType={}", e.getClass().getSimpleName());
             }
-            // 始终使用代理 URL（适配 Vite 和前端跨域场景）
-            String token = imageProxyService.register(originalUrl);
-            one.put("url", "/api/proxy-image/" + token);
+            // 优先使用代理 URL（适配 Vite 和前端跨域场景）；
+            // 代理注册失败时降级使用原始 URL，确保图片能返回给前端
+            String resolvedUrl;
+            try {
+                String token = imageProxyService.register(originalUrl);
+                resolvedUrl = "/api/proxy-image/" + token;
+            } catch (Exception e) {
+                log.warn("[生图] 图片代理注册失败，降级使用原始 URL, errorType={}, reason={}",
+                        e.getClass().getSimpleName(), e.getMessage());
+                resolvedUrl = originalUrl;
+            }
+            one.put("url", resolvedUrl);
             one.put("originalUrl", originalUrl);
             if (!one.isEmpty()) images.add(one);
         }
@@ -1171,7 +1181,13 @@ public class ImageGenerationService {
                             if (validateRemoteImage(originalUrl)) {
                                 // 重新注册代理 URL
                                 try { imageCacheService.cache(originalUrl); } catch (Exception ignored) {}
-                                img.put("url", "/api/proxy-image/" + imageProxyService.register(originalUrl));
+                                try {
+                                    img.put("url", "/api/proxy-image/" + imageProxyService.register(originalUrl));
+                                } catch (Exception e) {
+                                    log.warn("[生图验证] 图片代理注册失败，保留原始 URL, errorType={}, reason={}",
+                                            e.getClass().getSimpleName(), e.getMessage());
+                                    img.put("url", originalUrl);
+                                }
                                 valid.add(img);
                                 continue;
                             }
@@ -1181,11 +1197,21 @@ public class ImageGenerationService {
                     // 代理图片信任通过（实际加载时才验证）
                     valid.add(img);
                 } else if (url.startsWith("http://") || url.startsWith("https://")) {
-                    // 远程URL，验证
+                    // 远程URL，验证；若因代理策略无法下载验证，信任中转站返回的 URL
                     if (validateRemoteImage(url)) {
                         // 注册代理 URL
                         try { imageCacheService.cache(url); } catch (Exception ignored) {}
-                        img.put("url", "/api/proxy-image/" + imageProxyService.register(url));
+                        try {
+                            img.put("url", "/api/proxy-image/" + imageProxyService.register(url));
+                        } catch (Exception e) {
+                            // 代理注册失败，保留原始 URL
+                            log.warn("[生图验证] 图片代理注册失败，保留原始 URL, errorType={}, reason={}",
+                                    e.getClass().getSimpleName(), e.getMessage());
+                        }
+                        valid.add(img);
+                    } else {
+                        // 远程图片无法下载验证（可能因 URL 策略限制），信任中转站返回的 URL
+                        log.warn("[生图验证] 远程图片无法下载验证，信任上游返回的 URL");
                         valid.add(img);
                     }
                 } else {
@@ -1473,8 +1499,16 @@ public class ImageGenerationService {
                         if (cacheResult != null && cacheResult.success()) {
                             one.put("url", cacheResult.localUrl());
                         } else {
-                            String token = imageProxyService.register(originalUrl);
-                            one.put("url", "/api/proxy-image/" + token);
+                            // 代理注册失败时降级使用原始 URL，避免因 URL 策略校验失败
+                            // 导致整个方法被判定失败、触发方法链切换与重复生图
+                            try {
+                                String token = imageProxyService.register(originalUrl);
+                                one.put("url", "/api/proxy-image/" + token);
+                            } catch (Exception e) {
+                                log.warn("[生图] 图片代理注册失败，降级使用原始 URL, errorType={}, reason={}",
+                                        e.getClass().getSimpleName(), e.getMessage());
+                                one.put("url", originalUrl);
+                            }
                         }
                         one.put("originalUrl", originalUrl);
                     }

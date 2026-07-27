@@ -367,8 +367,15 @@ async function searchViaPythonScript(options: {
   cookieStr: string;
   timeoutMs?: number;
 }): Promise<{ items: SearchResultItem[]; total?: number; hasMore?: boolean } | null> {
-  // 仅在 Windows + 有头模式尝试（与 sliderSolve.py 一致）
-  if (process.platform !== 'win32') {
+  // 关键：商机发掘搜索允许在 Linux Docker（Xvfb 提供 DISPLAY）上调用 Python patchright 兜底。
+  // 原因：Node Playwright 即使 headed + 真实 Chrome 仍被 Baxia 通过 CDP 痕迹识别（FAIL_SYS_USER_VALIDATE），
+  // patchright 自动清理 CDP 痕迹（cdc_/__playwright__/Runtime.enable），是搜索场景的关键反检测手段。
+  //
+  // 与 sliderSolver.ts 的区别：sliderSolver.ts 仍保留 Windows-only 限制（Linux 用 Node Playwright 求解滑块，
+  // 成功率非常高，严禁改动）。商机发掘搜索独立允许 Linux patchright，不影响滑块求解模块。
+  // 需要 DISPLAY 环境变量（Xvfb 提供）才能在 Linux 上跑 headed patchright。
+  if (process.platform !== 'win32' && process.platform !== 'darwin' && !process.env.DISPLAY) {
+    console.log('[SearchCrawler] Linux 无 DISPLAY，跳过 Python patchright 兜底');
     return null;
   }
   if (!options.cookieStr) {
@@ -540,8 +547,26 @@ export async function crawlGoofishSearch(
   const url = `https://www.goofish.com/search?q=${encodedKeyword}&page=${pageNum}`;
   console.log(`[SearchCrawler] 开始搜索: page=${pageNum}, pageSize=${pageSize}, hasCookie=${!!cookieStr}`);
 
-  const headless = process.env.HEADLESS !== 'false';
+  // 关键：商机发掘搜索独立决定 headless 模式，不读取 sliderSolver.ts 使用的 HEADLESS 环境变量。
+  // 原因：sliderSolver.ts 在 HEADLESS=true 下成功率非常高，严禁影响；
+  // 而商机发掘的 MTOP 关键词搜索在 headless 模式下 Baxia 风控识别率极高（FAIL_SYS_USER_VALIDATE），
+  // 必须在 Xvfb 提供 DISPLAY 时切到 headed 模式以降低风控触发率。
+  // 决策逻辑：
+  //   - Windows / macOS：有物理显示子系统，headless=false（headed）
+  //   - Linux + DISPLAY 非空（Xvfb 提供）：headless=false（headed）
+  //   - Linux + 无 DISPLAY：headless=true（兜底，无法跑 headed）
+  const isHeadedAvailable =
+    process.platform === 'win32' ||
+    process.platform === 'darwin' ||
+    Boolean(process.env.DISPLAY && process.env.DISPLAY.trim());
+  const headless = !isHeadedAvailable;
+  console.log(`[SearchCrawler] headless 决策: platform=${process.platform} DISPLAY=${process.env.DISPLAY || '(空)'} isHeadedAvailable=${isHeadedAvailable} headless=${headless} HEADLESS=${process.env.HEADLESS || '(未设置)'}`);
   const isWindows = process.platform === 'win32';
+  // Linux Docker 内以非 root 用户运行系统 Chrome 必须关闭 sandbox 并使用 channel:'chrome'，
+  // 否则会因 Ubuntu 23.10+ AppArmor 限制非特权用户命名空间导致 Chrome 启动失败（No usable sandbox!）
+  // 或 Chrome for Testing 149 在 headed 模式下 SIGTRAP 崩溃。
+  // 与 sliderSolver.ts 的 isLinux / chromiumSandbox / args 配置保持一致。
+  const isLinux = process.platform !== 'win32' && process.platform !== 'darwin';
   let browser: Browser | null = null;
   // 优先使用 MTOP API 拦截结果，DOM 提取作为兜底
   const networkItems: SearchResultItem[] = [];
@@ -560,12 +585,29 @@ export async function crawlGoofishSearch(
   try {
     browser = await chromium.launch({
       headless,
-      chromiumSandbox: true,
+      // Linux Docker 内以非 root 用户运行系统 Chrome 必须关闭 sandbox，否则启动失败
+      // （Ubuntu 23.10+ AppArmor 限制非特权用户命名空间，Chrome sandbox 无法初始化）
+      chromiumSandbox: !isLinux,
       // 使用真实 Chrome channel（而非 Chromium），降低被 Baxia 识别为自动化的概率
       // sliderSolver.ts 验证：真实 Chrome + ignoreDefaultArgs 是求解滑块成功的关键配置
-      ...(isWindows ? { channel: 'chrome' } : {}),
+      // Linux 优先使用 channel:'chrome' 调用系统 google-chrome-stable，避免 Chrome for Testing 149 崩溃
+      ...((isWindows || isLinux) ? { channel: 'chrome' } : {}),
       // 移除 Playwright 默认的 --enable-automation 参数，这是 Baxia 识别自动化的强信号
       ignoreDefaultArgs: ['--enable-automation'],
+      args: [
+        // Linux 必须禁用 sandbox/dev-shm/crashpad，否则 Docker 内 Chrome 启动失败或崩溃
+        ...(isLinux
+          ? [
+              '--no-sandbox',
+              '--disable-dev-shm-usage',
+              '--disable-gpu',
+              '--disable-crash-reporter',
+              '--disable-crashpad',
+              '--disable-breakpad',
+              '--disable-features=Crashpad',
+            ]
+          : []),
+      ],
     });
 
     const contextOptions: BrowserContextOptions = {

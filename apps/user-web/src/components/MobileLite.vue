@@ -281,6 +281,23 @@
       <MIcon :name="fabIcon" :size="26" />
     </button>
 
+    <button
+      v-if="!subPage"
+      type="button"
+      class="m-cs-fab"
+      aria-label="联系 AI 客服小梦"
+      @click="openAiCs"
+    >
+      <span class="m-cs-fab-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+        </svg>
+      </span>
+      <span class="m-cs-fab-pulse" aria-hidden="true"></span>
+    </button>
+
+    <AiCsPanel :visible="aiCsVisible" @close="aiCsVisible = false" />
+
     <nav v-if="!subPage" class="m-tabbar">
       <button
         v-for="tab in bottomTabs"
@@ -307,6 +324,7 @@
 import { ref, onBeforeUnmount, onMounted, computed, nextTick } from 'vue'
 import MIcon from '../mobile/MIcon.vue'
 import MaintenanceBanner from './MaintenanceBanner.vue'
+import AiCsPanel from './AiCsPanel.vue'
 import MobileHome from '../mobile/MobileHome.vue'
 import MobileMessages from '../mobile/MobileMessages.vue'
 import MobileNotifications from '../mobile/MobileNotifications.vue'
@@ -467,6 +485,12 @@ function onFABClick() {
   } else {
     emit('navigate', 'product-publish')
   }
+}
+
+// AI 客服"小梦"面板可见性（仅在不显示底部 tab 的子页面时不出现 FAB）
+const aiCsVisible = ref(false)
+function openAiCs() {
+  aiCsVisible.value = true
 }
 
 async function loadUser() {
@@ -1319,5 +1343,56 @@ onBeforeUnmount(() => {
   .m-top-action-btn,
   .m-menu-btn { width: 36px; height: 36px; }
   .m-drawer { width: 270px; }
+}
+
+/* AI 客服悬浮按钮：独立 FAB，不修改 .m-topbar / .m-tabbar / .m-drawer */
+.m-cs-fab {
+  position: fixed;
+  right: 16px;
+  bottom: 84px; /* 位于底部 tab 之上 */
+  z-index: 50;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(135deg, #147dff 0%, #0865f4 100%);
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(20, 125, 255, 0.4), 0 2px 8px rgba(31, 53, 94, 0.16);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  padding: 0;
+}
+
+.m-cs-fab:active {
+  transform: scale(0.92);
+}
+
+.m-cs-fab-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.m-cs-fab-pulse {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #22c55e;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6);
+  animation: m-cs-fab-pulse-anim 2s infinite;
+}
+
+@keyframes m-cs-fab-pulse-anim {
+  0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55); }
+  70% { box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
 }
 </style>

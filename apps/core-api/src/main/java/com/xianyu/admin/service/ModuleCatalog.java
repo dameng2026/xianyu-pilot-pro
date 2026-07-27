@@ -32,11 +32,7 @@ public class ModuleCatalog {
         ));
         add("notify-channels", "通知渠道", "邮件、Webhook、飞书、企业微信配置", cols("id:ID:80", "channelName:渠道名称:160", "channelType:类型:120:tag", "target:目标:220", "status:状态:100:tag", "updatedTime:更新时间:170"));
         add("notify-logs", "通知日志", "消息通知、告警通知和套餐到期通知记录", cols("id:ID:80", "channelName:渠道:140", "title:标题:200", "receiver:接收人:150", "sendStatus:状态:100:tag", "createdTime:发送时间:170"));
-        add("risk-events", "风控事件", "账号、任务、登录、AI 等风险事件处理", cols("id:ID:80", "eventType:事件类型:150", "riskLevel:等级:100:tag", "username:用户:120", "accountName:账号:140", "title:标题:220", "status:状态:100:tag", "createdTime:发生时间:170"));
         add("system-settings", "系统配置", "全局配置、密钥、存储、邮件、地图、开关", cols("id:ID:80", "settingKey:配置键:180", "settingValue:配置值:260", "settingGroup:分组:120", "isSecret:敏感:90:tag", "updatedTime:更新时间:170"));
-        add("runtime", "运行日志", "节点状态、运行日志、内存、磁盘和线程池", cols("id:ID:80", "nodeName:节点:140", "nodeIp:IP:130", "cpuUsage:CPU:90", "memoryUsage:内存:90", "diskUsage:磁盘:90", "status:状态:100:tag", "lastHeartbeatTime:心跳:170"));
-        add("backups", "数据备份", "MySQL 备份、恢复、下载和保留策略", cols("id:ID:80", "backupName:备份名称:180", "backupType:类型:110:tag", "fileSize:大小:90", "status:状态:100:tag", "createdTime:创建时间:170"));
-        add("versions", "版本管理", "系统版本、升级记录和灰度发布", cols("id:ID:80", "version:版本号:120", "title:标题:200", "releaseType:类型:100:tag", "status:状态:100:tag", "releasedTime:发布时间:170"));
 
         add("xianyu-accounts", "闲鱼账号", "管理平台内所有普通用户绑定的闲鱼账号，包括账号状态、Cookie/WebSocket/在线状态、会员等级等", cols(
                 "id:ID:80",
@@ -81,25 +77,6 @@ public class ModuleCatalog {
                 "statDate:统计日期:120",
                 "accountName:所属账号:140",
                 "createdTime:统计时间:170"
-        ));
-        add("alerts", "异常告警", "系统异常告警事件聚合，包含任务失败、登录异常、AI 调用失败等告警", cols(
-                "id:ID:80",
-                "alertType:告警类型:140:tag",
-                "level:级别:100:tag",
-                "source:来源:140",
-                "title:标题:240",
-                "username:关联用户:130",
-                "status:状态:100:tag",
-                "createdTime:发生时间:170"
-        ));
-        add("files", "文件管理", "上传文件、LOGO、附件等资源文件清单与大小统计", cols(
-                "id:ID:80",
-                "fileName:文件名:240",
-                "filePath:存储路径:280",
-                "fileSize:大小:100",
-                "fileType:类型:100:tag",
-                "username:上传用户:130",
-                "createdTime:上传时间:170"
         ));
     }
 

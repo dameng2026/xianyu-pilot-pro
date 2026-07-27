@@ -44,11 +44,14 @@ class OrderDeliveryCommandServiceTest {
     @Mock
     private DeliveryExecutionService deliveryExecutionService;
 
+    @Mock
+    private CardService cardService;
+
     private OrderDeliveryCommandService service;
 
     @BeforeEach
     void setUp() {
-        service = new OrderDeliveryCommandService(orderMapper, jdbcTemplate, automationClient, deliveryExecutionService);
+        service = new OrderDeliveryCommandService(orderMapper, jdbcTemplate, automationClient, deliveryExecutionService, cardService);
     }
 
     @Test

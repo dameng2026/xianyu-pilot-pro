@@ -307,10 +307,10 @@
               <div class="section-title">手动发货</div>
               <div class="form-grid">
                 <div class="form-field">
-                  <label>发货方式</label>
-                  <select v-model="manualForm.deliveryMode" class="input">
-                    <option value="text">文本发货</option>
-                    <option value="card">卡密发货</option>
+                  <label>发货来源</label>
+                  <select v-model="manualForm.deliverySource" class="input" @change="onDeliverySourceChange">
+                    <option value="custom">自定义发货内容</option>
+                    <option value="library">使用货源库发货</option>
                   </select>
                 </div>
                 <div class="form-field">
@@ -326,10 +326,57 @@
                   <input v-model="manualForm.quantityRequested" class="input" type="number" min="1" />
                 </div>
               </div>
-              <div class="form-field">
+
+              <!-- 货源库发货：选择货源 -->
+              <div v-if="manualForm.deliverySource === 'library'" class="form-field">
+                <label>选择货源</label>
+                <div v-if="sourcesLoading" class="subtle">货源加载中...</div>
+                <div v-else-if="sourcesLoadError" class="subtle error-text">{{ sourcesLoadError }}</div>
+                <div v-else>
+                  <select v-model="manualForm.sourceId" class="input" @change="onSourceSelect">
+                    <option :value="null">请选择货源</option>
+                    <option
+                      v-for="src in deliverySources"
+                      :key="src.id"
+                      :value="src.id"
+                      :disabled="isSourceDisabled(src)"
+                    >
+                      {{ sourceOptionLabel(src) }}
+                    </option>
+                  </select>
+                  <div v-if="selectedSource" class="source-preview">
+                    <div class="source-preview-row">
+                      <span class="detail-label">发货方式：</span>
+                      <span class="detail-value">{{ selectedSource.deliveryMode === 'card' ? '卡密发货' : '文本发货' }}</span>
+                    </div>
+                    <div v-if="selectedSource.deliveryMode === 'card'" class="source-preview-row">
+                      <span class="detail-label">卡密库存：</span>
+                      <span :class="['detail-value', { 'error-text': (selectedSource.cardRemainCount ?? 0) <= 0 }]">
+                        剩余 {{ selectedSource.cardRemainCount ?? 0 }} 张
+                        <span v-if="(selectedSource.cardRemainCount ?? 0) <= 0" class="error-text">（库存不足，无法发货）</span>
+                      </span>
+                    </div>
+                    <div class="source-preview-row">
+                      <span class="detail-label">货源内容：</span>
+                      <span class="detail-value source-content-text">{{ selectedSource.content || '（空）' }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 自定义发货内容 -->
+              <div v-else class="form-field">
+                <label>发货方式</label>
+                <select v-model="manualForm.deliveryMode" class="input">
+                  <option value="text">文本发货</option>
+                  <option value="card">卡密发货</option>
+                </select>
+              </div>
+              <div v-if="manualForm.deliverySource === 'custom'" class="form-field">
                 <label>发货内容</label>
                 <textarea v-model="manualForm.deliveryContent" class="textarea" rows="5" placeholder="请输入发货文本、卡密内容或下载链接"></textarea>
               </div>
+
               <div class="inline-actions">
                 <AppButton type="primary" :loading="manualSubmitting" @click="submitManualDelivery">
                   {{ manualSubmitting ? '提交中...' : '提交手动发货' }}
@@ -359,6 +406,7 @@ import Icon from '../components/Icon.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { getLiteAccounts } from '../api/accounts.js'
 import { getOrderDetail, getOrders, getTodayOrderAmount, manualDeliverOrder, syncOrder, syncOrders } from '../api/orders.js'
+import { getDeliverySources } from '../api/autoDelivery.js'
 import { totalOf } from '../utils/apiData.js'
 import { accountName } from '../utils/format.js'
 import { buildManualDeliveryPayload, buildOrderDetailViewModel, buildOrderRowViewModel, buildOrdersQuery } from '../utils/orderPageState.js'
@@ -395,10 +443,25 @@ const query = reactive({
 
 const manualForm = reactive({
   visible: false,
+  // 'custom' = 自定义发货内容；'library' = 使用货源库发货
+  deliverySource: 'custom',
   deliveryMode: 'text',
   deliveryTiming: 'after_payment',
   deliveryContent: '',
-  quantityRequested: 1
+  quantityRequested: 1,
+  sourceId: null
+})
+
+// 货源库数据
+const deliverySources = ref([])
+const sourcesLoading = ref(false)
+const sourcesLoadError = ref('')
+const sourcesLoaded = ref(false)
+
+const selectedSource = computed(() => {
+  const id = Number(manualForm.sourceId)
+  if (!Number.isFinite(id) || id <= 0) return null
+  return deliverySources.value.find(s => Number(s.id) === id) || null
 })
 
 const rows = computed(() => orders.value.map(buildOrderRowViewModel))
@@ -610,10 +673,60 @@ function closeDetail() {
 
 function primeManualForm() {
   const order = selected.value || {}
+  manualForm.deliverySource = 'custom'
   manualForm.deliveryMode = 'text'
   manualForm.deliveryTiming = 'after_payment'
   manualForm.deliveryContent = order.deliveryContent || ''
   manualForm.quantityRequested = Number(order.quantityRequested ?? order.quantityTotal ?? 1) || 1
+  manualForm.sourceId = null
+}
+
+function sourceOptionLabel(src) {
+  const mode = src.deliveryMode === 'card' ? '卡密' : '文本'
+  const title = src.title || `货源#${src.id}`
+  if (src.deliveryMode === 'card') {
+    const remain = Number(src.cardRemainCount ?? 0)
+    return `${title}（${mode}，剩余 ${remain}）`
+  }
+  return `${title}（${mode}）`
+}
+
+function isSourceDisabled(src) {
+  // 卡密发货且库存为 0 时禁用
+  return src.deliveryMode === 'card' && Number(src.cardRemainCount ?? 0) <= 0
+}
+
+async function loadDeliverySourcesIfNeeded() {
+  if (sourcesLoaded.value || sourcesLoading.value) return
+  sourcesLoading.value = true
+  sourcesLoadError.value = ''
+  try {
+    const res = await getDeliverySources({ current: 1, size: 200 })
+    const data = res?.data
+    // 兼容 {records: [...]} 或数组
+    const list = Array.isArray(data)
+      ? data
+      : (data && Array.isArray(data.records) ? data.records : [])
+    deliverySources.value = list
+    sourcesLoaded.value = true
+  } catch (e) {
+    deliverySources.value = []
+    sourcesLoadError.value = e?.message || '货源库加载失败'
+  } finally {
+    sourcesLoading.value = false
+  }
+}
+
+function onDeliverySourceChange() {
+  // 切换发货来源时清空已选货源
+  manualForm.sourceId = null
+  if (manualForm.deliverySource === 'library') {
+    loadDeliverySourcesIfNeeded()
+  }
+}
+
+function onSourceSelect() {
+  // 选择货源后由后端推断发货方式与内容，前端仅展示
 }
 
 async function openManualDelivery(row) {
@@ -645,8 +758,25 @@ async function refreshSelectedOrder() {
 async function submitManualDelivery() {
   if (!selected.value?.id) return
   clearNotice()
+
+  // 货源库发货模式下的前置校验
+  if (manualForm.deliverySource === 'library') {
+    const src = selectedSource.value
+    if (!src) {
+      error.value = '请先选择货源'
+      return
+    }
+    // 卡密发货库存预检：前端拦截，避免无效请求
+    if (src.deliveryMode === 'card' && Number(src.cardRemainCount ?? 0) <= 0) {
+      error.value = `货源「${src.title || src.id}」卡密库存不足，无法发货。请先在卡密仓库补充库存后重试。`
+      return
+    }
+  }
+
   const payload = buildManualDeliveryPayload(manualForm)
-  if (!payload.deliveryContent) {
+
+  // 自定义模式必填校验
+  if (manualForm.deliverySource === 'custom' && !payload.deliveryContent) {
     error.value = '请先填写发货内容'
     return
   }
@@ -656,6 +786,10 @@ async function submitManualDelivery() {
     await manualDeliverOrder(selected.value.id, payload)
     success.value = '手动发货任务已提交'
     manualForm.visible = false
+    // 货源库发货后刷新货源列表以反映最新卡密库存
+    if (manualForm.deliverySource === 'library') {
+      sourcesLoaded.value = false
+    }
     await loadOrders()
     await refreshSelectedOrder()
   } catch (requestError) {
@@ -1574,6 +1708,36 @@ onBeforeUnmount(() => {
   background: #f8fafc;
   border-radius: 10px;
   border: 1px solid #e8eef8;
+}
+.source-preview {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.source-preview-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.source-preview-row .detail-label {
+  min-width: 72px;
+  font-size: 12px;
+}
+.source-preview-row .detail-value {
+  font-size: 12px;
+  flex: 1;
+  word-break: break-all;
+}
+.source-content-text {
+  color: #475569;
+  white-space: pre-wrap;
 }
 .detail-section { margin-bottom: 20px; }
 .detail-section:last-child { margin-bottom: 0; }

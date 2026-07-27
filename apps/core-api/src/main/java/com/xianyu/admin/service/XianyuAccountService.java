@@ -571,9 +571,60 @@ public class XianyuAccountService {
         return vo;
     }
 
-    private Long getLong(Map<String, Object> map, String key) {
-        if (map == null) return null;
+    /**
+     * 从 Map 中读取值，同时支持下划线和驼峰格式的 key。
+     * MyBatis 配置了 map-underscore-to-camel-case=true，Map key 为驼峰格式；
+     * 但 SQL 中使用下划线别名时，JDBC 驱动可能返回原始列名。
+     * 此方法先尝试原始 key，再尝试驼峰转换后的 key，确保两种格式都能读取。
+     */
+    private Object getRowValue(Map<String, Object> map, String key) {
+        if (map == null || key == null) return null;
         Object val = map.get(key);
+        if (val != null) return val;
+        // 尝试驼峰格式（如 "fish_shop_user" → "fishShopUser"）
+        String camelKey = toCamelCase(key);
+        if (!camelKey.equals(key)) {
+            val = map.get(camelKey);
+            if (val != null) return val;
+        }
+        // 尝试下划线格式（如 "fishShopUser" → "fish_shop_user"）
+        String snakeKey = toSnakeCase(key);
+        if (!snakeKey.equals(key)) {
+            val = map.get(snakeKey);
+        }
+        return val;
+    }
+
+    private static String toCamelCase(String snake) {
+        if (snake == null || !snake.contains("_")) return snake;
+        StringBuilder sb = new StringBuilder();
+        boolean upper = false;
+        for (int i = 0; i < snake.length(); i++) {
+            char c = snake.charAt(i);
+            if (c == '_') { upper = true; continue; }
+            sb.append(upper ? Character.toUpperCase(c) : c);
+            upper = false;
+        }
+        return sb.toString();
+    }
+
+    private static String toSnakeCase(String camel) {
+        if (camel == null || camel.isEmpty()) return camel;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < camel.length(); i++) {
+            char c = camel.charAt(i);
+            if (Character.isUpperCase(c)) {
+                if (i > 0) sb.append('_');
+                sb.append(Character.toLowerCase(c));
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    private Long getLong(Map<String, Object> map, String key) {
+        Object val = getRowValue(map, key);
         if (val == null) return null;
         if (val instanceof Long) return (Long) val;
         if (val instanceof Number) return ((Number) val).longValue();
@@ -581,14 +632,12 @@ public class XianyuAccountService {
     }
 
     private String getString(Map<String, Object> map, String key) {
-        if (map == null) return null;
-        Object val = map.get(key);
+        Object val = getRowValue(map, key);
         return val != null ? String.valueOf(val) : null;
     }
 
     private Integer getInteger(Map<String, Object> map, String key) {
-        if (map == null) return null;
-        Object val = map.get(key);
+        Object val = getRowValue(map, key);
         if (val == null) return null;
         if (val instanceof Integer) return (Integer) val;
         if (val instanceof Number) return ((Number) val).intValue();
@@ -596,8 +645,7 @@ public class XianyuAccountService {
     }
 
     private Double getDouble(Map<String, Object> map, String key) {
-        if (map == null) return null;
-        Object val = map.get(key);
+        Object val = getRowValue(map, key);
         if (val == null) return null;
         if (val instanceof Double) return (Double) val;
         if (val instanceof Number) return ((Number) val).doubleValue();
@@ -605,15 +653,13 @@ public class XianyuAccountService {
     }
 
     private LocalDateTime getLocalDateTime(Map<String, Object> map, String key) {
-        if (map == null) return null;
-        Object val = map.get(key);
+        Object val = getRowValue(map, key);
         if (val instanceof LocalDateTime) return (LocalDateTime) val;
         return null;
     }
 
     private Boolean getBoolean(Map<String, Object> map, String key) {
-        if (map == null) return null;
-        Object val = map.get(key);
+        Object val = getRowValue(map, key);
         if (val == null) return null;
         if (val instanceof Boolean) return (Boolean) val;
         if (val instanceof Number) return ((Number) val).intValue() != 0;

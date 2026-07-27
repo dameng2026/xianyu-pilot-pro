@@ -18,25 +18,39 @@ WORKDIR /app
 
 RUN node -e "const v=process.versions.node.split('.')[0]; if(v!=='24') process.exit(1)"
 
-# 安装 Xvfb + google-chrome-stable：
+# 安装 Xvfb + google-chrome-stable + Python + patchright：
 # - Xvfb：让线上 Linux Docker 也能运行有头 Chrome（headless 下 Baxia 风控识别率极高）
 # - google-chrome-stable：Playwright 自带 Chrome for Testing 149 在 Docker headed 模式下崩溃
 #   (SIGTRAP / chrome_crashpad_handler: --database is required)，改用系统 Chrome 通过
 #   channel:'chrome' 调用，是 Playwright 官方推荐方案
+# - python3 + patchright：商机发掘搜索的 Python 兜底脚本（goofishSearch.py）依赖 patchright
+#   反检测分支（自动清理 CDP 痕迹），是 Node Playwright 触发 Baxia 风控后的关键兜底。
+#   注意：仅用于商机发掘搜索（goofishSearch.ts），不影响滑块求解（sliderSolver.ts 仍走 Node Playwright）。
 RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -O /tmp/chrome.deb && \
     apt-get update && apt-get install -y --no-install-recommends \
         xvfb \
         xauth \
+        python3 \
+        python3-pip \
+        python3-venv \
         /tmp/chrome.deb \
-    && rm -rf /var/lib/apt/lists/* /tmp/chrome.deb
+    && rm -rf /var/lib/apt/lists/* /tmp/chrome.deb \
+    && python3 -m pip install --no-cache-dir --break-system-packages patchright
 
 COPY --from=build --chown=pwuser:pwuser /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=pwuser:pwuser /app/node_modules ./node_modules
 COPY --from=build --chown=pwuser:pwuser /app/dist ./dist
 COPY --from=build --chown=pwuser:pwuser /app/migrations ./migrations
 
+# 复制 Python 兜底脚本（goofishSearch.py + sliderSolve.py）到镜像根目录
+# 这两个脚本仅在商机发掘搜索触发 Baxia 风控时被调用，不影响滑块求解模块
+COPY --chown=pwuser:pwuser goofishSearch.py sliderSolve.py ./
+
 ENV NODE_ENV=production
-# 仍保留 HEADLESS=true 作为默认值，由 sliderSolver.ts 根据 DISPLAY 环境变量决定实际是否使用有头模式
+# 保留 HEADLESS=true 作为滑块求解（sliderSolver.ts）的默认配置。
+# 滑块求解在该模式下成功率非常高，严禁改动此环境变量。
+# 商机发掘搜索（goofishSearch.ts）不读取此变量，自行根据 DISPLAY 决定 headless，
+# 以便在 Xvfb 提供显示器时使用有头模式降低 Baxia 风控触发率。
 ENV HEADLESS=true
 ENV PORT=3001
 # 设置 HOME 为可写目录：pwuser 默认 HOME=/home/pwuser 不可写，

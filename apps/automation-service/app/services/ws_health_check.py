@@ -14,8 +14,10 @@
 1. cookie_status = 1（cookie 仍有效）
 2. ws_status = 0（WS 未连接）
 3. last_heartbeat_time 距今超过 5 分钟（避免刚启动/重启的账号被误判）
-4. ws_manager 中无活跃客户端 或 客户端 is_connected=False
-5. 账号不在排除表 xianyu_account_solve_exclusion 中（enqueue_solve 内部也会检查）
+4. last_heartbeat_time IS NOT NULL（过滤从未上线过的账号，避免误触发）
+5. ws_manager 中无活跃客户端 或 客户端 is_connected=False
+6. 账号不在排除表 xianyu_account_solve_exclusion 中（enqueue_solve 内部也会检查）
+7. 入队前调用 hasLogin 校验 Cookie 真实有效性，避免注定失败的求解入队污染数据库
 """
 from __future__ import annotations
 
@@ -39,6 +41,27 @@ WS_NO_HEARTBEAT_THRESHOLD_SEC = 5 * 60  # 5 分钟
 MAX_ENQUEUE_PER_SCAN = 10
 
 
+async def _mark_cookie_invalid(account_id: int, tenant_id: int) -> None:
+    """hasLogin 校验失败后将 cookie_status 标记为 0，避免后续扫描重复触发。"""
+    try:
+        from ..core.database import async_session
+        async with async_session() as db:
+            await db.execute(
+                text(
+                    "UPDATE xianyu_account_runtime "
+                    "SET cookie_status = 0, updated_time = NOW() "
+                    "WHERE account_id = :aid AND tenant_id = :tid AND deleted = 0"
+                ),
+                {"aid": account_id, "tid": tenant_id},
+            )
+            await db.commit()
+    except Exception as e:
+        log_service_failure(
+            logger, e, operation="ws_health_mark_cookie_invalid",
+            tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
+        )
+
+
 async def _scan_and_enqueue_ws_health() -> int:
     """扫描 cookie_status=1 但 ws_status=0 的账号，触发滑块求解入队。
 
@@ -47,6 +70,7 @@ async def _scan_and_enqueue_ws_health() -> int:
     """
     from ..core.database import async_session
     from .ws_client import ws_manager
+    from .captcha_precheck import precheck_cookie_status
 
     try:
         async with async_session() as db:
@@ -54,20 +78,21 @@ async def _scan_and_enqueue_ws_health() -> int:
                 text(
                     "SELECT r.account_id, r.tenant_id, a.nickname, "
                     "r.last_heartbeat_time, r.updated_time, "
-                    "TIMESTAMPDIFF(SECOND, COALESCE(r.last_heartbeat_time, '1970-01-01'), NOW()) AS hb_age_sec "
+                    "TIMESTAMPDIFF(SECOND, r.last_heartbeat_time, NOW()) AS hb_age_sec "
                     "FROM xianyu_account_runtime r "
                     "INNER JOIN xianyu_account a ON a.id = r.account_id AND a.tenant_id = r.tenant_id "
                     "WHERE r.deleted = 0 "
                     "  AND a.deleted = 0 "
                     "  AND r.cookie_status = 1 "
                     "  AND r.ws_status = 0 "
-                    "  AND COALESCE(r.last_heartbeat_time, '1970-01-01') < DATE_SUB(NOW(), INTERVAL :threshold SECOND) "
+                    "  AND r.last_heartbeat_time IS NOT NULL "
+                    "  AND r.last_heartbeat_time < DATE_SUB(NOW(), INTERVAL :threshold SECOND) "
                     "ORDER BY r.updated_time ASC "
                     "LIMIT :limit"
                 ),
                 {
                     "threshold": WS_NO_HEARTBEAT_THRESHOLD_SEC,
-                    "limit": MAX_ENQUEUE_PER_SCAN * 2,  # 多查一些，内存校验后取前 N
+                    "limit": MAX_ENQUEUE_PER_SCAN * 2,  # 多查一些，hasLogin 校验后取前 N
                 },
             )).mappings().all()
     except Exception as e:
@@ -100,6 +125,39 @@ async def _scan_and_enqueue_ws_health() -> int:
         except Exception:
             # get_client 异常不阻断，继续尝试入队
             pass
+
+        # 入队前先做 hasLogin 校验，避免注定失败的求解入队污染数据库
+        # 容器重启后第一次扫描可能命中大量"cookie_status=1 但 Cookie 已过期"的账号，
+        # 直接入队会创建大量 precheck_rejected 记录浪费资源
+        try:
+            is_pass, failure_reason, _message = await precheck_cookie_status(
+                account_id, tenant_id,
+            )
+            if not is_pass:
+                if failure_reason == "cookie_invalid":
+                    # Cookie 真实过期：直接更新 cookie_status=0，避免后续扫描重复触发
+                    await _mark_cookie_invalid(account_id, tenant_id)
+                    logger.info(
+                        "WS 健康检查跳过：hasLogin 校验 Cookie 已失效，已更新 cookie_status=0 accountId=%d nickname=%s",
+                        account_id, nickname,
+                    )
+                    continue
+                # service_unavailable / precheck_rejected / 其他：跳过本次扫描
+                # 不更新 cookie_status（可能临时不可用），下次扫描再试
+                logger.info(
+                    "WS 健康检查跳过：hasLogin 预校验未通过 reason=%s accountId=%d nickname=%s",
+                    failure_reason, account_id, nickname,
+                )
+                continue
+        except Exception as e:
+            log_service_failure(
+                logger, e, operation="ws_health_precheck",
+                tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
+            )
+            # 预校验异常不阻断，继续入队让 worker 内部预校验兜底
+            logger.warning(
+                "WS 健康检查预校验异常，降级为直接入队 accountId=%d", account_id,
+            )
 
         # 入队滑块求解（trigger_scene="ws_health_check"）
         # enqueue_solve 内部有 4 层去重：排除表、内存 pending、DB retrying、手动冷却

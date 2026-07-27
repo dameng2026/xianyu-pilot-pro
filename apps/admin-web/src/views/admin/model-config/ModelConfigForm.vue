@@ -104,6 +104,15 @@
             @input="handleFieldChange"
           />
 
+          <ElAlert
+            v-else-if="field.type === 'tip'"
+            :title="field.placeholder || field.label || ''"
+            type="info"
+            :closable="false"
+            show-icon
+            class="field-tip"
+          />
+
           <ElInput
             v-else
             v-model="formData[field.prop]"
@@ -168,7 +177,7 @@
     prop: string
     label: string
     placeholder?: string
-    type?: 'text' | 'password' | 'number' | 'select' | 'textarea' | 'switch'
+    type?: 'text' | 'password' | 'number' | 'select' | 'textarea' | 'switch' | 'tip'
     options?: string[]
     rows?: number
     maxlength?: number
@@ -263,6 +272,9 @@
   })
 
   function buildDefaultValue(field: ModelConfigField) {
+    if (field.type === 'tip') {
+      return undefined
+    }
     if (field.prop === 'billingMode') {
       return props.section.key === 'image' || props.section.key === 'image2' || props.section.key === 'image3'
         ? '按次计费（每张图片固定费用）'
@@ -270,9 +282,6 @@
     }
     if (field.prop === 'billingUnit') {
       return '1K Tokens'
-    }
-    if (field.prop === 'perCallPrice' && props.section.key === 'general') {
-      return 0.03
     }
     if (field.prop === 'cost') {
       return 0
@@ -301,6 +310,7 @@
 
   function normalizePayload(data?: Record<string, any> | null) {
     sectionFields.value.forEach((field) => {
+      if (field.type === 'tip') return
       const nextValue = data?.[field.prop]
       formData[field.prop] =
         nextValue === undefined || nextValue === null ? buildDefaultValue(field) : nextValue
@@ -318,6 +328,7 @@
   function getPersistPayload() {
     const payload: Record<string, any> = {}
     sectionFields.value.forEach((field) => {
+      if (field.type === 'tip') return
       payload[field.prop] = formData[field.prop]
     })
     payload.status = enabled.value ? '正常' : '禁用'
@@ -329,6 +340,7 @@
 
   function updateState() {
     const configured = sectionFields.value.some((field) => {
+      if (field.type === 'tip') return false
       const value = formData[field.prop]
       if (field.type === 'switch') {
         return true
@@ -345,7 +357,7 @@
   }
 
   function getFieldPassed(field: ModelConfigField) {
-    if (field.type === 'switch') {
+    if (field.type === 'tip' || field.type === 'switch') {
       return true
     }
     if (!field.required) {
@@ -405,7 +417,7 @@
       return
     }
     const missingField = sectionFields.value.find((field) => {
-      if (!field.required || field.type === 'switch') {
+      if (!field.required || field.type === 'switch' || field.type === 'tip') {
         return false
       }
       return String(formData[field.prop] ?? '').trim() === ''
@@ -639,6 +651,11 @@
   .field-switch {
     --el-switch-on-color: #4d78ff;
     --el-switch-off-color: #cfd6e4;
+  }
+
+  .field-tip {
+    width: 100%;
+    margin: 4px 0;
   }
 
   .field-pass {

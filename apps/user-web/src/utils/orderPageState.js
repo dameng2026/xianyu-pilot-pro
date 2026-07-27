@@ -113,12 +113,20 @@ export function buildOrderDetailViewModel(order) {
 }
 
 export function buildManualDeliveryPayload(form) {
-  return {
-    deliveryMode: String(form?.deliveryMode || 'text').trim() || 'text',
+  const payload = {
     deliveryTiming: String(form?.deliveryTiming || 'after_payment').trim() || 'after_payment',
-    deliveryContent: String(form?.deliveryContent || '').trim(),
     quantityRequested: Math.max(Number(form?.quantityRequested) || 1, 1)
   }
+  // 货源库发货：传 sourceId，由后端根据货源推断 deliveryMode 与 deliveryContent
+  const sourceId = Number(form?.sourceId)
+  if (Number.isFinite(sourceId) && sourceId > 0) {
+    payload.sourceId = sourceId
+    return payload
+  }
+  // 自定义发货：传 deliveryMode + deliveryContent
+  payload.deliveryMode = String(form?.deliveryMode || 'text').trim() || 'text'
+  payload.deliveryContent = String(form?.deliveryContent || '').trim()
+  return payload
 }
 
 export function buildOrdersQuery(query) {

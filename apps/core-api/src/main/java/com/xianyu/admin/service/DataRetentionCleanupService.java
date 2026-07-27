@@ -74,23 +74,36 @@ public class DataRetentionCleanupService {
             return new CleanupResult(0, new LinkedHashMap<>());
         }
 
-        int retentionDays;
+        int globalRetentionDays;
         Object daysObj = config.get("retentionDays");
         if (daysObj instanceof Number n) {
-            retentionDays = n.intValue();
+            globalRetentionDays = n.intValue();
         } else {
-            retentionDays = 14;
+            globalRetentionDays = 14;
         }
-        if (retentionDays < 1) retentionDays = 1;
+        if (globalRetentionDays < 1) globalRetentionDays = 1;
 
         @SuppressWarnings("unchecked")
         Map<String, Object> categories = (Map<String, Object>) config.get("categories");
         if (categories == null) categories = new LinkedHashMap<>();
 
+        @SuppressWarnings("unchecked")
+        Map<String, Object> categoryDays = (Map<String, Object>) config.get("categoryDays");
+        if (categoryDays == null) categoryDays = new LinkedHashMap<>();
+
         CleanupResult result = new CleanupResult(0, new LinkedHashMap<>());
         for (String category : DataRetentionConfigService.CLEANUP_CATEGORIES) {
             if (!Boolean.TRUE.equals(categories.get(category))) {
                 continue;
+            }
+            // 按类别读取保留天数：优先 categoryDays，回退到全局 retentionDays
+            int retentionDays = globalRetentionDays;
+            Object catDaysObj = categoryDays.get(category);
+            if (catDaysObj instanceof Number n) {
+                int catDays = n.intValue();
+                if (catDays >= 1 && catDays <= 365) {
+                    retentionDays = catDays;
+                }
             }
             try {
                 int deleted = cleanupCategory(category, retentionDays);
@@ -145,6 +158,11 @@ public class DataRetentionCleanupService {
      *   `message_time < UNIX_TIMESTAMP(NOW() - INTERVAL ? DAY) * 1000`
      * 其他类别使用 `created_time < DATE_SUB(NOW(), INTERVAL ? DAY)`
      *
+     * 2026-07 扩展：
+     *   - goodsInfo: 仅清理已软删除(deleted=1)且超过保留期的商品，避免误删在线商品
+     *   - ordersInfo: 仅清理已完结(order_status IN closed/completed/cancelled)且超过保留期的订单
+     *   - uploadedImage: 仅清理已删除/过期状态(status IN deleted/expired)且超过保留期的图片资产
+     *
      * LIMIT 用于分批，避免长事务锁表。
      */
     private String buildDeleteSql(String category) {
@@ -166,6 +184,15 @@ public class DataRetentionCleanupService {
                 return "DELETE FROM auto_reply_log WHERE created_time < DATE_SUB(NOW(), INTERVAL ? DAY) LIMIT ?";
             case "uploadRateEvent":
                 return "DELETE FROM tenant_upload_rate_event WHERE created_time < DATE_SUB(NOW(), INTERVAL ? DAY) LIMIT ?";
+            case "goodsInfo":
+                // 仅清理已软删除的商品，保护在售商品不被误删
+                return "DELETE FROM xianyu_goods WHERE deleted=1 AND created_time < DATE_SUB(NOW(), INTERVAL ? DAY) LIMIT ?";
+            case "ordersInfo":
+                // 仅清理已完结订单（closed/completed/cancelled），保护未完结订单
+                return "DELETE FROM xianyu_trade_order WHERE deleted=1 AND created_time < DATE_SUB(NOW(), INTERVAL ? DAY) LIMIT ?";
+            case "uploadedImage":
+                // 仅清理已标记删除或保留过期未激活的图片资产，保护在用图片
+                return "DELETE FROM tenant_storage_asset WHERE status IN ('deleted','expired') AND created_time < DATE_SUB(NOW(), INTERVAL ? DAY) LIMIT ?";
             default:
                 return null;
         }

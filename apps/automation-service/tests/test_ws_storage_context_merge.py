@@ -237,6 +237,68 @@ class _PreviewDB:
         return _FakeResult(rows=self._rows)
 
 
+def test_merge_context_source_messages_deduplicates_same_outgoing_text_with_different_remote_ids():
+    messages = ws_storage._merge_context_source_messages(
+        [
+            {
+                "id": 101,
+                "pnmId": "local-uuid",
+                "sid": "63154410580",
+                "senderUserId": "seller@goofish",
+                "receiverUserId": "buyer@goofish",
+                "msgContent": "11",
+                "direction": "OUT",
+                "messageTime": 1783379158000,
+            }
+        ],
+        [
+            {
+                "id": "live-remote-id",
+                "pnmId": "remote-message-id",
+                "sid": "63154410580",
+                "senderUserId": "seller@goofish",
+                "receiverUserId": "buyer@goofish",
+                "msgContent": "11",
+                "direction": "OUT",
+                "messageTime": 1783379159000,
+            }
+        ],
+    )
+
+    assert len(messages) == 1
+    assert messages[0]["id"] == 101
+
+
+def test_merge_context_source_messages_keeps_separate_outgoing_repeats():
+    messages = ws_storage._merge_context_source_messages(
+        [
+            {
+                "id": 101,
+                "pnmId": "first",
+                "sid": "63154410580",
+                "senderUserId": "seller@goofish",
+                "receiverUserId": "buyer@goofish",
+                "msgContent": "11",
+                "direction": "OUT",
+                "messageTime": 1783379158000,
+            },
+            {
+                "id": 102,
+                "pnmId": "second",
+                "sid": "63154410580",
+                "senderUserId": "seller@goofish",
+                "receiverUserId": "buyer@goofish",
+                "msgContent": "11",
+                "direction": "OUT",
+                "messageTime": 1783379178000,
+            },
+        ],
+        [],
+    )
+
+    assert len(messages) == 2
+
+
 def test_normalize_message_time_value_treats_database_datetime_as_shanghai_time():
     expected = 1783379158000
 

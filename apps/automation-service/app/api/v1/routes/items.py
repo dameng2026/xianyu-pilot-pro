@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import math
 import uuid
@@ -8,19 +9,25 @@ import threading
 from decimal import Decimal, ROUND_DOWN
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update as sql_update, and_, desc
+from sqlalchemy import select, func, update as sql_update, and_, desc, text
 from ....core.database import get_db
 from ....core.http_failures import PublicRouteValidationError, log_route_failure, safe_route_failure
 from ....core.response import ResultObject
 from ....core.cookie_crypto import decrypt_cookie_if_needed
-from ....models.entities import XianyuGoods, XianyuAccount, XianyuAccountAuth, XianyuGoodsSyncTask
+from ....models.entities import XianyuGoods, XianyuAccount, XianyuAccountAuth, XianyuGoodsSyncTask, XianyuGoodsEditSnapshot
 from ....schemas.common import (
     ItemListReqDTO, ItemReqDTO, ItemDTO, ItemListRespDTO, ItemDetailRespDTO,
     RefreshItemsRespDTO, DeleteItemRespDTO,
     ItemOperateReqDTO, ItemBatchOperateReqDTO, UpdateItemPriceReqDTO,
 )
 from .internal import verify_internal_token
-from ....services.xianyu_goods_sync import XianyuItemOperator
+from ....services.xianyu_goods_sync import (
+    XianyuItemOperator,
+    XianyuAuthExpiredError,
+    XianyuMultiSpecNotSupportedError,
+    XianyuProviderRejectedError,
+    XianyuRiskControlError,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/item")
@@ -618,6 +625,75 @@ async def refresh_items(
         return safe_route_failure(logger, e, operation="start goods sync", user_message="启动商品同步失败，请稍后重试")
 
 
+async def _save_publish_snapshot(
+    db: AsyncSession,
+    account_id: int,
+    tenant_id: int,
+    external_goods_id: str,
+    publish_request: dict,
+    stock: int = 1,
+    is_fish_shop: bool = False,
+) -> None:
+    """发布成功后保存完整快照，用于售整自动上架。
+
+    鱼小铺账号与普通账号均调用本函数。account_type 字段区分账号类型，
+    鱼小铺快照支持 itemSkuList 等多规格字段；普通账号快照与发布请求体对齐。
+
+    本函数失败不影响发布主流程，仅记录警告日志。
+    """
+    try:
+        account_type = "fish_shop" if is_fish_shop else "normal"
+        source = "publish_fish_shop" if is_fish_shop else "publish_normal"
+
+        # 构建快照数据（保留发布时的完整请求体，便于后续重发）
+        snapshot_data = {
+            "title": publish_request.get("title", ""),
+            "description": publish_request.get("description") or publish_request.get("desc", ""),
+            "imageUrls": publish_request.get("imageUrls", []),
+            "price": publish_request.get("price", ""),
+            "stock": stock,
+            "category": publish_request.get("category", ""),
+            "location": publish_request.get("location", {}),
+            "shippingMode": publish_request.get("shippingMode", "free"),
+            "supportSelfPick": publish_request.get("supportSelfPick", False),
+            "origPrice": publish_request.get("origPrice"),
+            "postFee": publish_request.get("postFee"),
+        }
+        # 鱼小铺多规格字段透传
+        if is_fish_shop and publish_request.get("itemSkuList"):
+            snapshot_data["itemSkuList"] = publish_request.get("itemSkuList")
+        if is_fish_shop and publish_request.get("itemProperties"):
+            snapshot_data["itemProperties"] = publish_request.get("itemProperties")
+
+        snapshot = XianyuGoodsEditSnapshot(
+            tenant_id=tenant_id,
+            account_id=account_id,
+            external_goods_id=str(external_goods_id),
+            snapshot_json=snapshot_data,
+            source=source,
+            account_type=account_type,
+        )
+        db.add(snapshot)
+        await db.flush()
+
+        # 同步冗余字段到 xianyu_goods 表，避免跨库查询
+        await db.execute(
+            text(
+                "UPDATE xianyu_goods SET has_snapshot = 1, "
+                "original_quantity = :qty "
+                "WHERE external_goods_id = :gid AND account_id = :aid"
+            ),
+            {"qty": int(stock), "gid": str(external_goods_id), "aid": int(account_id)},
+        )
+        # 不在此处 commit，由调用方统一 commit
+    except Exception as snapshot_err:
+        # 快照保存失败不影响发布主流程
+        logger.warning(
+            "保存发布快照失败 account_id=%s external_goods_id=%s err=%s",
+            account_id, external_goods_id, str(snapshot_err)[:200],
+        )
+
+
 @router.post("/publish")
 async def publish_item(
     req: dict = {},
@@ -765,6 +841,18 @@ async def publish_item(
                     publish_result=result,
                     publish_payload=item_data,
                 )
+                # 保存发布快照（用于售整自动上架）。失败不影响发布主流程。
+                new_item_id = result.get("itemId", "")
+                if new_item_id:
+                    await _save_publish_snapshot(
+                        db,
+                        account_id=account_id,
+                        tenant_id=tenant_id,
+                        external_goods_id=str(new_item_id),
+                        publish_request=item_data,
+                        stock=stock,
+                        is_fish_shop=is_fish_shop,
+                    )
                 await db.commit()
             except Exception as persist_error:
                 await db.rollback()
@@ -805,10 +893,119 @@ async def republish_item(
     db: AsyncSession = Depends(get_db),
     _: None = Depends(verify_internal_token),
 ):
-    return ResultObject.failed(
-        "重新发布能力暂不可用，商品未重新发布",
-        503,
-    )
+    """手动触发售整自动上架重发。
+
+    请求体：
+    {
+        xianyuAccountId: int,
+        itemId: str,  # 闲鱼商品 ID（external_goods_id）
+        tenantId: int
+    }
+
+    与定时调度不同，手动触发放宽 original_quantity==1 与 status 限制，
+    但仍要求 auto_relist_enabled=1 且 has_snapshot=1。
+    """
+    try:
+        account_id = int(req.get("xianyuAccountId") or req.get("xianyu_account_id") or 0)
+        if not account_id:
+            return ResultObject.failed("缺少参数 xianyuAccountId")
+        tenant_id = int(req.get("tenantId") or req.get("tenant_id") or req.get("_tenantId") or 0)
+        if not tenant_id:
+            return ResultObject.failed("缺少租户上下文")
+        external_goods_id = str(req.get("itemId") or req.get("item_id") or "").strip()
+        if not external_goods_id:
+            return ResultObject.failed("缺少参数 itemId")
+
+        from ....services.relist_service import manual_relist
+        result = await manual_relist(account_id, tenant_id, external_goods_id)
+        if result.get("success"):
+            return ResultObject.success({
+                "itemId": result.get("itemId", ""),
+                "itemUrl": result.get("itemUrl", ""),
+                "newGoodsId": result.get("new_goods_id"),
+                "message": result.get("message", "重发成功"),
+            })
+        return ResultObject.failed(result.get("message", "重发失败"), code=422)
+    except Exception as e:
+        return safe_route_failure(logger, e, operation="manual relist", user_message="重发失败，请稍后重试")
+
+
+@router.post("/auto-relist/toggle")
+async def toggle_auto_relist(
+    req: dict = {},
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """切换商品的售整自动上架开关。
+
+    请求体：
+    {
+        xianyuAccountId: int,
+        itemId: str,           # 闲鱼商品 ID
+        tenantId: int,
+        enabled: bool          # true=开启, false=关闭
+    }
+
+    返回：
+    {
+        enabled: bool,         # 当前开关状态
+        hasSnapshot: bool,     # 是否有发布快照
+        message: str
+    }
+    """
+    try:
+        account_id = int(req.get("xianyuAccountId") or req.get("xianyu_account_id") or 0)
+        if not account_id:
+            return ResultObject.failed("缺少参数 xianyuAccountId")
+        tenant_id = int(req.get("tenantId") or req.get("tenant_id") or req.get("_tenantId") or 0)
+        if not tenant_id:
+            return ResultObject.failed("缺少租户上下文")
+        external_goods_id = str(req.get("itemId") or req.get("item_id") or "").strip()
+        if not external_goods_id:
+            return ResultObject.failed("缺少参数 itemId")
+        enabled = bool(req.get("enabled"))
+
+        # 查询商品
+        result = await db.execute(
+            select(XianyuGoods).where(
+                and_(
+                    XianyuGoods.tenant_id == tenant_id,
+                    XianyuGoods.account_id == account_id,
+                    XianyuGoods.external_goods_id == external_goods_id,
+                    XianyuGoods.deleted == 0,
+                )
+            )
+        )
+        goods = result.scalar_one_or_none()
+        if not goods:
+            return ResultObject.failed("商品不存在", code=404)
+
+        # 开启时校验是否有快照
+        if enabled and not goods.has_snapshot:
+            return ResultObject.failed(
+                "当前商品缺少发布快照，请先通过同步或编辑生成快照后再开启",
+                code=422,
+            )
+
+        # 更新开关
+        await db.execute(
+            sql_update(XianyuGoods)
+            .where(XianyuGoods.id == goods.id)
+            .values(auto_relist_enabled=1 if enabled else 0)
+        )
+        await db.commit()
+
+        logger.info(
+            "售整自动上架开关切换: account_id=%s, item_id=%s, enabled=%s",
+            account_id, external_goods_id, enabled,
+        )
+        return ResultObject.success({
+            "enabled": enabled,
+            "hasSnapshot": bool(goods.has_snapshot),
+            "message": "已开启售整自动上架" if enabled else "已关闭售整自动上架",
+        })
+    except Exception as e:
+        return safe_route_failure(logger, e, operation="toggle auto relist", user_message="切换开关失败，请稍后重试")
 
 
 @router.post("/delete")
@@ -1244,6 +1441,31 @@ async def update_item_price(
         try:
             operator = XianyuItemOperator(cookie_str, is_fish_shop=True)
             operator.update_price(xy_goods_id, normalized_price)
+        except XianyuMultiSpecNotSupportedError:
+            # 多规格商品不支持行内改价，引导用户进入完整编辑页面
+            logger.info("多规格商品拒绝行内改价: account_id=%s, goods_id=%s",
+                        account_id, xy_goods_id)
+            return ResultObject(
+                code=422,
+                msg="多规格商品不支持行内改价，请进入商品编辑页面修改各 SKU 价格",
+                data={
+                    "multiSpec": True,
+                    "needManualEdit": True,
+                    "editUrl": f"#/fish-shop-edit/{account_id}/{xy_goods_id}",
+                },
+            )
+        except XianyuAuthExpiredError:
+            logger.warning("改价失败-账号登录态过期: account_id=%s, goods_id=%s",
+                           account_id, xy_goods_id)
+            return ResultObject.failed("账号登录已过期，请重新登录闲鱼账号")
+        except XianyuRiskControlError:
+            logger.warning("改价失败-触发平台风控: account_id=%s, goods_id=%s",
+                           account_id, xy_goods_id)
+            return ResultObject.failed("操作触发平台风控，请稍后重试或完成人工验证")
+        except XianyuProviderRejectedError:
+            logger.warning("改价失败-业务拒绝: account_id=%s, goods_id=%s",
+                           account_id, xy_goods_id)
+            return ResultObject.failed("闲鱼改价失败，请稍后重试")
         except RuntimeError as e:
             return safe_route_failure(logger, e, operation="update remote goods price", user_message="闲鱼改价失败，请稍后重试")
 
@@ -1262,7 +1484,12 @@ async def update_item_price(
             await db.commit()
             logger.info("商品改价成功: account_id=%s, goods_id=%s, new_price=%s",
                         account_id, xy_goods_id, normalized_price)
-            return ResultObject.success({"message": "商品改价成功"})
+            return ResultObject.success({
+                "message": "商品改价成功",
+                "xyGoodsId": str(xy_goods_id),
+                "price": normalized_price,
+                "accountId": account_id,
+            })
         except Exception as e:
             log_route_failure(logger, e, operation="persist remote goods price")
             reconciliation_id = await _record_goods_reconciliation(

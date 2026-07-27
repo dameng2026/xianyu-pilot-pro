@@ -181,10 +181,10 @@ public class DeliverySchedulerService {
                 int status = ((Number) row.get("status")).intValue();
                 Long recordId = ((Number) row.get("record_id")).longValue();
                 Long tenantId = ((Number) row.get("tenant_id")).longValue();
-                Long orderId = row.get("order_id") == null ? null : ((Number) row.get("order_id")).longValue();
+                Long orderId = toLongOrNull(row.get("order_id"));
                 Long accountId = row.get("order_account_id") == null
-                        ? (row.get("account_id") == null ? null : ((Number) row.get("account_id")).longValue())
-                        : ((Number) row.get("order_account_id")).longValue();
+                        ? toLongOrNull(row.get("account_id"))
+                        : toLongOrNull(row.get("order_account_id"));
 
                 // 1) 订单未取消校验：order_status 必须仍是待发货（1=已付款 / 2=待发货）
                 //    order_status=5（已关闭/退款）即"用户取消"信号，跳过补发
@@ -200,8 +200,7 @@ public class DeliverySchedulerService {
                 }
 
                 // 2) 商品配置仍启用 + 货源仍可用校验
-                Long itemGoodsId = row.get("item_goods_id") == null ? null
-                        : ((Number) row.get("item_goods_id")).longValue();
+                Long itemGoodsId = toLongOrNull(row.get("item_goods_id"));
                 String itemExternalGoodsId = row.get("item_external_goods_id") == null ? null
                         : String.valueOf(row.get("item_external_goods_id"));
                 ReplenishReadiness readiness = checkReplenishReadiness(
@@ -225,8 +224,7 @@ public class DeliverySchedulerService {
                 }
 
                 // 4) 处理中卡死场景：若持锁卡密，先释放避免卡密永久占用
-                Long cardItemId = row.get("card_item_id") == null ? null
-                        : ((Number) row.get("card_item_id")).longValue();
+                Long cardItemId = toLongOrNull(row.get("card_item_id"));
                 if (cardItemId != null) {
                     releaseStuckClaimedCard(tenantId, cardItemId);
                 }
@@ -254,7 +252,8 @@ public class DeliverySchedulerService {
                             recordId, tenantId, orderId);
                 }
             } catch (Exception e) {
-                log.warn("兜底补发货行处理异常, errorType={}", e.getClass().getSimpleName());
+                log.warn("兜底补发货行处理异常 recordId={} errorType={} msg={}",
+                        row.get("record_id"), e.getClass().getSimpleName(), e.getMessage());
                 skipped++;
             }
         }
@@ -617,6 +616,20 @@ public class DeliverySchedulerService {
                     "SELECT external_order_id FROM xianyu_trade_order WHERE id=? AND tenant_id=? AND deleted=0 LIMIT 1",
                     String.class, orderId, tenantId);
         } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 安全转换为 Long，兼容 Number、String（VARCHAR 列）与 null。
+     * 用于 V1.35 后 delivery_record.order_id 等 VARCHAR 列的类型兼容。
+     */
+    private static Long toLongOrNull(Object v) {
+        if (v == null) return null;
+        if (v instanceof Number) return ((Number) v).longValue();
+        try {
+            return Long.parseLong(String.valueOf(v).trim());
+        } catch (NumberFormatException e) {
             return null;
         }
     }

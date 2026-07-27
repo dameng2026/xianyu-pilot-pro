@@ -3,6 +3,7 @@ package com.xianyu.admin.controller;
 import com.xianyu.admin.common.BizException;
 import com.xianyu.admin.common.PageResult;
 import com.xianyu.admin.common.Result;
+import com.xianyu.admin.dto.TierPriceConfigDTO;
 import com.xianyu.admin.service.AiBillingService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
@@ -119,6 +120,17 @@ public class AiBillingController {
     public Result<Map<String, Object>> internalCharge(@RequestBody Map<String, Object> usage, HttpServletRequest request) {
         verifyInternal(request);
         return Result.ok(aiBillingService.charge(usage));
+    }
+
+    @GetMapping("/admin-api/ai-billing/tier-config")
+    public Result<TierPriceConfigDTO> getTierConfig(@RequestParam(required = false) String moduleKey) {
+        String key = (moduleKey == null || moduleKey.isBlank()) ? "model-config-general" : moduleKey;
+        return Result.ok(aiBillingService.getTierConfig(key));
+    }
+
+    @PutMapping("/admin-api/ai-billing/tier-config")
+    public Result<TierPriceConfigDTO> saveTierConfig(@RequestBody TierPriceConfigDTO dto) {
+        return Result.ok(aiBillingService.saveTierConfig(dto));
     }
 
     private void verifyInternal(HttpServletRequest request) {

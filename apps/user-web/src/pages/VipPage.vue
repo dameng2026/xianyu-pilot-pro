@@ -29,6 +29,30 @@
           </div>
         </div>
 
+        <!-- 会员充值限时活动通知横幅 -->
+        <div
+          v-if="promotionNotice"
+          class="vip-promotion-banner"
+          :class="[`pos-${promotionNotice.position}`, `icon-${promotionNotice.icon}`]"
+          role="status"
+        >
+          <div class="vip-promo-banner-icon" aria-hidden="true">
+            <span v-if="promotionNotice.icon === 'hot'">🔥</span>
+            <span v-else-if="promotionNotice.icon === 'time'">⏰</span>
+            <span v-else-if="promotionNotice.icon === 'gift'">🎁</span>
+            <span v-else-if="promotionNotice.icon === 'star'">⭐</span>
+            <span v-else>📣</span>
+          </div>
+          <div class="vip-promo-banner-body">
+            <strong>{{ promotionNotice.title }}</strong>
+            <p v-if="promotionNotice.content">{{ promotionNotice.content }}</p>
+            <div class="vip-promo-banner-meta">
+              <span v-if="promotionCountdown" class="vip-promo-countdown">⏱ {{ promotionCountdown }}</span>
+              <span v-if="promotionEndTimeText" class="vip-promo-endtime">截止：{{ promotionEndTimeText }}</span>
+            </div>
+          </div>
+        </div>
+
         <EmptyState
           v-if="loading && !displayPlans.length"
           icon="…"
@@ -62,13 +86,23 @@
             v-for="plan in displayPlans"
             :key="plan.id || plan.planCode"
             class="vip-plan vip-card-surface"
-            :class="[plan.cardClass, { recommend: plan.level === 'vip' }]"
+            :class="[plan.cardClass, { recommend: plan.level === 'vip', 'has-promotion': plan.hasActivePrice, 'quota-full': plan.quotaFull }]"
           >
-            <div v-if="plan.ribbon" class="vip-ribbon" :class="{ warm: plan.level === 'svp' }">{{ plan.ribbon }}</div>
+            <div v-if="plan.hasActivePrice && plan.activityTag" class="vip-promo-tag">{{ plan.activityTag }}</div>
+            <div v-else-if="plan.ribbon" class="vip-ribbon" :class="{ warm: plan.level === 'svp' }">{{ plan.ribbon }}</div>
             <div class="vip-plan-head">
               <div>
                 <strong>{{ plan.planName }}</strong>
-                <h3>{{ plan.price }} <small v-if="plan.periodLabel">/{{ plan.periodLabel }}</small></h3>
+                <h3 v-if="plan.hasActivePrice" class="vip-plan-price-active">
+                  <span class="vip-price-currency">¥</span>{{ plan.activityPriceYuan }}
+                  <small v-if="plan.periodLabel">/{{ plan.periodLabel }}</small>
+                </h3>
+                <h3 v-else>{{ plan.price }} <small v-if="plan.periodLabel">/{{ plan.periodLabel }}</small></h3>
+                <div v-if="plan.hasActivePrice" class="vip-price-original-row">
+                  <span class="vip-price-strike">{{ plan.strikethroughPrice }}</span>
+                  <span v-if="plan.discountYuan && Number(plan.discountYuan) > 0" class="vip-price-discount">立省 ¥{{ plan.discountYuan }}</span>
+                  <span v-else-if="plan.discountRate && Number(plan.discountRate) > 0" class="vip-price-discount">{{ plan.discountRate }}折</span>
+                </div>
               </div>
               <div class="vip-plan-ornament" :class="plan.ornament"><Icon :name="plan.level === 'normal' ? 'diamond' : 'crown'" /></div>
             </div>
@@ -76,8 +110,29 @@
             <ul v-if="plan.features && plan.features.length">
               <li v-for="item in plan.features" :key="item">{{ item }}</li>
             </ul>
+
+            <!-- 活动名额进度（基于真实数据） -->
+            <div v-if="plan.hasActivePrice && plan.quota > 0 && (plan.showQuota || plan.showRemain || plan.showSold)" class="vip-promo-quota">
+              <div class="vip-promo-quota-bar">
+                <div class="vip-promo-quota-fill" :style="{ width: `${plan.quotaProgress}%` }"></div>
+              </div>
+              <div class="vip-promo-quota-text">
+                <span v-if="plan.showSold">已售 <b>{{ plan.soldCount }}</b> 份</span>
+                <span v-if="plan.showQuota">/ 限量 <b>{{ plan.quota }}</b> 份</span>
+                <span v-if="plan.showRemain && plan.remainCount >= 0" class="vip-promo-remain">剩余 <b>{{ plan.remainCount }}</b> 份</span>
+              </div>
+            </div>
+            <div v-else-if="plan.hasActivePrice && plan.quota === 0 && plan.showSold" class="vip-promo-quota-static">
+              <span>已售 <b>{{ plan.soldCount }}</b> 份 · 活动期间不限量</span>
+            </div>
+
+            <!-- 活动倒计时（仅在活动价生效时展示） -->
+            <div v-if="plan.hasActivePrice && promotionCountdown" class="vip-promo-card-countdown">
+              ⏱ {{ promotionCountdown }}
+            </div>
+
             <button class="vip-btn" :class="plan.buttonClass" type="button" :disabled="plan.level !== 'normal' && !plan.canPurchase" @click="handlePlanClick(plan)">
-              {{ plan.level === 'normal' ? '当前套餐' : plan.level === 'unknown' ? '套餐标识无效' : plan.canPurchase ? '立即升级' : '价格未配置' }}
+              {{ plan.level === 'normal' ? '当前套餐' : plan.level === 'unknown' ? '套餐标识无效' : plan.quotaFull ? '名额已售罄' : plan.canPurchase ? (plan.hasActivePrice ? '立即抢购' : '立即升级') : '价格未配置' }}
             </button>
           </article>
         </div>
@@ -232,12 +287,13 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Icon from '../components/Icon.vue'
 import PaymentModal from '../components/PaymentModal.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { getBillingPlans } from '../api/billing.js'
 import { getFeatureSwitchStatus, getFeatureSwitchComparison } from '../api/feature-switch.js'
+import { getActivePromotion, previewPromotionPlan } from '../api/promotion.js'
 import { globalConfirm } from '../composables/confirmState.js'
 import { resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
 
@@ -259,6 +315,15 @@ const paymentVisible = ref(false)
 const selectedPlan = ref(null)
 const avatarLoadFailed = ref(false)
 let plansRequestId = 0
+
+// 会员充值限时活动
+const promotion = ref({})
+const promotionLoading = ref(false)
+let promotionRequestId = 0
+// 服务端时间偏移（毫秒），用于倒计时：localNow - serverNow
+let serverClockOffsetMs = 0
+const localNowTick = ref(Date.now())
+let countdownTimer = null
 
 // 会员功能对比：与个人中心 ProfileCenterPage 共用同一份后台「功能管理」数据源
 const memberCompareFeatures = ref([])
@@ -315,6 +380,13 @@ const PLAN_DEFAULT_SUMMARY = {
 }
 
 const displayPlans = computed(() => {
+  // 当前活动套餐映射：key = planId:periodType
+  const promotionPlans = promotion.value?.plans || []
+  const promotionMap = new Map()
+  for (const ap of promotionPlans) {
+    const key = `${ap.planId}:${ap.periodType}`
+    promotionMap.set(key, ap)
+  }
   return plans.value
     .map(raw => {
       const level = normalizeLevel(raw)
@@ -332,13 +404,42 @@ const displayPlans = computed(() => {
       const canPurchase = ['vip', 'svp'].includes(level) && hasPrice && Number.isFinite(priceCent) && priceCent > 0
       // 前台套餐介绍严格使用后台 featuresText 按行拆分后的数组；为空则不展示任何 li
       const features = Array.isArray(raw.features) ? raw.features : []
+      // 注入活动信息：仅当活动状态为 ongoing 且套餐配置存在时生效
+      const promotionInfo = promotionMap.get(`${raw.id}:${period}`) || null
+      const promotionActive = promotionInfo && promotion.value?.status === 'ongoing'
+      // 活动价（分→元）：仅当活动价>0 且 ≤ 原价时才展示为活动价
+      const activityPriceCent = promotionInfo ? Number(promotionInfo.activityPriceCent) : 0
+      const activityPriceYuan = promotionInfo ? promotionInfo.activityPriceYuan : ''
+      const originalPriceYuan = promotionInfo ? promotionInfo.originalPriceYuan : ''
+      const discountYuan = promotionInfo ? promotionInfo.discountYuan : ''
+      const discountRate = promotionInfo ? promotionInfo.discountRate : ''
+      const hasActivePrice = promotionActive
+        && activityPriceCent > 0
+        && activityPriceCent <= priceCent
+        && String(activityPriceYuan || '').trim() !== ''
+      // 名额信息（基于真实数据）
+      const quota = promotionInfo ? Number(promotionInfo.quota) : 0
+      const soldCount = promotionInfo ? Number(promotionInfo.soldCount) : 0
+      const remainCount = promotionInfo ? Number(promotionInfo.remainCount) : -1
+      const showSold = promotionInfo ? promotionInfo.showSoldCount : false
+      const showQuota = promotionInfo ? promotionInfo.showQuota : false
+      const showRemain = promotionInfo ? promotionInfo.showRemain : false
+      const activityTag = promotionInfo ? promotionInfo.activityTag : ''
+      // 名额进度条数据
+      const quotaProgress = quota > 0 ? Math.min(100, Math.round((soldCount / quota) * 100)) : 0
+      const quotaFull = quota > 0 && remainCount <= 0
+      // 实际展示价：活动价优先，否则原价
+      const displayPrice = level === 'normal'
+        ? '免费'
+        : (hasActivePrice ? `¥${activityPriceYuan}` : (hasPrice ? String(priceDisplay) : '价格未配置'))
+      const strikethroughPrice = hasActivePrice && originalPriceYuan ? `¥${originalPriceYuan}` : ''
       return {
         ...raw,
         level,
         planName,
         // 普通用户套餐在后台无论配置为免费还是带价，前台统一展示为「免费」
-        price: level === 'normal' ? '免费' : (hasPrice ? String(priceDisplay) : '价格未配置'),
-        canPurchase,
+        price: displayPrice,
+        canPurchase: canPurchase && !quotaFull,
         durationLabel,
         periodLabel,
         periodType: period,
@@ -347,7 +448,24 @@ const displayPlans = computed(() => {
         cardClass: level === 'svp' ? 'svip' : level,
         ornament: level === 'svp' ? 'warm' : level === 'vip' ? 'blue' : 'muted',
         buttonClass: level === 'svp' ? 'vip-btn-warm' : level === 'vip' ? 'vip-btn-primary' : 'vip-btn-ghost',
-        ribbon: raw.ribbon || (raw.recommended === true ? '推荐' : (level === 'vip' ? '推荐' : ''))
+        ribbon: raw.ribbon || (raw.recommended === true ? '推荐' : (level === 'vip' ? '推荐' : '')),
+        // 活动相关字段
+        promotionInfo,
+        hasActivePrice,
+        activityPriceYuan,
+        originalPriceYuan,
+        discountYuan,
+        discountRate,
+        strikethroughPrice,
+        quota,
+        soldCount,
+        remainCount,
+        showSold,
+        showQuota,
+        showRemain,
+        activityTag,
+        quotaProgress,
+        quotaFull
       }
     })
 })
@@ -466,6 +584,25 @@ async function loadPlans() {
   }
 }
 
+async function loadPromotion() {
+  const requestId = ++promotionRequestId
+  promotionLoading.value = true
+  try {
+    const data = await getActivePromotion()
+    if (requestId !== promotionRequestId) return
+    // 计算服务端时间偏移
+    const serverNow = data?.serverNow ? new Date(data.serverNow).getTime() : Date.now()
+    serverClockOffsetMs = Date.now() - serverNow
+    promotion.value = data || {}
+  } catch (e) {
+    if (requestId !== promotionRequestId) return
+    // 活动查询失败时降级为无活动，套餐仍展示原价
+    promotion.value = {}
+  } finally {
+    if (requestId === promotionRequestId) promotionLoading.value = false
+  }
+}
+
 async function loadMemberComparison() {
   memberComparisonLoading.value = true
   memberComparisonError.value = ''
@@ -482,25 +619,178 @@ async function loadMemberComparison() {
   }
 }
 
+// 服务端当前时间（毫秒）
+const serverNowMs = computed(() => localNowTick.value - serverClockOffsetMs)
+
+// 活动是否有效（前台展示）
+const hasActivePromotion = computed(() => {
+  const p = promotion.value
+  return !!p && (p.status === 'ongoing' || p.status === 'pending') && Array.isArray(p.plans) && p.plans.length > 0
+})
+
+// 活动通知（仅当 visible=true 且非空时展示）
+const promotionNotice = computed(() => {
+  const p = promotion.value
+  if (!p || !hasActivePromotion.value) return null
+  const notice = p.notice || {}
+  if (!notice.visible) return null
+  if (!notice.title && !notice.content) return null
+  return {
+    title: notice.title || p.activityName || '会员限时优惠',
+    content: notice.content || '',
+    position: notice.position || 'top',
+    icon: notice.icon || 'hot'
+  }
+})
+
+// 活动倒计时文案
+const promotionCountdown = computed(() => {
+  const p = promotion.value
+  if (!p || p.status !== 'ongoing') return ''
+  if (Number(p.isLongTerm) === 1) return '长期活动'
+  const endTime = p.endTime ? new Date(p.endTime).getTime() : 0
+  if (!endTime) return ''
+  const diff = endTime - serverNowMs.value
+  if (diff <= 0) return '已结束'
+  const days = Math.floor(diff / 86400000)
+  const hours = Math.floor((diff % 86400000) / 3600000)
+  const minutes = Math.floor((diff % 3600000) / 60000)
+  const seconds = Math.floor((diff % 60000) / 1000)
+  if (days > 0) return `剩 ${days} 天 ${hours} 时 ${minutes} 分`
+  if (hours > 0) return `剩 ${hours} 时 ${minutes} 分 ${seconds} 秒`
+  if (minutes > 0) return `剩 ${minutes} 分 ${seconds} 秒`
+  return `剩 ${seconds} 秒`
+})
+
+// 活动结束时间展示文案
+const promotionEndTimeText = computed(() => {
+  const p = promotion.value
+  if (!p) return ''
+  if (Number(p.isLongTerm) === 1) return '长期活动'
+  const endTime = p.endTime
+  if (!endTime) return ''
+  const d = new Date(endTime)
+  if (Number.isNaN(d.getTime())) return ''
+  const y = d.getFullYear()
+  const m = `${d.getMonth() + 1}`.padStart(2, '0')
+  const day = `${d.getDate()}`.padStart(2, '0')
+  const hh = `${d.getHours()}`.padStart(2, '0')
+  const mm = `${d.getMinutes()}`.padStart(2, '0')
+  return `${y}-${m}-${day} ${hh}:${mm}`
+})
+
+// 不可用原因映射
+function mapUnavailableReason(reason) {
+  switch (reason) {
+    case 'no_activity': return '当前套餐未参与活动'
+    case 'activity_not_started': return '活动尚未开始'
+    case 'activity_ended': return '活动已结束'
+    case 'activity_closed': return '活动已关闭'
+    case 'quota_full': return '活动名额已用完'
+    case 'plan_offline': return '套餐已下架'
+    case 'price_invalid': return '活动价格异常，请刷新页面后重试'
+    default: return '活动不可用，请刷新页面后重试'
+  }
+}
+
 async function handlePlanClick(plan) {
   if (!plan || plan.level === 'normal' || !plan.canPurchase) return
   // 检查"升级会员"功能开关：开启则弹出充值弹窗，关闭则提示暂未开放
   try {
     const status = await getFeatureSwitchStatus()
-    if (status?.accessible?.['member-upgrade'] === true) {
-      selectedPlan.value = plan
-      paymentVisible.value = true
+    if (status?.accessible?.['member-upgrade'] !== true) {
+      await globalConfirm.alert('暂未开放', '会员升级功能暂未开放，敬请期待。')
       return
     }
   } catch (e) {
     // 查询失败时降级为提示暂未开放
+    await globalConfirm.alert('暂未开放', '会员升级功能暂未开放，敬请期待。')
+    return
   }
-  await globalConfirm.alert('暂未开放', '会员升级功能暂未开放，敬请期待。')
+  // 如果套餐有活动价，调用服务端 preview 进行二次确认
+  if (plan.hasActivePrice && plan.promotionInfo) {
+    try {
+      const preview = await previewPromotionPlan(plan.id, plan.periodType)
+      if (!preview.available) {
+        // 活动已不可用：刷新活动状态后提示用户
+        loadPromotion()
+        const reason = mapUnavailableReason(preview.reason)
+        await globalConfirm.alert('活动已变化', `${reason}，请按当前页面价格重新下单。`)
+        return
+      }
+      // 校验价格/名额是否变化
+      const previewFinalYuan = String(preview.finalPriceYuan || '')
+      const localFinalYuan = String(plan.activityPriceYuan || '')
+      const previewRemain = Number(preview.remainCount)
+      const localRemain = Number(plan.remainCount)
+      let changedMessage = ''
+      if (previewFinalYuan && previewFinalYuan !== localFinalYuan) {
+        changedMessage = `活动价格已变化：原显示 ¥${localFinalYuan}，当前服务端最终价 ¥${previewFinalYuan}`
+      } else if (plan.quota > 0 && previewRemain !== localRemain) {
+        changedMessage = `活动剩余名额已变化：原显示 ${localRemain} 份，当前剩余 ${previewRemain} 份`
+      }
+      if (changedMessage) {
+        // 价格或名额变化：必须让用户明确确认，不能静默修改
+        const confirmed = await globalConfirm.confirm('活动信息已变化', `${changedMessage}\n是否按服务端最新价格 ¥${previewFinalYuan} 继续下单？`)
+        if (!confirmed) {
+          loadPromotion()
+          return
+        }
+        // 注入服务端最新数据后开窗
+        selectedPlan.value = {
+          ...plan,
+          activityPriceYuan: previewFinalYuan,
+          activityPriceCent: Number(preview.finalPriceCent || plan.promotionInfo.activityPriceCent),
+          originalPriceYuan: preview.originalPriceYuan || plan.originalPriceYuan,
+          originalPriceCent: Number(preview.originalPriceCent || plan.promotionInfo.originalPriceCent),
+          remainCount: previewRemain,
+          ruleVersion: Number(preview.ruleVersion || plan.promotionInfo.ruleVersion),
+          promotionSnapshot: {
+            activityId: preview.activityId || promotion.value?.id,
+            activityPlanId: preview.activityPlanId || plan.promotionInfo.activityPlanId,
+            activityName: preview.activityName || promotion.value?.activityName,
+            finalPriceYuan: previewFinalYuan,
+            finalPriceCent: Number(preview.finalPriceCent || 0),
+            originalPriceYuan: preview.originalPriceYuan || '',
+            originalPriceCent: Number(preview.originalPriceCent || 0),
+            ruleVersion: Number(preview.ruleVersion || 0),
+            endTime: preview.endTime || promotion.value?.endTime
+          }
+        }
+        paymentVisible.value = true
+        return
+      }
+      // 价格/名额未变化，正常下单：注入服务端 preview 数据作为快照
+      selectedPlan.value = {
+        ...plan,
+        promotionSnapshot: {
+          activityId: preview.activityId || promotion.value?.id,
+          activityPlanId: preview.activityPlanId || plan.promotionInfo.activityPlanId,
+          activityName: preview.activityName || promotion.value?.activityName,
+          finalPriceYuan: previewFinalYuan,
+          finalPriceCent: Number(preview.finalPriceCent || 0),
+          originalPriceYuan: preview.originalPriceYuan || '',
+          originalPriceCent: Number(preview.originalPriceCent || 0),
+          ruleVersion: Number(preview.ruleVersion || 0),
+          endTime: preview.endTime || promotion.value?.endTime
+        }
+      }
+      paymentVisible.value = true
+      return
+    } catch (e) {
+      // preview 调用失败：阻塞下单，避免用户按过期价格支付
+      await globalConfirm.alert('无法确认活动价格', e?.message || '活动价格校验失败，请刷新页面后重试。')
+      return
+    }
+  }
+  // 非活动套餐：原流程
+  selectedPlan.value = plan
+  paymentVisible.value = true
 }
 
 async function handlePaid() {
   paymentVisible.value = false
-  await loadPlans()
+  await Promise.all([loadPlans(), loadPromotion()])
 }
 
 async function showFaqNotice() {
@@ -512,7 +802,17 @@ async function showFaqNotice() {
 
 onMounted(() => {
   loadPlans()
+  loadPromotion()
   loadMemberComparison()
+  // 倒计时定时器：每秒刷新一次
+  countdownTimer = setInterval(() => {
+    localNowTick.value = Date.now()
+  }, 1000)
+})
+
+onBeforeUnmount(() => {
+  if (countdownTimer) clearInterval(countdownTimer)
+  countdownTimer = null
 })
 </script>
 
@@ -1502,6 +1802,290 @@ onMounted(() => {
 
   .vip-compare-refresh {
     align-self: flex-start;
+  }
+}
+
+/* ========================================
+   会员充值限时活动 - 样式
+   ======================================== */
+
+/* ----- 活动通知横幅 ----- */
+.vip-promotion-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #fff5e6 0%, #ffe9c7 100%);
+  border: 1.5px solid #ffd591;
+  box-shadow: 0 10px 24px rgba(245, 158, 11, 0.12);
+  position: relative;
+  overflow: hidden;
+}
+
+.vip-promotion-banner::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 8% 20%, rgba(255, 255, 255, 0.4), transparent 30%);
+  pointer-events: none;
+}
+
+.vip-promo-banner-icon {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #fff, #fff7ed);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  box-shadow: 0 6px 14px rgba(245, 158, 11, 0.18);
+}
+
+.vip-promo-banner-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.vip-promo-banner-body strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 800;
+  color: #b45309;
+  line-height: 1.3;
+}
+
+.vip-promo-banner-body p {
+  margin: 4px 0 8px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #92400e;
+}
+
+.vip-promo-banner-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.vip-promo-countdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #b45309;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.vip-promo-endtime {
+  font-size: 12px;
+  color: #92400e;
+  font-weight: 600;
+}
+
+/* ----- 活动套餐卡片样式 ----- */
+.vip-plan.has-promotion {
+  border: 1.5px solid #ffd591;
+  background: linear-gradient(180deg, #fffaf2 0%, #fff5e6 100%);
+  box-shadow: 0 12px 28px rgba(245, 158, 11, 0.14);
+}
+
+.vip-plan.has-promotion.recommend {
+  border-color: #f59e0b;
+  box-shadow: 0 14px 32px rgba(245, 158, 11, 0.2);
+}
+
+.vip-plan.quota-full {
+  opacity: 0.78;
+}
+
+.vip-promo-tag {
+  position: absolute;
+  right: 0;
+  top: 0;
+  padding: 7px 16px;
+  border-radius: 0 18px 0 14px;
+  background: linear-gradient(90deg, #f59e0b, #ffb647);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  box-shadow: 0 8px 18px rgba(245, 158, 11, 0.22);
+}
+
+.vip-plan-price-active {
+  margin: 10px 0 0;
+  font-size: 32px;
+  line-height: 1;
+  color: #d97706;
+  font-weight: 800;
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.vip-price-currency {
+  font-size: 18px;
+  font-weight: 700;
+  color: #d97706;
+}
+
+.vip-plan-price-active small {
+  font-size: 12px;
+  color: #92400e;
+  font-weight: 600;
+}
+
+.vip-price-original-row {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.vip-price-strike {
+  font-size: 13px;
+  color: #94a3b8;
+  text-decoration: line-through;
+  text-decoration-color: #cbd5e1;
+}
+
+.vip-price-discount {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #fef3c7;
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* 名额进度条 */
+.vip-promo-quota {
+  margin-top: 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.vip-promo-quota-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: #fde9c8;
+  overflow: hidden;
+}
+
+.vip-promo-quota-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #f59e0b, #ffb647);
+  transition: width 0.3s ease;
+}
+
+.vip-promo-quota-text {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: #92400e;
+  font-weight: 600;
+}
+
+.vip-promo-quota-text b {
+  color: #b45309;
+  font-weight: 800;
+  margin: 0 2px;
+}
+
+.vip-promo-remain {
+  margin-left: auto;
+}
+
+.vip-promo-remain b {
+  color: #d97706;
+}
+
+.vip-promo-quota-static {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #fff7ed;
+  border: 1px dashed #ffd591;
+  font-size: 12px;
+  color: #92400e;
+  font-weight: 600;
+}
+
+.vip-promo-quota-static b {
+  color: #b45309;
+  font-weight: 800;
+  margin: 0 2px;
+}
+
+.vip-promo-card-countdown {
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.08);
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: max-content;
+}
+
+/* 移动端活动样式适配 */
+@media (max-width: 900px) {
+  .vip-promotion-banner {
+    padding: 12px 14px;
+    gap: 10px;
+  }
+
+  .vip-promo-banner-icon {
+    width: 38px;
+    height: 38px;
+    font-size: 18px;
+  }
+
+  .vip-promo-banner-body strong {
+    font-size: 14px;
+  }
+
+  .vip-promo-banner-body p {
+    font-size: 12px;
+  }
+
+  .vip-plan-price-active {
+    font-size: 28px;
+  }
+
+  .vip-price-currency {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .vip-promo-banner-meta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .vip-promo-quota-text {
+    font-size: 11px;
+  }
+
+  .vip-promo-quota-static {
+    font-size: 11px;
   }
 }
 </style>

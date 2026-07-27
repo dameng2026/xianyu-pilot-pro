@@ -197,6 +197,22 @@ export interface RetentionPolicyConfig {
     captchaRecord: boolean
     autoReplyLog: boolean
     uploadRateEvent: boolean
+    goodsInfo: boolean
+    ordersInfo: boolean
+    uploadedImage: boolean
+  }
+  categoryDays: {
+    operationLog: number
+    clientErrorLog: number
+    notificationLog: number
+    notificationDedup: number
+    chatMessage: number
+    captchaRecord: number
+    autoReplyLog: number
+    uploadRateEvent: number
+    goodsInfo: number
+    ordersInfo: number
+    uploadedImage: number
   }
   lastCleanup: {
     time: string

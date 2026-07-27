@@ -27,7 +27,8 @@ public class BusinessSettingsController {
     private static final Logger log = LoggerFactory.getLogger(BusinessSettingsController.class);
 
     private static final Set<String> ALLOWED_CATEGORIES = new HashSet<>(Arrays.asList(
-            "ai-customer-service", "message-settings", "delivery-settings", "product-op-settings"
+            "ai-customer-service", "xiaomeng-assistant",
+            "message-settings", "delivery-settings", "product-op-settings"
     ));
 
     private final BusinessSettingsService settingsService;
@@ -109,6 +110,63 @@ public class BusinessSettingsController {
     @GetMapping("/ai-customer-service/defaults")
     public Result<Map<String, Object>> getAiCsDefaults() {
         return Result.ok(settingsService.getDefaults("ai-customer-service"));
+    }
+
+    /**
+     * 获取小梦运营助手配置的默认值。
+     * 与 ai-customer-service/defaults 区分：小梦是前台用户主动对话的运营助手，
+     * ai-customer-service 是买家消息触发的自动回复（售前客服）。
+     */
+    @GetMapping("/xiaomeng-assistant/defaults")
+    public Result<Map<String, Object>> getXiaomengDefaults() {
+        return Result.ok(settingsService.getDefaults("xiaomeng-assistant"));
+    }
+
+    /**
+     * 测试小梦运营助手回复（与 ai-customer-service/test 区分）。
+     * 使用小梦专用配置的 systemPrompt + 硬编码人设进行测试。
+     */
+    @PostMapping("/xiaomeng-assistant/test")
+    public Result<Map<String, Object>> testXiaomengReply(@RequestBody Map<String, Object> body) {
+        try {
+            if (body == null) throw new BizException(400, "测试消息不能为空");
+            Map<String, Object> settings = settingsService.getConfig("xiaomeng-assistant");
+            // 小梦人设由 ai_cs_runtime.py 硬编码，此处测试仅取用户自定义提示词作为补充
+            String userCustomPrompt = String.valueOf(settings.getOrDefault("systemPrompt", ""));
+            String systemPrompt = "你是闲鱼运营助手的智能客服小梦，负责帮助卖家管理闲鱼店铺。";
+            if (!userCustomPrompt.isBlank()) {
+                systemPrompt = systemPrompt + "\n\n【用户自定义补充】\n" + userCustomPrompt;
+            }
+            String userMessage = String.valueOf(body.getOrDefault("message", "你好，小梦，能帮我查一下账号状态吗？"));
+            if (userMessage.isBlank() || userMessage.length() > 5_000) {
+                throw new BizException(400, "测试消息不能为空且不能超过 5000 个字符");
+            }
+
+            Map<String, Object> status = aiProviderService.isConfigured()
+                    ? Collections.singletonMap("configured", true)
+                    : Collections.singletonMap("configured", false);
+            if (!Boolean.TRUE.equals(status.get("configured"))) {
+                throw new BizException(503, "AI 客服模型尚未配置，当前无法测试");
+            }
+
+            Map<String, Object> result = aiProviderService.generateText(
+                    "xiaomeng_assistant_test",
+                    systemPrompt,
+                    userMessage,
+                    0.6,
+                    true);
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("ok", Boolean.TRUE.equals(result.get("ok")));
+            response.put("reply", result.getOrDefault("content", ""));
+            response.put("configured", true);
+            response.put("usage", result.get("usage"));
+            return Result.ok(response);
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("小梦客服测试失败, errorType={}", e.getClass().getSimpleName());
+            throw new BizException(503, "小梦客服测试暂时不可用，请稍后重试");
+        }
     }
 
     /**

@@ -139,7 +139,7 @@ public class AdminCaptchaSolveRecordService {
         result.put("retrying", retrying);
         result.put("timeout", timeout);
         result.put("precheckRejected", precheckRejected);
-        result.put("workers", 2); // SOLVE_WORKER_CONCURRENCY
+        result.put("workers", 4); // SOLVE_WORKER_CONCURRENCY（对齐 crawler-service 单租户并发上限 CRAWLER_BROWSER_CONCURRENCY_PER_TENANT=4）
         return result;
     }
 

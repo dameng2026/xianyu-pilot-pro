@@ -22,6 +22,7 @@ import uuid
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
+import sqlalchemy
 from sqlalchemy import text
 
 from .ai_billing import (
@@ -459,6 +460,51 @@ async def _fetch_product_sensitive_words() -> list[str]:
             seen.add(ws.lower())
             normalized.append(ws)
     logger.info("[SENSITIVE] 拉取敏感词成功 count=%d", len(normalized))
+    return normalized
+
+
+async def _fetch_ai_cs_sensitive_words() -> list[str]:
+    """从 Java core-api 拉取 AI 客服自动回复使用的敏感词列表。
+
+    复用 scene=polish 场景（含 scene=all）：polish 语义为「AI 生成文本时不可携带的词」，
+    与 AI 客服自动回复场景一致。失败时返回空列表（不阻塞自动回复，但敏感词限制不生效）。
+    """
+    import httpx as _httpx
+    base = (settings.core_api_base_url or "").rstrip("/")
+    if not base:
+        logger.warning("[AI_CS_SENSITIVE] core_api_base_url 未配置，敏感词注入跳过")
+        return []
+    headers = {"Accept": "application/json"}
+    if settings.effective_internal_api_token:
+        headers["X-Internal-Token"] = settings.effective_internal_api_token
+    try:
+        async with _httpx.AsyncClient(timeout=8.0, follow_redirects=False, trust_env=False) as client:
+            resp = await client.get(
+                f"{base}/open-api/internal/sensitive-words",
+                headers=headers,
+                params={"scene": "polish"},
+            )
+            if resp.status_code != 200:
+                logger.warning("[AI_CS_SENSITIVE] 拉取敏感词失败 status=%s", resp.status_code)
+                return []
+            data = resp.json()
+    except Exception as e:
+        _log_runtime_failure("fetch_ai_cs_sensitive_words", e)
+        return []
+    payload = data.get("data") if isinstance(data, dict) and isinstance(data.get("data"), dict) else data
+    if not isinstance(payload, dict):
+        return []
+    words = payload.get("words") or []
+    if not isinstance(words, list):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for w in words:
+        ws = _text(w).strip()
+        if ws and ws.lower() not in seen:
+            seen.add(ws.lower())
+            normalized.append(ws)
+    logger.info("[AI_CS_SENSITIVE] 拉取敏感词成功 count=%d", len(normalized))
     return normalized
 
 
@@ -3232,17 +3278,27 @@ async def _complete_scheduled_task_lease(
     return True, disable_after_failure
 
 
-async def execute_scheduled_task(
+async def claim_scheduled_task_lease(
     db: AsyncSession,
     task_id: int,
-    tenant_id: Optional[int] = None,
+    tenant_id: int,
     *,
     manual: bool = False,
-) -> dict[str, Any]:
+) -> tuple[Optional[dict[str, Any]], Optional[str], dict[str, Any]]:
+    """仅做 lease claim + reload task，不执行任务体。
+
+    返回 (task_dict, lease_token, error_dict)：
+    - 成功：(task, lease_token, {})
+    - 失败：(None, None, {"ok": False, "error": "...", ...})
+
+    拆分自 execute_scheduled_task，用于支持「立即返回，后台异步执行」模式：
+    内部调度器通过 execute_scheduled_task 调用本函数后同步执行剩余部分；
+    外部 HTTP 手动触发通过 internal_run_task 调用本函数后启动后台任务。
+    """
     task_id = _safe_int(task_id)
     scoped_tenant_id = _safe_int(tenant_id)
     if task_id <= 0 or scoped_tenant_id <= 0:
-        return {
+        return None, None, {
             "ok": False,
             "claimed": False,
             "error": "TASK_SCOPE_INVALID",
@@ -3276,7 +3332,7 @@ async def execute_scheduled_task(
     })
     await db.commit()
     if getattr(claim, "rowcount", 0) != 1:
-        return {
+        return None, None, {
             "ok": False,
             "claimed": False,
             "error": "TASK_ALREADY_RUNNING",
@@ -3296,7 +3352,7 @@ async def execute_scheduled_task(
         LIMIT 1
     """), params)).mappings().first()
     if not task:
-        return {
+        return None, None, {
             "ok": False,
             "claimed": True,
             "error": "TASK_LEASE_LOST",
@@ -3304,7 +3360,29 @@ async def execute_scheduled_task(
             "taskId": task_id,
         }
 
-    task = dict(task)
+    return dict(task), lease_token, {}
+
+
+async def execute_scheduled_task(
+    db: AsyncSession,
+    task_id: int,
+    tenant_id: Optional[int] = None,
+    *,
+    manual: bool = False,
+) -> dict[str, Any]:
+    """同步执行定时任务（用于内部 cron 调度器）。
+
+    外部 HTTP 手动触发请使用 claim_scheduled_task_lease + _run_scheduled_task_in_background 组合，
+    避免长耗时任务（如 auto_redelivery 多账号同步订单+批量发货）阻塞 HTTP 请求导致前端超时。
+    """
+    scoped_tenant_id = _safe_int(tenant_id)
+    task, lease_token, claim_error = await claim_scheduled_task_lease(
+        db, task_id, scoped_tenant_id, manual=manual
+    )
+    if task is None:
+        return claim_error
+
+    task_id = _safe_int(task.get("id", task_id))
     t_id = _safe_int(task.get("tenant_id"), scoped_tenant_id)
     task_type = _text(task.get("task_type")).lower()
     config = _task_config(task)
@@ -3368,6 +3446,107 @@ async def execute_scheduled_task(
     return result
 
 
+async def _run_scheduled_task_in_background(
+    task: dict[str, Any],
+    tenant_id: int,
+    lease_token: str,
+) -> None:
+    """后台执行定时任务（claim 后剩余部分：执行 + lease 释放 + 通知）。
+
+    使用独立 db session，避免依赖请求 scoped session。
+    失败时记录日志并强制释放 lease，避免任务永久卡在 running 状态。
+    """
+    task_id = _safe_int(task.get("id"))
+    task_type = _text(task.get("task_type")).lower()
+    task_name = task.get("task_name") or task_id
+    t_id = _safe_int(task.get("tenant_id"), tenant_id)
+    config = _task_config(task)
+
+    try:
+        async with async_session() as bg_db:
+            result, lease_owned = await _run_task_under_lease(
+                bg_db, task, t_id, config, lease_token,
+            )
+            if not lease_owned:
+                logger.warning(
+                    "后台定时任务 lease 丢失 taskId=%d taskType=%s",
+                    task_id, task_type,
+                )
+                return
+
+            result = _sanitize_runtime_value(
+                result,
+                failure_context=result.get("ok") is False,
+                default_code="SCHEDULED_TASK_FAILED",
+            )
+            if result.get("ok") is False and result.get("errorCode"):
+                result["error"] = result["errorCode"]
+            result.update({"claimed": True, "taskId": task_id, "taskType": task_type})
+            completed, disabled = await _complete_scheduled_task_lease(
+                bg_db,
+                task=task,
+                tenant_id=t_id,
+                lease_token=lease_token,
+                result=result,
+                config=config,
+            )
+            if not completed:
+                logger.warning(
+                    "后台定时任务 lease 完成失败 taskId=%d taskType=%s",
+                    task_id, task_type,
+                )
+                return
+            if disabled:
+                result["disabledAfterFailures"] = True
+            try:
+                await insert_notification(
+                    bg_db, t_id, None,
+                    "定时任务已执行",
+                    f"任务 {task_name} 执行结果：{result.get('message') or result}",
+                    "scheduled_task",
+                    "info" if result.get("ok") is True else "warning",
+                )
+                await bg_db.commit()
+            except Exception as exc:
+                rollback = getattr(bg_db, "rollback", None)
+                if rollback is not None:
+                    await rollback()
+                _log_runtime_failure("notify_scheduled_task_completion", exc)
+
+            logger.info(
+                "后台定时任务执行完成 taskId=%d taskType=%s ok=%s",
+                task_id, task_type, result.get("ok"),
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log_runtime_failure("run_scheduled_task_in_background", exc)
+        # 即使执行失败也要释放 lease，避免任务永久卡在 running 状态
+        try:
+            async with async_session() as cleanup_db:
+                await cleanup_db.execute(text("""
+                    UPDATE scheduled_task
+                    SET last_status = 'failed',
+                        last_finished_time = NOW(6),
+                        last_result = :last_result,
+                        lease_token = NULL,
+                        lease_owner = NULL,
+                        lease_expires_at = NULL,
+                        next_run_time = TIMESTAMPADD(MINUTE, 5, NOW(6)),
+                        consecutive_failure_count = COALESCE(consecutive_failure_count, 0) + 1,
+                        updated_time = NOW()
+                    WHERE id = :id AND tenant_id = :tenant_id AND lease_token = :lease_token
+                """), {
+                    "id": task_id,
+                    "tenant_id": t_id,
+                    "lease_token": lease_token,
+                    "last_result": json.dumps({"ok": False, "message": f"后台执行异常: {exc}"}, ensure_ascii=False)[:4000],
+                })
+                await cleanup_db.commit()
+        except Exception:
+            pass
+
+
 def _task_config(task: dict[str, Any]) -> dict[str, Any]:
     config_json = task.get("config_json")
     if not config_json:
@@ -3412,16 +3591,31 @@ async def _run_redelivery_task(db: AsyncSession, tenant_id: int, task: dict[str,
         return {"ok": False, "errorCode": "REDELIVERY_RECORD_REQUIRED", "message": "补发货任务缺少记录编号", "processed": 0}
 
     row = (await db.execute(text("""
-        SELECT dr.id, dr.account_id, dr.order_id,
+        SELECT dr.id, dr.account_id, dr.order_id, dr.status,
                COALESCE(dr.delivery_content, dr.content) AS delivery_content,
                o.buyer_id, o.external_order_id, o.item_id, o.is_bargain
         FROM delivery_record dr
-        JOIN xianyu_trade_order o ON o.id = dr.order_id AND o.tenant_id = dr.tenant_id
+        JOIN xianyu_trade_order o
+          ON o.tenant_id = dr.tenant_id
+          AND (o.id = dr.order_id OR o.external_order_id = dr.order_id)
         WHERE dr.id = :record_id AND dr.tenant_id = :tenant_id AND dr.deleted = 0
         LIMIT 1
     """), {"record_id": record_id, "tenant_id": tenant_id})).mappings().first()
     if not row:
         return {"ok": False, "errorCode": "REDELIVERY_RECORD_NOT_FOUND", "message": "补发货记录不存在", "processed": 0, "recordId": record_id}
+
+    # 门控：若该记录已处于成功状态（status IN (1,2)），拒绝重发，避免对同一买家重复发送货源信息
+    # 历史问题：用户看到"订单待发货"会误以为没发货，反复点补发 → 反复发送货源信息
+    existing_status = _safe_int(row.get("status"))
+    if existing_status in (1, 2):
+        return {
+            "ok": True,
+            "errorCode": "REDELIVERY_ALREADY_SUCCESS",
+            "message": "该发货记录已成功发送，无需重复补发",
+            "processed": 0,
+            "recordId": record_id,
+            "deliveryStatus": "success" if existing_status == 2 else "pending",
+        }
 
     row = dict(row)
     account_id = _safe_int(row.get("account_id"))
@@ -4467,6 +4661,7 @@ async def sync_sold_orders_for_account(
     inserted = 0
     updated = 0
     failed = 0
+    sold_item_ids_to_relist: list[str] = []  # 新售订单对应的商品 ID，用于触发售整自动上架
     for order in remote_orders:
         try:
             result = await _upsert_remote_sold_order(db, tenant_id, account_id, order)
@@ -4476,8 +4671,26 @@ async def sync_sold_orders_for_account(
             continue
         if result == "inserted":
             inserted += 1
+            # 新订单插入成功，记录商品 ID 用于触发售整自动上架钩子
+            sold_item_id = _text(order.get("itemId") or "").strip()
+            if sold_item_id:
+                sold_item_ids_to_relist.append(sold_item_id)
         elif result == "updated":
             updated += 1
+
+    # 售整自动上架钩子：新售订单触发后立即异步重发
+    # 失败不影响订单同步主流程；relist_scheduler 也会每 3 分钟兜底扫描
+    if sold_item_ids_to_relist:
+        try:
+            from .relist_service import relist_sold_item
+            for sold_item_id in sold_item_ids_to_relist:
+                # 异步触发，不等待结果（fire-and-forget）
+                asyncio.create_task(
+                    relist_sold_item(account_id, tenant_id, sold_item_id),
+                    name=f"relist_hook_{account_id}_{sold_item_id}",
+                )
+        except Exception as exc:
+            _log_runtime_failure("trigger_relist_hook", exc)
 
     # 同步退款订单：补充缺失的退款订单 + 更新已售订单的退款状态
     # （除非按 externalOrderId 单订单同步，此时不需要拉全部退款订单）
@@ -4620,9 +4833,12 @@ async def process_pending_deliveries(
           AND NOT EXISTS (
             SELECT 1 FROM delivery_record d
             WHERE d.tenant_id = o.tenant_id
-              AND d.order_id = o.id
               AND d.deleted = 0
               AND d.status IN (1, 2)
+              AND (
+                  d.order_id = o.id
+                  OR d.order_id = o.external_order_id
+              )
           )
         ORDER BY COALESCE(o.pay_time, o.created_time) ASC
         LIMIT :limit
@@ -4846,10 +5062,12 @@ async def execute_delivery_for_order(db: AsyncSession, order: dict[str, Any]) ->
 
     existing_delivery = (await db.execute(text("""
         SELECT id, card_item_id FROM delivery_record
-        WHERE tenant_id = :tenant_id AND order_id = :order_id AND deleted = 0
+        WHERE tenant_id = :tenant_id AND deleted = 0
           AND status IN (1, 2)
+          AND (order_id = :order_id
+               OR (:external_order_id <> '' AND order_id = :external_order_id))
         ORDER BY id DESC LIMIT 1
-    """), {"tenant_id": tenant_id, "order_id": order_id})).mappings().first()
+    """), {"tenant_id": tenant_id, "order_id": order_id, "external_order_id": external_order_id})).mappings().first()
     if existing_delivery:
         return {"ok": True, "orderId": order_id, "deliveryRecordId": existing_delivery.get("id"), "cardItemId": existing_delivery.get("card_item_id"), "message": "订单已发货，跳过重复处理"}
 
@@ -5323,6 +5541,29 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
             "message": "账号已删除或停用，跳过自动回复",
         }
 
+    # 提前解析 seller_uid，用于自问自答防护（必须在 buyer_id 解析之前）
+    seller_uid = _text(
+        payload.get("sellerExternalUid")
+        or payload.get("ownerUserId")
+        or payload.get("sellerUserId")
+        or payload.get("accountExternalUid")
+    )
+
+    # === 自问自答防护（强制闸门）===
+    # 显式校验 payload 的原始 senderUserId（即 buyerId 字段）是否等于卖家自己。
+    # 即使 IM 回环消息 direction 被误判为 IN、_resolve_effective_buyer_id_from_sid
+    # 从历史消息反查出买家 ID，这里也能直接拦截，避免自问自答。
+    # 注意：该检查必须在 _resolve_effective_buyer_id_from_sid 之前，因为后者
+    # 会跳过等于卖家的候选，导致原始 sender 信息丢失。
+    raw_sender_uid = _text(payload.get("buyerId") or payload.get("senderUserId"))
+    if raw_sender_uid and seller_uid:
+        if _normalize_external_uid(raw_sender_uid) == _normalize_external_uid(seller_uid):
+            logger.info(
+                "[AUTO_REPLY] 跳过自动回复（原始 senderUserId 命中卖家自己）tenantId=%d accountId=%d sId=%s senderUserId=%s",
+                tenant_id, account_id, _text(payload.get("sId") or payload.get("sid")), raw_sender_uid
+            )
+            return {"ok": True, "matched": False, "message": "senderUserId 指向卖家自己，跳过自动回复（防止自问自答）"}
+
     buyer_id = (await _resolve_effective_buyer_id_from_sid(db, tenant_id, account_id, payload)).strip() or "unknown"
     buyer_name = _text(payload.get("buyerName") or payload.get("buyer_name") or buyer_id)
     content = _text(payload.get("content"))
@@ -5351,12 +5592,6 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
     platform_message_id = _text(payload.get("platformMessageId") or payload.get("pnmId") or payload.get("pnm_id"))
     goods_id = _text(payload.get("goodsId") or payload.get("itemId") or payload.get("xyGoodsId"))
     item_title = _text(payload.get("itemTitle") or payload.get("cardTitle"))
-    seller_uid = _text(
-        payload.get("sellerExternalUid")
-        or payload.get("ownerUserId")
-        or payload.get("sellerUserId")
-        or payload.get("accountExternalUid")
-    )
     if seller_uid and _normalize_external_uid(buyer_id) == _normalize_external_uid(seller_uid):
         logger.info(
             "[AUTO_REPLY] 跳过自动回复（buyer_id 命中卖家自己）tenantId=%d accountId=%d sId=%s buyerId=%s",
@@ -5551,6 +5786,63 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
                     "message": "人工干预暂停中，AI 回复已临时挂起",
                 }
 
+    # === 人工干预兜底判定：上一条消息是否是卖家自己发送的（非 AI 自动回复） ===
+    # 背景：auto_reply_paused 状态字段在以下场景会漏设置：
+    #   1. 图片消息发送路径（/sendImageMessage）未调用暂停逻辑
+    #   2. IM 回环异步任务可能丢失（asyncio.create_task）
+    #   3. 会话匹配失败时静默跳过
+    # 此处直接查询该会话最近一条 OUT 消息（非 AI 自动回复），若距当前 < 60 秒，视为人工干预中，跳过 AI 回复。
+    # 仅在 conv_paused == 0 时触发，作为状态字段机制的兜底；不替换现有 60 秒自动恢复逻辑。
+    if conv_paused == 0 and conv_manual_disabled == 0:
+        last_manual_msg = (await db.execute(text("""
+            SELECT message_time
+            FROM xianyu_message
+            WHERE tenant_id = :tenant_id
+              AND account_id = :account_id
+              AND conversation_id = :conversation_id
+              AND deleted = 0
+              AND direction = 1
+              AND is_auto_reply = 0
+            ORDER BY message_time DESC, id DESC
+            LIMIT 1
+        """), {
+            "tenant_id": tenant_id,
+            "account_id": account_id,
+            "conversation_id": conversation_db_id,
+        })).mappings().first()
+        if last_manual_msg and last_manual_msg.get("message_time"):
+            try:
+                last_manual_ms = int(last_manual_msg["message_time"])
+                now_ms_val = int(time.time() * 1000)
+                manual_elapsed_ms = now_ms_val - last_manual_ms
+                if 0 <= manual_elapsed_ms < 60_000:
+                    # 同步设置 auto_reply_paused 状态字段，让后续逻辑能正确感知并广播 SSE
+                    await db.execute(text("""
+                        UPDATE xianyu_conversation
+                        SET auto_reply_paused = 1, last_manual_reply_at = :last_manual_at, updated_time = NOW()
+                        WHERE id = :conversation_id AND auto_reply_paused = 0
+                    """), {
+                        "conversation_id": conversation_db_id,
+                        "last_manual_at": last_manual_ms,
+                    })
+                    logger.info(
+                        "[AUTO_REPLY] 兜底判定：上一条消息为卖家发送（%dms < 60s），暂停 AI 回复 tenantId=%d accountId=%d convId=%d",
+                        manual_elapsed_ms, tenant_id, account_id, conversation_db_id
+                    )
+                    await db.commit()
+                    return {
+                        "ok": True,
+                        "matched": False,
+                        "autoSent": False,
+                        "conversationId": conversation_db_id,
+                        "message": "检测到卖家最近有人工回复，AI 回复已临时挂起",
+                    }
+            except (ValueError, TypeError) as exc:
+                logger.warning(
+                    "[AUTO_REPLY] 兜底判定解析 message_time 失败 convId=%d value=%s error=%s",
+                    conversation_db_id, last_manual_msg.get("message_time"), exc
+                )
+
     if platform_message_id:
         existing = (await db.execute(text("""
             SELECT id FROM xianyu_message
@@ -5608,10 +5900,13 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
             }
 
     # 幂等检查：该会话该规则对该消息是否已处理过自动回复（rule/trigger_message_id 此时均已赋值）
+    # 注意：AI 客服 fallback 路径下 rule.id 为 None，SQL 中 `rule_id = NULL` 永远为 false 会导致去重失效
+    # （历史 Bug：同一触发反复生成回复并发送）。此处使用 NULL-safe 匹配：rule_id 均为 NULL 时也视为相等。
     existing_reply = (await db.execute(text("""
         SELECT id FROM auto_reply_log
         WHERE tenant_id = :tenant_id AND account_id = :account_id AND conversation_id = :conversation_id
-          AND rule_id = :rule_id AND trigger_message = :trigger_message AND deleted = 0
+          AND (rule_id = :rule_id OR (rule_id IS NULL AND :rule_id IS NULL))
+          AND trigger_message = :trigger_message AND deleted = 0
           AND action IN ('auto_send_allowed', 'suggest_only')
         ORDER BY id DESC LIMIT 1
     """), {
@@ -6310,22 +6605,32 @@ def _build_ai_cs_system_prompt(
     user_chat_rules: list[dict[str, str]],
     default_knowledge_bases: list[dict[str, str]],
     default_chat_rules: list[dict[str, str]],
+    sensitive_words: Optional[list[str]] = None,
+    learned_kb_hits: Optional[list[dict[str, Any]]] = None,
+    user_private_kb_hits: Optional[list[dict[str, Any]]] = None,
 ) -> str:
-    parts = [
-        _text(cfg.get("systemPrompt")).strip(),
-        "",
-        "【角色】你是当前店铺的商品客服，只代表店铺，不代表闲鱼平台。",
-        "【语气】像真人客服一样自然礼貌，回答短、准、直接，少说套话，避免客服腔和平台公告腔。",
-        "【身份表达】不要主动说自己是AI、机器人或系统；正常接待时就像店里客服本人在回复。",
-        "【硬性约束】只能依据商品资料、知识库和聊天规则回复；不要编造库存、价格、赠品、售后、物流、额外服务；不要与买家闲聊。",
-        "【库存红线】绝对不要主动告诉买家'没库存''售罄''缺货'。即使本地库存显示为 0 或未知，也要回复'有货的，可以直接下单'或引导买家下单；真实库存以商品页为准，不要因库存问题劝退买家或阻止下单。",
-        "【信息不足时】如果当前资料里没有答案，就自然地说这个细节我这边暂时确认不了，或者我先帮您再核实一下，再引导买家看商品页或等待人工处理。",
-        "【高风险场景】退款、投诉、赔偿、维权、平台规则、线下交易、加微信、改地址等问题，只能建议人工处理。",
-        "",
-        "【当前商品信息】",
-        _build_goods_context_text(goods),
-    ]
+    """构造 AI 客服系统提示词。
 
+    严格遵守用户配置的自定义提示词（cfg.systemPrompt），仅在末尾追加：
+    1. 当前商品信息（上下文，必须提供给 AI）
+    2. 用户知识库 / 用户聊天规则 / 默认知识库 / 默认聊天规则（用户主动配置的内容）
+    3. 后台配置的敏感词限制（仅用于限制 AI 回复不要出现违规内容）
+
+    不再预设角色、语气、库存红线等硬编码提示词，避免覆盖用户自定义语气。
+    """
+    parts: list[Any] = []
+
+    # 1) 用户自定义提示词（最优先，严格遵守）
+    custom_prompt = _text(cfg.get("systemPrompt")).strip()
+    if custom_prompt:
+        parts.append(custom_prompt)
+        parts.append("")
+
+    # 2) 当前商品信息（上下文，必须提供）
+    parts.append("【当前商品信息】")
+    parts.append(_build_goods_context_text(goods))
+
+    # 3) 用户主动配置的知识库与聊天规则
     if user_knowledge_bases:
         parts.extend(["", "【用户知识库（优先）】", _join_ai_cs_entry_contents(user_knowledge_bases)])
     if user_chat_rules:
@@ -6334,6 +6639,47 @@ def _build_ai_cs_system_prompt(
         parts.extend(["", "【默认知识库（补充）】", _join_ai_cs_entry_contents(default_knowledge_bases)])
     if default_chat_rules:
         parts.extend(["", "【默认聊天规则（补充）】", _join_ai_cs_entry_contents(default_chat_rules)])
+
+    # 5) 用户启用的学习知识库（RAG 检索结果）
+    # 注：answer 字段是 MEDIUMTEXT，可能极长。这里限制单条 800 字、总 4000 字，避免 prompt 爆炸。
+    MAX_KB_PER_ITEM_CHARS = 800
+    MAX_KB_TOTAL_CHARS = 4000
+    if learned_kb_hits:
+        parts.extend(["", "【学习知识库（用户启用）】"])
+        total_kb_chars = 0
+        for hit in learned_kb_hits:
+            q = str(hit.get('question', ''))[:200]
+            a = str(hit.get('answer', ''))[:MAX_KB_PER_ITEM_CHARS]
+            snippet = f"Q: {q}\nA: {a}"
+            if total_kb_chars + len(snippet) > MAX_KB_TOTAL_CHARS:
+                parts.append("（更多知识库条目已截断）")
+                break
+            parts.append(snippet)
+            cat = hit.get('category', '')
+            score = hit.get('score', 0)
+            if cat or score:
+                parts.append(f"（分类: {cat} | 评分: {score}）")
+            parts.append("")
+            total_kb_chars += len(snippet)
+
+    # 6) 用户的私有知识库（RAG 检索结果）
+    if user_private_kb_hits:
+        parts.extend(["", "【我的知识库】"])
+        total_user_kb_chars = 0
+        for hit in user_private_kb_hits:
+            title = str(hit.get('title', ''))[:100]
+            content = str(hit.get('content', ''))[:MAX_KB_PER_ITEM_CHARS]
+            snippet = f"{'### ' + title + chr(10) if title else ''}{content}"
+            if total_user_kb_chars + len(snippet) > MAX_KB_TOTAL_CHARS:
+                parts.append("（更多知识库条目已截断）")
+                break
+            parts.append(snippet)
+            parts.append("")
+            total_user_kb_chars += len(snippet)
+
+    # 4) 后台配置的敏感词限制（仅用于限制 AI 回复不要出现违规内容）
+    if sensitive_words:
+        parts.extend(["", "【回复禁用词】以下词汇不得出现在你的回复中：", "、".join(sensitive_words)])
 
     return "\n".join(part for part in parts if part is not None).strip()
 
@@ -6555,6 +6901,44 @@ async def _build_ai_customer_service_rule(
         prefix="默认聊天规则",
         source="default",
     )
+    # 拉取后台配置的敏感词（复用 polish 场景），用于限制 AI 回复不要出现违规内容
+    sensitive_words = await _fetch_ai_cs_sensitive_words()
+
+    # 查询用户启用的 KB 并做 RAG 检索
+    learned_kb_hits: list[dict[str, Any]] = []
+    user_private_kb_hits: list[dict[str, Any]] = []
+    try:
+        if content and tenant_id and account_id and user_id:
+            # 注意：AsyncResult.mappings() 返回的迭代器只能消费一次，
+            # 必须先 .all() 物化为列表再分区，否则第二次迭代会拿到空游标。
+            all_bindings = (await db.execute(text(
+                "SELECT kb_type, kb_id, enabled FROM ai_cs_user_kb_binding "
+                "WHERE tenant_id=:t AND user_id=:u AND deleted=0"
+            ), {"t": tenant_id, "u": user_id})).mappings().all()
+            learned_ids = [r["kb_id"] for r in all_bindings
+                           if r["kb_type"] == "learned" and r["enabled"]]
+            user_kb_ids = [r["kb_id"] for r in all_bindings
+                           if r["kb_type"] == "user" and r["enabled"]]
+
+            from app.services.rag_service import search_with_filter
+            if learned_ids:
+                learned_kb_hits = await search_with_filter(
+                    query=content, kb_ids=learned_ids, top_k=3
+                )
+            if user_kb_ids:
+                user_kb_rows = await db.execute(text(
+                    "SELECT title, content FROM ai_cs_user_kb "
+                    "WHERE id IN :ids AND tenant_id=:t AND user_id=:u "
+                    "AND deleted=0 AND enabled=1"
+                ).bindparams(sqlalchemy.bindparam("ids", expanding=True)),
+                {"ids": user_kb_ids, "t": tenant_id, "u": user_id})
+                user_private_kb_hits = [
+                    {"title": r["title"], "content": r["content"]}
+                    for r in user_kb_rows.mappings()
+                ]
+    except Exception as exc:
+        logger.warning("[AI_CS] kb binding/rag lookup failed errorType=%s", type(exc).__name__)
+
     system_prompt = _build_ai_cs_system_prompt(
         cfg,
         goods,
@@ -6562,6 +6946,9 @@ async def _build_ai_customer_service_rule(
         user_chat_rules,
         default_knowledge_bases,
         default_chat_rules,
+        sensitive_words=sensitive_words,
+        learned_kb_hits=learned_kb_hits,
+        user_private_kb_hits=user_private_kb_hits,
     )
     welcome_message = _text(cfg.get("welcomeMessage"))
     handoff_keywords = _text(cfg.get("handoffKeywords"))

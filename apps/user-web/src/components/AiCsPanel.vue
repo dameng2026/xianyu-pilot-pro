@@ -1,0 +1,1585 @@
+<template>
+  <Teleport to="body">
+    <Transition name="ai-cs-slide">
+      <aside
+        v-show="visible"
+        class="ai-cs-panel"
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby="ai-cs-title"
+      >
+        <span class="ai-cs-panel-border" aria-hidden="true"></span>
+
+        <header class="ai-cs-header">
+          <div class="ai-cs-header-main">
+            <div class="ai-cs-avatar-wrap">
+              <img class="ai-cs-avatar" :src="avatar" alt="" />
+              <span class="ai-cs-status-dot" :class="{ online: ready, busy: streaming }"></span>
+            </div>
+            <div class="ai-cs-header-text">
+              <strong id="ai-cs-title" class="ai-cs-title">小梦 🌙</strong>
+              <span class="ai-cs-balance">
+                Token 余额：<em>{{ balanceText }}</em>
+              </span>
+            </div>
+          </div>
+
+          <div class="ai-cs-header-actions">
+            <button
+              type="button"
+              class="ai-cs-icon-btn"
+              :disabled="loadingSession || compressing || !sessionId"
+              :title="compressing ? '压缩中...' : '压缩上下文'"
+              @click="onCompress"
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path d="M4 7h16M6 12h12M4 17h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="ai-cs-icon-btn"
+              :disabled="loadingSession"
+              title="开启新会话"
+              @click="onNewSession"
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="ai-cs-close"
+              aria-label="关闭"
+              @click="emit('close')"
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <div ref="messagesRef" class="ai-cs-messages" tabindex="0">
+          <div v-if="loadingSession" class="ai-cs-loading">
+            <div class="ai-cs-loading-spinner" aria-hidden="true"></div>
+            <span>正在连接小梦...</span>
+          </div>
+
+          <template v-else>
+            <div
+              v-for="msg in messages"
+              :key="msg.id"
+              class="ai-cs-msg-row"
+              :class="`msg-${msg.role}`"
+            >
+              <img
+                v-if="msg.role === 'assistant'"
+                class="ai-cs-msg-avatar"
+                :src="avatar"
+                alt=""
+              />
+
+              <div class="ai-cs-msg-body">
+                <div v-if="msg.type === 'casual_remind'" class="ai-cs-casual">
+                  <span class="ai-cs-casual-icon" aria-hidden="true">i</span>
+                  <span>{{ msg.content }}</span>
+                </div>
+
+                <div v-else-if="msg.type === 'insufficient_balance'" class="ai-cs-insufficient">
+                  <p>{{ msg.content }}</p>
+                  <button type="button" class="ai-cs-recharge-btn" @click="onRecharge">
+                    立即充值
+                  </button>
+                </div>
+
+                <div
+                  v-else-if="msg.type === 'quota_notice'"
+                  class="ai-cs-quota"
+                  :class="`quota-${msg.quotaType || 'exceeded'}`"
+                >
+                  <div class="ai-cs-quota-head">
+                    <span class="ai-cs-quota-icon" aria-hidden="true">
+                      <svg v-if="msg.quotaType === 'warning'" viewBox="0 0 24 24" width="14" height="14">
+                        <path d="M12 2 1 21h22L12 2zm0 4 8 14H4l8-14zm-1 5v4h2v-4h-2zm0 5v2h2v-2h-2z" fill="currentColor"/>
+                      </svg>
+                      <svg v-else viewBox="0 0 24 24" width="14" height="14">
+                        <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 4a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm-1 5h2v6h-2v-6z" fill="currentColor"/>
+                      </svg>
+                    </span>
+                    <strong>{{ msg.quotaType === 'warning' ? '免费额度即将用完' : '免费额度已用完' }}</strong>
+                  </div>
+                  <p class="ai-cs-quota-text">{{ msg.content }}</p>
+                  <div v-if="msg.perMessageTokens" class="ai-cs-quota-meta">
+                    <span class="ai-cs-quota-tag">免费 {{ msg.usedQuota || 0 }}/{{ msg.dailyFreeQuota || 0 }} 条</span>
+                    <span class="ai-cs-quota-tag accent">扣费 {{ msg.perMessageTokens }} Token/条</span>
+                  </div>
+                  <button
+                    v-if="msg.quotaType === 'exceeded'"
+                    type="button"
+                    class="ai-cs-quota-btn"
+                    @click="onRecharge"
+                  >
+                    充值 Token
+                  </button>
+                </div>
+
+                <div
+                  v-else-if="msg.type === 'tool_call'"
+                  class="ai-cs-tool-card"
+                  :class="`tool-${msg.status}`"
+                >
+                  <div class="ai-cs-tool-head">
+                    <span class="ai-cs-tool-badge">工具</span>
+                    <strong>{{ msg.name }}</strong>
+                  </div>
+                  <p v-if="msg.description" class="ai-cs-tool-desc">{{ msg.description }}</p>
+                  <pre v-if="msg.argumentsText" class="ai-cs-tool-args">{{ msg.argumentsText }}</pre>
+
+                  <div v-if="msg.status === 'pending'" class="ai-cs-tool-actions">
+                    <button type="button" class="ai-cs-tool-btn accept" @click="onToolConfirm(msg, true)">
+                      同意
+                    </button>
+                    <button type="button" class="ai-cs-tool-btn reject" @click="onToolConfirm(msg, false)">
+                      拒绝
+                    </button>
+                  </div>
+                  <div v-else-if="msg.status === 'accepted'" class="ai-cs-tool-status">
+                    已同意，执行中...
+                  </div>
+                  <div v-else-if="msg.status === 'rejected'" class="ai-cs-tool-status rejected">
+                    已拒绝
+                  </div>
+
+                  <div v-if="msg.resultText" class="ai-cs-tool-result">
+                    <span class="ai-cs-tool-result-label">结果：</span>
+                    <pre>{{ msg.resultText }}</pre>
+                  </div>
+                </div>
+
+                <div v-else class="ai-cs-msg-bubble" :class="msg.role">
+                  <span class="ai-cs-msg-text" v-html="renderContent(msg.content)"></span>
+                </div>
+
+                <time v-if="msg.type !== 'tool_call'" class="ai-cs-msg-time">
+                  {{ formatTime(msg.timestamp) }}
+                </time>
+              </div>
+            </div>
+
+            <div v-if="streaming" class="ai-cs-msg-row msg-assistant">
+              <img class="ai-cs-msg-avatar" :src="avatar" alt="" />
+              <div class="ai-cs-typing" aria-label="小梦正在输入">
+                <span></span><span></span><span></span>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <div class="ai-cs-input-area">
+          <textarea
+            ref="inputRef"
+            v-model="input"
+            class="ai-cs-input"
+            placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+            rows="1"
+            :disabled="!ready || streaming"
+            @keydown.enter.exact.prevent="onSend"
+            @input="autoResize"
+          ></textarea>
+          <button
+            type="button"
+            class="ai-cs-send"
+            :disabled="!canSend"
+            @click="onSend"
+          >
+            <svg v-if="streaming" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+              <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
+            </svg>
+            <svg v-else viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path d="M3 12l18-8-8 18-2-7-8-3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            </svg>
+            <span>{{ streaming ? '生成中' : '发送' }}</span>
+          </button>
+        </div>
+
+        <Transition name="ai-cs-fade">
+          <div
+            v-if="contextExceeded"
+            class="ai-cs-modal-mask"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ai-cs-ctx-title"
+          >
+            <div class="ai-cs-modal">
+              <div class="ai-cs-modal-icon" aria-hidden="true">!</div>
+              <h3 id="ai-cs-ctx-title">上下文已超限</h3>
+              <p>
+                当前会话已达到 {{ contextExceeded.maxCount }} 条上下文上限，
+                建议开启新会话或压缩历史以继续对话。
+              </p>
+              <div class="ai-cs-modal-actions">
+                <button
+                  type="button"
+                  class="ai-cs-modal-btn primary"
+                  :disabled="loadingSession"
+                  @click="onNewSession"
+                >
+                  开启新会话
+                </button>
+                <button
+                  type="button"
+                  class="ai-cs-modal-btn"
+                  :disabled="compressing"
+                  @click="onCompress"
+                >
+                  {{ compressing ? '压缩中...' : '压缩上下文' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </Transition>
+      </aside>
+    </Transition>
+  </Teleport>
+</template>
+
+<script setup>
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import {
+  closeSession,
+  compressContext,
+  confirmToolCall,
+  createSession,
+  currentSession,
+  getCsConfig,
+  listMessages,
+  streamChat
+} from '../api/aiCs.js'
+import { getAiBillingBalance } from '../api/aiBilling.js'
+
+const props = defineProps({
+  visible: { type: Boolean, default: false }
+})
+const emit = defineEmits(['close'])
+
+const AVATAR = 'http://localhost:5174/xya/chat_ui_assets/chat_ui_assets_023.png'
+const avatar = AVATAR
+
+const messagesRef = ref(null)
+const inputRef = ref(null)
+const messages = ref([])
+const input = ref('')
+const sessionId = ref(null)
+const sessionToken = ref('')
+const balance = ref(0)
+const ready = ref(false)
+const loadingSession = ref(false)
+const streaming = ref(false)
+const compressing = ref(false)
+const casualRemindShown = ref(false)
+const contextExceeded = ref(null)
+
+let abortStream = null
+let msgSeq = 0
+
+const balanceText = computed(() => {
+  const v = Number(balance.value) || 0
+  if (v <= 0) return '0'
+  return v.toLocaleString()
+})
+
+const canSend = computed(
+  () => ready.value && !streaming.value && input.value.trim().length > 0
+)
+
+function genId() {
+  msgSeq += 1
+  return `m-${Date.now()}-${msgSeq}`
+}
+
+function formatTime(ts) {
+  if (!ts) return ''
+  const d = new Date(ts)
+  const hh = d.getHours().toString().padStart(2, '0')
+  const mm = d.getMinutes().toString().padStart(2, '0')
+  return `${hh}:${mm}`
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function renderContent(content) {
+  if (!content) return ''
+  return escapeHtml(content).replace(/\n/g, '<br />')
+}
+
+function autoResize() {
+  const el = inputRef.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+}
+
+function resetInput() {
+  input.value = ''
+  nextTick(() => {
+    const el = inputRef.value
+    if (el) el.style.height = 'auto'
+  })
+}
+
+function scrollToBottom() {
+  nextTick(() => {
+    const el = messagesRef.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
+
+function pushMessage(msg) {
+  messages.value.push(msg)
+  scrollToBottom()
+}
+
+function formatJsonLike(value) {
+  if (value == null || value === '') return ''
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        return JSON.stringify(JSON.parse(trimmed), null, 2)
+      } catch (_) {
+        return value
+      }
+    }
+    return value
+  }
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch (_) {
+    return String(value)
+  }
+}
+
+async function initSession() {
+  loadingSession.value = true
+  ready.value = false
+  messages.value = []
+  sessionId.value = null
+  sessionToken.value = ''
+  casualRemindShown.value = false
+  contextExceeded.value = null
+
+  try {
+    const [balRes, existing] = await Promise.all([
+      getAiBillingBalance().catch((e) => {
+        // 余额拉取失败时打印诊断信息，避免静默吞掉异常导致 0 余额误导用户
+        console.warn('[AiCsPanel] 拉取 Token 余额失败：', e?.message || e)
+        return null
+      }),
+      currentSession().catch((e) => {
+        console.warn('[AiCsPanel] 查询当前会话失败：', e?.message || e)
+        return null
+      })
+    ])
+    // 直接读取 /ai-billing/balance 返回的 tokenBalance（与个人中心同源）
+    const bal = Number(balRes?.tokenBalance ?? balRes?.balance ?? 0)
+    if (Number.isFinite(bal)) balance.value = bal
+
+    let session = (existing && existing.data && existing.data.sessionId) ? existing.data : (existing && existing.sessionId ? existing : null)
+    if (!session) {
+      const created = await createSession()
+      session = created?.data || created
+    }
+
+    sessionId.value = session.sessionId
+    sessionToken.value = session.sessionToken || ''
+
+    const welcome =
+      session.welcomeMessage || '你好，我是小梦，有什么可以帮你的吗？'
+    pushMessage({
+      id: genId(),
+      role: 'assistant',
+      type: 'text',
+      content: welcome,
+      timestamp: Date.now()
+    })
+
+    try {
+      const historyRes = await listMessages(session.sessionId, 50)
+      const history = historyRes?.data || historyRes
+      if (Array.isArray(history?.messages) && history.messages.length) {
+        for (const m of history.messages) {
+          messages.value.push(normalizeHistoryMessage(m))
+        }
+        scrollToBottom()
+      }
+    } catch (_) {}
+
+    ready.value = true
+  } catch (err) {
+    pushMessage({
+      id: genId(),
+      role: 'system',
+      type: 'text',
+      content: `连接小梦失败：${err?.message || '未知错误'}`,
+      timestamp: Date.now()
+    })
+  } finally {
+    loadingSession.value = false
+  }
+}
+
+function normalizeHistoryMessage(m) {
+  const role = m.role === 'user' ? 'user' : 'assistant'
+  return {
+    id: m.id || m.messageId || genId(),
+    role,
+    type: 'text',
+    content: m.content || m.text || '',
+    timestamp: m.createdAt || m.timestamp || Date.now()
+  }
+}
+
+async function onSend() {
+  if (!canSend.value) return
+  const text = input.value.trim()
+  if (!text) return
+
+  pushMessage({
+    id: genId(),
+    role: 'user',
+    type: 'text',
+    content: text,
+    timestamp: Date.now()
+  })
+
+  resetInput()
+  await runStream(text)
+}
+
+async function runStream(text) {
+  if (!sessionId.value) return
+  streaming.value = true
+
+  const assistantMsg = {
+    id: genId(),
+    role: 'assistant',
+    type: 'text',
+    content: '',
+    timestamp: Date.now()
+  }
+  pushMessage(assistantMsg)
+
+  abortStream = streamChat({
+    sessionId: sessionId.value,
+    message: text,
+    onEvent: (evt) => handleEvent(evt, assistantMsg),
+    onError: (err, status) => {
+      streaming.value = false
+      abortStream = null
+      // 网络层错误：替换空气泡为友好错误提示，避免堆叠 [出错] 前缀
+      const errMsg = err?.message || '网络异常'
+      const friendly = friendlyErrorMessage(errMsg, status)
+      if (!assistantMsg.content) {
+        assistantMsg.content = friendly
+      } else {
+        assistantMsg.content = `${assistantMsg.content}\n\n${friendly}`
+      }
+      // SSE 401 不再踢出登录：UserJwtAuthFilter 已修复 ASYNC 分发误判问题，
+      // 真实 401 极少见；此处仅在 402/insufficient_balance 时刷新余额并展示充值卡片
+      if (status === 402 || /insufficient_balance|余额不足/i.test(errMsg)) {
+        refreshBalance().then(() => {
+          if (balance.value <= 0) {
+            pushMessage({
+              id: genId(),
+              role: 'assistant',
+              type: 'insufficient_balance',
+              content: 'Token 余额不足，请充值后继续。',
+              timestamp: Date.now()
+            })
+          }
+        })
+      } else if (/余额|balance|insufficient/i.test(errMsg)) {
+        // 仅在错误信息明显指向余额时刷新一次余额（不直接清零，避免 48026 被误清零）
+        refreshBalance()
+      }
+      scrollToBottom()
+    },
+    onClose: () => {
+      streaming.value = false
+      abortStream = null
+      refreshBalance()
+      // 流结束：若 AI 气泡仍为空且无待确认工具调用，替换为"服务不在线"友好提示
+      if (!assistantMsg.content && !hasToolCallPending()) {
+        const idx = messages.value.findIndex((m) => m.id === assistantMsg.id)
+        if (idx >= 0) {
+          // 替换为系统提示消息，而不是删除（让用户看到反馈）
+          messages.value[idx] = {
+            id: assistantMsg.id,
+            role: 'system',
+            type: 'text',
+            content: '小梦暂时不在线，请稍后重试。若问题持续，可点击右上角刷新会话。',
+            timestamp: Date.now()
+          }
+          scrollToBottom()
+        }
+      }
+    }
+  })
+}
+
+function handleEvent(evt, assistantMsg) {
+  const { event, data } = evt || {}
+  const type = data?.type || event
+  switch (event) {
+    case 'connected':
+      // 连接建立成功，无需特殊处理
+      break
+    case 'delta':
+    case 'content': {
+      assistantMsg.content += data.content || ''
+      scrollToBottom()
+      break
+    }
+    case 'tool_call': {
+      // 兼容两种负载：直接字段或嵌套 toolCall
+      const payload = data.toolCall || data
+      pushMessage({
+        id: genId(),
+        role: 'assistant',
+        type: 'tool_call',
+        toolCallId: payload.toolCallId || payload.tool_call_id || 0,
+        name: payload.name || payload.tool || '',
+        argumentsText: formatJsonLike(payload.arguments),
+        description: data.description || payload.description || data.message || '',
+        status: 'pending',
+        resultText: '',
+        timestamp: Date.now()
+      })
+      break
+    }
+    case 'tool_result': {
+      const found = messages.value.find(
+        (m) => m.type === 'tool_call' && m.toolCallId === data.toolCallId
+      )
+      if (found) {
+        found.status = data.status || 'done'
+        found.resultText = formatJsonLike(data.result)
+      }
+      break
+    }
+    case 'insufficient_balance': {
+      pushMessage({
+        id: genId(),
+        role: 'assistant',
+        type: 'insufficient_balance',
+        content: data.message || 'Token 余额不足，请充值后继续。',
+        timestamp: Date.now()
+      })
+      // 后端主动告知余额不足时，刷新一次以获取真实余额（不直接清零，避免假阴性）
+      refreshBalance()
+      break
+    }
+    case 'context_exceeded': {
+      contextExceeded.value = {
+        currentCount: data.currentCount,
+        maxCount: data.maxCount
+      }
+      break
+    }
+    case 'quota_exceeded': {
+      // 今日免费额度已用完，后续每条扣费 N Token
+      pushMessage({
+        id: genId(),
+        role: 'assistant',
+        type: 'quota_notice',
+        content: data.message || `今日免费额度已用完，后续每条消息将扣费 ${data.perMessageTokens || 3} Token`,
+        quotaType: 'exceeded',
+        dailyFreeQuota: data.dailyFreeQuota,
+        usedQuota: data.usedQuota,
+        perMessageTokens: data.perMessageTokens,
+        timestamp: Date.now()
+      })
+      break
+    }
+    case 'quota_warning': {
+      // 本条是免费额度最后一条，提醒用户下一条开始扣费
+      pushMessage({
+        id: genId(),
+        role: 'assistant',
+        type: 'quota_notice',
+        quotaType: 'warning',
+        content: data.message || `今日免费额度还剩 0 条，下一条消息将开始扣费 ${data.perMessageTokens || 3} Token/条`,
+        dailyFreeQuota: data.dailyFreeQuota,
+        usedQuota: data.usedQuota,
+        perMessageTokens: data.perMessageTokens,
+        timestamp: Date.now()
+      })
+      break
+    }
+    case 'casual_remind': {
+      if (!casualRemindShown.value) {
+        casualRemindShown.value = true
+        pushMessage({
+          id: genId(),
+          role: 'assistant',
+          type: 'casual_remind',
+          content:
+            data.message ||
+            '已闲聊多次，建议创建任务让我帮你处理具体业务哦。',
+          timestamp: Date.now()
+        })
+      }
+      break
+    }
+    case 'done': {
+      if (typeof data.tokensCharged === 'number' && data.tokensCharged > 0) {
+        balance.value = Math.max(0, balance.value - data.tokensCharged)
+      }
+      // 流正常结束：若 AI 没有任何内容（既无文本也无工具调用），给出友好提示
+      if (!assistantMsg.content && !hasToolCallPending()) {
+        pushMessage({
+          id: genId(),
+          role: 'system',
+          type: 'text',
+          content: '小梦暂时没有可回复的内容，请稍后重试或换一种问法。',
+          timestamp: Date.now()
+        })
+      }
+      break
+    }
+    case 'error': {
+      const errMsg = data.message || '请求失败'
+      // 把错误信息替换为友好提示（避免在空气泡末尾追加 [出错]）
+      assistantMsg.content = assistantMsg.content
+        ? `${assistantMsg.content}\n\n${errMsg}`
+        : errMsg
+      scrollToBottom()
+      break
+    }
+    case 'message':
+    default: {
+      // 兼容无 event 行的默认事件（旧协议：data.type 分发）
+      if (type === 'delta' || type === 'content') {
+        assistantMsg.content += data.content || ''
+        scrollToBottom()
+      } else if (type === 'done') {
+        if (typeof data.tokensCharged === 'number' && data.tokensCharged > 0) {
+          balance.value = Math.max(0, balance.value - data.tokensCharged)
+        }
+      } else if (type === 'error') {
+        const errMsg = data.message || '请求失败'
+        assistantMsg.content = assistantMsg.content
+          ? `${assistantMsg.content}\n\n${errMsg}`
+          : errMsg
+        scrollToBottom()
+      }
+      break
+    }
+  }
+}
+
+function hasToolCallPending() {
+  return messages.value.some(m => m.type === 'tool_call' && m.status === 'pending')
+}
+
+// 将底层错误消息转换为用户友好的中文提示
+// status 为 HTTP 状态码（0 表示网络层错误，无响应）
+function friendlyErrorMessage(rawMsg, status) {
+  const msg = String(rawMsg || '')
+  // 优先按状态码判定，避免正则误匹配（旧版正则 /auth/i 会把 "authority" 之类也命中）
+  if (status === 401) return '登录已过期，请刷新页面后重新登录。'
+  if (status === 402) return 'Token 余额不足，请充值后继续。'
+  if (status === 503) return 'AI 客服服务暂时不可用，请稍后重试。'
+  if (status === 500 || status === 502 || status === 504) return '服务器暂时异常，请稍后重试。'
+  if (status === 0 || /timeout|超时|aborted|abort/i.test(msg)) return '请求超时或网络异常，小梦暂时无法响应，请稍后重试。'
+  if (/网络|network|fetch/i.test(msg)) return '网络连接异常，请检查网络后重试。'
+  return `小梦暂时无法响应：${msg}`
+}
+
+async function onToolConfirm(msg, accept) {
+  if (!sessionId.value || !msg.toolCallId) return
+  msg.status = accept ? 'accepted' : 'rejected'
+  try {
+    await confirmToolCall(sessionId.value, msg.toolCallId, accept)
+  } catch (_) {
+    msg.status = 'pending'
+  }
+}
+
+async function onNewSession() {
+  contextExceeded.value = null
+  if (sessionId.value) {
+    try {
+      await closeSession(sessionId.value)
+    } catch (_) {}
+  }
+  await initSession()
+}
+
+async function onCompress() {
+  if (!sessionId.value || compressing.value) return
+  compressing.value = true
+  try {
+    const res = await compressContext(sessionId.value)
+    contextExceeded.value = null
+    pushMessage({
+      id: genId(),
+      role: 'assistant',
+      type: 'text',
+      content: res?.summary || '上下文已压缩，可以继续对话。',
+      timestamp: Date.now()
+    })
+    if (res?.sessionId) {
+      sessionId.value = res.sessionId
+    }
+  } catch (_) {
+    // 静默失败，保持当前会话
+  } finally {
+    compressing.value = false
+  }
+}
+
+function onRecharge() {
+  window.dispatchEvent(new CustomEvent('xya-open-payment'))
+}
+
+async function refreshBalance() {
+  // 直接调用 /ai-billing/balance（与个人中心一致），避免 /ai-cs/config 的 try/catch 把异常吞掉返回 0
+  try {
+    const bal = await getAiBillingBalance()
+    const next = Number(bal?.tokenBalance ?? bal?.balance ?? 0)
+    if (Number.isFinite(next)) balance.value = next
+  } catch (e) {
+    console.warn('[AiCsPanel] 刷新 Token 余额失败：', e?.message || e)
+  }
+}
+
+function abortCurrentStream() {
+  if (abortStream) {
+    try {
+      abortStream()
+    } catch (_) {}
+    abortStream = null
+  }
+  streaming.value = false
+}
+
+watch(
+  () => props.visible,
+  async (visible) => {
+    if (visible) {
+      // 首次打开：初始化会话；后续展开（路由切换自动收起后）：保留历史，仅刷新余额
+      if (!sessionId.value) {
+        await initSession()
+      } else {
+        ready.value = true
+        loadingSession.value = false
+        refreshBalance()
+        nextTick(() => {
+          inputRef.value?.focus()
+          scrollToBottom()
+        })
+      }
+    } else {
+      abortCurrentStream()
+    }
+  }
+)
+
+onBeforeUnmount(() => {
+  abortCurrentStream()
+})
+</script>
+
+<style scoped>
+.ai-cs-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 420px;
+  max-width: 100vw;
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border-top-left-radius: 24px;
+  border-bottom-left-radius: 24px;
+  box-shadow: -20px 0 60px rgba(17, 35, 67, 0.18);
+  z-index: 1100;
+  overflow: hidden;
+}
+
+.ai-cs-panel-border {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    rgba(13, 107, 255, 0.45) 0%,
+    rgba(49, 134, 255, 0.15) 50%,
+    rgba(13, 107, 255, 0.45) 100%
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+.ai-cs-slide-enter-active,
+.ai-cs-slide-leave-active {
+  transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.32s ease;
+}
+.ai-cs-slide-enter-from,
+.ai-cs-slide-leave-to {
+  transform: translateX(110%);
+  opacity: 0;
+}
+
+.ai-cs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  background: linear-gradient(135deg, rgba(237, 245, 255, 0.7), rgba(220, 234, 255, 0.5));
+  border-bottom: 1px solid rgba(220, 232, 248, 0.7);
+  position: relative;
+  z-index: 2;
+}
+
+.ai-cs-header-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ai-cs-avatar-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.ai-cs-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: linear-gradient(135deg, #cfe1ff, #0d6bff);
+  border: 2px solid #fff;
+  box-shadow: 0 6px 16px rgba(13, 107, 255, 0.28);
+}
+
+.ai-cs-status-dot {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #c4cad5;
+  border: 2px solid #fff;
+  transition: background 0.2s;
+}
+.ai-cs-status-dot.online {
+  background: #2ebd8f;
+}
+.ai-cs-status-dot.busy {
+  background: #f7a94b;
+}
+
+.ai-cs-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ai-cs-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #16213e;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.ai-cs-balance {
+  font-size: 12px;
+  color: #64748b;
+  white-space: nowrap;
+}
+.ai-cs-balance em {
+  font-style: normal;
+  font-weight: 600;
+  color: #0d6bff;
+}
+
+.ai-cs-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-cs-icon-btn {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.6);
+  color: #35435d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, transform 0.15s;
+}
+.ai-cs-icon-btn:hover:not(:disabled) {
+  background: #fff;
+  color: #0d6bff;
+  transform: translateY(-1px);
+}
+.ai-cs-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ai-cs-close {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.6);
+  color: #35435d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+.ai-cs-close:hover {
+  background: #fee;
+  color: #ef4444;
+}
+
+.ai-cs-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 18px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  scroll-behavior: smooth;
+}
+.ai-cs-messages::-webkit-scrollbar {
+  width: 6px;
+}
+.ai-cs-messages::-webkit-scrollbar-thumb {
+  background: rgba(13, 107, 255, 0.18);
+  border-radius: 999px;
+}
+.ai-cs-messages::-webkit-scrollbar-thumb:hover {
+  background: rgba(13, 107, 255, 0.32);
+}
+
+.ai-cs-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #64748b;
+  font-size: 13px;
+  padding: 24px 4px;
+}
+
+.ai-cs-loading-spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid rgba(13, 107, 255, 0.2);
+  border-top-color: #0d6bff;
+  animation: ai-cs-spin 0.8s linear infinite;
+}
+@keyframes ai-cs-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ai-cs-msg-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  max-width: 100%;
+}
+.ai-cs-msg-row.msg-user {
+  flex-direction: row-reverse;
+}
+.ai-cs-msg-row.msg-system .ai-cs-msg-body {
+  max-width: 100%;
+}
+
+.ai-cs-msg-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #cfe1ff, #0d6bff);
+  border: 1.5px solid #fff;
+  box-shadow: 0 4px 10px rgba(13, 107, 255, 0.22);
+}
+
+.ai-cs-msg-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 78%;
+}
+.msg-user .ai-cs-msg-body {
+  align-items: flex-end;
+}
+
+.ai-cs-msg-bubble {
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 14px;
+  line-height: 1.65;
+  word-break: break-word;
+  white-space: normal;
+}
+.ai-cs-msg-bubble.assistant {
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(220, 232, 248, 0.9);
+  border-top-left-radius: 6px;
+  color: #1e293b;
+  box-shadow: 0 4px 14px rgba(17, 35, 67, 0.06);
+}
+.ai-cs-msg-bubble.user {
+  background: linear-gradient(135deg, #0865f4, #147dff);
+  color: #fff;
+  border-top-right-radius: 6px;
+  box-shadow: 0 6px 16px rgba(8, 101, 244, 0.25);
+}
+.ai-cs-msg-bubble.system {
+  background: rgba(255, 240, 240, 0.85);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  color: #b91c1c;
+  font-size: 13px;
+  border-radius: 10px;
+}
+
+.ai-cs-msg-text {
+  display: inline;
+}
+
+.ai-cs-msg-time {
+  font-size: 11px;
+  color: #94a3b8;
+  margin: 0 4px;
+}
+
+.ai-cs-casual {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: linear-gradient(90deg, rgba(255, 247, 230, 0.95), rgba(255, 241, 219, 0.9));
+  border: 1px solid rgba(255, 213, 145, 0.7);
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: #874d00;
+  line-height: 1.5;
+}
+.ai-cs-casual-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #f7a94b;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  font-style: italic;
+  flex-shrink: 0;
+}
+
+.ai-cs-insufficient {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  background: rgba(255, 240, 240, 0.85);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 14px;
+  max-width: 88%;
+}
+.ai-cs-insufficient p {
+  margin: 0;
+  font-size: 13px;
+  color: #b91c1c;
+  line-height: 1.55;
+}
+.ai-cs-recharge-btn {
+  align-self: flex-start;
+  border: 0;
+  padding: 7px 16px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #ff7a59, #ff5a36);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 14px rgba(255, 90, 54, 0.3);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.ai-cs-recharge-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(255, 90, 54, 0.4);
+}
+
+/* 每日免费额度提示卡：warning=橙色（即将用完）、exceeded=蓝色（已用完，开始扣费） */
+.ai-cs-quota {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  max-width: 90%;
+  background: linear-gradient(135deg, rgba(239, 246, 255, 0.95), rgba(219, 234, 254, 0.85));
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-left: 3px solid #3b82f6;
+}
+.ai-cs-quota.quota-warning {
+  background: linear-gradient(135deg, rgba(255, 247, 237, 0.95), rgba(254, 226, 199, 0.85));
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-left: 3px solid #f59e0b;
+}
+.ai-cs-quota-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #1e3a8a;
+  font-size: 12.5px;
+}
+.ai-cs-quota.quota-warning .ai-cs-quota-head {
+  color: #92400e;
+}
+.ai-cs-quota-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #3b82f6;
+  color: #fff;
+  flex-shrink: 0;
+}
+.ai-cs-quota.quota-warning .ai-cs-quota-icon {
+  background: #f59e0b;
+}
+.ai-cs-quota-text {
+  margin: 0;
+  font-size: 12.5px;
+  color: #334155;
+  line-height: 1.55;
+}
+.ai-cs-quota-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ai-cs-quota-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: #475569;
+  background: rgba(241, 245, 249, 0.9);
+  border: 1px solid rgba(203, 213, 225, 0.6);
+}
+.ai-cs-quota-tag.accent {
+  color: #1d4ed8;
+  background: rgba(219, 234, 254, 0.9);
+  border-color: rgba(96, 165, 250, 0.5);
+}
+.ai-cs-quota-btn {
+  align-self: flex-start;
+  border: 0;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.ai-cs-quota-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.4);
+}
+
+.ai-cs-tool-card {
+  padding: 12px 14px;
+  background: rgba(248, 251, 255, 0.92);
+  border: 1px solid rgba(13, 107, 255, 0.35);
+  border-left: 3px solid #0d6bff;
+  border-radius: 12px;
+  max-width: 92%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 6px 18px rgba(13, 107, 255, 0.1);
+}
+.ai-cs-tool-card.tool-rejected {
+  border-color: rgba(148, 163, 184, 0.4);
+  border-left-color: #94a3b8;
+  background: rgba(248, 250, 252, 0.9);
+}
+.ai-cs-tool-card.tool-accepted {
+  border-color: rgba(46, 189, 143, 0.4);
+  border-left-color: #2ebd8f;
+}
+
+.ai-cs-tool-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ai-cs-tool-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(13, 107, 255, 0.12);
+  color: #0d6bff;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.ai-cs-tool-head strong {
+  font-size: 13.5px;
+  color: #1e293b;
+}
+
+.ai-cs-tool-desc {
+  margin: 0;
+  font-size: 12.5px;
+  color: #475569;
+  line-height: 1.55;
+}
+
+.ai-cs-tool-args {
+  margin: 0;
+  padding: 8px 10px;
+  background: rgba(13, 107, 255, 0.06);
+  border: 1px solid rgba(13, 107, 255, 0.12);
+  border-radius: 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #334155;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+}
+
+.ai-cs-tool-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+.ai-cs-tool-btn {
+  flex: 0 0 auto;
+  border: 0;
+  padding: 6px 16px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.ai-cs-tool-btn.accept {
+  background: linear-gradient(135deg, #0865f4, #147dff);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(8, 101, 244, 0.28);
+}
+.ai-cs-tool-btn.reject {
+  background: rgba(148, 163, 184, 0.18);
+  color: #475569;
+}
+.ai-cs-tool-btn:hover {
+  transform: translateY(-1px);
+}
+
+.ai-cs-tool-status {
+  font-size: 12px;
+  color: #2ebd8f;
+  font-weight: 500;
+}
+.ai-cs-tool-status.rejected {
+  color: #94a3b8;
+}
+
+.ai-cs-tool-result {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.3);
+}
+.ai-cs-tool-result-label {
+  display: block;
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+.ai-cs-tool-result pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: rgba(13, 107, 255, 0.05);
+  border-radius: 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #334155;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+}
+
+.ai-cs-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(220, 232, 248, 0.9);
+  border-radius: 16px;
+  border-top-left-radius: 6px;
+  box-shadow: 0 4px 14px rgba(17, 35, 67, 0.06);
+}
+.ai-cs-typing span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #0d6bff;
+  opacity: 0.5;
+  animation: ai-cs-bounce 1.2s infinite ease-in-out;
+}
+.ai-cs-typing span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.ai-cs-typing span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes ai-cs-bounce {
+  0%, 80%, 100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.ai-cs-input-area {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 14px 18px 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.92) 30%);
+  border-top: 1px solid rgba(220, 232, 248, 0.7);
+  position: relative;
+  z-index: 2;
+}
+
+.ai-cs-input {
+  flex: 1;
+  resize: none;
+  max-height: 120px;
+  padding: 10px 14px;
+  border: 1px solid rgba(220, 232, 248, 0.9);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.85);
+  font-size: 14px;
+  line-height: 1.5;
+  color: #1e293b;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  font-family: inherit;
+}
+.ai-cs-input:focus {
+  border-color: #0865f4;
+  box-shadow: 0 0 0 3px rgba(8, 101, 244, 0.12);
+}
+.ai-cs-input::placeholder {
+  color: #94a3b8;
+}
+.ai-cs-input:disabled {
+  background: rgba(248, 250, 252, 0.7);
+  cursor: not-allowed;
+}
+
+.ai-cs-send {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px;
+  border: 0;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #0865f4, #147dff);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(8, 101, 244, 0.28);
+  transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
+}
+.ai-cs-send:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(8, 101, 244, 0.36);
+}
+.ai-cs-send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.ai-cs-modal-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 10;
+}
+
+.ai-cs-modal {
+  width: 100%;
+  max-width: 320px;
+  padding: 24px 22px 22px;
+  background: #fff;
+  border-radius: 18px;
+  text-align: center;
+  box-shadow: 0 24px 60px rgba(17, 35, 67, 0.3);
+  animation: ai-cs-modal-pop 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes ai-cs-modal-pop {
+  from {
+    transform: scale(0.92);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.ai-cs-modal-icon {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #fff1db, #ffd591);
+  color: #b45309;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  font-weight: 800;
+  font-style: italic;
+}
+
+.ai-cs-modal h3 {
+  margin: 0 0 10px;
+  font-size: 17px;
+  font-weight: 700;
+  color: #16213e;
+}
+.ai-cs-modal p {
+  margin: 0 0 18px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: #64748b;
+}
+
+.ai-cs-modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ai-cs-modal-btn {
+  padding: 10px 18px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 12px;
+  background: #fff;
+  color: #475569;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, transform 0.15s;
+}
+.ai-cs-modal-btn:hover:not(:disabled) {
+  background: #f8fafc;
+  transform: translateY(-1px);
+}
+.ai-cs-modal-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.ai-cs-modal-btn.primary {
+  background: linear-gradient(135deg, #0865f4, #147dff);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(8, 101, 244, 0.28);
+}
+.ai-cs-modal-btn.primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #0759db, #126fe8);
+}
+
+.ai-cs-fade-enter-active,
+.ai-cs-fade-leave-active {
+  transition: opacity 0.22s ease;
+}
+.ai-cs-fade-enter-from,
+.ai-cs-fade-leave-to {
+  opacity: 0;
+}
+
+@media (max-width: 480px) {
+  .ai-cs-panel {
+    width: 100vw;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+  .ai-cs-msg-body {
+    max-width: 82%;
+  }
+  .ai-cs-header {
+    padding: 14px 16px;
+  }
+  .ai-cs-input-area {
+    padding: 12px 14px 16px;
+  }
+}
+</style>

@@ -44,26 +44,34 @@ class AdminModuleServiceTruthfulStateTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-            "licenses", "notify-channels", "notify-logs", "risk-events", "runtime",
-            "backups", "versions", "rag", "alerts", "files"
+            "licenses", "notify-channels", "notify-logs", "rag"
     })
     void modulesWithoutRealBackendAreExplicitlyUnavailable(String moduleKey) {
         assertUnavailable(() -> service.page(moduleKey, 1, 10, null, null));
         verifyNoInteractions(jdbcTemplate);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "risk-events", "runtime", "backups", "versions", "alerts", "files"
+    })
+    void removedModulesAreRejectedAsUnknown(String moduleKey) {
+        assertBadRequest(() -> service.page(moduleKey, 1, 10, null, null));
+        verifyNoInteractions(jdbcTemplate);
+    }
+
     @Test
     void unavailableModuleIsRejectedAcrossEveryGenericOperation() {
         assertAll(
-                () -> assertUnavailable(() -> service.meta("backups")),
-                () -> assertUnavailable(() -> service.detail("backups", 1)),
-                () -> assertUnavailable(() -> service.save("backups", Map.of("name", "fake"))),
-                () -> assertUnavailable(() -> service.updateStatus("backups", 1, "enabled")),
-                () -> assertUnavailable(() -> service.batchUpdateStatus("backups", List.of(1L), "enabled")),
-                () -> assertUnavailable(() -> service.delete("backups", 1)),
-                () -> assertUnavailable(() -> service.batchDelete("backups", List.of(1L))),
-                () -> assertUnavailable(() -> service.stats("backups")),
-                () -> assertUnavailable(() -> service.exportCsv("backups", null, null))
+                () -> assertUnavailable(() -> service.meta("licenses")),
+                () -> assertUnavailable(() -> service.detail("licenses", 1)),
+                () -> assertUnavailable(() -> service.save("licenses", Map.of("name", "fake"))),
+                () -> assertUnavailable(() -> service.updateStatus("licenses", 1, "enabled")),
+                () -> assertUnavailable(() -> service.batchUpdateStatus("licenses", List.of(1L), "enabled")),
+                () -> assertUnavailable(() -> service.delete("licenses", 1)),
+                () -> assertUnavailable(() -> service.batchDelete("licenses", List.of(1L))),
+                () -> assertUnavailable(() -> service.stats("licenses")),
+                () -> assertUnavailable(() -> service.exportCsv("licenses", null, null))
         );
         verifyNoInteractions(jdbcTemplate);
     }

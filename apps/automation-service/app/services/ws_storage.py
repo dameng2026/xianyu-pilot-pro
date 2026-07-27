@@ -1049,8 +1049,45 @@ def _merge_context_source_messages(
     live_messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     deduped: dict[str, dict[str, Any]] = {}
-    for item in list(base_messages) + list(live_messages):
+    base_outgoing_content_keys: set[tuple[str, str, str, str]] = set()
+
+    def outgoing_content_key(item: dict[str, Any]) -> tuple[str, str, str, str] | None:
+        if _coerce_message_direction(item.get("direction")) != "OUT":
+            return None
+        sender = _normalize_party_id(
+            item.get("sender_user_id")
+            or item.get("senderUserId")
+            or item.get("from_user_id")
+            or item.get("fromUserId")
+        )
+        receiver = _normalize_party_id(
+            item.get("receiver_user_id")
+            or item.get("receiverUserId")
+            or item.get("to_user_id")
+            or item.get("toUserId")
+        )
+        sid = _normalize_sid_value(item.get("sid") or item.get("s_id") or item.get("sId"))
+        content = str(
+            item.get("msg_content")
+            or item.get("msgContent")
+            or item.get("content")
+            or ""
+        ).strip()
+        return (sid, sender, receiver, content) if content else None
+
+    for item in base_messages:
         if not _is_displayable_message(item):
+            continue
+        key = outgoing_content_key(item)
+        if key:
+            base_outgoing_content_keys.add(key)
+        deduped[_context_message_identity(item)] = item
+
+    for item in live_messages:
+        if not _is_displayable_message(item):
+            continue
+        key = outgoing_content_key(item)
+        if key and key in base_outgoing_content_keys:
             continue
         deduped[_context_message_identity(item)] = item
     return sorted(

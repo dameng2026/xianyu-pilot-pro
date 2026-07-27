@@ -77,3 +77,24 @@ export function getBillingSummary() {
   return request.get<BillingSummary>({ url: '/ai-billing/summary' })
     .then(value => requireRecordPayload<Record<string, any>>(value, '计费汇总') as BillingSummary)
 }
+
+export interface TierPriceConfig {
+  moduleKey?: string
+  normal: number
+  vip: number
+  svp: number
+}
+
+export function getTierConfig(moduleKey?: string) {
+  return request.get<TierPriceConfig>({
+    url: '/ai-billing/tier-config',
+    params: moduleKey ? { moduleKey } : {}
+  })
+}
+
+export function saveTierConfig(data: TierPriceConfig) {
+  return request.put<TierPriceConfig>({
+    url: '/ai-billing/tier-config',
+    data
+  })
+}

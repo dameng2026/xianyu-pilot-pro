@@ -294,6 +294,23 @@ public class XianyuGoodsService {
         return deleteService.executeRemoteDelete(tenantId, userId, id, ipAddress);
     }
 
+    /**
+     * 更新售整自动上架开关。
+     * 仅修改 auto_relist_enabled 字段，不影响其他字段。
+     * 前端通过此接口开启/关闭"售整自动上架"功能。
+     */
+    @Transactional
+    public void updateAutoRelistEnabled(Long id, Boolean enabled, Long tenantId) {
+        if (enabled == null) {
+            throw new BizException(400, "enabled 字段必填");
+        }
+        int rows = goodsMapper.updateAutoRelistEnabled(id, enabled ? 1 : 0, tenantId);
+        if (rows == 0) {
+            throw new BizException(404, "商品不存在或无权限");
+        }
+        log.info("更新售整自动上架开关: id={}, enabled={}, tenantId={}", id, enabled, tenantId);
+    }
+
 
     private void validateGoodsFields(XianyuGoodsDTO dto) {
         validateMoney(dto.getPrice(), "价格");
@@ -350,6 +367,8 @@ public class XianyuGoodsService {
         vo.setExposureCount(g.getExposureCount());
         vo.setViewCount(g.getViewCount());
         vo.setWantCount(g.getWantCount());
+        vo.setExposureCount30d(g.getExposureCount30d());
+        vo.setViewCount30d(g.getViewCount30d());
         vo.setDetailUrl(g.getDetailUrl());
         vo.setDetailInfo(g.getDetailInfo());
         vo.setDescription(g.getDescription());
@@ -357,7 +376,17 @@ public class XianyuGoodsService {
         vo.setSortOrder(g.getSortOrder());
         vo.setStatus(dbToFeStatus(g.getStatus()));
         vo.setCreatedTime(g.getCreatedTime());
+        vo.setGmtCreate(g.getGmtCreate());
         vo.setUpdatedTime(g.getUpdatedTime());
+        // 售整自动上架相关字段透传
+        vo.setAutoRelistEnabled(g.getAutoRelistEnabled());
+        vo.setHasSnapshot(g.getHasSnapshot());
+        vo.setOriginalQuantity(g.getOriginalQuantity());
+        vo.setNextRelistGoodsId(g.getNextRelistGoodsId());
+        // 鱼小铺商品编辑能力透传（V1.21）
+        // 默认值兜底：旧数据未写入时按可编辑处理，前端再通过账号类型判断
+        vo.setCanEdit(g.getCanEdit() == null ? 1 : g.getCanEdit());
+        vo.setEditNote(g.getEditNote() == null ? "" : g.getEditNote());
         return vo;
     }
 }

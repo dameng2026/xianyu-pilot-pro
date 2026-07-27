@@ -110,8 +110,7 @@ public class GlobalExceptionHandler {
         if (traceId == null || traceId.isBlank()) {
             traceId = java.util.UUID.randomUUID().toString().replace("-", "");
         }
-        log.error("Database operation unavailable, traceId={}, errorType={}",
-                traceId, e.getClass().getSimpleName());
+        log.error("Database operation unavailable, traceId={}, errorType={}", traceId, e.getClass().getSimpleName(), e);
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(new Result<>(503, "数据服务暂时不可用，请稍后重试，错误编号：" + traceId, null));
     }

@@ -27,6 +27,8 @@ from ....services.automation_runtime import (
     update_ws_heartbeat,
     list_workflow_timeline,
     list_workflow_state_variables,
+    claim_scheduled_task_lease,
+    _run_scheduled_task_in_background,
 )
 from ....services.upload_governance import (
     ALLOWED_PUBLIC_UPLOAD_PURPOSES,
@@ -399,20 +401,44 @@ async def internal_run_task(
     tenant_id = _required_tenant_id(payload.get("tenantId"))
     if tenant_id is None:
         return ResultObject.validate_failed("tenantId 不能为空且必须为正整数")
-    result = await execute_scheduled_task(db, task_id, tenant_id, manual=True)
-    if not result.get("ok"):
-        error_code = result.get("error") or result.get("errorCode")
+
+    # 同步执行 lease claim，立即判断任务是否可执行（毫秒级完成）
+    # 避免直接 await execute_scheduled_task 同步等待长耗时任务（如 auto_redelivery
+    # 多账号同步订单+批量发货）导致 Java 端 HTTP 超时和前端 axios 超时。
+    task, lease_token, claim_error = await claim_scheduled_task_lease(
+        db, task_id, tenant_id, manual=True
+    )
+
+    if task is None:
+        # claim 失败，返回对应错误
+        error_code = claim_error.get("error") or claim_error.get("errorCode")
         if error_code in {"TASK_ALREADY_RUNNING", "TASK_LEASE_LOST"}:
             return ResultObject.failed(
                 "定时任务正在执行或执行归属已变更，请稍后刷新状态",
                 409,
             )
-        if error_code == "UNSUPPORTED_TASK_TYPE":
-            return ResultObject.failed("该定时任务类型暂不支持执行", 422)
-        if error_code == "EVENT_DRIVEN_TASK":
-            return ResultObject.failed("该任务由事件触发，不能手动定时执行", 422)
-        return ResultObject.failed("定时任务执行失败，请稍后重试", 500)
-    return ResultObject.success(result)
+        if error_code == "TASK_SCOPE_INVALID":
+            return ResultObject.validate_failed(claim_error.get("message", "任务参数无效"))
+        # 500 兜底：claim_error.message 可能包含运行时异常详情（含 provider 响应体、
+        # API key、token 等敏感信息），不得直接回传给前端。仅记录日志，返回通用提示。
+        logger.warning(
+            "定时任务 claim 失败 taskId=%d tenantId=%d errorCode=%s",
+            task_id, tenant_id, error_code,
+        )
+        return ResultObject.failed("定时任务暂时无法执行，请稍后重试", 500)
+
+    # claim 成功，启动后台异步执行剩余部分（执行 + lease 释放 + 通知）
+    # 使用独立 db session，不依赖请求 scoped session
+    _asyncio.create_task(_run_scheduled_task_in_background(task, tenant_id, lease_token))
+
+    # 立即返回响应，前端通过任务列表轮询 lastStatus 查看最终执行结果
+    return ResultObject.success({
+        "ok": True,
+        "running": True,
+        "message": "任务已开始执行，请稍后在任务列表查看运行结果",
+        "taskId": task_id,
+        "taskType": str(task.get("task_type") or "").lower(),
+    })
 
 
 @router.post("/orders/sync-sold")

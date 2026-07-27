@@ -310,6 +310,86 @@
           "sha256": "cee54abb7e49dca5f63bf42f048e93e6464a8e2b2fa9e9adfde99f3d0baf7fe1",
           "risk": "expand",
           "rollback": "restore"
+        },
+        {
+          "version": "1.38",
+          "description": "add auto relist fields for goods",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.38__add_auto_relist_fields.sql",
+          "sha256": "75eaaf6db7a44fa6f02f3ce3c6c8547785e65b320e0861a365bf161115bf95a7",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.39",
+          "description": "add AI customer service (XiaoMeng) tables: session, message, billing config, knowledge base category/item, daily stats",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.39__add_ai_cs_tables.sql",
+          "sha256": "cd3f404926e84965f4d4bbb287d57da5abd9a2bba4f80a63b3cd59136a4d2e56",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.40",
+          "description": "add rate management tables: xianyu_rate, xianyu_rate_sync_task, xianyu_rate_account_state",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.40__add_rate_management_tables.sql",
+          "sha256": "36769a1c010523c0a9ad73a461ccd430a62386ea1e10287984f731b886b4b3bb",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.41",
+          "description": "add refund management tables: xianyu_refund, xianyu_refund_sync_task, xianyu_refund_account_state",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.41__add_refund_management_tables.sql",
+          "sha256": "06f26b434fd35e200c37e6327b9747e4fdc75c9bd14c9dc75f800f17f2e0e701",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.42",
+          "description": "create ai_model_tier_price table for tiered pricing by user vip level (normal/vip/svp)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.42__create_ai_model_tier_price.sql",
+          "sha256": "31a6a073607dd7cdf51604f75f4d250e8dd74170e9065428bb4cf3f9553ffea2",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.43",
+          "description": "add ai cs learned kb tables (5 tables: category, learned_kb, user_kb, binding, learning_log)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.43__add_ai_cs_learned_kb.sql",
+          "sha256": "dc400df6b30405c818ce93f981a8bcc37f9b559d1cb31ceae8208425cab782e6",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.44",
+          "description": "add member promotion activity tables (3 tables: activity, plan, quota_log) and extend payment_order with activity snapshot columns",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.44__add_member_promotion_activity.sql",
+          "sha256": "c88b6634dcd7e9960e2ae52673d8065ce23caeb0707f61eee004e45e93e4eb74",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.45",
+          "description": "expand ai_cs_knowledge base with 35 detailed entries across 12 categories (system_usage, xianyu_account, product_publish, auto_reply, auto_delivery, card_key, workflow, scheduled_task, ai_customer_service, membership, troubleshoot, faq)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.45__expand_ai_cs_knowledge_base.sql",
+          "sha256": "44a854163a668528bf51a9d0d396291a4b17ccf9fa9f684d4279dcc7b9da601e",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.46",
+          "description": "deepen ai_cs_knowledge base with comprehensive entries covering all frontend functions, API endpoints, parameter limits, and standard response approaches (17 categories)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.46__deepen_ai_cs_knowledge_base.sql",
+          "sha256": "dcc852ce4e4c35f800dcd4352944ab7e33aec23da70168d94c5aac3bff622e81",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.47",
+          "description": "predefined 15 business scenario categories for ai_cs_kb_category with code/keywords/is_system fields and conversation_turn_count on learned_kb; migrate legacy LLM-generated categories to predefined ones",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.47__predefined_kb_categories.sql",
+          "sha256": "fae40cde694fa50be57a6be5a37690afe4afb5f4adfb30e8e168a2abd6a069c1",
+          "risk": "expand",
+          "rollback": "restore"
         }
       ],
       "quarantined": [
@@ -463,6 +543,54 @@
           "description": "add api captcha solve record table for external slider solve api",
           "path": "apps/automation-service/migrations/V1.17__add_api_captcha_solve_record.sql",
           "sha256": "edf41c4eb8adf5091b5117bb53011c72e64c3f1f0e5f3f40eb59e9f63a143b44",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.18",
+          "description": "add fish shop goods metrics columns (gmt_create, exposure_count_30d, view_count_30d) to xianyu_goods",
+          "path": "apps/automation-service/migrations/V1.18__add_fish_shop_goods_metrics.sql",
+          "sha256": "f47db5e4e970f13d4599d1d324fac4674cfb4cbc65ffb2793950172b4f9dc229",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.19",
+          "description": "add fish shop multi-spec SKU/property/value/edit-snapshot tables",
+          "path": "apps/automation-service/migrations/V1.19__add_fish_shop_sku_tables.sql",
+          "sha256": "7e1e133cb0177f0ce3c3a2390fb75cd104adafb2979fe4f3c6985ea3427e7850",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.20",
+          "description": "extend snapshot table for normal account",
+          "path": "apps/automation-service/migrations/V1.20__extend_snapshot_table.sql",
+          "sha256": "c46f49623526adae7ea9e6d5405b2bb72790ce65510a60f93c718efca5aa2caf",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.21",
+          "description": "add fish shop goods edit capability columns (can_edit, edit_note) to xianyu_goods",
+          "path": "apps/automation-service/migrations/V1.21__add_fish_shop_goods_edit_capability.sql",
+          "sha256": "9db650227e8acc44a073157e8ce7318f887ccd807136d6475582a90bd196c9cd",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.22",
+          "description": "add refund management tables: xianyu_refund, xianyu_refund_sync_task, xianyu_refund_account_state",
+          "path": "apps/automation-service/migrations/V1.22__add_refund_management_tables.sql",
+          "sha256": "ee3d7c3840f003ab71be9ebe6759751d0081075ef1d4cd72523c8fadccdc83a4",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.23",
+          "description": "add rate management tables: xianyu_rate, xianyu_rate_sync_task, xianyu_rate_account_state",
+          "path": "apps/automation-service/migrations/V1.23__add_rate_management_tables.sql",
+          "sha256": "44555d5227fcd5049c98e26a340bb3a403637b057f1f9fa12428719644ea56b9",
           "risk": "expand",
           "rollback": "restore"
         }

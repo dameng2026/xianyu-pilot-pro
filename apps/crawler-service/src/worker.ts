@@ -51,11 +51,13 @@ async function start() {
 
     const pool = getPool();
     const executionToken = crypto.randomUUID().replace(/-/g, '');
+    // claim 必须包含 'retrying'：markCrawlJobRetrying 将失败任务置为 'retrying' 等待 BullMQ 自动重试，
+    // 若不在此处放行，BullMQ 重试时 claim 会因 status='retrying' 不匹配而失败，导致任务卡死在 'retrying' 状态。
     const claimed = await pool.query(
       `UPDATE goofish_crawl_jobs
        SET status = 'running', started_at = NOW(), execution_token = $3
        WHERE tenant_id = $1 AND bullmq_job_id = $2
-         AND status IN ('pending', 'running')
+         AND status IN ('pending', 'retrying', 'running')
        RETURNING bullmq_job_id, store_user_id`,
       [tenantId, jobId, executionToken]
     );
@@ -79,8 +81,11 @@ async function start() {
       const maxAttempts = Number.isSafeInteger(configuredAttempts)
         ? Math.max(1, Math.min(configuredAttempts, 10)) : 1;
       const currentAttempt = Math.max(1, Number(job.attemptsMade || 0) + 1);
+      // 同时记录 errorType 和原始 message：toPublicCrawlerError 会将敏感信息脱敏成"采集任务执行失败"，
+      // 但运维侧需要看到真实失败原因（如 Playwright 启动失败、页面阻断关键词等）才能定位问题。
+      const rawMessage = err instanceof Error ? err.message : String(err || '');
       console.error(
-        `[Worker] 任务失败: tenantId=${tenantId}, jobId=${jobId}, attempt=${currentAttempt}/${maxAttempts}, errorType=${safeErrorType(err)}`
+        `[Worker] 任务失败: tenantId=${tenantId}, jobId=${jobId}, attempt=${currentAttempt}/${maxAttempts}, errorType=${safeErrorType(err)}, message=${rawMessage.slice(0, 500)}`
       );
       const publicError = toPublicCrawlerError(err, '采集任务执行失败');
       try {

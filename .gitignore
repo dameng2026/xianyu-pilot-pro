@@ -128,6 +128,38 @@ scripts/_test_db_conn.py
 scripts/slider_test_report.json
 scripts/test_slider_success_rate.py
 
+# Database backups (never commit)
+db/backups/
+
+# AI session temporary debug scripts (today's session)
+_ssh_diag.py
+apps/automation-service/add_can_edit_column.py
+apps/automation-service/check_sync_status.py
+apps/automation-service/e2e_sync_test.py
+apps/automation-service/run_noreload.py
+apps/automation-service/test_kb.py
+apps/automation-service/test_sync_speed.py
+apps/automation-service/test_sync_timing.py
+apps/automation-service/verify_sync_data.py
+apps/core-api/test-chat.json
+apps/core-api/test-login.json
+scripts/_admin_login.json
+scripts/_batch_approve.json
+scripts/_bind_kbs.json
+scripts/_create_user_kb.json
+scripts/_temp_set_vector_indexed.py
+scripts/_token_only.txt
+scripts/_trigger_body.json
+scripts/_user_login.json
+scripts/check_chat_messages.py
+scripts/check_embedding_config.py
+scripts/check_kb_stats.py
+scripts/check_migrations.py
+scripts/check_vector_status.py
+scripts/exec_v1_13_sql.py
+scripts/exec_v1_43_sql.py
+scripts/reset_kb_test_data.py
+
 .tmp-stash/
 
 # AI 临时调试与本地脚本（不应进入版本控制）

@@ -43,9 +43,9 @@ logger = logging.getLogger(__name__)
 # 配置常量
 # ============================================================
 
-# 并发 worker 数量：匹配 crawler-service 单租户并发上限（2）
-# 不超过 crawler-service 全局并发（4），避免 503 拒绝
-SOLVE_WORKER_CONCURRENCY = 2
+# 并发 worker 数量：匹配 crawler-service 单租户并发上限（4）
+# 不超过 crawler-service 全局并发（8），避免 503 拒绝
+SOLVE_WORKER_CONCURRENCY = 4
 
 # 同账号去重冷却时间（秒）：60 秒内同账号只入队一次（对齐产品设计"每分钟可主动求解一次"）
 SOLVE_DEDUP_COOLDOWN_SEC = 60

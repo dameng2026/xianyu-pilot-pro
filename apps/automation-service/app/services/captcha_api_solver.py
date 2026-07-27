@@ -78,6 +78,9 @@ async def solve_for_external(
     """
     start_time = time.time()
 
+    # 先创建记录（queued），保证预检失败/超时/异常都能持久化
+    await create_api_record(tenant_id, api_key_prefix, request_id, client_ip)
+
     # 预检验：cookie 非空
     if not cookie or not cookie.strip():
         await update_api_record(
@@ -90,9 +93,6 @@ async def solve_for_external(
             "attempts": 0, "durationMs": int((time.time() - start_time) * 1000),
             "cookies": None, "error": "cookie is empty",
         }
-
-    # 创建记录
-    await create_api_record(tenant_id, api_key_prefix, request_id, client_ip)
 
     # 标记处理中
     await update_api_record(request_id, status="retrying", started=True)
@@ -120,6 +120,19 @@ async def solve_for_external(
         async with httpx.AsyncClient(timeout=180.0) as client:
             resp = await client.post(endpoint, json=payload, headers=headers)
             data = resp.json()
+    except httpx.TimeoutException as e:
+        # 超时单独归类，开源版据此显示"超时记录"
+        error_msg = str(e)
+        duration_ms = int((time.time() - start_time) * 1000)
+        await update_api_record(
+            request_id, status="timeout", result="timeout",
+            failure_reason="timeout", error_message=error_msg,
+            duration_ms=duration_ms,
+        )
+        return {
+            "status": "timeout", "solved": False, "captchaDetected": False,
+            "attempts": 0, "durationMs": duration_ms, "cookies": None, "error": "求解超时，请稍后重试",
+        }
     except Exception as e:
         error_msg = str(e)
         duration_ms = int((time.time() - start_time) * 1000)

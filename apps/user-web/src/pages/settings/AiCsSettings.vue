@@ -110,7 +110,7 @@
             <div class="aics-row">
               <div class="aics-label-row">
                 <label>知识库（优先于默认配置）</label>
-                <span class="aics-kb-count">共 {{ form.knowledgeBases.length }} 份</span>
+                <span class="aics-kb-count">自定义 {{ form.knowledgeBases.length }} 份 · 默认 {{ form.defaultKnowledgeBases.length }} 份</span>
               </div>
               <div class="aics-upload-area">
                 <input ref="kbFileInputRef" type="file" accept=".md,.txt,.pptx,.xlsx,.csv" style="display:none" @change="onKbFileChange" />
@@ -132,14 +132,29 @@
                     <span>{{ (item.content || '').length }} 字</span>
                   </div>
                 </div>
-                <div v-if="!form.knowledgeBases.length" class="aics-empty-tip">还没有添加自定义知识库，当前将使用系统默认知识库。</div>
+                <div v-if="!form.knowledgeBases.length" class="aics-empty-tip">还没有添加自定义知识库，下方系统默认知识库将自动生效。</div>
+              </div>
+
+              <!-- 系统默认知识库（只读展示，让用户能看到 AI 客服将引用哪些预置内容） -->
+              <div v-if="form.defaultKnowledgeBases.length" class="aics-default-section">
+                <div class="aics-default-head">
+                  <span class="aics-default-badge">系统默认</span>
+                  <span class="aics-default-title">默认知识库（只读，自定义知识库优先）</span>
+                </div>
+                <details v-for="(item, index) in form.defaultKnowledgeBases" :key="`dkb-${index}`" class="aics-default-card">
+                  <summary>
+                    <strong>{{ item.name || `默认知识库 ${index + 1}` }}</strong>
+                    <span class="aics-default-meta">{{ (item.content || '').length }} 字</span>
+                  </summary>
+                  <pre class="aics-default-pre">{{ item.content || '（空）' }}</pre>
+                </details>
               </div>
             </div>
 
             <div class="aics-row">
               <div class="aics-label-row">
                 <label>聊天规则（优先于默认规则）</label>
-                <span class="aics-kb-count">共 {{ form.chatRules.length }} 条</span>
+                <span class="aics-kb-count">自定义 {{ form.chatRules.length }} 条 · 默认 {{ form.defaultChatRules.length }} 条</span>
               </div>
               <div class="aics-entry-list">
                 <div v-for="(item, index) in form.chatRules" :key="`rule-${index}`" class="aics-entry-card">
@@ -149,9 +164,24 @@
                   </div>
                   <textarea v-model="item.content" class="aics-input aics-textarea" rows="4" placeholder="例如：只能回答商品本身，不要主动延展售后承诺"></textarea>
                 </div>
-                <div v-if="!form.chatRules.length" class="aics-empty-tip">暂未添加自定义聊天规则，当前将使用默认规则。</div>
+                <div v-if="!form.chatRules.length" class="aics-empty-tip">暂未添加自定义聊天规则，下方系统默认规则将自动生效。</div>
               </div>
               <button type="button" class="aics-upload-btn" @click="addChatRule">新增聊天规则</button>
+
+              <!-- 系统默认聊天规则（只读展示） -->
+              <div v-if="form.defaultChatRules.length" class="aics-default-section">
+                <div class="aics-default-head">
+                  <span class="aics-default-badge">系统默认</span>
+                  <span class="aics-default-title">默认聊天规则（只读，自定义规则优先）</span>
+                </div>
+                <details v-for="(item, index) in form.defaultChatRules" :key="`dcr-${index}`" class="aics-default-card">
+                  <summary>
+                    <strong>{{ item.name || `默认规则 ${index + 1}` }}</strong>
+                    <span class="aics-default-meta">{{ (item.content || '').length }} 字</span>
+                  </summary>
+                  <pre class="aics-default-pre">{{ item.content || '（空）' }}</pre>
+                </details>
+              </div>
             </div>
           </div>
         </CardPanel>
@@ -189,6 +219,39 @@
               <label>每日最大回复数</label>
               <input v-model.number="form.maxDailyReplies" type="number" min="1" max="10000" class="aics-input" />
               <p class="aics-hint">超出后自动转人工，避免 AI 滥用消耗额度</p>
+            </div>
+          </div>
+        </CardPanel>
+
+        <!-- 计费与额度 -->
+        <CardPanel title="计费与每日额度" desc="配置用户每日免费条数与超额扣费规则" style="margin-top:16px">
+          <div class="aics-form">
+            <div class="aics-row">
+              <label>用户每日免费额度（条）</label>
+              <input v-model.number="billing.dailyFreeQuota" type="number" min="0" max="1000" class="aics-input" />
+              <p class="aics-hint">每个用户每天可免费与客服沟通的消息条数；超出后按下方规则扣费。设为 0 表示无免费额度。</p>
+            </div>
+            <div class="aics-row">
+              <label>每条消息扣费 Token 数</label>
+              <input v-model.number="billing.perMessageTokens" type="number" min="1" max="100" class="aics-input" />
+              <p class="aics-hint">超出免费额度后，每条客服回复扣减的 Token 数（默认 3）。</p>
+            </div>
+            <div class="aics-row">
+              <label>上下文消息上限（条）</label>
+              <input v-model.number="billing.maxContextMessages" type="number" min="10" max="200" class="aics-input" />
+              <p class="aics-hint">超出后提示用户新建会话或压缩上下文（压缩不扣费）。</p>
+            </div>
+            <div class="aics-row aics-row-toggle">
+              <div>
+                <strong>启用计费</strong>
+                <p>关闭后所有客服消息均不扣费（仅限调试用途）</p>
+              </div>
+              <button type="button" :class="['aics-switch', { on: billing.enabled }]" @click="billing.enabled = !billing.enabled">
+                <span class="aics-switch-knob" />
+              </button>
+            </div>
+            <div class="aics-billing-actions">
+              <button type="button" class="aics-save-btn" :disabled="billingSaving" @click="saveBilling">{{ billingSaving ? '保存中...' : '保存额度配置' }}</button>
             </div>
           </div>
         </CardPanel>
@@ -262,6 +325,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import CardPanel from '../../components/CardPanel.vue'
 import { getBusinessSettings, saveBusinessSettings, testAiCustomerService, getAiCsDefaults, uploadKnowledgeBase } from '../../api/businessSettings.js'
+import { getCsConfig, saveCsBillingConfig } from '../../api/aiCs.js'
 import { ensureAiTokenBalance } from '../../utils/aiTokenGuard.js'
 import { confirmAction } from '../../utils/confirmAction.js'
 import { createRequestGate } from '../../utils/requestLifecycle.js'
@@ -279,6 +343,15 @@ const loadGate = createRequestGate()
 
 const kbFileInputRef = ref(null)
 const kbUploading = ref(false)
+
+// 计费与额度配置（存储于 ai_cs_billing_config，与上方业务设置独立保存）
+const billing = reactive({
+  dailyFreeQuota: 10,
+  perMessageTokens: 3,
+  maxContextMessages: 50,
+  enabled: true
+})
+const billingSaving = ref(false)
 
 const form = reactive({
   enabled: false,
@@ -380,9 +453,10 @@ async function load() {
   loadError.value = ''
   settingsAvailable.value = false
   try {
-    const [configResult, defaultsResult] = await Promise.allSettled([
+    const [configResult, defaultsResult, billingResult] = await Promise.allSettled([
       getBusinessSettings('ai-customer-service'),
-      getAiCsDefaults()
+      getAiCsDefaults(),
+      getCsConfig()
     ])
     if (!loadGate.isCurrent(requestGeneration)) return
     if (configResult.status === 'rejected') throw configResult.reason
@@ -405,12 +479,48 @@ async function load() {
     form.defaultKnowledgeBases = normalizeEntries(data.defaultKnowledgeBases, '', '默认知识库')
     form.chatRules = normalizeEntries(data.chatRules, '', '规则')
     form.defaultChatRules = normalizeEntries(data.defaultChatRules, '', '默认规则')
+    // 计费配置：getCsConfig 返回 { code, msg, data: { dailyFreeQuota, perMessageTokens, ... } }
+    if (billingResult.status === 'fulfilled') {
+      const bd = billingResult.value?.data
+      if (bd && typeof bd === 'object') {
+        if (Number.isFinite(Number(bd.dailyFreeQuota))) billing.dailyFreeQuota = Number(bd.dailyFreeQuota)
+        if (Number.isFinite(Number(bd.perMessageTokens))) billing.perMessageTokens = Number(bd.perMessageTokens)
+        if (Number.isFinite(Number(bd.maxContextMessages))) billing.maxContextMessages = Number(bd.maxContextMessages)
+        if (typeof bd.enabled === 'boolean') billing.enabled = bd.enabled
+      }
+    }
     settingsAvailable.value = true
   } catch {
     if (!loadGate.isCurrent(requestGeneration)) return
     loadError.value = '请检查网络连接后重试；在配置成功加载前不会应用或覆盖任何设置。'
   } finally {
     if (loadGate.isCurrent(requestGeneration)) loading.value = false
+  }
+}
+
+async function saveBilling() {
+  if (billingSaving.value) return
+  billingSaving.value = true
+  try {
+    const payload = {
+      dailyFreeQuota: Math.max(0, Math.min(1000, Number(billing.dailyFreeQuota) || 0)),
+      perMessageTokens: Math.max(1, Math.min(100, Number(billing.perMessageTokens) || 3)),
+      maxContextMessages: Math.max(10, Math.min(200, Number(billing.maxContextMessages) || 50)),
+      enabled: !!billing.enabled
+    }
+    const res = await saveCsBillingConfig(payload)
+    const bd = res?.data
+    if (bd && typeof bd === 'object') {
+      if (Number.isFinite(Number(bd.dailyFreeQuota))) billing.dailyFreeQuota = Number(bd.dailyFreeQuota)
+      if (Number.isFinite(Number(bd.perMessageTokens))) billing.perMessageTokens = Number(bd.perMessageTokens)
+      if (Number.isFinite(Number(bd.maxContextMessages))) billing.maxContextMessages = Number(bd.maxContextMessages)
+      if (typeof bd.enabled === 'boolean') billing.enabled = bd.enabled
+    }
+    showToast('额度配置已保存')
+  } catch (e) {
+    showToast('额度配置保存失败：' + (e.message || '网络错误'), true)
+  } finally {
+    billingSaving.value = false
   }
 }
 
@@ -628,6 +738,7 @@ onBeforeUnmount(() => {
 .aics-switch.on .aics-switch-knob { left: 22px; }
 
 .aics-actions { display: flex; gap: 12px; margin-top: 16px; }
+.aics-billing-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
 .aics-save-btn, .aics-test-btn {
   padding: 10px 20px; border-radius: 12px; border: 0; cursor: pointer;
   font-size: 13px; font-weight: 700; transition: all .2s;
@@ -677,6 +788,96 @@ onBeforeUnmount(() => {
 .aics-entry-remove { padding: 6px 10px; border-radius: 8px; border: 1px solid #fecaca; background: #fff; color: #ef4444; font-size: 12px; cursor: pointer; }
 .aics-entry-meta { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; color: #99a4b4; }
 .aics-empty-tip { font-size: 12px; color: #94a3b8; padding: 10px 0 2px; }
+
+/* 系统默认知识库 / 默认聊天规则：只读展示，灰底折叠面板 */
+.aics-default-section {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.aics-default-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.aics-default-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #e0e7ff;
+  color: #4338ca;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.aics-default-title {
+  font-size: 12px;
+  color: #475569;
+  font-weight: 600;
+}
+.aics-default-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+.aics-default-card > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 8px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: #1e293b;
+  user-select: none;
+}
+.aics-default-card > summary::-webkit-details-marker { display: none; }
+.aics-default-card > summary::before {
+  content: '▸';
+  display: inline-block;
+  color: #94a3b8;
+  font-size: 11px;
+  transition: transform 0.15s;
+}
+.aics-default-card[open] > summary::before {
+  transform: rotate(90deg);
+}
+.aics-default-card > summary strong {
+  flex: 1;
+  font-weight: 600;
+  font-size: 12.5px;
+  color: #1e293b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aics-default-meta {
+  font-size: 11px;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+.aics-default-pre {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px dashed #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #334155;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow-y: auto;
+  background: #fbfdff;
+}
 
 .aics-label-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
 .aics-restore-btn { padding: 2px 8px; border-radius: 6px; border: 1px solid #e2e8f0; background: #fff; color: #6b7a90; font-size: 11px; cursor: pointer; transition: all .2s; }

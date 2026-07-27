@@ -198,6 +198,78 @@ def _generate_qrcode(session: requests.Session, login_form: dict) -> str:
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
+def _collect_session_cookies(session: requests.Session, resp: requests.Response) -> dict:
+    """合并 session.cookies 与响应头 Set-Cookie，避免 requests 因 domain 不匹配而丢失登录态字段。
+
+    问题背景：requests.Session 的 cookie jar 会根据 Set-Cookie 的 domain/path 属性保存 cookie，
+    若闲鱼在 CONFIRMED 时下发的 Set-Cookie domain 是 .taobao.com/.alibaba.com 等，
+    与请求 URL 的 host（passport.goofish.com）不匹配时，cookie 可能未被 session 收集。
+    导致保存到数据库的 Cookie 缺少 havana_lgc2_77 / _hvn_lgc_ / havana_lgc_exp 等
+    核心登录态字段，进而触发 hasLogin API 返回 SESSION_EXPIRED（虽然 _m_h5_tk 有效，
+    但 hasLogin 严格要求 havana_lgc2_77 等字段）。
+
+    修复方案：与 cookie_token_refresher._call_has_login 保持一致，同时从响应头解析
+    Set-Cookie 合并到 cookies dict，确保不丢失任何字段。
+    """
+    cookies = {k: v for k, v in session.cookies.items()}
+
+    # 从响应头解析所有 Set-Cookie（urllib3 HTTPHeaderDict.getlist 支持多值）
+    set_cookie_values: list[str] = []
+    try:
+        if resp.raw is not None and hasattr(resp.raw, "headers"):
+            set_cookie_values = resp.raw.headers.getlist("Set-Cookie") or []
+    except Exception:
+        set_cookie_values = []
+    if not set_cookie_values:
+        try:
+            set_cookie_values = resp.headers.get_list("set-cookie") or []  # type: ignore[attr-defined]
+        except Exception:
+            set_cookie_values = []
+    if not set_cookie_values:
+        sc = resp.headers.get("set-cookie")
+        if sc:
+            set_cookie_values = [sc]
+
+    new_keys: list[str] = []
+    for sc in set_cookie_values:
+        # 每个 Set-Cookie 形如 "key=value; Path=/; Domain=.taobao.com; ..."
+        first = sc.split(";")[0].strip()
+        if "=" in first:
+            k, v = first.split("=", 1)
+            k = k.strip()
+            v = v.strip()
+            if not k:
+                continue
+            # 只在新值与 session 中已有值不同时记录（避免覆盖 session 中更完整的值）
+            if cookies.get(k) != v:
+                cookies[k] = v
+                new_keys.append(k)
+
+    if new_keys:
+        logger.info(
+            "扫码登录 CONFIRMED: 从 Set-Cookie 头补全 %d 个字段 keys=%s (session_cookies=%d, total=%d)",
+            len(new_keys), new_keys, len({k: v for k, v in session.cookies.items()}), len(cookies),
+        )
+    else:
+        logger.info(
+            "扫码登录 CONFIRMED: Set-Cookie 头未补全新字段 (session_cookies=%d, total=%d)",
+            len({k: v for k, v in session.cookies.items()}), len(cookies),
+        )
+
+    # 关键字段存在性检查（用于诊断登录态完整性）
+    critical_keys = ("havana_lgc2_77", "_hvn_lgc_", "havana_lgc_exp", "unb", "_m_h5_tk")
+    missing_critical = [k for k in critical_keys if k not in cookies]
+    if missing_critical:
+        logger.warning(
+            "扫码登录 CONFIRMED: 仍缺少关键登录态字段 missing=%s (可能导致 hasLogin 返回 SESSION_EXPIRED)",
+            missing_critical,
+        )
+    else:
+        logger.info("扫码登录 CONFIRMED: 关键登录态字段全部就绪")
+
+    return cookies
+
+
 def _poll_status(session: requests.Session, login_form: dict, timeout: int = SESSION_TIMEOUT) -> dict:
     """Step 4: 轮询扫码状态，阻塞直到完成或超时。"""
     start = time.time()
@@ -209,8 +281,8 @@ def _poll_status(session: requests.Session, login_form: dict, timeout: int = SES
         if status == "CONFIRMED":
             if data.get("iframeRedirect"):
                 return {"status": "verification_required", "iframe_redirect_url": data.get("iframeRedirectUrl")}
-            # 收集关键 Cookie
-            cookies = {k: v for k, v in session.cookies.items()}
+            # 收集 Cookie：同时从 session.cookies 和响应头 Set-Cookie 合并，避免丢失登录态字段
+            cookies = _collect_session_cookies(session, resp)
             return {"status": "confirmed", "cookies": cookies}
         elif status == "EXPIRED":
             return {"status": "expired"}
@@ -234,7 +306,8 @@ def _poll_status_once(session: requests.Session, login_form: dict) -> dict:
         if status == "CONFIRMED":
             if data.get("iframeRedirect"):
                 return {"status": "verification_required", "iframe_redirect_url": data.get("iframeRedirectUrl")}
-            cookies = {k: v for k, v in session.cookies.items()}
+            # 收集 Cookie：同时从 session.cookies 和响应头 Set-Cookie 合并，避免丢失登录态字段
+            cookies = _collect_session_cookies(session, resp)
             return {"status": "confirmed", "cookies": cookies}
         return {"status": status.lower()}
     except Exception as e:

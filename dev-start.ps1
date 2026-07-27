@@ -23,9 +23,9 @@ function Test-Cmd($cmd) {
     }
 }
 
-$MinimumNodeVersion = [Version]'24.14.0'
+$MinimumNodeVersion = [Version]'22.0.0'
 $MaximumNodeVersion = [Version]'27.0.0'
-$MinimumNpmVersion = [Version]'11.11.0'
+$MinimumNpmVersion = [Version]'10.9.0'
 $MaximumNpmVersion = [Version]'12.0.0'
 
 function Get-SemanticToolVersion($cmd) {

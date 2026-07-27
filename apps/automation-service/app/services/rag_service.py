@@ -748,3 +748,287 @@ async def get_rag_stats(tenant_id: int) -> dict:
         "goodsBreakdown": goods_count,
         "embeddingModel": DEFAULT_EMBEDDING_MODEL,
     }
+
+
+# ============================================================
+# AI 客服自主学习知识库 - 扩展 API
+# ============================================================
+async def add_to_rag_for_learning(text: str, metadata: dict) -> None:
+    """为学习 KB 添加向量。
+
+    与既有 add_to_rag 区别：
+    - metadata 必须含 kb_id / kb_type='learned'
+    - 单独的 metadata 标记 source='learned_kb'，避免与系统 KB 混淆
+
+    Args:
+        text: 原始文本内容
+        metadata: 元数据，必须含 kb_id；可选 kb_type、question、answer、category、score 等
+    """
+    if not text or not text.strip():
+        logger.warning("rag: add_to_rag_for_learning empty text kb_id=%s", metadata.get("kb_id"))
+        return
+    try:
+        # 1. 切片（复用既有 split_text）
+        chunks = split_text(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
+        if not chunks:
+            logger.warning("rag: add_to_rag_for_learning empty chunks kb_id=%s", metadata.get("kb_id"))
+            return
+
+        # 2. 批量向量化（复用既有 generate_embeddings_batch）
+        embeddings = await generate_embeddings_batch(chunks)
+
+        # 3. 构造文档，附加 source='learned_kb' 标记
+        kb_id = metadata.get("kb_id")
+        base_metadata: dict[str, Any] = {
+            **metadata,
+            "source": "learned_kb",
+            "createTime": datetime.now().isoformat(),
+        }
+        doc_id_prefix = f"learned-{kb_id or uuid.uuid4().hex[:8]}"
+        docs: list[VectorDocument] = []
+        for idx, (chunk, emb) in enumerate(zip(chunks, embeddings)):
+            if not emb:
+                continue
+            docs.append(VectorDocument(
+                id=f"{doc_id_prefix}-{idx}-{uuid.uuid4().hex[:8]}",
+                content=chunk,
+                embedding=emb,
+                metadata={**base_metadata, "chunkIndex": idx},
+            ))
+
+        # 4. 写入向量库（复用既有 get_vector_store + add + save_to_file）
+        store = get_vector_store()
+        store.add(docs)
+        store.save_to_file()
+
+        logger.info(
+            "rag: added learned kb id=%s chunks=%d",
+            kb_id, len(docs),
+        )
+    except Exception:
+        logger.exception(
+            "rag: add_to_rag_for_learning failed kb_id=%s",
+            metadata.get("kb_id"),
+        )
+        raise
+
+
+async def search_with_filter(
+    query: str,
+    kb_ids: list[int],
+    top_k: int = 3,
+) -> list[dict]:
+    """按 kb_ids 过滤的语义检索。
+
+    similarity_search 仅支持 filter_metadata（相等匹配），不支持 filter_fn，
+    因此先按 source='learned_kb' 在向量库内过滤缩小范围，再在内存中按 kb_ids 集合过滤。
+
+    Args:
+        query: 查询文本
+        kb_ids: 限制检索的知识库 ID 列表
+        top_k: 返回前 K 条
+
+    Returns:
+        [{question, answer, category, score, kb_id, similarity, weighted}, ...]
+        按 weighted 降序排列。
+    """
+    if not kb_ids:
+        return []
+    if not query or not query.strip():
+        return []
+
+    try:
+        # 1. 生成查询向量
+        vector = await generate_embedding(query)
+        if not vector:
+            return []
+
+        # 2. 在向量库内按 source 过滤（缩小范围），取 top_k * 3 用于后续内存过滤
+        kb_id_set = {int(kb) for kb in kb_ids}
+        store = get_vector_store()
+        hits = store.similarity_search(
+            query_embedding=vector,
+            top_k=max(top_k * 3, top_k),
+            similarity_threshold=DEFAULT_SIMILARITY_THRESHOLD,
+            filter_metadata={"source": "learned_kb"},
+        )
+
+        # 3. 内存中按 kb_ids 集合过滤（similarity_search 不支持 filter_fn）
+        filtered: list[tuple[SearchHit, dict]] = []
+        for hit in hits:
+            meta = hit.metadata or {}
+            raw_kb_id = meta.get("kb_id")
+            try:
+                hit_kb_id = int(raw_kb_id) if raw_kb_id is not None else None
+            except (TypeError, ValueError):
+                hit_kb_id = None
+            if hit_kb_id is None or hit_kb_id not in kb_id_set:
+                continue
+            filtered.append((hit, meta))
+
+        # 4. 取 Top-K，加权 score
+        out: list[dict] = []
+        for hit, meta in filtered[:top_k]:
+            sim = float(hit.score or 0.0)
+            try:
+                raw_score = float(meta.get("score", 50))
+            except (TypeError, ValueError):
+                raw_score = 50.0
+            normalized_score = raw_score / 100.0
+            weighted = sim * 0.7 + normalized_score * 0.3
+            out.append({
+                "question": meta.get("question", ""),
+                "answer": hit.content,
+                "category": meta.get("category", ""),
+                "score": raw_score,
+                "kb_id": meta.get("kb_id"),
+                "similarity": sim,
+                "weighted": weighted,
+            })
+
+        # 5. 按 weighted 降序
+        out.sort(key=lambda x: x["weighted"], reverse=True)
+        return out
+    except Exception:
+        logger.exception("rag: search_with_filter failed kb_ids=%s", kb_ids)
+        return []
+
+
+async def search_with_category_filter(
+    query: str,
+    kb_ids: list[int],
+    category_code: Optional[str] = None,
+    top_k: int = 3,
+) -> list[dict]:
+    """按 category_code 预过滤的语义检索（V1.47 新增）。
+
+    性能优化：
+    1. 若 category_code 命中，先在向量库内按 source + category_code 双重过滤缩小范围
+       （从百万级压缩到单分类万级以内），再在内存中按 kb_ids 过滤。
+    2. 若 category_code 为空或未命中，回退到原有 search_with_filter 逻辑（全库检索）。
+
+    Args:
+        query: 查询文本
+        kb_ids: 限制检索的知识库 ID 列表（用户启用的 KB）
+        category_code: 预定义分类 code（如 stock_query），可选
+        top_k: 返回前 K 条
+
+    Returns:
+        [{question, answer, category, category_code, score, kb_id, similarity, weighted}, ...]
+    """
+    if not kb_ids:
+        return []
+    if not query or not query.strip():
+        return []
+
+    # 无 category_code 时回退到原逻辑
+    if not category_code:
+        return await search_with_filter(query, kb_ids, top_k)
+
+    try:
+        # 1. 生成查询向量
+        vector = await generate_embedding(query)
+        if not vector:
+            return []
+
+        # 2. 在向量库内按 source + category_code 双重过滤（核心优化点）
+        kb_id_set = {int(kb) for kb in kb_ids}
+        store = get_vector_store()
+        hits = store.similarity_search(
+            query_embedding=vector,
+            top_k=max(top_k * 3, top_k),
+            similarity_threshold=DEFAULT_SIMILARITY_THRESHOLD,
+            filter_metadata={"source": "learned_kb", "category_code": category_code},
+        )
+
+        # 3. 内存中按 kb_ids 集合过滤
+        filtered: list[tuple[SearchHit, dict]] = []
+        for hit in hits:
+            meta = hit.metadata or {}
+            raw_kb_id = meta.get("kb_id")
+            try:
+                hit_kb_id = int(raw_kb_id) if raw_kb_id is not None else None
+            except (TypeError, ValueError):
+                hit_kb_id = None
+            if hit_kb_id is None or hit_kb_id not in kb_id_set:
+                continue
+            filtered.append((hit, meta))
+
+        # 4. 取 Top-K，加权 score
+        out: list[dict] = []
+        for hit, meta in filtered[:top_k]:
+            sim = float(hit.score or 0.0)
+            try:
+                raw_score = float(meta.get("score", 50))
+            except (TypeError, ValueError):
+                raw_score = 50.0
+            normalized_score = raw_score / 100.0
+            weighted = sim * 0.7 + normalized_score * 0.3
+            out.append({
+                "question": meta.get("question", ""),
+                "answer": hit.content,
+                "category": meta.get("category", ""),
+                "category_code": meta.get("category_code", ""),
+                "score": raw_score,
+                "kb_id": meta.get("kb_id"),
+                "similarity": sim,
+                "weighted": weighted,
+            })
+
+        # 5. 若分类预过滤结果不足（< top_k），补充无分类过滤的检索结果
+        if len(out) < top_k:
+            fallback = await search_with_filter(query, kb_ids, top_k)
+            existing_ids = {item["kb_id"] for item in out}
+            for item in fallback:
+                if item.get("kb_id") not in existing_ids:
+                    out.append(item)
+                    if len(out) >= top_k:
+                        break
+
+        # 6. 按 weighted 降序
+        out.sort(key=lambda x: x["weighted"], reverse=True)
+        return out[:top_k]
+    except Exception:
+        logger.exception(
+            "rag: search_with_category_filter failed kb_ids=%s category=%s",
+            kb_ids, category_code,
+        )
+        return []
+
+
+def detect_category_by_keywords(query: str) -> Optional[str]:
+    """关键词规则匹配，快速判定查询所属分类（V1.47 新增）。
+
+    用于检索时的分类预过滤：先尝试关键词匹配（毫秒级），
+    命中则在该分类内检索；未命中则全库检索。
+
+    Args:
+        query: 用户查询文本
+
+    Returns:
+        命中的 category_code（如 "stock_query"），未命中返回 None
+    """
+    if not query:
+        return None
+    # 关键词表（与 V1.47 预定义分类保持一致）
+    CATEGORY_KEYWORDS = {
+        "stock_query": ["库存", "有货", "现货", "还有吗", "没货", "缺货", "断货", "在不在"],
+        "shipping_track": ["发货", "物流", "快递", "什么时候发", "单号", "运单", "发出", "揽收"],
+        "refund_aftersale": ["退款", "退货", "换货", "质量", "坏了", "破损", "不想要", "退钱"],
+        "product_consult": ["规格", "材质", "尺寸", "功能", "详情", "什么样", "多大", "多重"],
+        "price_discount": ["便宜点", "优惠", "满减", "折扣", "券", "降价", "打折", "少点"],
+        "account_login": ["登录", "cookie", "失效", "掉线", "登不上", "扫码", "二维码"],
+        "card_key_delivery": ["卡密", "激活码", "虚拟商品", "兑换码"],
+        "workflow_config": ["工作流", "节点", "流程", "触发"],
+        "scheduled_task": ["定时", "计划任务"],
+        "auto_reply": ["自动回复", "模板", "AI回复", "智能回复", "话术"],
+        "auto_delivery": ["自动发货", "发货规则"],
+        "membership_recharge": ["Token", "充值", "VIP", "会员", "SVP", "余额"],
+        "system_usage": ["怎么用", "功能", "操作", "使用", "教程", "怎么操作"],
+        "troubleshoot": ["报错", "错误", "不能用", "失败", "异常", "bug", "崩溃"],
+    }
+    for code, keywords in CATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            if kw in query:
+                return code
+    return None

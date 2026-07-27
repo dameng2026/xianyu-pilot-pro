@@ -1,6 +1,5 @@
 
 from .routes import ai_transaction_engine, opportunity, workflow
-from fastapi import APIRouter
 from .routes import account, order, dashboard, items, auto_delivery, auto_reply, kami, messages, system, internal
 from .routes import quick_reply as quick_reply_module
 from .routes import sse as sse_module
@@ -13,6 +12,13 @@ from .routes import captcha as captcha_module
 from .routes import feishu as feishu_module
 from .routes import mall_category as mall_category_module
 from .routes import slider_api as slider_api_module
+from .routes import ai_cs as ai_cs_module
+from .routes import fish_shop as fish_shop_module
+from .routes import refunds as refunds_module
+from .routes import rates as rates_module
+from .routes import kb_learning as kb_learning_module
+
+from fastapi import APIRouter
 
 api_router = APIRouter()
 api_router.include_router(ai_transaction_engine.router, tags=['aiTransaction'])
@@ -58,3 +64,8 @@ api_router.include_router(auto_reply_scope_module.router, tags=["autoReplyScope"
 api_router.include_router(feishu_module.router, tags=["feishu"])
 api_router.include_router(mall_category_module.router, tags=["mallCategory"])
 api_router.include_router(slider_api_module.router, tags=["slider-api"])
+api_router.include_router(ai_cs_module.router, tags=["aiCs"])
+api_router.include_router(fish_shop_module.router, tags=["fishShop"])
+api_router.include_router(refunds_module.router, tags=["refunds"])
+api_router.include_router(rates_module.router, tags=["rates"])
+api_router.include_router(kb_learning_module.router, tags=["kbLearning"])

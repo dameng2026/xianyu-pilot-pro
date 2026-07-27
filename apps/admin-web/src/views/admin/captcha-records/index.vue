@@ -499,14 +499,14 @@
 
   // ==================== 队列实时状态 ====================
   const queueLoading = ref(false)
-  const queueStatus = reactive<CaptchaQueueStatus>({ queued: 0, retrying: 0, timeout: 0, precheckRejected: 0, workers: 2 })
+  const queueStatus = reactive<CaptchaQueueStatus>({ queued: 0, retrying: 0, timeout: 0, precheckRejected: 0, workers: 4 })
   let queueTimer: ReturnType<typeof setInterval> | null = null
 
   async function loadQueueStatus() {
     queueLoading.value = true
     try {
       const data = await getCaptchaQueueStatus()
-      Object.assign(queueStatus, data || { queued: 0, retrying: 0, timeout: 0, precheckRejected: 0, workers: 2 })
+      Object.assign(queueStatus, data || { queued: 0, retrying: 0, timeout: 0, precheckRejected: 0, workers: 4 })
     } catch (error: any) {
       console.warn('队列状态加载失败:', error?.message)
     } finally {

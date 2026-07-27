@@ -347,7 +347,7 @@
         <div class="aside-card aside-guide">
           <div class="aside-head">
             <h4 class="aside-title">使用指南</h4>
-            <a href="#/user-manual" class="aside-more">查看更多</a>
+            <button type="button" class="aside-more" @click="openAiCs">咨询 AI 客服</button>
           </div>
           <div class="guide-list">
             <div v-for="(item, idx) in guideList" :key="idx" class="guide-item">
@@ -764,6 +764,11 @@ const totalPages = ref(1)
 const totalItems = ref(0)
 
 const displayProducts = computed(() => products.value)
+
+function openAiCs() {
+  // 派发全局事件，由 App.vue 监听并打开 AI 客服"小梦"面板
+  window.dispatchEvent(new CustomEvent('xya-open-ai-cs'))
+}
 
 const guideList = [
   { title: '注册账号', desc: '完成注册并实名认证', color: 'rgba(79,124,255,.92)', icon: 'M4 13C4 10.79 5.79 9 8 9H12M12 9L9.5 6.5M12 9L9.5 11.5' },

@@ -163,6 +163,10 @@ class XianyuProviderRejectedError(RuntimeError):
     """平台拒绝业务请求，不暴露响应正文。"""
 
 
+class XianyuMultiSpecNotSupportedError(RuntimeError):
+    """多规格商品不支持行内改价，需引导用户进入完整编辑页面。"""
+
+
 def _safe_price_to_cent(price: Any) -> int:
     """将价格安全转换为分（int）。
 
@@ -1014,8 +1018,29 @@ def _normalize_image_urls(image_urls: Any) -> list[str]:
 
 
 def _clean_goods_update_values(goods_dict: dict, *, partial: bool) -> dict:
+    # 仅保留 XianyuGoods ORM 模型的合法列，避免 TypeError。
+    # 鱼小铺解析出的 gmt_shelf（上架时间）等非 ORM 字段在此过滤，
+    # 但仍保留在 parsed dict 中供测试与诊断使用。
+    from ..models.entities import XianyuGoods
+    allowed = set(XianyuGoods.__table__.columns.keys())
+    # 售整自动上架相关字段与开关字段由用户/发布链路维护，同步器不得覆盖。
+    # 这里的字段即使出现在同步响应中也必须忽略，避免被接口返回值意外清零。
+    protected_fields = {
+        "auto_relist_enabled",
+        "auto_reply_enabled",
+        "next_relist_goods_id",
+        "relist_source_goods_id",
+        "last_relist_at",
+        "has_snapshot",
+        "original_quantity",
+    }
     values = {}
     for key, value in goods_dict.items():
+        if key not in allowed:
+            continue
+        if key in protected_fields:
+            # 同步链路不允许覆盖这些字段，由发布/编辑/重发链路显式维护
+            continue
         if key in {"tenant_id", "account_id"}:
             continue
         if value is None:
@@ -1261,6 +1286,41 @@ def fetch_item_detail(
         return {}
 
 
+async def _is_fish_shop_account_async(account_id: int, tenant_id: int) -> bool:
+    """
+    判断账号是否为鱼小铺账号（异步版本，供 sync_goods_for_account 在路由前调用）。
+
+    通过 XianyuAccount.fish_shop_user 字段判断（由 Java 端从闲鱼接口 superShow 字段解析后写入）。
+    默认返回 False（普通账号），任何异常都按普通账号处理，避免误触发鱼小铺专属接口。
+    """
+    try:
+        from ..core.database import async_session
+        from ..models.entities import XianyuAccount
+        from sqlalchemy import select, and_
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(XianyuAccount).where(
+                    and_(
+                        XianyuAccount.id == account_id,
+                        XianyuAccount.tenant_id == tenant_id,
+                        XianyuAccount.deleted == 0,
+                    )
+                )
+            )
+            account = result.scalar_one_or_none()
+            if not account:
+                return False
+            # fish_shop_user 列在数据库中为 TINYINT（1=鱼小铺，0=普通账号）
+            return bool(getattr(account, "fish_shop_user", 0))
+    except Exception as e:
+        log_service_failure(
+            logger, e, operation="check_fish_shop_user",
+            tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
+        )
+        return False
+
+
 async def sync_goods_for_account(
     account_id: int,
     tenant_id: int,
@@ -1271,15 +1331,33 @@ async def sync_goods_for_account(
 ) -> dict:
     """
     为指定账号执行完整商品同步流程。
-    
-    流程:
+
+    路由规则：
+    - 鱼小铺账号（XianyuAccount.fish_shop_user=1）：委托 sync_fish_shop_goods_for_account，
+      调用鱼小铺商品管理接口 + 数据罗盘接口（最近30天曝光/浏览）；
+    - 普通闲鱼账号：继续走原有 mtop.idle.web.xyh.item.list 同步流程，不调用鱼小铺专属接口。
+
+    流程（普通账号）:
     1. 分页获取全部商品列表（在售+已售）
     2. 增量保存：比对已有数据，只更新变化的商品
     3. 标记本地多余商品为下架
     4. 异步获取商品详情（如有变化）
-    
+
     返回: 同步结果摘要
     """
+    # 鱼小铺账号路由：在执行任何原有流程前判断，避免普通账号逻辑误触发鱼小铺专属接口
+    if await _is_fish_shop_account_async(account_id, tenant_id):
+        from .fish_shop_sync import sync_fish_shop_goods_for_account
+        logger.info("账号 %d 命中鱼小铺标识，委托鱼小铺同步流程", account_id)
+        return await sync_fish_shop_goods_for_account(
+            account_id=account_id,
+            tenant_id=tenant_id,
+            cookie_str=cookie_str,
+            sync_id=sync_id,
+            db_session_factory=db_session_factory,
+            async_fetch_detail=async_fetch_detail,
+        )
+
     start_time = time.time()
 
     # 更新任务状态
@@ -2158,14 +2236,24 @@ class XianyuItemOperator:
 
     @staticmethod
     def _safe_quantity(seller_item: dict) -> int:
-        """安全读取商品库存，兜底返回 0"""
+        """
+        安全读取商品库存。
+        需求要求：不得因为库存为空而直接提交 0；
+        如果商品数据中没有可靠的 quantity 字段，应抛出异常，不调用接口。
+        库存为 0 是合法值，可以提交。
+        """
+        if not isinstance(seller_item, dict) or "quantity" not in seller_item:
+            raise RuntimeError("商品库存数据缺失，请先同步商品或获取完整商品数据")
+        raw = seller_item.get("quantity")
+        if raw is None:
+            raise RuntimeError("商品库存数据缺失，请先同步商品或获取完整商品数据")
         try:
-            raw = seller_item.get("quantity", 0)
-            if raw is None:
-                return 0
-            return int(raw)
+            qty = int(raw)
         except (ValueError, TypeError):
-            return 0
+            raise RuntimeError("商品库存数据格式异常，请先同步商品或获取完整商品数据")
+        if qty < 0:
+            raise RuntimeError("商品库存数据异常（负数），请先同步商品或获取完整商品数据")
+        return qty
 
     def _build_seller_price_update_payload(self, seller_item: dict, price: str) -> dict:
         """
@@ -2206,22 +2294,28 @@ class XianyuItemOperator:
 
     def update_price(self, item_id: str, price: str) -> bool:
         """
-        修改闲鱼商品价格（仅鱼小铺账号支持）。
-        
+        修改闲鱼商品价格（仅鱼小铺账号支持，仅支持单价格商品）。
+
         流程：
         1. 在卖家工作台搜索商品，获取完整信息（含 SKU）
-        2. 构建改价请求 payload（有SKU则更新每个SKU的价格）
-        3. 调用卖家工作台改价 API
-        
+        2. 检测多规格商品，拒绝行内改价（避免覆盖所有 SKU 价格）
+        3. 构建改价请求 payload（仅单价格商品，使用搜索接口返回的最新库存）
+        4. 调用卖家工作台改价 API
+        5. 验证业务成功响应（ret 包含 SUCCESS、data.code=success、data.data=true）
+
         Args:
             item_id: 闲鱼商品ID
             price: 新价格（字符串，如 "99.99"）
-            
+
         Returns:
             True 表示操作成功
-            
+
         Raises:
             RuntimeError: 如果不是鱼小铺账号、未找到商品或 API 调用失败
+            XianyuMultiSpecNotSupportedError: 多规格商品不支持行内改价
+            XianyuProviderRejectedError: 改价业务失败
+            XianyuAuthExpiredError: 账号登录态过期
+            XianyuRiskControlError: 触发平台风控
         """
         if not self.is_seller:
             raise RuntimeError("当前账号不是鱼小铺，无法改价")
@@ -2229,13 +2323,53 @@ class XianyuItemOperator:
         # Step 1: 在卖家工作台搜索商品
         seller_item = self._find_seller_item(item_id)
 
-        # Step 2: 构建改价请求参数
+        # Step 2: 检测多规格商品，拒绝行内改价（避免覆盖所有 SKU 价格）
+        sku_list = seller_item.get("idleItemSkuList", [])
+        if isinstance(sku_list, list) and len(sku_list) > 0:
+            raise XianyuMultiSpecNotSupportedError(
+                "多规格商品不支持行内改价，请进入商品编辑页面修改各 SKU 价格"
+            )
+
+        # Step 3: 构建改价请求参数（仅单价格商品，使用搜索接口返回的最新库存）
         payload = self._build_seller_price_update_payload(seller_item, price)
 
-        # Step 3: 调用改价 API
-        self._call_api(self.SELLER_UPDATE_API, self.SELLER_UPDATE_VERSION, payload)
+        # Step 4: 调用改价 API
+        response = self._call_api(self.SELLER_UPDATE_API, self.SELLER_UPDATE_VERSION, payload)
+
+        # Step 5: 验证业务成功响应
+        self._verify_price_update_success(response)
         logger.info("商品改价成功: itemId=%s, newPrice=%s", item_id, price)
         return True
+
+    @staticmethod
+    def _verify_price_update_success(response: dict) -> None:
+        """验证改价接口业务成功响应。
+
+        需求要求至少同时检查：
+        - ret 中包含 SUCCESS
+        - data.code 为 success
+        - data.data 为 true
+
+        不能只判断 HTTP 200。
+        """
+        if not isinstance(response, dict):
+            raise XianyuProviderRejectedError("改价响应格式异常")
+
+        ret = response.get("ret", [])
+        ret_list = ret if isinstance(ret, list) else [ret]
+        if not any("SUCCESS" in str(r) for r in ret_list):
+            raise XianyuProviderRejectedError("改价接口返回失败")
+
+        data_body = response.get("data", {})
+        if not isinstance(data_body, dict):
+            raise XianyuProviderRejectedError("改价响应数据格式异常")
+
+        code = data_body.get("code", "")
+        if code != "success":
+            raise XianyuProviderRejectedError("改价业务失败")
+
+        if data_body.get("data") is not True:
+            raise XianyuProviderRejectedError("改价业务结果为 false")
 
     def update_price_batch(self, item_ids: list[str], price: str) -> dict[str, bool]:
         """

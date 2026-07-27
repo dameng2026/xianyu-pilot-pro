@@ -25,11 +25,12 @@ public class AdminModuleService {
     private static final Logger log = LoggerFactory.getLogger(AdminModuleService.class);
     /**
      * Catalog entries that describe operational capabilities, but have no read/write backend wired here.
-     * Falling through to admin_module_record would turn arbitrary JSON into fake backup/log/file/etc. state.
+     * Falling through to admin_module_record would turn arbitrary JSON into fake state.
+     * 注：versions/files/backups/runtime/risk-events/alerts 已从 ModuleCatalog 中移除，
+     * 调用时由 catalog.get(moduleKey) 抛出 IllegalArgumentException 后转为 400 错误。
      */
     private static final Set<String> MODULES_WITHOUT_REAL_BACKEND = Set.of(
-            "licenses", "notify-channels", "notify-logs", "risk-events", "runtime",
-            "backups", "versions", "rag", "alerts", "files"
+            "licenses", "notify-channels", "notify-logs", "rag"
     );
 
     private final JdbcTemplate jdbcTemplate;

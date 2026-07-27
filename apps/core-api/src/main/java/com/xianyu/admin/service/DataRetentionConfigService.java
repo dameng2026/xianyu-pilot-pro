@@ -33,10 +33,37 @@ public class DataRetentionConfigService {
     private static final String MODULE_KEY = "data-retention-policy";
     private static final String CONFIG_STATUS = "config";
 
-    /** 可清理类别白名单（与 spec 第三节 3.1 一致，受保护表绝不在此列表中） */
+    /**
+     * 可清理类别白名单（与 spec 第三节 3.1 一致，受保护表绝不在此列表中）。
+     *
+     * 2026-07 扩展：新增 goodsInfo / ordersInfo / uploadedImage 三个类别，分别用于清理
+     * 已下架商品、已完结订单、已删除/过期图片资产。这三类数据均可从闲鱼重新同步获取，
+     * 满足"无关用户使用且可以二次获取的数据"的定义。
+     */
     static final List<String> CLEANUP_CATEGORIES = List.of(
             "operationLog", "clientErrorLog", "notificationLog", "notificationDedup",
-            "chatMessage", "captchaRecord", "autoReplyLog", "uploadRateEvent"
+            "chatMessage", "captchaRecord", "autoReplyLog", "uploadRateEvent",
+            "goodsInfo", "ordersInfo", "uploadedImage"
+    );
+
+    /**
+     * 各类别默认保留天数（管理员未在 categoryDays 中显式覆盖时使用）。
+     * 业务衍生数据（商品/订单/图片）默认保留更久，避免误删近期业务数据。
+     *
+     * 注：Map.of() 最多 10 对键值，此处有 11 对，因此使用 Map.ofEntries()。
+     */
+    static final Map<String, Integer> DEFAULT_CATEGORY_DAYS = Map.ofEntries(
+            Map.entry("operationLog", 30),
+            Map.entry("clientErrorLog", 30),
+            Map.entry("notificationLog", 60),
+            Map.entry("notificationDedup", 30),
+            Map.entry("chatMessage", 14),
+            Map.entry("captchaRecord", 30),
+            Map.entry("autoReplyLog", 30),
+            Map.entry("uploadRateEvent", 14),
+            Map.entry("goodsInfo", 90),
+            Map.entry("ordersInfo", 180),
+            Map.entry("uploadedImage", 60)
     );
 
     private static final int MIN_RETENTION_DAYS = 1;
@@ -85,6 +112,7 @@ public class DataRetentionConfigService {
 
     /**
      * 保存配置。校验 retentionDays 范围 [1, 365]，超出抛 400。
+     * categoryDays 中每个值也校验 [1, 365]，非法值剔除并使用默认值。
      */
     @Transactional
     public void saveConfig(Map<String, Object> config) {
@@ -98,6 +126,19 @@ public class DataRetentionConfigService {
         try {
             Map<String, Object> safeConfig = mergeWithDefaults(new LinkedHashMap<>(config));
             safeConfig.put("retentionDays", retentionDays);
+            // 强制覆盖 categoryDays 中的非法值为默认值
+            @SuppressWarnings("unchecked")
+            Map<String, Object> daysMap = (Map<String, Object>) safeConfig.get("categoryDays");
+            if (daysMap != null) {
+                for (String cat : CLEANUP_CATEGORIES) {
+                    Object v = daysMap.get(cat);
+                    int days = (v instanceof Number n) ? n.intValue() : DEFAULT_CATEGORY_DAYS.getOrDefault(cat, DEFAULT_RETENTION_DAYS);
+                    if (days < MIN_RETENTION_DAYS || days > MAX_RETENTION_DAYS) {
+                        days = DEFAULT_CATEGORY_DAYS.getOrDefault(cat, DEFAULT_RETENTION_DAYS);
+                    }
+                    daysMap.put(cat, days);
+                }
+            }
             String json = objectMapper.writeValueAsString(safeConfig);
             if (json.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 64 * 1024) {
                 throw new BizException(413, "数据保留策略配置内容过大");
@@ -167,6 +208,25 @@ public class DataRetentionConfigService {
             mergedCats.putAll((Map<String, Object>) parsedCatsObj);
             merged.put("categories", mergedCats);
         }
+        // 确保 categoryDays 包含所有白名单类别的默认值
+        Map<String, Object> defaultDays = defaultCategoryDays();
+        Object parsedDaysObj = merged.get("categoryDays");
+        if (!(parsedDaysObj instanceof Map)) {
+            merged.put("categoryDays", defaultDays);
+        } else {
+            Map<String, Object> mergedDays = new LinkedHashMap<>(defaultDays);
+            Map<String, Object> parsedDays = (Map<String, Object>) parsedDaysObj;
+            for (String cat : CLEANUP_CATEGORIES) {
+                Object v = parsedDays.get(cat);
+                if (v instanceof Number n) {
+                    int days = n.intValue();
+                    if (days >= MIN_RETENTION_DAYS && days <= MAX_RETENTION_DAYS) {
+                        mergedDays.put(cat, days);
+                    }
+                }
+            }
+            merged.put("categoryDays", mergedDays);
+        }
         return merged;
     }
 
@@ -176,6 +236,7 @@ public class DataRetentionConfigService {
         config.put("retentionDays", DEFAULT_RETENTION_DAYS);
         config.put("cleanupCron", DEFAULT_CLEANUP_CRON);
         config.put("categories", defaultCategories());
+        config.put("categoryDays", defaultCategoryDays());
         config.put("lastCleanup", null);
         return config;
     }
@@ -186,6 +247,14 @@ public class DataRetentionConfigService {
             cats.put(cat, true);
         }
         return cats;
+    }
+
+    private Map<String, Object> defaultCategoryDays() {
+        Map<String, Object> days = new LinkedHashMap<>();
+        for (String cat : CLEANUP_CATEGORIES) {
+            days.put(cat, DEFAULT_CATEGORY_DAYS.getOrDefault(cat, DEFAULT_RETENTION_DAYS));
+        }
+        return days;
     }
 
     private int parseRetentionDays(Object value) {

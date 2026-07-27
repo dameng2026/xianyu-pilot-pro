@@ -91,8 +91,8 @@ DATA_SYNC_API_TOKEN=HIDpsuvrKSlWfczLiFTJa0Ydhqm8gx7Q
 
 3. 更新线上服务器：
    ```bash
-   # SSH 到线上服务器
-   ssh ubuntu@1.12.66.249
+   # SSH 到线上服务器（国内商业版后端）
+   ssh root@211.161.232.54
    cd /home/ubuntu/project
    # 编辑 .env.production，更新 DATA_SYNC_API_TOKEN=<新值>
    # 重启后端使配置生效

@@ -1,7 +1,7 @@
 import request from '../utils/request.js'
 import { invalidateRequestCache, withRequestCache } from '../utils/requestCache.js'
 
-const CATEGORIES = ['ai-customer-service', 'message-settings', 'delivery-settings', 'product-op-settings']
+const CATEGORIES = ['ai-customer-service', 'xiaomeng-assistant', 'message-settings', 'delivery-settings', 'product-op-settings']
 const BUSINESS_SETTINGS_CACHE_NAMESPACE = 'api:business-settings'
 
 function invalidateBusinessSettingsCache(category) {

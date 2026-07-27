@@ -42,8 +42,15 @@ async def _run_delivery_after_message_saved(tenant_id: int, account_id: int, msg
         logger.error("自动发货处理异常 tenantId=%d accountId=%d: %s", tenant_id, account_id, exc)
 
 
-def _should_trigger_ai_auto_reply(msg: dict) -> tuple[bool, int, str, str]:
-    """Return whether the message should enter AI auto-reply flow."""
+def _should_trigger_ai_auto_reply(msg: dict, seller_external_uid: str = "") -> tuple[bool, int, str, str]:
+    """Return whether the message should enter AI auto-reply flow.
+
+    自问自答防护（强制）：
+    - 仅 direction == "IN" 的消息才触发自动回复
+    - 显式校验 senderUserId 不等于卖家自己（防止 IM 回环消息 direction 被误判为 IN）
+    - 当 seller_external_uid 已知且 senderUserId 等于卖家自己时，强制返回 False
+      （这是自问自答的最后一道闸门，不依赖 validate_parsed_message 的 direction 修正）
+    """
     direction = str(msg.get("direction") or "IN").upper()
     content_type = msg.get("contentType", 1)
     try:
@@ -68,6 +75,15 @@ def _should_trigger_ai_auto_reply(msg: dict) -> tuple[bool, int, str, str]:
         or (not sender_user_id and not looks_like_partial_buyer_text)
         or reminder_content in system_reminder_codes
     )
+
+    # 自问自答防护：senderUserId 等于卖家自己时，强制不触发自动回复。
+    # 该检查是 direction 修正失败的兜底，无论 direction 字段是否为 IN 都会拦截。
+    if seller_external_uid and sender_user_id:
+        seller_uid_norm = seller_external_uid.replace("@goofish", "").strip()
+        sender_uid_norm = sender_user_id.replace("@goofish", "").strip()
+        if seller_uid_norm and sender_uid_norm and seller_uid_norm == sender_uid_norm:
+            return False, content_type_int, sender_user_id, reminder_content
+
     return direction == "IN" and not is_system_message, content_type_int, sender_user_id, reminder_content
 
 
@@ -214,7 +230,7 @@ async def _queue_ai_auto_reply_after_message_saved(
     msg: dict,
     seller_external_uid: str,
 ) -> None:
-    should_trigger, _, _, _ = _should_trigger_ai_auto_reply(msg)
+    should_trigger, _, _, _ = _should_trigger_ai_auto_reply(msg, seller_external_uid)
     if not should_trigger:
         return
 
@@ -255,7 +271,7 @@ async def _run_ai_auto_reply_after_message_saved(
     seller_external_uid: str,
 ) -> None:
     """Run AI auto-reply off the WS receive critical path."""
-    should_trigger, content_type_int, sender_user_id, reminder_content = _should_trigger_ai_auto_reply(msg)
+    should_trigger, content_type_int, sender_user_id, reminder_content = _should_trigger_ai_auto_reply(msg, seller_external_uid)
     if not should_trigger:
         if str(msg.get("direction") or "IN").upper() == "IN":
             logger.info(
@@ -377,6 +393,17 @@ async def on_message_callback(tenant_id: int, account_id: int, msg: dict) -> Non
     # 从同账号最近的有 sId 的消息推断当前消息属于哪个会话。
     await _infer_missing_session_info(tenant_id, account_id, msg, seller_external_uid)
 
+    # 检测卖家从其他客户端（移动 APP/PC 闲鱼）人工发送的消息，触发会话级自动回复暂停。
+    # 触发条件：新入库（saved_message_id 非 None，排除 IM 回环去重命中）+ OUT + is_auto_reply=0。
+    # AI 自动回复消息的 IM 回环会因去重命中 saved_message_id=None 被跳过，
+    # 网站手动发送消息在 misc.py 中已设置暂停，此处作为兜底（重复设置同样字段值，无副作用）。
+    msg_direction = str(msg.get("direction") or "IN").upper()
+    msg_is_auto_reply = int(msg.get("isAutoReply") or 0)
+    if saved_message_id is not None and msg_direction == "OUT" and msg_is_auto_reply == 0:
+        asyncio.create_task(_pause_auto_reply_for_manual_outbound(
+            tenant_id, account_id, dict(msg), seller_external_uid
+        ))
+
     # 发货声明回复识别：买家回复"确认/取消"时，更新声明会话状态并触发发货/通知。
     # 已处理的回复抑制 AI 自动回复（系统已响应，避免 AI 再发无关回复）。
     # 未匹配声明会话的回复静默忽略，AI 自动回复照常。
@@ -391,7 +418,172 @@ async def on_message_callback(tenant_id: int, account_id: int, msg: dict) -> Non
     # Offload heavy follow-up work so the WS loop can continue syncing new messages.
     asyncio.create_task(_run_delivery_after_message_saved(tenant_id, account_id, dict(msg)))
     if not statement_handled:
-        asyncio.create_task(_queue_ai_auto_reply_after_message_saved(tenant_id, account_id, dict(msg), seller_external_uid))
+        # 自问自答前置防护：在创建自动回复 task 之前，显式过滤自己发的消息。
+        # 即使 IM 回环消息 direction 被误判为 IN，这里也能拦截，避免创建无效 task。
+        # msg_direction 复用前面已定义的变量（人工 OUT 暂停检测处）
+        msg_sender_uid = str(msg.get("senderUserId") or "").strip()
+        is_self_message = False
+        if seller_external_uid and msg_sender_uid:
+            seller_uid_norm = seller_external_uid.replace("@goofish", "").strip()
+            sender_uid_norm = msg_sender_uid.replace("@goofish", "").strip()
+            if seller_uid_norm and sender_uid_norm and seller_uid_norm == sender_uid_norm:
+                is_self_message = True
+        if msg_direction == "OUT" or is_self_message:
+            logger.info(
+                "[AUTO_REPLY] 跳过自动回复（自己发的消息）tenantId=%d accountId=%d sId=%s direction=%s senderUserId=%s isSelf=%s",
+                tenant_id, account_id, str(msg.get("sId", ""))[:20], msg_direction,
+                msg_sender_uid[:20] if msg_sender_uid else "(空)", is_self_message,
+            )
+        else:
+            asyncio.create_task(_queue_ai_auto_reply_after_message_saved(tenant_id, account_id, dict(msg), seller_external_uid))
+
+
+async def _pause_auto_reply_for_manual_outbound(
+    tenant_id: int,
+    account_id: int,
+    msg: dict,
+    seller_external_uid: str,
+) -> None:
+    """检测到卖家从其他客户端（移动 APP/PC 闲鱼）人工发送消息后，
+    暂停该会话的 AI 自动回复 60 秒，避免与人工回复"撞车"产生自问自答。
+
+    触发条件（在 on_message_callback 中已判定）：
+        - OUT 消息首次入库（非 IM 回环去重命中）
+        - is_auto_reply=0（非 AI 自动回复）
+
+    状态转移：
+        - auto_reply_paused=1
+        - last_manual_reply_at=<messageTime>
+        - auto_reply_manual_disabled 保持原值（用户已手动关闭则依然只能手动开启）
+
+    自动恢复：由 process_incoming_message 在下次买家消息到来时检查 60 秒超时恢复。
+    """
+    try:
+        sid = str(msg.get("sId") or msg.get("sid") or "").strip()
+        sender_user_id = str(msg.get("senderUserId") or "").strip()
+        receiver_user_id = str(msg.get("receiverUserId") or "").strip()
+        msg_content = str(msg.get("msgContent") or "").strip()
+
+        if not sid:
+            logger.debug(
+                "人工 OUT 消息无 sId，跳过暂停 tenantId=%d accountId=%d",
+                tenant_id, account_id,
+            )
+            return
+
+        # 使用消息时间戳作为暂停起点；若 messageTime<=0 则用当前时间兜底
+        message_time_ms = _coerce_message_time_ms(msg)
+        if message_time_ms <= 0:
+            message_time_ms = int(time.time() * 1000)
+
+        # 排除卖家自己的 ID 后，构造 peer_id 候选列表（用于反查会话）
+        seller_norm = seller_external_uid.replace("@goofish", "").strip() if seller_external_uid else ""
+        seller_variants = {seller_norm, f"{seller_norm}@goofish"} if seller_norm else set()
+        peer_id_candidates: list[str] = []
+        for candidate in (receiver_user_id, sender_user_id):
+            cand = str(candidate or "").strip()
+            if cand and cand not in peer_id_candidates and cand not in seller_variants:
+                peer_id_candidates.append(cand)
+
+        async with async_session() as db:
+            # 从最近消息中取 peer_external_uid 作为补充候选
+            sid_peer_row = (await db.execute(text("""
+                SELECT peer_external_uid, sender_user_id, receiver_user_id
+                FROM xianyu_chat_message
+                WHERE tenant_id = :tenant_id AND account_id = :account_id
+                  AND deleted = 0
+                  AND s_id COLLATE utf8mb4_unicode_ci IN (:sid, :sid_goofish)
+                ORDER BY id DESC LIMIT 1
+            """), {
+                "tenant_id": tenant_id,
+                "account_id": account_id,
+                "sid": sid,
+                "sid_goofish": f"{sid}@goofish" if not sid.endswith("@goofish") else sid,
+            })).mappings().first()
+
+            if sid_peer_row:
+                for key in ("peer_external_uid", "sender_user_id", "receiver_user_id"):
+                    v = str(sid_peer_row.get(key) or "").strip()
+                    if v and v not in peer_id_candidates and v not in seller_variants:
+                        peer_id_candidates.append(v)
+
+            # 通过 peer_id 候选匹配 xianyu_conversation
+            # 使用 expanding bind parameter 支持 list 参数（SQLAlchemy 2.0 标准用法）
+            conv_row = None
+            if peer_id_candidates:
+                from sqlalchemy import bindparam
+                conv_row = (await db.execute(text("""
+                    SELECT id, auto_reply_manual_disabled
+                    FROM xianyu_conversation
+                    WHERE tenant_id = :tenant_id AND account_id = :account_id
+                      AND deleted = 0
+                      AND (
+                          external_buyer_id IN (:peer_ids)
+                          OR peer_external_uid IN (:peer_ids)
+                          OR peer_key IN (:peer_ids)
+                      )
+                    ORDER BY id DESC LIMIT 1
+                """).bindparams(bindparam("peer_ids", expanding=True)), {
+                    "tenant_id": tenant_id,
+                    "account_id": account_id,
+                    "peer_ids": peer_id_candidates,
+                })).mappings().first()
+
+            if not conv_row:
+                logger.info(
+                    "[AUTO_REPLY] 人工 OUT 消息未匹配到会话，跳过暂停 tenantId=%d accountId=%d sId=%s",
+                    tenant_id, account_id, sid[:20],
+                )
+                return
+
+            conv_id = int(conv_row["id"])
+            manual_disabled = int(conv_row["auto_reply_manual_disabled"] or 0)
+
+            # 设置会话暂停状态（与 misc.py 人工发送路径一致）
+            await db.execute(text("""
+                UPDATE xianyu_conversation
+                SET auto_reply_paused = 1,
+                    last_manual_reply_at = :last_manual_at,
+                    last_message_time = NOW(),
+                    last_message_content = :content,
+                    updated_time = NOW()
+                WHERE id = :conversation_id
+            """), {
+                "conversation_id": conv_id,
+                "last_manual_at": message_time_ms,
+                "content": msg_content[:500] if msg_content else "",
+            })
+            await db.commit()
+
+            logger.info(
+                "[AUTO_REPLY] 检测到卖家从其他客户端人工发送消息，暂停 AI 回复 60 秒 "
+                "tenantId=%d accountId=%d convId=%d sId=%s contentLen=%d",
+                tenant_id, account_id, conv_id, sid[:20], len(msg_content),
+            )
+
+            # 广播会话暂停状态变更事件，让前端实时更新开关按钮文案
+            try:
+                from .ws_sse import broadcaster
+                await broadcaster.broadcast(tenant_id, "conversation_auto_reply_state", {
+                    "conversationId": conv_id,
+                    "accountId": account_id,
+                    "peerId": peer_id_candidates[0] if peer_id_candidates else "",
+                    "sid": sid,
+                    "autoReplyPaused": 1,
+                    "autoReplyManualDisabled": manual_disabled,
+                    "lastManualReplyAt": message_time_ms,
+                    "reason": "manual_intervention",
+                })
+            except Exception as sse_exc:
+                logger.warning(
+                    "广播会话暂停状态失败（不影响主流程）accountId=%d convId=%d: %s",
+                    account_id, conv_id, sse_exc,
+                )
+    except Exception as exc:
+        logger.error(
+            "人工 OUT 消息暂停处理异常 tenantId=%d accountId=%d: %s",
+            tenant_id, account_id, exc, exc_info=True,
+        )
 
 
 async def _infer_missing_session_info(
@@ -426,10 +618,13 @@ async def _infer_missing_session_info(
     try:
         async with async_session() as db:
             # 查询最近 5 分钟内有 sId 的消息（不限 direction）。
-            # 优先买家发的 IN 消息（sender_user_id 是买家），
-            # 其次卖家发的 OUT 消息（peer_external_uid 是买家）。
+            # 自问自答防护：优先买家真实消息（direction=0 AND is_auto_reply=0），
+            # 其次买家其他消息（direction=0），最后卖家消息（direction=1）。
+            # 避免自动回复入库的 OUT 消息（is_auto_reply=1）被选为推断源，
+            # 导致 IM 回环消息的 senderUserId 被错误推断为买家。
             row = (await db.execute(text("""
-                SELECT s_id, sender_user_id, peer_external_uid, xy_goods_id, reminder_url
+                SELECT s_id, sender_user_id, peer_external_uid, xy_goods_id, reminder_url,
+                       is_auto_reply, direction
                 FROM xianyu_chat_message
                 WHERE tenant_id = :tenant_id
                   AND account_id = :account_id
@@ -437,7 +632,13 @@ async def _infer_missing_session_info(
                   AND content_type = 1
                   AND s_id IS NOT NULL AND s_id != ''
                   AND created_time >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)
-                ORDER BY id DESC
+                ORDER BY
+                    CASE
+                        WHEN direction = 0 AND is_auto_reply = 0 THEN 0
+                        WHEN direction = 0 THEN 1
+                        ELSE 2
+                    END,
+                    id DESC
                 LIMIT 1
             """), {
                 "tenant_id": tenant_id,
@@ -452,6 +653,8 @@ async def _infer_missing_session_info(
             inferred_peer = str(row.get("peer_external_uid") or "").strip()
             inferred_goods_id = str(row.get("xy_goods_id") or "").strip()
             inferred_reminder_url = str(row.get("reminder_url") or "").strip()
+            inferred_is_auto_reply = int(row.get("is_auto_reply") or 0)
+            inferred_direction = int(row.get("direction") or 0)
 
             # 判断推断源消息的 sender 是否是卖家自己
             seller_normalized = seller_external_uid.replace("@goofish", "").strip() if seller_external_uid else ""
@@ -460,6 +663,16 @@ async def _infer_missing_session_info(
 
             # 如果 sender 是卖家自己（OUT 消息同步回来），买家 ID 从 peer_external_uid 获取
             effective_buyer = inferred_peer if sender_is_seller else inferred_sender
+
+            # 自问自答防护：如果推断源是自动回复入库的 OUT 消息（is_auto_reply=1），
+            # 不推断 senderUserId（保持为空，由 _should_trigger_ai_auto_reply 的 partial_buyer_text 逻辑处理）。
+            # 避免自动回复的 IM 回环消息被错误推断为买家消息，触发自问自答。
+            if inferred_is_auto_reply == 1 and inferred_direction == 1:
+                effective_buyer = ""  # 不推断 senderUserId
+                logger.info(
+                    "推断源为自动回复 OUT 消息，跳过 senderUserId 推断（防止自问自答）tenantId=%d accountId=%d sId=%s",
+                    tenant_id, account_id, inferred_sid[:20] if inferred_sid else "(空)",
+                )
 
             if not sid and inferred_sid:
                 msg["sId"] = inferred_sid

@@ -836,8 +836,9 @@ function formatRealtimeType(type) {
   }
 }
 
-function openGuideDocument() {
-  emit('navigate', 'user-manual')
+function openAiCs() {
+  // 派发全局事件，由 App.vue 监听并打开 AI 客服"小梦"面板
+  window.dispatchEvent(new CustomEvent('xya-open-ai-cs'))
 }
 
 const quickStarts = [

@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.LinkedHashMap;
@@ -198,6 +199,34 @@ public class CardService {
         CardItem item = itemMapper.findClaimedByOrder(tenantId, groupId, orderId);
         groupMapper.refreshCounts(tenantId, groupId);
         return item;
+    }
+
+    /**
+     * 标记卡密为已使用（status=2）。用于手动发货链路在消息发送成功后调用。
+     * 认领后卡密 status=1，updateStatus 的 WHERE 要求 status=0 故会返回 0，
+     * 此时用 updateStatusOnly 强制更新，与 DeliveryExecutionService.markCardUsed 逻辑一致。
+     */
+    @Transactional
+    public void markCardUsed(Long tenantId, Long groupId, Long itemId, Long orderId) {
+        int affected = itemMapper.updateStatus(tenantId, itemId, 2, orderId, LocalDateTime.now());
+        if (affected == 0) {
+            itemMapper.updateStatusOnly(tenantId, groupId, itemId, 2);
+        }
+        groupMapper.refreshCounts(tenantId, groupId);
+    }
+
+    /**
+     * 释放已认领的卡密（status 恢复 0）。用于手动发货失败时回滚卡密。
+     * 静默失败：释放异常只记录日志不抛出，避免影响主流程的错误处理。
+     */
+    public void releaseClaimedCard(Long tenantId, Long groupId, Long itemId) {
+        try {
+            itemMapper.reset(tenantId, groupId, itemId);
+            groupMapper.refreshCounts(tenantId, groupId);
+        } catch (Exception releaseError) {
+            log.warn("释放已认领卡密失败 tenantId={}, groupId={}, itemId={}, errorType={}",
+                    tenantId, groupId, itemId, releaseError.getClass().getSimpleName());
+        }
     }
 
     @Transactional

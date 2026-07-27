@@ -61,7 +61,7 @@
           </div>
           <div class="rule-item">
             <span class="rules-dot dot-green"></span>
-            <span><strong>并行求解</strong>：同时并行 2 个滑块求解任务。</span>
+            <span><strong>并行求解</strong>：同时并行 4 个滑块求解任务。</span>
           </div>
           <div class="rule-item">
             <span class="rules-dot dot-gray"></span>
@@ -201,7 +201,7 @@ const detail = ref(null)
 const filters = reactive({ status: '', triggerScene: '' })
 
 // 队列实时状态
-const queueStatus = reactive({ queued: 0, retrying: 0, timeout: 0, precheckRejected: 0, workers: 2 })
+const queueStatus = reactive({ queued: 0, retrying: 0, timeout: 0, precheckRejected: 0, workers: 4 })
 let queueTimer = null
 
 async function loadQueueStatus() {
@@ -212,7 +212,7 @@ async function loadQueueStatus() {
     queueStatus.retrying = Number(payload.retrying) || 0
     queueStatus.timeout = Number(payload.timeout) || 0
     queueStatus.precheckRejected = Number(payload.precheckRejected) || 0
-    queueStatus.workers = Number(payload.workers) || 2
+    queueStatus.workers = Number(payload.workers) || 4
   } catch {
     // 静默失败，不影响主列表
   }
