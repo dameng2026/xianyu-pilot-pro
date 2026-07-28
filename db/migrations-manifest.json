@@ -390,6 +390,134 @@
           "sha256": "fae40cde694fa50be57a6be5a37690afe4afb5f4adfb30e8e168a2abd6a069c1",
           "risk": "expand",
           "rollback": "restore"
+        },
+        {
+          "version": "1.48",
+          "description": "soft-delete legacy LLM-learned KB entries, learned bindings, and V1.47 flat categories in preparation for V1.49 three-level hierarchy (soft-delete only, no physical drop, rollback-able)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.48__softdelete_legacy_learned_kb.sql",
+          "sha256": "598bed4ca1b96ebcbe0f929bfa21521bd95fc40e3bec9ea5ef4d7f81772dd8c8",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.49",
+          "description": "three-level kb categories: add icon/color/description columns to ai_cs_kb_category, add source_type to ai_cs_learned_kb, soft-delete legacy flat categories, rebuild as 13 first-level + 68 second-level hierarchy",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.49__three_level_kb_categories.sql",
+          "sha256": "81c6287013f8621780039bcd424d26199c73d4b86d6d59cfc64c74279ae5a938",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.50",
+          "description": "seed Q&A for general_trade parent category (6 second-level categories x 30 entries = 180 high-value sales-grade Q&A covering stock/shipping/refund/consult/price/login)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.50__seed_qa_general_trade.sql",
+          "sha256": "07188c9c0d0d31d5dcb5e41c6b11e00c12eb5dc849d142741db667cada2dd27b",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.51",
+          "description": "seed Q&A for fashion_bag parent category (5 second-level categories x 30 entries = 150 entries covering men/women/shoes/bags/accessories size, fabric, fit, authenticity, washing)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.51__seed_qa_fashion_bag.sql",
+          "sha256": "e254e6ca246ec2238580f6290d2011fa320a0556d6fa58060e70a0ee0fe1c414",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.52",
+          "description": "seed Q&A for digital_appliance parent category (30+ entries covering phones, computers, audio, cameras, accessories)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.52__seed_qa_digital_appliance.sql",
+          "sha256": "492d096e763cd8e6fed2ce0a66b9323d75b8ffeea8467afb5fcae29f0c2d41f5",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.53",
+          "description": "seed Q&A for beauty_care parent category (30+ entries covering skincare, makeup, fragrance, personal care)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.53__seed_qa_beauty_care.sql",
+          "sha256": "59c3bb514d2bdb3d6be12a3cfaa846bcbea0ca1a7737c91118836f74377072b0",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.54",
+          "description": "seed Q&A for home_living parent category (30+ entries covering home goods, kitchen, furniture, decor)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.54__seed_qa_home_living.sql",
+          "sha256": "d41f455aec6b9935aebdf3a4df637215399ce4a459f6d7c7547290221e46bb0b",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.55",
+          "description": "seed Q&A for baby_maternity parent category (30+ entries covering maternity, infant goods, baby care)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.55__seed_qa_baby_maternity.sql",
+          "sha256": "24941dfefe51b88b6418d8cdf822e6e5f39fe3352dc5309cb0800348964377a0",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.56",
+          "description": "seed Q&A for sports_outdoor parent category (30+ entries covering sports gear, outdoor equipment, fitness)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.56__seed_qa_sports_outdoor.sql",
+          "sha256": "6774f8709bab1626b1ddf9056d5c2a5928cad90af1d4cb3eba1e58763803ea01",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.57",
+          "description": "seed Q&A for books_textbook parent category (30+ entries covering books, textbooks, exam prep, stationery)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.57__seed_qa_books_textbook.sql",
+          "sha256": "08d662952c74c239f3681c451c44122b934684ac9de3c57bedbcd309a6be2c86",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.58",
+          "description": "seed Q&A for art_collection parent category (30+ entries covering antiques, collectibles, jewelry, art)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.58__seed_qa_art_collection.sql",
+          "sha256": "b2be81c7c6003e7a9b82f55b3b8f7396e9a316825fb242bbf76b3e8be3e835b8",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.59",
+          "description": "seed Q&A for pet_supplies parent category (30+ entries covering pet food, pet supplies, pet care)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.59__seed_qa_pet_supplies.sql",
+          "sha256": "4cecec65cb6580ec7d6dfc4a4d86298a4d73b32b04d04e18929c223302450133",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.60",
+          "description": "seed Q&A for auto_accessories parent category (30+ entries covering car accessories, parts, maintenance)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.60__seed_qa_auto_accessories.sql",
+          "sha256": "dc52920f934fba3811876fde16b7dbfadcfff96df5f482aeffd8a0d40881ef1d",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.61",
+          "description": "seed Q&A for handcraft parent category (30+ entries covering handmade crafts, DIY materials, tools)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.61__seed_qa_handcraft.sql",
+          "sha256": "3f1abe9d539a395f80b210aa7cebb81458a65a6d30e56253b15f33928bd986f6",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.62",
+          "description": "seed Q&A for virtual_goods parent category (30+ entries covering software, activation codes, design templates, e-books)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.62__seed_qa_virtual_goods.sql",
+          "sha256": "f76e947dea43fd5026c7bfaba8dbeda2fe12c82f057d521d5ed0afbcd7b23f08",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.63",
+          "description": "add sku_property_key column to card_group for SKU-isolated card pools (multi-spec auto-delivery)",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.63__add_card_group_sku_property_key.sql",
+          "sha256": "268d84017ec8ec7124f797d9b7a93d1e13ff68d1b665b7bf11600df7b57edc8f",
+          "risk": "expand",
+          "rollback": "restore"
         }
       ],
       "quarantined": [
@@ -591,6 +719,22 @@
           "description": "add rate management tables: xianyu_rate, xianyu_rate_sync_task, xianyu_rate_account_state",
           "path": "apps/automation-service/migrations/V1.23__add_rate_management_tables.sql",
           "sha256": "44555d5227fcd5049c98e26a340bb3a403637b057f1f9fa12428719644ea56b9",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.24",
+          "description": "create captcha solve attempt detail table for success rate statistics",
+          "path": "apps/automation-service/migrations/V1.24__create_captcha_solve_attempt.sql",
+          "sha256": "696cb426ce7664303f8cb2da6aec280a1c340da1dfa7796824feae6d14690a1d",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.25",
+          "description": "auto rate scheduler: add schedule_hour column and execution log table",
+          "path": "apps/automation-service/migrations/V1.25__add_auto_rate_schedule_and_logs.sql",
+          "sha256": "f73d43e845180d457cd5ea0545a2e4e0d1ac8033ee91d5f4d9951084464b2566",
           "risk": "expand",
           "rollback": "restore"
         }

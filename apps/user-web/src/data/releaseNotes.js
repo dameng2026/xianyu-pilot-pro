@@ -66,13 +66,108 @@ export const VERSION_BUMP_RULES = [
  */
 
 /** 当前最新版本号（应与 package.json 的 version 字段保持一致） */
-export const CURRENT_VERSION = '2.1.0'
+export const CURRENT_VERSION = '2.3.0'
 
 /**
  * 更新日志数据，最新在前。
  * @type {ReleaseNote[]}
  */
 export const releaseNotes = [
+  {
+    version: '2.3.0',
+    date: '2026-07-28',
+    type: RELEASE_TYPES.MINOR,
+    title: '多规格商品配置、商品数据分析、退款详情页、AI客服三级知识库、小梦客服工具扩展',
+    summary: '统一重做发布/编辑商品的多规格配置板块并支持 SKU 卡密池隔离；新增「商品数据分析」与「鱼小铺数据分析」两个独立数据页面；退款详情独立成页并修复三接口参数与成功判断；AI 客服知识库改造为三级分类体系（13 一级 / 68 二级 / 2040 条种子 Q&A）；小梦客服扩展至 38 个工具并支持自然语言运营操作；修复支付订单创建失败、自动发货死循环、退款详情接口等多个严重问题。',
+    changes: [
+      {
+        label: '新增',
+        items: [
+          '多规格商品配置板块：发布商品与编辑商品页统一重做多规格编辑器，三区结构（标题区 / 规格设置区 / SKU 组合管理区），支持最多 2 个规格类型、SKU 笛卡尔积自动生成、批量设置价格与库存、SKU 主图上传、未受影响 SKU 数据保留；编辑页正确回显已有规格、SKU 图片、价格和库存；新增 card_group.sku_property_key 字段支持 SKU 专属卡密池（V1.63 迁移）',
+          '商品数据分析页面（商品管理 → 商品数据分析）：支持账号下拉选择（默认全部），展示 1/3/7/30 日商品数据趋势（曝光、订单等指标），单个商品数据查看，可筛选指定时间内数据最差商品（自定义数量），一键重发（删除后重新上架）与一键删除（闲鱼与本地同步删除）；后端 GoodsDataAnalysisController/Mapper/Service 提供统计查询',
+          '鱼小铺数据分析独立页面：接入鱼小铺卖家数据概览接口，仅统计鱼小铺账号，支持账号下拉选择、时间范围筛选、核心指标与趋势分析、智能诊断、转化漏斗、分类指标分区、趋势明细表格；后端 fish_shop_datacompass.py 调用闲鱼 MTOP 接口，多账号隔离 Cookie 与并发控制',
+          '退款详情独立页面：从退款管理列表「查看详情」跳转内部页面，三个接口（退款服务记录 / 完整订单信息 / 退款核心详情）并行请求且支持局部失败重试，60 秒短时缓存与去重，按区域管理加载状态，区分错误类型显示而非统一提示',
+          'AI 客服知识库三级分类体系：一级分类 13 个（含 icon/color/description），二级分类 68 个，每个二级分类 30 条精选种子 Q&A（共 2040 条）；前台用户可选择一个或多个一级/二级分类，AI 客服回复时优先使用勾选的知识库内容；V1.48-V1.62 共 15 个迁移脚本（V1.49 使用 INFORMATION_SCHEMA 动态 SQL 兼容 MySQL 8.0）',
+          '滑块求解记录成功率统计：管理端滑块求解记录页新增「成功率统计」标签页与尝试明细展示，按方案 / 拖动方法 / 速度策略统计使用次数、成功次数及成功率；新增 xianyu_captcha_solve_attempt 表（automation V1.24 迁移）存储每次求解尝试详情',
+          '小梦客服工具扩展至 38 个：新增商品汇总统计、商品软删除、商品上下架、闲鱼商品搜索、最近会话列表、买家消息回复、鱼小铺数据罗盘、销售对比、发货声明配置更新、工作流更新、定时任务配置更新、自动回复规则更新、商品发布准备等 13 个工具；查询类工具自动执行，写操作类工具需用户确认；全程使用自然语言回复，禁止暴露代码/JSON/字段名',
+          '自动调价管理页面：新增自动调价定时任务配置与执行日志（automation V1.25 迁移）',
+          '运营预警横幅：商品数据分析页根据后端统计查询展示运营预警，支持跳转低效商品列表与「仅选可重发」快速选择按钮、智能建议列（重发/编辑/观察）'
+        ]
+      },
+      {
+        label: '优化',
+        items: [
+          '鱼小铺数据分析页面视觉重构：采用现代简洁轻量的 SaaS 数据看板风格，大面积浅灰蓝背景、白色内容卡片、清晰信息分组，响应式适配；仅修改主体内容区域样式，未改动业务逻辑与全局导航',
+          'AI 客服配置测试发送与前台调用通用模型场景统一接入 Token 余额校验（ensureAiTokenBalance）：余额为 0 时提示「请先充值 Token 后再使用 AI 功能」并阻止调用，已接入发布商品 AI 描述、商机改写、工作流润色、AI 客服测试等场景',
+          '通用模型按 VIP 等级差异化定价：扣费 Token 数由 ai_model_tier_price 表按 vip_level 查询决定（普通/VIP/SVP 三档），管理端「费用设置」页面三档定价卡片统一管理，前台扣费数量由后端决定不得前端硬编码',
+          '通知设置移除腾讯云 SES 选项，用户级业务通知固定走 SMTP 发送；EmailSenderService 强制 sendHtmlEmail 走 SMTP 并记录降级日志',
+          'MultiSpecEditor 视觉优化：统计信息区改为轻量胶囊标签，规格设置区独立卡片布局，步骤序号渐变蓝色圆角方块，SKU 表格统一 8px 圆角与表头底色，批量操作面板淡入动画'
+        ]
+      },
+      {
+        label: '修复',
+        items: [
+          '支付订单创建失败（线上事故）：PaymentService.createOrder 的 INSERT 语句 VALUES 子句末尾多了一个 ,0 导致 SQL 列数与值数不匹配，抛出 Column count doesn\'t match value count 错误；移除多余逗号修复',
+          '自动发货死循环（线上事故）：账号 768786986 向买家 85.PNM 持续发送消息 30+ 分钟产生 220+ 条失败记录；根因为 _has_existing_realtime_delivery 仅匹配 status IN (1,2) 成功记录，失败记录（status=3）被排除导致去重失效；修复去重查询条件为 (status IN (1,2) AND created_time>=10min) OR (status=3 AND created_time>=1hour)；新增 xianyu_trade_order.order_status=3 第二道防线；新增 _resolve_order_id_for_confirm 反查 external_order_id 并回写 delivery_record.order_id 让后续按 order_id 精确去重；发送成功后强制调用 _auto_confirm_shipment 确认发货',
+          '退款详情三个接口全部显示「接口返回失败状态」：根因为 MTOP 公共客户端硬编码 type=json 与 valueType=string，与三个接口所需参数不匹配；为三个接口分别设置正确请求参数（退款服务记录 type=originaljson data={orderId}、完整订单信息 type=json valueType=string data={tid}、退款核心详情 type=originaljson data={orderId,refundId}），实现各自独立的成功判断逻辑；orderId/refundId 全程保持字符串类型；使用退款所属账号 Cookie；失败 Promise 在 finally 清理保证重新加载能发起新请求',
+          '鱼小铺数据分析报错（display_name 字段不存在）：fish_shop_datacompass.py 错误引用 XianyuAccount.display_name，实际模型字段名为 nickname，移除 display_name 列引用修复',
+          '前台知识库加载分类失败 + 后台滑块求解统计「数据服务暂时不可用」+ 后台学习知识库看不到三级分类：根因为 V1.49 迁移脚本使用 MySQL 8.0 不支持的 ADD COLUMN IF NOT EXISTS 语法导致迁移失败；重写 V1.49 为 INFORMATION_SCHEMA 动态 SQL + 新增 name_hash 清理步骤解决唯一键冲突；XianyuCaptchaSolveAttemptMapper 的 SUM/AVG 改为 COALESCE 避免 NULL 返回',
+          '小梦客服无法查询真实闲鱼账号 + 返回代码导致用户看不懂：list_accounts 工具增加租户兜底查询逻辑；ai_cs_runtime 系统提示词注入「核心行为准则」并强制自然语言回复；Java 回调鉴权校验 X-Internal-Token + 白名单 + 从请求体传入 userId/tenantId；前端 AiCsPanel 添加 quotaExceededShown/quotaWarningShown 去重通知标志位',
+          '小梦客服 get_dashboard_summary 执行失败：SQL JOIN 查询未加表别名（g.status/g.tenant_id），MySQL 不支持 NULLS LAST 改为 IS NULL',
+          '商品编辑页无法显示标题/正文/封面图：parse_edit_detail_response 解析逻辑与 /fish-shop/detail 接口实际字段路径不匹配，已对比修复',
+          '通用模型计费异常：AiBillingService 优先匹配 model-config-general 避免误匹配 model-config-chat；自动回复 token 扣费时机调整为发送成功后，发送失败时禁止扣费'
+        ]
+      }
+    ],
+    remark: '本次涉及 17 个数据库迁移脚本：core-api V1.48-V1.63（三级知识库分类 + 种子 Q&A + 卡密组 SKU 字段）、automation V1.24（滑块求解尝试明细表）+ V1.25（自动调价调度）。V1.49 使用 INFORMATION_SCHEMA 动态 SQL 兼容 MySQL 8.0（避免 ADD COLUMN IF NOT EXISTS 语法不支持）。上线前已完整备份三个数据库并产出 migration-evidence；过程中开启维护模式横幅，上线结束后关闭并验证。'
+  },
+  {
+    version: '2.2.0',
+    date: '2026-07-27',
+    type: RELEASE_TYPES.MINOR,
+    title: 'AI 客服系统、知识库学习、通用模型按等级定价、鱼店商品管理、会员推广、退款与评分管理',
+    summary: '新增 AI 客服系统（RAG + 知识库 + 工具调用），AI 客服知识库支持学习模式自动从会话归纳问答；通用模型改为按次计费 + 按 VIP 等级差异化定价；鱼店商品管理支持发布/编辑/同步；会员推广活动与套餐管理；退款管理与卖家评分管理；登录/注册/找回密码页面重构并新增移动端适配与图形验证码。',
+    changes: [
+      {
+        label: '新增',
+        items: [
+          'AI 客服系统：基于 RAG 的智能客服，支持知识库检索、工具调用、多轮对话；管理端 AI 客服配置页面与学习知识库管理页面；前台 AI 客服面板组件（AiCsPanel）；AiCsController/AiCsKbController 提供会话、知识库绑定、学习日志等接口；V1.39/V1.43/V1.45-V1.47 迁移建立 ai_cs 相关表与预定义知识库',
+          'AI 客服知识库学习模式：kb_learning_service 从历史会话自动归纳高质量 Q&A 并入库；管理端可查看学习日志与审核；前台知识库设置页支持分类绑定与学习作业',
+          '通用模型按次计费 + VIP 等级差异化定价：model-config-general 强制 per_call 计费，扣费 Token 数由 ai_model_tier_price 表按 vip_level 查询（普通/VIP/SVP 三档，默认每档 3 Token）；管理端「费用设置」页面三档定价卡片；V1.42 迁移建表；SchemaCompatibilityRunner 启动时幂等创建并迁移默认值',
+          '鱼店商品管理：fish_shop_publish/fish_shop_sync 服务支持商品发布、编辑、同步；FishShopEditPage 编辑页；MultiSpecEditor 多规格编辑器；V1.18-V1.21 迁移建立鱼店商品与 SKU 表',
+          '会员推广活动：MemberPromotionService + ActivityFormDialog + ActivityStatsDialog；管理端可创建推广活动、查看统计；V1.44 迁移建立 member_promotion_activity 表',
+          '退款管理：refund_service + RefundsPage；接入闲鱼退款 MTOP 接口；V1.41 迁移建立退款管理表',
+          '卖家评分管理：rate_service + RatesPage；接入闲鱼评价 MTOP 接口；V1.40 迁移建立评分管理表；automation V1.23 迁移建立 xianyu_rate 等表',
+          '自动调价：rate_service 支持按规则自动调价；relist_service/relist_scheduler 支持商品自动重发；V1.38 迁移添加 auto_relist 字段',
+          '登录/注册/找回密码页面重构：新增移动端适配（MobileAuthShell）与图形验证码；优化 PC 登录页左右间距、右侧面板高度与 3D 插画尺寸',
+          'ImageGenerationService 图片生成增强；ThumbnailService 缩略图服务；TencentSesSender 腾讯云 SES 邮件发送（后续在 2.3.0 改为 SMTP 降级）',
+          'PaymentModal 支付弹窗组件；VipPage VIP 页面扩展；OrdersPage 订单页扩展卖家发货表单'
+        ]
+      },
+      {
+        label: '优化',
+        items: [
+          'BusinessSettingsService 配置同步适配 AI 客服与通用模型按次计费；管理端模型配置页面通用模型 section 移除 perCallPrice/tokenExchangeRate/inputPricePer1k/outputPricePer1k 等字段，改为提示「已迁移至费用设置页面」',
+          'UserJwtAuthFilter 白名单扩展 AI 客服与维护状态相关端点；AdminRbacFilter 权限调整',
+          'AutomationProxyController 新增鱼店商品、退款、评分等代理路由',
+          'docker-compose.yml 与 Dockerfile 优化；crawler-service Dockerfile 调整',
+          'US Nginx 配置（us-nginx-full.conf）调整反代与 SSL；user-web nginx.conf 新增 /uploads 代理',
+          'dev-start.ps1 本地启动脚本调整；生产预检脚本 production-preflight.sh 注册 API_KEY_CRYPTO_SECRET'
+        ]
+      },
+      {
+        label: '修复',
+        items: [
+          '增量 SFTP 上传的 mkdir 竞态条件修复',
+          'MobileHome 趋势渐变 ID 改用 Vue useId 避免冲突；MobileHome 消息趋势数据源优先级与 SSE banner 样式补全；MobileHome 经营指标网格样式补全',
+          '邮件 SMTP 错误码映射为用户友好提示',
+          'captcha_api_record/api_solver 调整；captcha_backoff 阈值调整；ws_startup/ws_storage/ws_health_check 优化',
+          'API 滑块求解服务强制 HTTP/1.1 修复 uvicorn h2c 400；滑块预检验不活跃阈值放宽至 30 天；不活跃账号扫描器阈值放宽至 30 天'
+        ]
+      }
+    ],
+    remark: '本次涉及 17 个数据库迁移脚本：core-api V1.38-V1.47（鱼店商品/AI 客服/评分/退款/会员推广/知识库）+ automation V1.18-V1.23（鱼店商品/退款/评分）。所有迁移均为 CREATE TABLE IF NOT EXISTS / ADD COLUMN 等非破坏性 DDL，无数据丢失风险。'
+  },
   {
     version: '2.1.0',
     date: '2026-07-24',
