@@ -308,25 +308,25 @@ function statusText(status: string): string {
   }
 }
 
-function statusTagType(status: string): '' | 'success' | 'warning' | 'info' | 'danger' {
+function statusTagType(status: string): 'primary' | 'success' | 'warning' | 'info' | 'danger' {
   switch (status) {
     case 'ongoing': return 'success'
     case 'pending': return 'warning'
     case 'ended':
     case 'closed': return 'info'
     case 'quota_full': return 'danger'
-    default: return ''
+    default: return 'primary'
   }
 }
 
-function orderStatusTagType(status: number): '' | 'success' | 'warning' | 'info' | 'danger' {
+function orderStatusTagType(status: number): 'primary' | 'success' | 'warning' | 'info' | 'danger' {
   switch (status) {
     case 1: return 'success'
     case 0: return 'warning'
     case 2: return 'info'
     case 3: return 'danger'
     case 4: return 'danger'
-    default: return ''
+    default: return 'primary'
   }
 }
 
@@ -381,7 +381,7 @@ async function onAdjust() {
   }
   adjusting.value = true
   try {
-    await adjustPromotionPlanQuota(props.activity.id, activityPlanId, newQuota, adjustRemark)
+    await adjustPromotionPlanQuota(props.activity.id, activityPlanId, newQuota, adjustRemark.value)
     adjustVisible.value = false
     await loadStats()
     await loadOrders()

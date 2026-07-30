@@ -267,14 +267,14 @@ function statusText(status: string): string {
   }
 }
 
-function statusTagType(status: string): '' | 'success' | 'warning' | 'info' | 'danger' {
+function statusTagType(status: string): 'primary' | 'success' | 'warning' | 'info' | 'danger' {
   switch (status) {
     case 'ongoing': return 'success'
     case 'pending': return 'warning'
     case 'ended':
     case 'closed': return 'info'
     case 'quota_full': return 'danger'
-    default: return ''
+    default: return 'primary'
   }
 }
 

@@ -187,7 +187,7 @@
               controls-position="right"
               size="small"
               style="width: 100%"
-              @change="onActivityPriceChange(row)"
+              @change="onActivityPriceChange(row as PlanRow)"
             />
             <div v-if="row._originalPriceYuan" class="muted small-text">原价 ¥{{ row._originalPriceYuan }}</div>
           </template>

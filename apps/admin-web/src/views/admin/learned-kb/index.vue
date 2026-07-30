@@ -631,7 +631,6 @@ async function onReject(row: EntryRow) {
     const res = await ElMessageBox.prompt('请输入拒绝原因', '拒绝确认', {
       type: 'warning',
       inputPlaceholder: '例如：答案不准确 / 重复条目',
-      inputMaxLength: 200,
       inputValidator: (v: string) => (!!v && v.trim().length > 0) || '请输入拒绝原因',
     })
     reason = res.value
@@ -683,7 +682,6 @@ async function onBatchReject() {
       '批量拒绝',
       {
         type: 'warning',
-        inputMaxLength: 200,
         inputValidator: (v: string) => (!!v && v.trim().length > 0) || '请输入拒绝原因',
       }
     )

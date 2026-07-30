@@ -205,7 +205,7 @@ async function loadConfig() {
     // 兜底：确保 limitMode 字段有默认值（后端已返回，但向前兼容旧数据）
     const normalized = list.map(f => ({
       ...f,
-      limitMode: (f.limitMode === 'preview' || f.limitMode === 'blocked') ? f.limitMode : 'none'
+      limitMode: (f.limitMode === 'preview' || f.limitMode === 'blocked') ? f.limitMode : 'none' as 'none' | 'preview' | 'blocked'
     }))
     features.splice(0, features.length, ...normalized)
     configState.value = 'ready'
