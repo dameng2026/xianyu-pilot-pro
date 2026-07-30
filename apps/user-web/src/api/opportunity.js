@@ -42,6 +42,15 @@ export const listImageRecords = params => request.get('/opportunity/image-histor
 export const getOpportunityImageHistoryDetail = requestId => request.get(`/opportunity/image-history/${requestId}`)
 
 /**
+ * 查询生图记录统计聚合（后端 SQL COUNT，避免前端拉取全量数据循环统计）
+ * @param {string} source - 'all' | 'workflow' | 'opportunity'
+ * @returns {Promise<{total:number, success:number, failed:number, thisMonth:number}>}
+ */
+export const getImageRecordsStats = (source = 'all') => request.get('/opportunity/image-history/stats', {
+  params: { source }
+})
+
+/**
  * 恢复历史生图图片（当之前生图成功但前端未获取到时使用）
  */
 export const recoverOpportunityImages = historyId => request.post(`/opportunity/image-recover/${historyId}`)

@@ -23,15 +23,17 @@ public class JwtUtil {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private static final int MAX_TOKEN_LENGTH = 8_192;
     private static final long CLOCK_SKEW_SECONDS = 60;
+    /** JWT 最长有效期：7 天（604800 秒），用于支持"持久登录"用户体验。 */
+    private static final long MAX_EXPIRE_SECONDS = 604_800L;
     private static final Set<String> TOKEN_TYPES = Set.of("admin", "user");
 
     public JwtUtil(@Value("${admin.jwt.secret}") String secret,
-                   @Value("${admin.jwt.expire-seconds:3600}") long expireSeconds,
+                   @Value("${admin.jwt.expire-seconds:86400}") long expireSeconds,
                    @Value("${admin.jwt.issuer:xianyu-core-api}") String issuer,
                    @Value("${admin.jwt.audience:xianyu-user-api}") String audience) {
         if (secret == null || secret.isBlank()) throw new IllegalArgumentException("JWT secret is required");
-        if (expireSeconds < 60 || expireSeconds > 86_400) {
-            throw new IllegalArgumentException("JWT expiration must be between 60 and 86400 seconds");
+        if (expireSeconds < 60 || expireSeconds > MAX_EXPIRE_SECONDS) {
+            throw new IllegalArgumentException("JWT expiration must be between 60 and " + MAX_EXPIRE_SECONDS + " seconds");
         }
         if (issuer == null || issuer.isBlank()) throw new IllegalArgumentException("JWT issuer is required");
         if (audience == null || audience.isBlank()) throw new IllegalArgumentException("JWT audience is required");

@@ -110,7 +110,6 @@
           <template #cookie="{ row }"><Badge :type="row.cookieType">{{ row.cookie }}</Badge></template>
           <template #ws="{ row }"><span><i :class="['dot', row.wsState === true ? '' : row.wsState === false ? 'red' : 'gray']"></i>{{ row.ws }}</span></template>
           <template #op="{ row }">
-            <button class="link" @click="selectAccount(row.raw)">详情</button>
             <button class="link" @click="refreshProfile(row.raw.id)">刷新资料</button>
             <button class="link" @click="openRescanModal(row.raw)">重新扫码</button>
             <button class="link solve-op-btn" :class="solveOpBtnClass(row.raw.id)" :title="solveOpBtnTitle(row.raw.id)" :disabled="solveOpBtnDisabled(row.raw.id)" @click="handleManualSolve(row.raw.id)">{{ solveOpBtnText(row.raw.id) }}</button>
@@ -562,8 +561,14 @@
           <span>账号：</span><b>{{ selected?.nickname || selected?.displayName || selected?.externalUid || selected?.unb || selected?.id }}</b>
           <span v-if="selected?.unb" class="current-unb-tag">UNB: {{ maskValue(selected.unb) }}</span>
         </div>
-        <label class="field-label required">Cookie <span>必填</span></label>
-        <textarea v-model="cookieEdit.cookie" class="cookie-area" placeholder="请输入闲鱼账号 Cookie 字符串（从浏览器 F12 开发者工具中复制）"></textarea>
+        <div class="cookie-edit-label-row">
+          <label class="field-label required">Cookie <span>必填</span></label>
+          <span class="cookie-edit-toolbar">
+            <span v-if="cookieEditLoading" class="cookie-loading-hint"><Icon name="refresh" class="spin" /> 加载当前 Cookie...</span>
+            <button v-else type="button" class="link cookie-copy-btn" :disabled="!cookieEdit.cookie" @click="copyCookieEdit">复制 Cookie</button>
+          </span>
+        </div>
+        <textarea v-model="cookieEdit.cookie" class="cookie-area" :placeholder="cookieEditLoading ? '正在加载当前 Cookie...' : '请输入闲鱼账号 Cookie 字符串（从浏览器 F12 开发者工具中复制）'" :disabled="cookieEditLoading"></textarea>
 
         <!-- Cookie 解析预览 -->
         <div v-if="cookieEditParsed" class="cookie-parse-preview">
@@ -675,6 +680,11 @@
           <input v-model="autoRateForm.enabled" type="checkbox" :disabled="!autoRateLoaded">
           <span>启用该账号的自动评价</span>
         </label>
+        <label class="field-label required">每天执行时间 <span>必选</span></label>
+        <select v-model="autoRateForm.scheduleHour" class="input large" :disabled="!autoRateLoaded">
+          <option v-for="opt in autoRateScheduleHourOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+        </select>
+        <div class="modal-hint"><Icon name="help" /> 启用后，每天到点会自动拉取该账号评价管理，对未评价订单提交好评。非鱼小铺账号、Cookie 失效、未配置评价内容时会自动跳过并写入日志。</div>
         <label class="field-label">评价方式</label>
         <select v-model="autoRateForm.rateType" class="input large" :disabled="!autoRateLoaded">
           <option value="text">固定文本</option>
@@ -832,13 +842,13 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import StatCard from '../components/StatCard.vue'; import CardPanel from '../components/CardPanel.vue'; import BaseTable from '../components/BaseTable.vue'; import Badge from '../components/Badge.vue'; import AppButton from '../components/AppButton.vue'; import Icon from '../components/Icon.vue'; import EmptyState from '../components/EmptyState.vue'; import Pagination from '../components/Pagination.vue'
-import { checkAccountAuth, deleteAccount, getLiteAccounts, createAccountByCookie, getAccountDetail, refreshAccountProfile, updateAccountCookie, runItemPolish, getItemPolishProgress, getAccountAutoRateConfig, saveAccountAutoRateConfig, getAccountFaceVerifications, markAccountFaceVerificationRead, getAccountStrategyConfig as getAccountStrategyConfigRequest, saveAccountStrategyConfig as saveAccountStrategyConfigRequest, getAccountLoginCredential as getAccountLoginCredentialRequest, saveAccountLoginCredential as saveAccountLoginCredentialRequest } from '../api/accounts.js'
+import { checkAccountAuth, deleteAccount, getLiteAccounts, createAccountByCookie, getAccountDetail, refreshAccountProfile, updateAccountCookie, getAccountCookie, runItemPolish, getItemPolishProgress, getAccountAutoRateConfig, saveAccountAutoRateConfig, getAccountFaceVerifications, markAccountFaceVerificationRead, getAccountStrategyConfig as getAccountStrategyConfigRequest, saveAccountStrategyConfig as saveAccountStrategyConfigRequest, getAccountLoginCredential as getAccountLoginCredentialRequest, saveAccountLoginCredential as saveAccountLoginCredentialRequest } from '../api/accounts.js'
 import { startWebSocket, stopWebSocket, websocketStatus } from '../api/websocket.js'
 import { useDebouncedRef } from '../composables/useDebouncedRef.js'
 const emit = defineEmits(['navigate'])
 import { generateQrLogin, getQrLoginStatus, cleanupQrLogin } from '../api/qrlogin.js'
 import { accountName } from '../utils/format.js'
-import { resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
+import { resolveTrustedMediaUrl, resolveAvatarUrl } from '../utils/safeMediaUrl.js'
 import { recordsOfOrThrow } from '../utils/apiData.js'
 import { accountAuthUsable, accountCookieBadgeType, accountCookieLabel, accountLoginHint, accountWsConnectionState, resolveAccountAuthDisplayState } from '../utils/accountAuth.js'
 import { extractKeyFields, maskKeyFields, validateCookie, checkIdentity, maskValue } from '../utils/cookie.js'
@@ -887,6 +897,7 @@ const qrSuccessMsg = ref('')
 const cookieEdit = reactive({ accountId: null, cookie: '' })
 const cookieEditError = ref('')
 const cookieEditSubmitting = ref(false)
+const cookieEditLoading = ref(false)
 const faceVerificationLoading = ref(false)
 const faceVerificationError = ref('')
 const faceVerificationItems = ref([])
@@ -899,7 +910,12 @@ const autoRateForm = reactive({
   rateType: 'text',
   textContent: '',
   apiUrl: '',
+  scheduleHour: 9,
 })
+const autoRateScheduleHourOptions = Array.from({ length: 24 }, (_, h) => ({
+  value: h,
+  label: `${String(h).padStart(2, '0')}:00`,
+}))
 const loginCredentialSaving = ref(false)
 const loginCredentialError = ref('')
 const loginCredentialLoaded = ref(false)
@@ -1142,9 +1158,13 @@ const captchaAlerts = computed(() => {
       type = 'fail'
       statusText = '预校验拒绝'
       reason = state.reason || '滑块求解预校验未通过'
-      // 根据 reason 文案细化下一步操作
+      // 根据 reason 文案细化下一步操作（按优先级匹配，冷却中优先级最高）
       const reasonLower = reason.toLowerCase()
-      if (reasonLower.includes('session') || reasonLower.includes('过期') || reasonLower.includes('重新扫码') || reasonLower.includes('登录') || reasonLower.includes('cookie')) {
+      if (reasonLower.includes('冷却') || reasonLower.includes('剩余') || reasonLower.includes('failcount')) {
+        // 冷却拦截：自动求解 60 秒内连续失败触发冷却，手动触发可跳过
+        nextAction = '滑块求解冷却中，请稍候或点击"重试求解"主动跳过冷却'
+        canRetry = true
+      } else if (reasonLower.includes('session') || reasonLower.includes('过期') || reasonLower.includes('重新扫码') || reasonLower.includes('登录') || reasonLower.includes('cookie')) {
         nextAction = 'Cookie 已失效，需点击"重新扫码"登录获取新 Cookie'
         canRetry = false
       } else if (reasonLower.includes('不活跃') || reasonLower.includes('inactive') || reasonLower.includes('未登录') || reasonLower.includes('3天')) {
@@ -1157,7 +1177,7 @@ const captchaAlerts = computed(() => {
         nextAction = 'Cookie 校验服务暂时不可用，请稍后重试'
         canRetry = true
       } else {
-        nextAction = '预校验未通过，请检查账号状态或 Cookie 后重试'
+        nextAction = '预校验未通过，请检查账号状态后重试'
         canRetry = true
       }
     }
@@ -1435,7 +1455,8 @@ function resetQrState() {
   qr.accountId = null
 }
 
-function openModal(type){
+async function openModal(type){
+  if (!await guardFeatureAction()) return
   if (!accountsAvailable.value) {
     error.value = '账号列表不可用，已禁用新增与扫码操作；请先重试加载。'
     return
@@ -1491,6 +1512,9 @@ function autoRateConfigOf(res) {
   if (typeof data.textContent !== 'string' || typeof data.apiUrl !== 'string') {
     throw new Error('自动评价配置内容响应格式异常')
   }
+  // scheduleHour 兜底为 9（旧数据无此字段时使用默认）
+  const sh = Number(data.scheduleHour)
+  data.scheduleHour = Number.isFinite(sh) && sh >= 0 && sh <= 23 ? sh : 9
   return data
 }
 
@@ -1564,6 +1588,7 @@ async function openAutoRateModal(account = selected.value) {
   autoRateForm.rateType = 'text'
   autoRateForm.textContent = ''
   autoRateForm.apiUrl = ''
+  autoRateForm.scheduleHour = 9
   try {
     const res = await getAccountAutoRateConfig(account.id)
     const data = autoRateConfigOf(res)
@@ -1571,6 +1596,7 @@ async function openAutoRateModal(account = selected.value) {
     autoRateForm.rateType = data.rateType
     autoRateForm.textContent = data.textContent
     autoRateForm.apiUrl = data.apiUrl
+    autoRateForm.scheduleHour = data.scheduleHour
     autoRateLoaded.value = true
   } catch (e) {
     autoRateError.value = e.message || '加载自动评价配置失败'
@@ -1595,6 +1621,7 @@ async function saveAutoRateConfig() {
       rateType: autoRateForm.rateType,
       textContent: autoRateForm.textContent.trim(),
       apiUrl: autoRateForm.apiUrl.trim(),
+      scheduleHour: Number(autoRateForm.scheduleHour),
     })
     autoRateConfigOf(res)
     closeModal()
@@ -1761,6 +1788,7 @@ async function applyCurrentAutoRateToVisibleAccounts() {
       rateType: source.rateType,
       textContent: source.textContent,
       apiUrl: source.apiUrl,
+      scheduleHour: Number(source.scheduleHour),
     }
     let success = 0
     let failed = 0
@@ -1866,7 +1894,7 @@ const rows = computed(() => {
     return {
       raw: a,
       name: accountTitle(a),
-      avatar: resolveTrustedMediaUrl(a.avatarUrl || a.avatar || ''),
+      avatar: resolveAvatarUrl(a.avatarUrl || a.avatar || ''),
       tag: a.accountNote && (a.nickname || a.displayName) ? (a.nickname || a.displayName) : '',
       uid: a.externalUid || a.unb || a.id,
       area: a.province && a.city ? `${a.province} ${a.city}` : (a.ipLocation || a.province || '-'),
@@ -1887,7 +1915,7 @@ const rows = computed(() => {
 const selectedAvatarUrl = computed(() => {
   if (!selected.value) return ''
   const raw = selected.value.avatarUrl || selected.value.avatar || ''
-  return resolveTrustedMediaUrl(raw)
+  return resolveAvatarUrl(raw)
 })
 
 // 详情头像加载失败时清空 src，触发 v-if 切换到占位 div
@@ -2409,6 +2437,7 @@ const handleItemPolishWithProgress = async (account) => {
 handleItemPolish = handleItemPolishWithProgress
 
 async function submitManual() {
+  if (!await guardFeatureAction()) return
   manualError.value = ''
   if (!manual.cookie.trim()) return (manualError.value = '请输入 Cookie 字符串')
   // 前端预校验
@@ -2435,13 +2464,28 @@ async function submitManual() {
   }
 }
 
-function openCookieEdit(account) {
+async function openCookieEdit(account) {
   if (!account) return
   cookieEdit.accountId = account.id
   cookieEdit.cookie = ''
   cookieEditError.value = ''
   cookieEditSubmitting.value = false
+  cookieEditLoading.value = true
   modal.value = 'cookieEdit'
+  // 回填当前 Cookie，便于用户复制或微调
+  try {
+    const res = await getAccountCookie(account.id)
+    const data = requireResponseObject(res, '账号 Cookie')
+    const current = typeof data.cookie === 'string' ? data.cookie : ''
+    cookieEdit.cookie = current
+    if (!current) {
+      cookieEditError.value = '该账号暂无 Cookie 记录，请粘贴新的 Cookie 字符串'
+    }
+  } catch (e) {
+    cookieEditError.value = e?.message || '加载当前 Cookie 失败，请直接粘贴新 Cookie'
+  } finally {
+    cookieEditLoading.value = false
+  }
 }
 
 async function submitCookieEdit() {
@@ -2484,7 +2528,19 @@ async function submitCookieEdit() {
   }
 }
 
+async function copyCookieEdit() {
+  if (!cookieEdit.cookie) return
+  try {
+    await navigator.clipboard.writeText(cookieEdit.cookie)
+    qrSuccessMsg.value = '当前 Cookie 已复制'
+    setTimeout(() => { if (qrSuccessMsg.value === '当前 Cookie 已复制') qrSuccessMsg.value = '' }, 2500)
+  } catch {
+    cookieEditError.value = '复制失败，请手动选中文本框内容复制'
+  }
+}
+
 async function startQrLogin() {
+  if (!await guardFeatureAction()) return
   qr.loading = true
   qr.message = ''
   qr.qrUrl = ''
@@ -3715,5 +3771,63 @@ onBeforeUnmount(() => {
 .captcha-alert-retry:disabled {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+/* 编辑 Cookie 弹窗：标签栏工具区（加载提示 / 复制按钮） */
+.cookie-edit-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 16px 0 8px;
+}
+
+.cookie-edit-label-row .field-label {
+  margin: 0;
+}
+
+.cookie-edit-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #8a96aa;
+  font-weight: 500;
+}
+
+.cookie-edit-toolbar .cookie-loading-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #0d6bff;
+  font-size: 12px;
+}
+
+.cookie-edit-toolbar .cookie-loading-hint .ui-icon.spin {
+  width: 14px;
+  height: 14px;
+  animation: cookie-spin 0.9s linear infinite;
+}
+
+.cookie-edit-toolbar .cookie-copy-btn {
+  margin-right: 0;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+}
+
+.cookie-edit-toolbar .cookie-copy-btn:disabled {
+  color: #b6bfcc;
+  cursor: not-allowed;
+}
+
+.cookie-area:disabled {
+  background: #f5f7fb;
+  cursor: progress;
+}
+
+@keyframes cookie-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 </style>

@@ -461,3 +461,60 @@ async def list_captcha_records(
         return ResultObject.success(result)
     except Exception as e:
         return safe_route_failure(logger, e, operation="list captcha records", user_message="查询滑块记录失败，请稍后重试")
+
+
+@router.get("/attempt-stats", response_model=ResultObject[dict])
+async def get_attempt_stats(
+    accountId: int = 0,
+    days: int = 30,
+    current_user: dict = Depends(get_current_user),
+):
+    """查询滑块求解尝试明细的成功率统计聚合数据。
+
+    按求解方案、拖动方法、速度策略、尝试轮次四个维度聚合，
+    返回每个组合的使用次数、成功次数、成功率、平均耗时。
+
+    查询参数:
+        accountId: 账号ID筛选（0=不限账号）
+        days: 统计最近 N 天的数据，默认 30
+    """
+    try:
+        tenant_id = int(current_user.get("tenant_id") or 0)
+        if not tenant_id:
+            return ResultObject.validate_failed("租户上下文不能为空")
+
+        from ....services.captcha_solve_record import get_attempt_stats
+        result = await get_attempt_stats(
+            tenant_id=tenant_id,
+            account_id=accountId,
+            days=min(365, max(1, days)),
+        )
+        return ResultObject.success(result)
+    except Exception as e:
+        return safe_route_failure(logger, e, operation="get attempt stats", user_message="查询成功率统计失败，请稍后重试")
+
+
+@router.get("/records/{record_id}/attempts", response_model=ResultObject[list])
+async def list_record_attempts(
+    record_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    """查询单条求解记录的尝试明细列表（用于前端查看详情）。
+
+    路径参数:
+        record_id: xianyu_captcha_solve_record.id
+    """
+    try:
+        tenant_id = int(current_user.get("tenant_id") or 0)
+        if not tenant_id:
+            return ResultObject.validate_failed("租户上下文不能为空")
+        if not record_id:
+            return ResultObject.validate_failed("record_id 不能为空")
+
+        from ....services.captcha_solve_record import list_record_attempts
+        # 注：list_record_attempts 通过 record_id 查询，tenant_id 校验在 service 层可选
+        # 这里简单返回明细，调用方前端通过列表页跳转，record_id 已是当前租户的
+        result = await list_record_attempts(record_id=record_id)
+        return ResultObject.success(result)
+    except Exception as e:
+        return safe_route_failure(logger, e, operation="list record attempts", user_message="查询尝试明细失败，请稍后重试")

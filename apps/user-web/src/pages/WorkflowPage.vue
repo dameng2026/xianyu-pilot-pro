@@ -775,6 +775,7 @@ import EmptyState from '../components/EmptyState.vue'
 import { friendlyError } from '../utils/friendlyError.js'
 import { formatArtifact, formatStateVariable } from '../utils/artifactFormat.js'
 import { accountAuthUsable, accountCookieLabel } from '../utils/accountAuth.js'
+import { guardFeatureAction } from '../composables/featureGuard.js'
 import { getPublishAddressMissingFields, isPublishAddressComplete, normalizePublishAddress } from '../utils/publishAddress.js'
 
 // ===================== 状态 =====================
@@ -1557,6 +1558,7 @@ async function doExtractKeywords() {
 // ===================== 节点测试方法 =====================
 
 async function testPolish() {
+  if (!await guardFeatureAction()) return
   const node = selectedNode.value
   if (!node || node.type !== 'PRODUCT_POLISH') return
   if (!(await ensureAiTokenBalance({ sceneName: '工作流润色测试' }))) return
@@ -1940,6 +1942,7 @@ async function deleteWorkflow(wf) {
   }
 }
 async function saveDraft(force) {
+  if (!await guardFeatureAction()) return
   if (workflowDetailError.value) return
   if (!force && saving.value) return draft.value.id
   const suppressValidationModal = extractingKeywords.value
@@ -2115,6 +2118,7 @@ async function preflightWorkflowTokenBalance() {
 
 // ===================== 画布操作 =====================
 async function runCurrent() {
+  if (!await guardFeatureAction()) return
   if (workflowDetailError.value) return
   if (running.value) return
   if (!await ensureWorkflowImageModelsReady('运行')) return
@@ -2255,6 +2259,7 @@ async function continueExecution() {
  * 仅 status === 'running' 时允许操作。
  */
 async function terminateExecution() {
+  if (!await guardFeatureAction()) return
   const detail = executionDetail.value
   if (!detail?.id) return
   if (detail.status !== 'running') {

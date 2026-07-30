@@ -24,7 +24,6 @@ async page => {
     'feedback',
     'settings-notify',
     'settings-ai-cs',
-    'settings-product',
     'settings-about',
     'vip',
     'profile'

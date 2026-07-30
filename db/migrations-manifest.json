@@ -401,9 +401,9 @@
         },
         {
           "version": "1.49",
-          "description": "three-level kb categories: add icon/color/description columns to ai_cs_kb_category, add source_type to ai_cs_learned_kb, soft-delete legacy flat categories, rebuild as 13 first-level + 68 second-level hierarchy",
+          "description": "three-level kb categories: add icon/color/description columns to ai_cs_kb_category, add source_type to ai_cs_learned_kb, soft-delete legacy flat categories, rebuild as 13 first-level + 68 second-level hierarchy (MySQL 8.0 compatible via INFORMATION_SCHEMA + PREPARE/EXECUTE; adds name_hash cleanup step for unique key conflicts)",
           "path": "apps/core-api/src/main/resources/db/migration/V1.49__three_level_kb_categories.sql",
-          "sha256": "81c6287013f8621780039bcd424d26199c73d4b86d6d59cfc64c74279ae5a938",
+          "sha256": "6037ea7a9339d591f8f304ee58928ce4e99a79650c5bf9cc2ef3dbbc7fb4c85e",
           "risk": "expand",
           "rollback": "restore"
         },
@@ -516,6 +516,22 @@
           "description": "add sku_property_key column to card_group for SKU-isolated card pools (multi-spec auto-delivery)",
           "path": "apps/core-api/src/main/resources/db/migration/V1.63__add_card_group_sku_property_key.sql",
           "sha256": "268d84017ec8ec7124f797d9b7a93d1e13ff68d1b665b7bf11600df7b57edc8f",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.64",
+          "description": "fix V1.11 indexes silently failed on MySQL 8.0 (ADD INDEX IF NOT EXISTS unsupported) using INFORMATION_SCHEMA + PREPARE/EXECUTE dynamic SQL; add composite indexes for xianyu_trade_order/xianyu_trade_order_item/xianyu_account/opportunity_image_history to avoid full table scans",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.64__fix_silent_failed_indexes_and_add_perf_indexes.sql",
+          "sha256": "3f186784a0ec6014d959c50476f9a6d55d806dffe8ec3fa315d9d7e2f65921e6",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.65",
+          "description": "growth partner system tables (growth_global_config, growth_agent_tier_config, growth_invite_code, growth_referral_relation, growth_reward_record, growth_user_balance, growth_withdrawal_request) and sys_user columns (balance, referrer_id); documentation-only DDL, actual creation is idempotent via SchemaCompatibilityRunner.ensureGrowthTables()",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.65__create_growth_partner_tables.sql",
+          "sha256": "2b8fc726b4da6c2a6beff085a26665ba6c1ceedda6e8b0232405685840bfb436",
           "risk": "expand",
           "rollback": "restore"
         }

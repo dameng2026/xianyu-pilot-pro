@@ -142,7 +142,7 @@
           <div class="vip-panel-title">
             <div>
               <h3>功能对比</h3>
-              <p>数据来源：后台「系统运维 → 功能管理」配置，与个人中心「会员等级功能对比」共用同一份数据源。✓ 表示该等级可用，— 表示该等级不可用。</p>
+              <p>数据来源：后台「系统运维 → 功能管理」配置，与个人中心「会员等级功能对比」共用同一份数据源。✓ 表示该等级可用，— 表示该等级不可用。限制模式由管理员配置，影响所有等级用户的访问权限。</p>
             </div>
             <button
               type="button"
@@ -185,12 +185,13 @@
                       SVIP会员
                     </div>
                   </th>
+                  <th class="vip-th-limit">限制模式</th>
                 </tr>
               </thead>
               <tbody>
                 <template v-for="(group, gIdx) in memberCompareData" :key="'g'+gIdx">
                   <tr class="vip-group-row">
-                    <td colspan="4">
+                    <td colspan="5">
                       <span class="vip-feature-ico" aria-hidden="true">{{ group.icon }}</span>
                       <span class="vip-group-label">{{ group.category }}</span>
                       <span class="vip-group-count">{{ group.items.length }} 项</span>
@@ -215,6 +216,9 @@
                         <svg viewBox="0 0 16 16" width="18" height="18"><circle cx="8" cy="8" r="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#d97706" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
                       </span>
                       <span v-else class="vip-dash">—</span>
+                    </td>
+                    <td class="vip-td-limit">
+                      <span class="vip-limit-badge" :class="`vip-limit-${item.limitModeClass || 'none'}`">{{ item.limitMode }}</span>
                     </td>
                   </tr>
                 </template>
@@ -539,7 +543,9 @@ const memberCompareData = computed(() => {
         name: f.title || f.key,
         normal: boolToMark(f.normal),
         vip: boolToMark(f.vip),
-        svip: boolToMark(f.svp)
+        svip: boolToMark(f.svp),
+        limitMode: limitModeLabel(f.limitMode),
+        limitModeClass: limitModeClassKey(f.limitMode)
       }))
     })
   }
@@ -548,6 +554,21 @@ const memberCompareData = computed(() => {
 
 function boolToMark(value) {
   return value === true || value === 'true' || value === 1 || value === '1' ? '✓' : '—'
+}
+
+/** 限制模式 → 展示文案（与后台功能管理配置一致，单选互斥） */
+function limitModeLabel(mode) {
+  const m = String(mode || 'none').toLowerCase()
+  if (m === 'preview') return '预览模式'
+  if (m === 'blocked') return '不可进入'
+  return '无限制'
+}
+
+/** 限制模式 → CSS 类名后缀（none/preview/blocked） */
+function limitModeClassKey(mode) {
+  const m = String(mode || 'none').toLowerCase()
+  if (m === 'preview' || m === 'blocked') return m
+  return 'none'
 }
 
 const coreFeatures = [
@@ -1374,6 +1395,46 @@ onBeforeUnmount(() => {
 .vip-th-vip,
 .vip-th-svip {
   min-width: 100px;
+}
+
+.vip-th-limit {
+  min-width: 96px;
+  color: #6f7e97;
+}
+
+.vip-td-limit {
+  text-align: center;
+}
+
+/* 限制模式徽章（无限制/预览模式/不可进入） */
+.vip-limit-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.vip-limit-none {
+  background: #f1f5f9;
+  color: #64748b;
+  border-color: #e2e8f0;
+}
+
+.vip-limit-preview {
+  background: #fffbeb;
+  color: #b45309;
+  border-color: #fde68a;
+}
+
+.vip-limit-blocked {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: #fecaca;
 }
 
 .vip-th-vip {

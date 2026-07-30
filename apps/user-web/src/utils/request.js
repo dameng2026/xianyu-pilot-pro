@@ -1,6 +1,10 @@
 import axios from 'axios'
 import { clearAuth, getToken } from './auth.js'
 import { httpErrorMessage } from './httpErrorMessage.js'
+import { isInBrowseMode, notifyLevelBlocked, isInPreviewMode, notifyPreviewBlocked } from '../composables/featureGuard.js'
+
+// 写操作 HTTP 方法集合：浏览模式（等级不足）下拦截这些方法，只允许 GET 查询
+const WRITE_METHODS = new Set(['post', 'put', 'delete', 'patch'])
 
 function emit(name, detail) {
   window.dispatchEvent(new CustomEvent(name, { detail }))
@@ -47,6 +51,26 @@ request.interceptors.request.use(config => {
 
   if (config.data instanceof FormData) {
     delete config.headers['Content-Type']
+  }
+
+  // 限制模式拦截写操作：浏览模式（等级不足）或预览模式（管理员限制）下，
+  // 用户可查看页面内容，但不能发送写业务请求。弹窗关闭后再 reject，避免弹窗与页面内错误提示同时出现
+  const method = (config.method || 'get').toLowerCase()
+  if (WRITE_METHODS.has(method)) {
+    if (isInBrowseMode()) {
+      return notifyLevelBlocked().then(() => Promise.reject({
+        featureBlocked: true,
+        message: '等级不足，无法使用此功能',
+        code: 'FEATURE_BLOCKED'
+      }))
+    }
+    if (isInPreviewMode()) {
+      return notifyPreviewBlocked().then(() => Promise.reject({
+        featureBlocked: true,
+        message: '预览模式，无法执行业务操作',
+        code: 'FEATURE_PREVIEW_BLOCKED'
+      }))
+    }
   }
 
   return config

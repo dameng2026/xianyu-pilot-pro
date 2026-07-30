@@ -1,0 +1,23 @@
+# 运行时镜像：直接使用本地预构建的 jar，跳过 Maven 构建
+# 使用方法：
+#   1. 本地执行：mvn -f apps/core-api/pom.xml -DskipTests package
+#   2. 上传 target/ 目录到服务器 apps/core-api/target/
+#   3. 服务器构建：docker build -f apps/core-api/Dockerfile.prebuilt -t xianyu-admin-backend:latest apps/core-api/
+# 构建时间：< 30 秒
+#
+# 详见 .trae/rules/maven-image-build-optimization.md 方案 A
+
+FROM eclipse-temurin:17-jre-jammy
+WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /app/uploads \
+    && chown -R app:app /app
+# 直接复制本地构建好的 jar（构建上下文为 apps/core-api/）
+COPY target/xianyu-assistant-admin-backend-*.jar app.jar
+USER 10001:10001
+EXPOSE 18080
+ENTRYPOINT ["java", "-jar", "app.jar"]

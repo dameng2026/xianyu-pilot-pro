@@ -49,6 +49,17 @@ public class AdminAiCsController {
         return Result.ok(aiCsService.adminPageMessages(current, size, sessionId, userId, role));
     }
 
+    /**
+     * 获取指定会话的全部消息（按时间正序，返回完整内容）。
+     * 供后台会话审计"对话气泡视图"使用：一次性加载该会话的所有消息，
+     * 不分页，便于以聊天气泡形式直观展示完整对话流。
+     */
+    @GetMapping("/messages/session/{sessionId}")
+    public Result<java.util.List<Map<String, Object>>> listSessionMessages(
+            @PathVariable Long sessionId) {
+        return Result.ok(aiCsService.adminListSessionMessages(sessionId));
+    }
+
     @GetMapping("/tool-calls/page")
     public Result<PageResult<Map<String, Object>>> pageToolCalls(
             @RequestParam(defaultValue = "1") int current,

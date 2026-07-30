@@ -28,7 +28,18 @@
             <button
               type="button"
               class="ai-cs-icon-btn"
-              :disabled="loadingSession || compressing || !sessionId"
+              :disabled="loadingSession || historyLoading"
+              :title="historyLoading ? '加载中...' : '历史会话'"
+              @click="onToggleHistory"
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path d="M12 8v5l3 2M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="ai-cs-icon-btn"
+              :disabled="compressing || !sessionId"
               :title="compressing ? '压缩中...' : '压缩上下文'"
               @click="onCompress"
             >
@@ -61,6 +72,69 @@
         </header>
 
         <div ref="messagesRef" class="ai-cs-messages" tabindex="0">
+          <!-- 历史会话面板（覆盖在消息列表之上） -->
+          <Transition name="ai-cs-history-fade">
+            <div v-if="historyVisible" class="ai-cs-history-panel">
+              <div class="ai-cs-history-header">
+                <strong>历史会话</strong>
+                <span class="ai-cs-history-count">{{ historyList.length }} 条</span>
+                <button
+                  type="button"
+                  class="ai-cs-history-close"
+                  :disabled="historyLoading"
+                  @click="historyVisible = false"
+                  aria-label="关闭历史会话"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                    <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  </svg>
+                </button>
+              </div>
+
+              <div v-if="historyLoading" class="ai-cs-history-loading">
+                <div class="ai-cs-loading-spinner" aria-hidden="true"></div>
+                <span>加载历史会话...</span>
+              </div>
+              <div v-else-if="historyError" class="ai-cs-history-error">
+                {{ historyError }}
+                <button type="button" class="ai-cs-history-retry" @click="loadHistory">重试</button>
+              </div>
+              <div v-else-if="historyList.length === 0" class="ai-cs-history-empty">
+                暂无历史会话
+              </div>
+              <div v-else class="ai-cs-history-list">
+                <button
+                  v-for="s in historyList"
+                  :key="s.id"
+                  type="button"
+                  class="ai-cs-history-item"
+                  :class="{
+                    active: s.id === sessionId,
+                    closed: !s.isActive,
+                    resuming: resumingSessionId === s.id
+                  }"
+                  :disabled="resumingSessionId === s.id || loadingSession"
+                  @click="onSelectHistorySession(s)"
+                >
+                  <div class="ai-cs-history-item-head">
+                    <span class="ai-cs-history-status" :class="s.isActive ? 'active' : 'closed'">
+                      {{ s.isActive ? '进行中' : '已结束' }}
+                    </span>
+                    <span class="ai-cs-history-meta">{{ s.messageCount || 0 }} 条消息</span>
+                    <span class="ai-cs-history-time">{{ formatHistoryTime(s.lastActiveTime || s.createdTime) }}</span>
+                  </div>
+                  <div class="ai-cs-history-preview">
+                    {{ s.firstUserMessagePreview || (s.compressedSummaryPreview ? '[已压缩] ' + s.compressedSummaryPreview : '暂无消息预览') }}
+                  </div>
+                  <div v-if="resumingSessionId === s.id" class="ai-cs-history-resuming">
+                    <div class="ai-cs-loading-spinner" aria-hidden="true"></div>
+                    <span>恢复中...</span>
+                  </div>
+                </button>
+              </div>
+            </div>
+          </Transition>
+
           <div v-if="loadingSession" class="ai-cs-loading">
             <div class="ai-cs-loading-spinner" aria-hidden="true"></div>
             <span>正在连接小梦...</span>
@@ -111,7 +185,7 @@
                   </div>
                   <p class="ai-cs-quota-text">{{ msg.content }}</p>
                   <div v-if="msg.perMessageTokens" class="ai-cs-quota-meta">
-                    <span class="ai-cs-quota-tag">免费 {{ msg.usedQuota || 0 }}/{{ msg.dailyFreeQuota || 0 }} 条</span>
+                    <span class="ai-cs-quota-tag">今日已发 {{ msg.usedQuota || 0 }} 条 / 免费 {{ msg.dailyFreeQuota || 0 }} 条</span>
                     <span class="ai-cs-quota-tag accent">扣费 {{ msg.perMessageTokens }} Token/条</span>
                   </div>
                   <button
@@ -132,27 +206,32 @@
                   <div class="ai-cs-tool-head">
                     <span class="ai-cs-tool-badge">工具</span>
                     <strong>{{ msg.name }}</strong>
+                    <span v-if="msg.status === 'executed'" class="ai-cs-tool-status-text executed">已执行</span>
+                    <span v-else-if="msg.status === 'failed'" class="ai-cs-tool-status-text failed">执行失败</span>
+                    <span v-else-if="msg.status === 'rejected'" class="ai-cs-tool-status-text rejected">已拒绝</span>
+                    <span v-else-if="msg.status === 'accepted'" class="ai-cs-tool-status-text accepted">执行中</span>
                   </div>
                   <p v-if="msg.description" class="ai-cs-tool-desc">{{ msg.description }}</p>
-                  <pre v-if="msg.argumentsText" class="ai-cs-tool-args">{{ msg.argumentsText }}</pre>
+                  <pre v-if="msg.argumentsText && msg.expanded" class="ai-cs-tool-args">{{ msg.argumentsText }}</pre>
 
                   <div v-if="msg.status === 'pending'" class="ai-cs-tool-actions">
                     <button type="button" class="ai-cs-tool-btn accept" @click="onToolConfirm(msg, true)">
-                      同意
+                      同意执行
                     </button>
                     <button type="button" class="ai-cs-tool-btn reject" @click="onToolConfirm(msg, false)">
                       拒绝
                     </button>
                   </div>
-                  <div v-else-if="msg.status === 'accepted'" class="ai-cs-tool-status">
-                    已同意，执行中...
-                  </div>
-                  <div v-else-if="msg.status === 'rejected'" class="ai-cs-tool-status rejected">
-                    已拒绝
-                  </div>
 
-                  <div v-if="msg.resultText" class="ai-cs-tool-result">
-                    <span class="ai-cs-tool-result-label">结果：</span>
+                  <button
+                    v-if="msg.resultText"
+                    type="button"
+                    class="ai-cs-tool-toggle"
+                    @click="msg.expanded = !msg.expanded"
+                  >
+                    {{ msg.expanded ? '收起详情' : '查看详情' }}
+                  </button>
+                  <div v-if="msg.resultText && msg.expanded" class="ai-cs-tool-result">
                     <pre>{{ msg.resultText }}</pre>
                   </div>
                 </div>
@@ -254,6 +333,8 @@ import {
   currentSession,
   getCsConfig,
   listMessages,
+  listUserSessions,
+  resumeSession,
   streamChat
 } from '../api/aiCs.js'
 import { getAiBillingBalance } from '../api/aiBilling.js'
@@ -279,6 +360,37 @@ const streaming = ref(false)
 const compressing = ref(false)
 const casualRemindShown = ref(false)
 const contextExceeded = ref(null)
+
+// 历史会话面板
+const historyVisible = ref(false)
+const historyLoading = ref(false)
+const historyError = ref('')
+const historyList = ref([])
+const resumingSessionId = ref(null)
+
+// 免费额度提醒按日去重（跨会话、跨刷新仅提醒一次）
+// 使用 localStorage 按日记录，避免每次刷新页面或重开会话都重复提醒
+function getQuotaShownDate(key) {
+  try {
+    return localStorage.getItem(key) || ''
+  } catch (_) {
+    return ''
+  }
+}
+function setQuotaShownDate(key) {
+  try {
+    const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+    localStorage.setItem(key, today)
+  } catch (_) {
+    // localStorage 不可用时静默降级（不影响主流程）
+  }
+}
+function isQuotaAlreadyShownToday(key) {
+  const today = new Date().toISOString().slice(0, 10)
+  return getQuotaShownDate(key) === today
+}
+const QUOTA_EXCEEDED_KEY = 'ai_cs_quota_exceeded_shown_date'
+const QUOTA_WARNING_KEY = 'ai_cs_quota_warning_shown_date'
 
 let abortStream = null
 let msgSeq = 0
@@ -374,6 +486,7 @@ async function initSession() {
   sessionId.value = null
   sessionToken.value = ''
   casualRemindShown.value = false
+  // 注意：额度提醒去重改为 localStorage 按日记录，不再在 initSession 中重置
   contextExceeded.value = null
 
   try {
@@ -561,17 +674,35 @@ function handleEvent(evt, assistantMsg) {
         description: data.description || payload.description || data.message || '',
         status: 'pending',
         resultText: '',
+        expanded: false,
         timestamp: Date.now()
       })
       break
     }
     case 'tool_result': {
+      // 查询类工具自动执行后直接发送 tool_result（前面没有 tool_call 事件）
+      // 此时需要新建一条消息展示结果；若已有对应 tool_call 消息则更新它
       const found = messages.value.find(
         (m) => m.type === 'tool_call' && m.toolCallId === data.toolCallId
       )
       if (found) {
-        found.status = data.status || 'done'
+        found.status = data.status || 'executed'
         found.resultText = formatJsonLike(data.result)
+      } else {
+        // 自动执行的查询工具：直接展示为已完成的工具卡片（默认折叠）
+        pushMessage({
+          id: genId(),
+          role: 'assistant',
+          type: 'tool_call',
+          toolCallId: data.toolCallId || 0,
+          name: data.tool || '',
+          argumentsText: '',
+          description: data.message || '查询完成',
+          status: data.status || 'executed',
+          resultText: formatJsonLike(data.result),
+          expanded: false,
+          timestamp: Date.now()
+        })
       }
       break
     }
@@ -596,32 +727,40 @@ function handleEvent(evt, assistantMsg) {
     }
     case 'quota_exceeded': {
       // 今日免费额度已用完，后续每条扣费 N Token
-      pushMessage({
-        id: genId(),
-        role: 'assistant',
-        type: 'quota_notice',
-        content: data.message || `今日免费额度已用完，后续每条消息将扣费 ${data.perMessageTokens || 3} Token`,
-        quotaType: 'exceeded',
-        dailyFreeQuota: data.dailyFreeQuota,
-        usedQuota: data.usedQuota,
-        perMessageTokens: data.perMessageTokens,
-        timestamp: Date.now()
-      })
+      // 去重策略：localStorage 按日记录，跨会话/跨刷新仅提醒一次
+      if (!isQuotaAlreadyShownToday(QUOTA_EXCEEDED_KEY)) {
+        setQuotaShownDate(QUOTA_EXCEEDED_KEY)
+        pushMessage({
+          id: genId(),
+          role: 'assistant',
+          type: 'quota_notice',
+          content: data.message || `今日免费额度已用完，后续每条消息将扣费 ${data.perMessageTokens || 3} Token`,
+          quotaType: 'exceeded',
+          dailyFreeQuota: data.dailyFreeQuota,
+          usedQuota: data.usedQuota,
+          perMessageTokens: data.perMessageTokens,
+          timestamp: Date.now()
+        })
+      }
       break
     }
     case 'quota_warning': {
       // 本条是免费额度最后一条，提醒用户下一条开始扣费
-      pushMessage({
-        id: genId(),
-        role: 'assistant',
-        type: 'quota_notice',
-        quotaType: 'warning',
-        content: data.message || `今日免费额度还剩 0 条，下一条消息将开始扣费 ${data.perMessageTokens || 3} Token/条`,
-        dailyFreeQuota: data.dailyFreeQuota,
-        usedQuota: data.usedQuota,
-        perMessageTokens: data.perMessageTokens,
-        timestamp: Date.now()
-      })
+      // 去重策略：localStorage 按日记录，跨会话/跨刷新仅提醒一次
+      if (!isQuotaAlreadyShownToday(QUOTA_WARNING_KEY)) {
+        setQuotaShownDate(QUOTA_WARNING_KEY)
+        pushMessage({
+          id: genId(),
+          role: 'assistant',
+          type: 'quota_notice',
+          quotaType: 'warning',
+          content: data.message || `今日免费额度还剩 0 条，下一条消息将开始扣费 ${data.perMessageTokens || 3} Token/条`,
+          dailyFreeQuota: data.dailyFreeQuota,
+          usedQuota: data.usedQuota,
+          perMessageTokens: data.perMessageTokens,
+          timestamp: Date.now()
+        })
+      }
       break
     }
     case 'casual_remind': {
@@ -705,10 +844,37 @@ function friendlyErrorMessage(rawMsg, status) {
 }
 
 async function onToolConfirm(msg, accept) {
-  if (!sessionId.value || !msg.toolCallId) return
+  if (!sessionId.value) return
+  // toolCallId 为 null/undefined/0 都视为异常（后端未生成真实记录）
+  // 给出明确反馈，避免用户点确认按钮无响应
+  if (!msg.toolCallId) {
+    msg.status = 'failed'
+    msg.resultText = '工具调用记录异常（toolCallId 缺失），请重新提问'
+    return
+  }
   msg.status = accept ? 'accepted' : 'rejected'
   try {
-    await confirmToolCall(sessionId.value, msg.toolCallId, accept)
+    const res = await confirmToolCall(sessionId.value, msg.toolCallId, accept)
+    // 更新工具卡片状态（executed/failed/rejected）
+    if (res && typeof res === 'object') {
+      msg.status = res.status || (accept ? 'executed' : 'rejected')
+      if (res.result) {
+        msg.resultText = formatJsonLike(res.result)
+      }
+      // 后端生成自然语言摘要，作为新的 assistant 消息展示
+      if (res.summary) {
+        pushMessage({
+          id: genId(),
+          role: 'assistant',
+          type: 'text',
+          content: res.summary,
+          timestamp: Date.now()
+        })
+        scrollToBottom()
+      }
+      // 执行操作可能扣费，刷新余额
+      refreshBalance()
+    }
   } catch (_) {
     msg.status = 'pending'
   }
@@ -722,6 +888,137 @@ async function onNewSession() {
     } catch (_) {}
   }
   await initSession()
+}
+
+// ==================== 历史会话 ====================
+
+function formatHistoryTime(ts) {
+  if (!ts) return ''
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return ''
+  const now = new Date()
+  const diff = (now - d) / 1000 // 秒
+  if (diff < 60) return '刚刚'
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
+  if (diff < 86400 && d.getDate() === now.getDate()) {
+    const hh = d.getHours().toString().padStart(2, '0')
+    const mm = d.getMinutes().toString().padStart(2, '0')
+    return `今天 ${hh}:${mm}`
+  }
+  const yesterday = new Date(now)
+  yesterday.setDate(now.getDate() - 1)
+  if (d.getDate() === yesterday.getDate() && d.getMonth() === yesterday.getMonth()) {
+    const hh = d.getHours().toString().padStart(2, '0')
+    const mm = d.getMinutes().toString().padStart(2, '0')
+    return `昨天 ${hh}:${mm}`
+  }
+  const y = d.getFullYear()
+  const m = (d.getMonth() + 1).toString().padStart(2, '0')
+  const dd = d.getDate().toString().padStart(2, '0')
+  const hh = d.getHours().toString().padStart(2, '0')
+  const mm = d.getMinutes().toString().padStart(2, '0')
+  return `${y}-${m}-${dd} ${hh}:${mm}`
+}
+
+async function onToggleHistory() {
+  if (historyVisible.value) {
+    historyVisible.value = false
+    return
+  }
+  historyVisible.value = true
+  await loadHistory()
+}
+
+async function loadHistory() {
+  historyLoading.value = true
+  historyError.value = ''
+  try {
+    const res = await listUserSessions(30)
+    const list = res?.data || res || []
+    historyList.value = Array.isArray(list) ? list : []
+  } catch (e) {
+    historyError.value = e?.message || '加载失败'
+    historyList.value = []
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+// 选择历史会话：
+// - 若是当前活跃会话：直接关闭历史面板（无需切换）
+// - 若是已关闭会话：调用 resume 恢复，然后加载消息
+async function onSelectHistorySession(s) {
+  if (!s || !s.id) return
+  // 已是当前会话：仅关闭历史面板
+  if (s.id === sessionId.value) {
+    historyVisible.value = false
+    return
+  }
+  // 中断当前流
+  abortCurrentStream()
+  resumingSessionId.value = s.id
+  try {
+    if (s.isActive) {
+      // 活跃会话但非当前会话：理论上不应出现（每用户仅一个活跃会话），保险起见直接切换
+      await switchToSession(s.id)
+    } else {
+      // 已关闭会话：调用 resume 恢复为活跃
+      await resumeSession(s.id)
+      await switchToSession(s.id)
+    }
+    historyVisible.value = false
+  } catch (e) {
+    pushMessage({
+      id: genId(),
+      role: 'system',
+      type: 'text',
+      content: `恢复会话失败：${e?.message || '未知错误'}`,
+      timestamp: Date.now()
+    })
+  } finally {
+    resumingSessionId.value = null
+  }
+}
+
+// 切换到指定会话：拉取该会话的消息并展示
+async function switchToSession(targetSessionId) {
+  loadingSession.value = true
+  ready.value = false
+  messages.value = []
+  casualRemindShown.value = false
+  contextExceeded.value = null
+  try {
+    sessionId.value = targetSessionId
+    sessionToken.value = ''
+    // 拉取历史消息
+    const historyRes = await listMessages(targetSessionId, 100)
+    const history = historyRes?.data || historyRes
+    if (Array.isArray(history?.messages) && history.messages.length) {
+      for (const m of history.messages) {
+        messages.value.push(normalizeHistoryMessage(m))
+      }
+    } else if (Array.isArray(history)) {
+      // 直接返回数组的情况
+      for (const m of history) {
+        messages.value.push(normalizeHistoryMessage(m))
+      }
+    }
+    ready.value = true
+    scrollToBottom()
+    // 刷新余额（恢复会话可能涉及扣费上下文变化）
+    refreshBalance()
+  } catch (e) {
+    pushMessage({
+      id: genId(),
+      role: 'system',
+      type: 'text',
+      content: `加载会话消息失败：${e?.message || '未知错误'}`,
+      timestamp: Date.now()
+    })
+    ready.value = true
+  } finally {
+    loadingSession.value = false
+  }
 }
 
 async function onCompress() {
@@ -978,6 +1275,215 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 16px;
   scroll-behavior: smooth;
+  position: relative;
+}
+
+/* 历史会话面板：覆盖在消息列表之上 */
+.ai-cs-history-panel {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+.ai-cs-history-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid rgba(220, 232, 248, 0.7);
+  font-size: 14px;
+  color: #16213e;
+  flex-shrink: 0;
+}
+.ai-cs-history-header strong {
+  font-size: 15px;
+  font-weight: 700;
+  color: #16213e;
+}
+.ai-cs-history-count {
+  font-size: 12px;
+  color: #64748b;
+  background: rgba(241, 245, 249, 0.9);
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-right: auto;
+}
+.ai-cs-history-close {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+.ai-cs-history-close:hover:not(:disabled) {
+  background: rgba(148, 163, 184, 0.15);
+  color: #1e293b;
+}
+.ai-cs-history-close:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ai-cs-history-loading,
+.ai-cs-history-empty,
+.ai-cs-history-error {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #64748b;
+  font-size: 13px;
+  padding: 24px;
+  text-align: center;
+}
+.ai-cs-history-retry {
+  border: 1px solid rgba(13, 107, 255, 0.4);
+  background: transparent;
+  color: #0d6bff;
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-top: 4px;
+}
+.ai-cs-history-retry:hover {
+  background: rgba(13, 107, 255, 0.08);
+}
+
+.ai-cs-history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 10px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ai-cs-history-list::-webkit-scrollbar {
+  width: 6px;
+}
+.ai-cs-history-list::-webkit-scrollbar-thumb {
+  background: rgba(13, 107, 255, 0.18);
+  border-radius: 999px;
+}
+
+.ai-cs-history-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(220, 232, 248, 0.9);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  font-family: inherit;
+}
+.ai-cs-history-item:hover:not(:disabled) {
+  background: rgba(248, 251, 255, 0.95);
+  border-color: rgba(13, 107, 255, 0.3);
+  transform: translateY(-1px);
+}
+.ai-cs-history-item:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+.ai-cs-history-item.active {
+  border-color: rgba(13, 107, 255, 0.5);
+  background: linear-gradient(135deg, rgba(237, 245, 255, 0.95), rgba(220, 234, 255, 0.7));
+  border-left: 3px solid #0d6bff;
+}
+.ai-cs-history-item.closed {
+  background: rgba(248, 250, 252, 0.6);
+}
+.ai-cs-history-item.resuming {
+  border-color: rgba(13, 107, 255, 0.4);
+  background: rgba(237, 245, 255, 0.5);
+}
+
+.ai-cs-history-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #64748b;
+}
+.ai-cs-history-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.ai-cs-history-status.active {
+  background: rgba(46, 189, 143, 0.14);
+  color: #2ebd8f;
+}
+.ai-cs-history-status.closed {
+  background: rgba(148, 163, 184, 0.18);
+  color: #64748b;
+}
+.ai-cs-history-meta {
+  color: #475569;
+}
+.ai-cs-history-time {
+  margin-left: auto;
+  color: #94a3b8;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ai-cs-history-preview {
+  font-size: 12.5px;
+  color: #334155;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-word;
+}
+
+.ai-cs-history-resuming {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #0d6bff;
+}
+
+/* 历史面板淡入淡出 */
+.ai-cs-history-fade-enter-active,
+.ai-cs-history-fade-leave-active {
+  transition: opacity 0.22s ease;
+}
+.ai-cs-history-fade-enter-from,
+.ai-cs-history-fade-leave-to {
+  opacity: 0;
 }
 .ai-cs-messages::-webkit-scrollbar {
   width: 6px;
@@ -1333,6 +1839,59 @@ onBeforeUnmount(() => {
 }
 .ai-cs-tool-status.rejected {
   color: #94a3b8;
+}
+
+/* 工具状态文本（头部右侧徽章） */
+.ai-cs-tool-status-text {
+  margin-left: auto;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.ai-cs-tool-status-text.executed {
+  background: rgba(46, 189, 143, 0.14);
+  color: #2ebd8f;
+}
+.ai-cs-tool-status-text.failed {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+}
+.ai-cs-tool-status-text.rejected {
+  background: rgba(148, 163, 184, 0.18);
+  color: #64748b;
+}
+.ai-cs-tool-status-text.accepted {
+  background: rgba(13, 107, 255, 0.12);
+  color: #0d6bff;
+}
+
+/* 查看/收起详情按钮 */
+.ai-cs-tool-toggle {
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  padding: 2px 8px;
+  font-size: 11.5px;
+  color: #0d6bff;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ai-cs-tool-toggle:hover {
+  color: #0865f4;
+}
+
+/* executed/failed 卡片状态色 */
+.ai-cs-tool-card.tool-executed {
+  border-color: rgba(46, 189, 143, 0.35);
+  border-left-color: #2ebd8f;
+}
+.ai-cs-tool-card.tool-failed {
+  border-color: rgba(239, 68, 68, 0.3);
+  border-left-color: #ef4444;
+  background: rgba(254, 242, 242, 0.9);
 }
 
 .ai-cs-tool-result {

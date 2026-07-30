@@ -94,6 +94,9 @@
           <span v-if="row.fromMall" class="subtle">商城货源</span>
           <span v-else-if="row.deliveryMode === 'card'" :class="['stock-cell', { low: (row.cardRemainCount ?? 0) <= 0 }]">
             剩余 {{ row.cardRemainCount ?? 0 }}
+            <span v-if="cardGroupSkuKey(row.cardGroupId)" class="sku-stock-tag" :title="`SKU 专属卡密池：${cardGroupSkuKey(row.cardGroupId)}`">
+              · SKU:{{ cardGroupSkuKey(row.cardGroupId) }}
+            </span>
           </span>
           <span v-else class="subtle">文本</span>
         </template>
@@ -210,6 +213,7 @@
                 <option value="" disabled>请选择卡密分组</option>
                 <option v-for="g in cardGroups" :key="g.id" :value="g.id">
                   {{ g.groupName }}（剩余 {{ g.remainCount ?? 0 }} / 共 {{ g.totalCount ?? 0 }}）
+                  <span v-if="g.skuPropertyKey"> · SKU:{{ g.skuPropertyKey }}</span>
                 </option>
               </select>
               <div v-if="cardGroupsLoading" class="subtle" style="margin-top:8px;font-size:13px">加载中…</div>
@@ -220,6 +224,9 @@
                 <span class="stock-label-text">当前剩余：</span>
                 <span :class="['stock-value-text', { low: selectedCardRemainCount <= 0 }]">
                   {{ selectedCardRemainCount }} 张
+                </span>
+                <span v-if="selectedCardGroup.skuPropertyKey" class="sku-stock-tag" style="margin-left:8px">
+                  SKU 专属：{{ selectedCardGroup.skuPropertyKey }}
                 </span>
               </div>
             </div>
@@ -629,6 +636,13 @@ const selectedCardRemainCount = computed(() => {
   const group = selectedCardGroup.value
   return group ? (group.remainCount ?? 0) : 0
 })
+
+// 根据卡密组ID查询其关联的 SKU 规格键（用于货源列表展示）
+function cardGroupSkuKey(cardGroupId) {
+  if (!cardGroupId) return ''
+  const group = cardGroups.value.find(g => String(g.id) === String(cardGroupId))
+  return group?.skuPropertyKey || ''
+}
 
 const editingUsageCount = computed(() => {
   if (!editing.value?.id) return 0
@@ -1614,6 +1628,23 @@ select.field-input {
 
 .stock-cell.low {
   color: #dc2626;
+}
+
+.sku-stock-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #2d5bff;
+  background: #eef2ff;
+  border-radius: 8px;
+  border: 1px solid #c7d2fe;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 
 .goods-cell {

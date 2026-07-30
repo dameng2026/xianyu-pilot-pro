@@ -124,8 +124,9 @@ async def ai_cs_chat(
                 yield chunk
         except Exception as exc:
             logger.warning(
-                "ai_cs_chat stream exception sessionId=%d errorType=%s",
-                session_id, type(exc).__name__,
+                "ai_cs_chat stream exception sessionId=%d errorType=%s msg=%s",
+                session_id, type(exc).__name__, str(exc)[:200],
+                exc_info=True,
             )
             yield (
                 'event: error\ndata: '
@@ -283,26 +284,40 @@ async def ai_cs_tool_execute(
 
     # 从 body 读取工具名与参数；缺失时尝试从数据库查询
     tool_name = str(payload.get("tool") or "").strip()
-    arguments = payload.get("arguments") or {}
-    if not isinstance(arguments, dict):
+    arguments = payload.get("arguments")
+    # arguments 可能是 dict（Java 解析后传入）或 JSON 字符串（DB 直读），统一规整为 dict
+    if isinstance(arguments, str):
+        if arguments.strip():
+            try:
+                import json as _json
+                parsed = _json.loads(arguments)
+                arguments = parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                arguments = {}
+        else:
+            arguments = {}
+    elif not isinstance(arguments, dict):
         arguments = {}
 
     if not tool_name and accept:
-        # 尝试从 ai_cs_tool_call 表查询（表由 Java 管理，可能不存在）
+        # 尝试从 ai_cs_tool_call 表查询（字段名为 arguments，非 arguments_json）
         try:
             from sqlalchemy import text as _text
             row = (await db.execute(_text("""
-                SELECT tool_name, arguments_json FROM ai_cs_tool_call
+                SELECT tool_name, arguments FROM ai_cs_tool_call
                 WHERE id = :id AND tenant_id = :tenant_id
                 LIMIT 1
             """), {"id": tool_call_id, "tenant_id": tenant_id})).mappings().first()
             if row:
                 tool_name = str(row.get("tool_name") or "").strip()
-                raw_args = row.get("arguments_json")
+                raw_args = row.get("arguments")
                 if raw_args:
                     try:
                         import json as _json
-                        parsed_args = _json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                        if isinstance(raw_args, str):
+                            parsed_args = _json.loads(raw_args) if raw_args.strip() else {}
+                        else:
+                            parsed_args = raw_args
                         if isinstance(parsed_args, dict):
                             arguments = parsed_args
                     except Exception:
@@ -365,6 +380,65 @@ async def ai_cs_knowledge_rebuild(
     except Exception as exc:
         logger.exception("ai_cs_knowledge_rebuild failed: %s", exc)
         return ResultObject.failed("知识库索引重建失败", code=503)
+
+
+# ============================================================
+# AI 客服自主学习：扫描 nav.js 同步功能清单到知识库
+# ============================================================
+
+@router.post("/knowledge/sync-features")
+async def ai_cs_knowledge_sync_features(
+    _: None = Depends(verify_internal_token),
+):
+    """手动触发 AI 客服自主学习：扫描前台 nav.js，同步功能清单到 ai_cs_knowledge 表。
+
+    场景：
+    - 前台新增/删除功能页面后，立即触发同步，无需等待每日定时任务
+    - 系统部署后强制刷新知识库
+    - 测试 AI 客服功能时手动刷新
+
+    同步策略：
+    1. 读取 apps/user-web/src/data/nav.js 解析 navCategories
+    2. 与 ai_cs_knowledge 表中 category='系统功能' 的现有条目对比
+    3. 新增 → INSERT；已有但内容变化 → UPDATE；已删除 → enabled=0
+    4. 同时热更新 ai_cs_tools.SYSTEM_FEATURES 内存变量
+    5. 触发知识库向量索引重建
+    """
+    try:
+        from app.services.ai_cs_feature_sync import scan_and_sync_features
+        result = await scan_and_sync_features()
+        if result.get("error"):
+            return ResultObject.failed(
+                f"同步失败：{result['error']}",
+                code=503,
+                data=result,
+            )
+        return ResultObject.success({
+            "synced": True,
+            **result,
+            "message": (
+                f"功能清单同步完成：扫描到 {result.get('categories_count', 0)} 个分类、"
+                f"{result.get('features_count', 0)} 个功能页面，"
+                f"新增 {result.get('added', 0)} 条，更新 {result.get('updated', 0)} 条，"
+                f"禁用 {result.get('disabled', 0)} 条"
+            ),
+        })
+    except Exception as exc:
+        logger.exception("ai_cs_knowledge_sync_features failed: %s", exc)
+        return ResultObject.failed("功能清单同步失败", code=503)
+
+
+@router.get("/knowledge/feature-sync-status")
+async def ai_cs_feature_sync_status(
+    _: None = Depends(verify_internal_token),
+):
+    """查询 AI 客服自主学习调度器状态。"""
+    try:
+        from app.services.ai_cs_feature_sync import get_scheduler_status
+        return ResultObject.success(get_scheduler_status())
+    except Exception as exc:
+        logger.exception("ai_cs_feature_sync_status failed: %s", exc)
+        return ResultObject.failed("查询状态失败", code=503)
 
 
 # ============================================================

@@ -26,7 +26,6 @@ assert.match(deliveryTemplates, /if \(!templatesAvailable\.value\) return/)
 
 for (const [file, availabilityName] of [
   ['DeliveryStatementPage.vue', 'settingsAvailable'],
-  [path.join('settings', 'ProductOpSettings.vue'), 'settingsAvailable'],
 ]) {
   const source = read('src', 'pages', file)
   assert.match(source, /v-else-if="loadError"/)

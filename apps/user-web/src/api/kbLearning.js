@@ -34,6 +34,22 @@ export function unbindCategory(code) {
   return request({ url: `/ai-cs/kb/categories/${code}/bind`, method: 'delete' })
 }
 
+// V1.49: 一级大类（三级分类）
+// 按一级分类 code 列出其下所有二级分类的所有 Q&A
+export function listLearnedKbByParentCategory(code, params) {
+  return request({ url: `/ai-cs/kb/parent-categories/${code}/learned`, method: 'get', params })
+}
+
+// V1.49: 一键启用某个一级分类下所有二级分类的所有 Q&A（按大类启用）
+export function bindParentCategory(code) {
+  return request({ url: `/ai-cs/kb/parent-categories/${code}/bind`, method: 'post' })
+}
+
+// V1.49: 一键取消启用某个一级分类下所有二级分类的所有 Q&A
+export function unbindParentCategory(code) {
+  return request({ url: `/ai-cs/kb/parent-categories/${code}/bind`, method: 'delete' })
+}
+
 // 用户私有 KB
 export function listUserKb() {
   return request({ url: '/ai-cs/kb/user-kb', method: 'get' })

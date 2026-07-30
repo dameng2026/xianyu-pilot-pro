@@ -105,6 +105,9 @@ public class MallProductShopController {
                 throw new BizException(400, "商品库存不足，暂时无法购买");
             }
         }
+        // 商品价格：0 表示免费商品，无需选择支付方式，由 PaymentService 自动标记已支付
+        Object priceCentObj = product.get("priceCent");
+        long priceCent = priceCentObj instanceof Number ? ((Number) priceCentObj).longValue() : 0L;
         // 组装支付订单参数
         Map<String, Object> orderData = new LinkedHashMap<>();
         orderData.put("orderType", "mall_product");
@@ -113,10 +116,18 @@ public class MallProductShopController {
         orderData.put("productId", productId);
         Object paymentMethod = body.get("paymentMethod");
         if (paymentMethod == null) paymentMethod = body.get("channel");
-        if (paymentMethod == null || String.valueOf(paymentMethod).isBlank()) {
-            throw new BizException(400, "请选择支付方式");
+        if (priceCent > 0) {
+            // 付费商品必须选择支付方式
+            if (paymentMethod == null || String.valueOf(paymentMethod).isBlank()) {
+                throw new BizException(400, "请选择支付方式");
+            }
+            orderData.put("paymentMethod", paymentMethod);
+        } else {
+            // 免费商品：paymentMethod 可不传，PaymentService 会跳过支付网关直接完成订单
+            if (paymentMethod != null && !String.valueOf(paymentMethod).isBlank()) {
+                orderData.put("paymentMethod", paymentMethod);
+            }
         }
-        orderData.put("paymentMethod", paymentMethod);
         String clientIp = ClientIpResolver.resolve(request);
         try {
             return Result.ok(paymentService.createOrder(orderData, clientIp));

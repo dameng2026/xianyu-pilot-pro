@@ -35,6 +35,18 @@ export function closeSession(sessionId) {
   return request({ url: `${BASE}/session/close`, method: 'post', data: { sessionId } })
 }
 
+// 列出当前用户的历史会话（最多 30 条未归档会话，按最后活跃时间倒序）
+// 每条会话附带首条用户消息作为预览，便于识别会话主题
+export function listUserSessions(limit = 30) {
+  return request({ url: `${BASE}/sessions`, method: 'get', params: { limit } })
+}
+
+// 恢复已关闭的会话为活跃状态，用于"继续对话"
+// 关闭当前活跃会话（如果有），将目标会话 status=1
+export function resumeSession(sessionId) {
+  return request({ url: `${BASE}/session/resume`, method: 'post', data: { sessionId } })
+}
+
 // 拉取历史消息
 export function listMessages(sessionId, limit = 100) {
   return request({ url: `${BASE}/messages`, method: 'get', params: { sessionId, limit } })

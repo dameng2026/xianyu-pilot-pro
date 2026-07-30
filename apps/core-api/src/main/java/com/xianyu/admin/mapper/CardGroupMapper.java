@@ -34,8 +34,8 @@ public interface CardGroupMapper {
     @Select("SELECT * FROM card_group WHERE tenant_id = #{tenantId} AND id = #{id} AND deleted = 0")
     CardGroup findById(@Param("tenantId") Long tenantId, @Param("id") Long id);
 
-    @Insert("INSERT INTO card_group(tenant_id, group_name, description, group_type, card_prefix, password_prefix, remark, alert_threshold, cost_price, suggested_price, total_count, used_count, remain_count, available_count, status, deleted, created_time, updated_time) " +
-            "VALUES(#{tenantId}, #{groupName}, #{description}, #{groupType}, #{cardPrefix}, #{passwordPrefix}, #{remark}, #{alertThreshold}, #{costPrice}, #{suggestedPrice}, #{totalCount}, #{usedCount}, #{remainCount}, #{remainCount}, #{status}, 0, NOW(), NOW())")
+    @Insert("INSERT INTO card_group(tenant_id, group_name, description, group_type, card_prefix, password_prefix, remark, alert_threshold, cost_price, suggested_price, total_count, used_count, remain_count, available_count, sku_property_key, status, deleted, created_time, updated_time) " +
+            "VALUES(#{tenantId}, #{groupName}, #{description}, #{groupType}, #{cardPrefix}, #{passwordPrefix}, #{remark}, #{alertThreshold}, #{costPrice}, #{suggestedPrice}, #{totalCount}, #{usedCount}, #{remainCount}, #{remainCount}, #{skuPropertyKey}, #{status}, 0, NOW(), NOW())")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(CardGroup group);
 
@@ -43,7 +43,7 @@ public interface CardGroupMapper {
             "card_prefix = #{cardPrefix}, password_prefix = #{passwordPrefix}, remark = #{remark}, " +
             "alert_threshold = #{alertThreshold}, cost_price = #{costPrice}, suggested_price = #{suggestedPrice}, " +
             "total_count = #{totalCount}, used_count = #{usedCount}, remain_count = #{remainCount}, available_count = #{remainCount}, " +
-            "status = #{status}, updated_time = NOW() " +
+            "sku_property_key = #{skuPropertyKey}, status = #{status}, updated_time = NOW() " +
             "WHERE tenant_id = #{tenantId} AND id = #{id} AND deleted = 0")
     int update(CardGroup group);
 

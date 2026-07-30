@@ -1,92 +1,128 @@
 <template>
   <div class="cw-page">
-    <div v-if="error" class="global-notice error">{{ error }}</div>
-    <div v-if="success" class="global-notice success">{{ success }}</div>
+    <div v-if="error" class="cw-toast cw-toast-error">
+      <span class="cw-toast-icon">❌</span>{{ error }}
+    </div>
+    <div v-if="success" class="cw-toast cw-toast-success">
+      <span class="cw-toast-icon">✅</span>{{ success }}
+    </div>
+
     <div class="cw-header">
       <div>
         <h2 class="cw-title">卡密仓库</h2>
         <p class="cw-subtitle">管理卡密库存，支持批量导入、自动发货领取、库存预警</p>
       </div>
+      <div class="cw-header-actions">
+        <button class="cw-header-btn cw-header-btn-primary" :disabled="!groupsAvailable" @click="openCreateDialog">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          新建卡密组
+        </button>
+      </div>
     </div>
-    <div class="grid wide-right cw-grid">
-    <!-- Left -->
-    <div>
-      <div class="cw-stat-grid">
-        <div class="cw-stat-card">
-          <div class="cw-stat-icon cw-stat-blue">
-            <Icon name="product" />
-          </div>
-          <div class="cw-stat-info">
-            <span>卡密组</span>
-            <strong>{{ groupMetric(groups.length) }}</strong>
-            <em v-if="groupsAvailable">总分组数</em>
-            <em v-else class="text-danger">状态不可用</em>
-          </div>
+
+    <div class="cw-banner">
+      <div class="cw-banner-icon">🔑</div>
+      <div class="cw-banner-content">
+        <div class="cw-banner-title">安全高效的卡密管理</div>
+        <p class="cw-banner-desc">
+          卡密按分组管理，支持粘贴或文件批量导入，自动发货时安全领取库存。设置库存预警阈值，库存不足时及时提醒补货，避免发货失败。
+        </p>
+      </div>
+      <div class="cw-banner-stats">
+        <div class="cw-banner-stat cw-banner-stat-blue">
+          <b>{{ groupMetric(groups.length) }}</b>
+          <span>卡密组</span>
         </div>
-        <div class="cw-stat-card">
-          <div class="cw-stat-icon cw-stat-indigo">
-            <Icon name="key" />
-          </div>
-          <div class="cw-stat-info">
-            <span>卡密总量</span>
-            <strong>{{ groupMetric(stockStats.total) }}</strong>
-            <em v-if="groupsAvailable">全部卡密</em>
-            <em v-else class="text-danger">状态不可用</em>
-          </div>
+        <div class="cw-banner-stat cw-banner-stat-green">
+          <b>{{ groupMetric(stockStats.remain) }}</b>
+          <span>可用库存</span>
         </div>
-        <div class="cw-stat-card">
-          <div class="cw-stat-icon cw-stat-green">
-            <Icon name="key" />
-          </div>
-          <div class="cw-stat-info">
-            <span>未使用</span>
-            <strong class="text-success">{{ groupMetric(stockStats.remain) }}</strong>
-            <em v-if="groupsAvailable">可用库存</em>
-            <em v-else class="text-danger">状态不可用</em>
-          </div>
-        </div>
-        <div class="cw-stat-card">
-          <div class="cw-stat-icon cw-stat-gray">
-            <Icon name="account" />
-          </div>
-          <div class="cw-stat-info">
-            <span>已使用</span>
-            <strong>{{ groupMetric(stockStats.used) }}</strong>
-            <em v-if="groupsAvailable">已消耗</em>
-            <em v-else class="text-danger">状态不可用</em>
-          </div>
-        </div>
-        <div class="cw-stat-card">
-          <div class="cw-stat-icon cw-stat-orange">
-            <Icon name="warning" />
-          </div>
-          <div class="cw-stat-info">
-            <span>异常/作废</span>
-            <strong class="text-warning">{{ groupMetric(stockStats.invalid) }}</strong>
-            <em v-if="groupsAvailable">需关注</em>
-            <em v-else class="text-danger">状态不可用</em>
-          </div>
-        </div>
-        <div class="cw-stat-card">
-          <div class="cw-stat-icon cw-stat-red">
-            <Icon name="warning" />
-          </div>
-          <div class="cw-stat-info">
-            <span>低库存</span>
-            <strong class="text-danger">{{ groupMetric(lowStockCount) }}</strong>
-            <em v-if="groupsAvailable">低于预警阈值</em>
-            <em v-else class="text-danger">状态不可用</em>
-          </div>
+        <div class="cw-banner-stat" :class="lowStockCount > 0 ? 'cw-banner-stat-red' : 'cw-banner-stat-gray'">
+          <b>{{ groupMetric(lowStockCount) }}</b>
+          <span>低库存预警</span>
         </div>
       </div>
-      <CardPanel>
-        <div class="toolbar">
-          <div class="toolbar-search">
-            <input v-model="query.keyword" class="input large" placeholder="搜索卡密组名称" @keyup.enter="load">
+    </div>
+
+    <div class="cw-layout">
+      <div class="cw-left">
+        <div class="cw-stat-grid">
+          <div class="cw-stat-card">
+            <div class="cw-stat-icon cw-stat-blue">
+              <Icon name="product" />
+            </div>
+            <div class="cw-stat-info">
+              <span>卡密组</span>
+              <strong>{{ groupMetric(groups.length) }}</strong>
+              <em v-if="groupsAvailable">总分组数</em>
+              <em v-else class="text-danger">状态不可用</em>
+            </div>
+          </div>
+          <div class="cw-stat-card">
+            <div class="cw-stat-icon cw-stat-indigo">
+              <Icon name="key" />
+            </div>
+            <div class="cw-stat-info">
+              <span>卡密总量</span>
+              <strong>{{ groupMetric(stockStats.total) }}</strong>
+              <em v-if="groupsAvailable">全部卡密</em>
+              <em v-else class="text-danger">状态不可用</em>
+            </div>
+          </div>
+          <div class="cw-stat-card">
+            <div class="cw-stat-icon cw-stat-green">
+              <Icon name="key" />
+            </div>
+            <div class="cw-stat-info">
+              <span>未使用</span>
+              <strong class="text-success">{{ groupMetric(stockStats.remain) }}</strong>
+              <em v-if="groupsAvailable">可用库存</em>
+              <em v-else class="text-danger">状态不可用</em>
+            </div>
+          </div>
+          <div class="cw-stat-card">
+            <div class="cw-stat-icon cw-stat-gray">
+              <Icon name="account" />
+            </div>
+            <div class="cw-stat-info">
+              <span>已使用</span>
+              <strong>{{ groupMetric(stockStats.used) }}</strong>
+              <em v-if="groupsAvailable">已消耗</em>
+              <em v-else class="text-danger">状态不可用</em>
+            </div>
+          </div>
+          <div class="cw-stat-card">
+            <div class="cw-stat-icon cw-stat-orange">
+              <Icon name="warning" />
+            </div>
+            <div class="cw-stat-info">
+              <span>异常/作废</span>
+              <strong class="text-warning">{{ groupMetric(stockStats.invalid) }}</strong>
+              <em v-if="groupsAvailable">需关注</em>
+              <em v-else class="text-danger">状态不可用</em>
+            </div>
+          </div>
+          <div class="cw-stat-card">
+            <div class="cw-stat-icon cw-stat-red">
+              <Icon name="warning" />
+            </div>
+            <div class="cw-stat-info">
+              <span>低库存</span>
+              <strong class="text-danger">{{ groupMetric(lowStockCount) }}</strong>
+              <em v-if="groupsAvailable">低于预警阈值</em>
+              <em v-else class="text-danger">状态不可用</em>
+            </div>
+          </div>
+        </div>
+
+        <CardPanel>
+          <div class="cw-toolbar">
+            <div class="cw-search">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input v-model="query.keyword" class="cw-search-input" placeholder="搜索卡密组名称" @keyup.enter="load">
+            </div>
             <AppButton @click="load">搜索</AppButton>
           </div>
-          <AppButton type="primary" :disabled="!groupsAvailable" @click="openCreateDialog">+ 新建卡密组</AppButton>
-        </div>
         <EmptyState v-if="groupsLoadError" variant="error" title="卡密分组暂时无法加载" :description="groupsLoadError">
           <template #actions><AppButton @click="load">重新加载</AppButton></template>
         </EmptyState>
@@ -95,6 +131,7 @@
             <div class="group-name-cell">
               <strong>{{ row.groupName }}</strong>
               <em v-if="row.remark" class="subtle group-remark">{{ row.remark }}</em>
+              <span v-if="row.skuPropertyKey" class="sku-tag" :title="`专属卡密池：${row.skuPropertyKey}`">SKU:{{ row.skuPropertyKey }}</span>
             </div>
           </template>
           <template #cardType="{row}">
@@ -162,21 +199,22 @@
             </span>
           </div>
         </div>
-      </CardPanel>
-    </div>
-    <!-- Right -->
-    <div>
-      <CardPanel :title="selected ? selected.groupName : '卡密详情'" class="cw-detail-panel">
-        <EmptyState v-if="!selected" icon="👈" title="请选择卡密分组" description="从左侧列表选择一个卡密组，查看卡密明细、使用记录和导入历史。" style="padding:40px 0" />
-        <template v-else>
-          <div class="tab-bar">
-            <button v-for="t in tabs" :key="t.key" :class="['tab-btn', { active: activeTab === t.key }]" @click="switchTab(t.key)">{{ t.label }}</button>
-          </div>
-          <!-- 卡密明细 -->
-          <div v-show="activeTab === 'items'">
-            <div class="toolbar" style="margin-bottom:8px">
-              <span class="table-info">共 <b>{{ itemTotal ?? '—' }}</b> 条卡密</span>
-              <select v-model="itemStatusFilter" class="input" style="max-width:140px;margin-left:auto" @change="loadItems">
+        </CardPanel>
+      </div>
+
+      <!-- Right -->
+      <div class="cw-right">
+        <CardPanel :title="selected ? selected.groupName : '卡密详情'" class="cw-detail-panel">
+          <EmptyState v-if="!selected" icon="👈" title="请选择卡密分组" description="从左侧列表选择一个卡密组，查看卡密明细、使用记录和导入历史。" style="padding:40px 0" />
+          <template v-else>
+            <div class="cw-tabs">
+              <button v-for="t in tabs" :key="t.key" :class="['cw-tab', { active: activeTab === t.key }]" @click="switchTab(t.key)">{{ t.label }}</button>
+            </div>
+            <!-- 卡密明细 -->
+            <div v-show="activeTab === 'items'">
+              <div class="cw-mini-toolbar">
+                <span class="cw-table-count">共 <b>{{ itemTotal ?? '—' }}</b> 条卡密</span>
+                <select v-model="itemStatusFilter" class="cw-input cw-input-sm" @change="loadItems">
                 <option value="">全部状态</option>
                 <option value="0">未使用</option>
                 <option value="1">已锁定</option>
@@ -214,11 +252,11 @@
               <button class="page-no" :disabled="itemPage >= itemPages" @click="itemPage++; loadItems()">›</button>
             </div>
           </div>
-          <!-- 使用记录 -->
-          <div v-show="activeTab === 'usage'">
-            <div class="toolbar" style="margin-bottom:8px">
-              <span class="table-info">共 <b>{{ usageTotal ?? '—' }}</b> 条使用记录</span>
-            </div>
+            <!-- 使用记录 -->
+            <div v-show="activeTab === 'usage'">
+              <div class="cw-mini-toolbar">
+                <span class="cw-table-count">共 <b>{{ usageTotal ?? '—' }}</b> 条使用记录</span>
+              </div>
             <EmptyState v-if="usageLoadError" variant="error" title="使用记录加载失败" :description="usageLoadError">
               <template #actions><AppButton @click="loadUsageRecords">重试</AppButton></template>
             </EmptyState>
@@ -292,6 +330,11 @@
           <div class="form-row cw-full-row">
             <label>备注</label>
             <textarea v-model="editForm.remark" class="input cw-textarea" rows="3" placeholder="可选备注信息"></textarea>
+          </div>
+          <div class="form-row cw-full-row">
+            <label>关联 SKU 规格键 <span class="subtle">（可选，仅多规格商品专属卡密池需填）</span></label>
+            <input v-model="editForm.skuPropertyKey" class="input" placeholder="例如：颜色=红色；留空=通用卡密池" />
+            <span class="subtle count-hint">填写后此卡密组仅服务于对应规格的 SKU；留空则作为通用卡密池服务所有规格</span>
           </div>
         </div>
         <div class="toolbar modal-toolbar">
@@ -379,7 +422,8 @@ const editForm = reactive({
   id: null,
   groupName: '',
   cardKeys: '',
-  remark: ''
+  remark: '',
+  skuPropertyKey: ''
 })
 
 // ─── Card Type Labels ───
@@ -522,6 +566,7 @@ function openCreateDialog() {
   editForm.groupName = ''
   editForm.cardKeys = ''
   editForm.remark = ''
+  editForm.skuPropertyKey = ''
   editDialogVisible.value = true
 }
 
@@ -531,6 +576,7 @@ function openEditDialog(group) {
   editForm.groupName = group.groupName || ''
   editForm.cardKeys = ''
   editForm.remark = group.remark || ''
+  editForm.skuPropertyKey = group.skuPropertyKey || ''
   editDialogVisible.value = true
 }
 
@@ -548,7 +594,11 @@ async function saveGroup() {
   error.value = ''
   success.value = ''
   try {
-    const data = { groupName: editForm.groupName.trim(), remark: editForm.remark.trim() || null }
+    const data = {
+      groupName: editForm.groupName.trim(),
+      remark: editForm.remark.trim() || null,
+      skuPropertyKey: editForm.skuPropertyKey.trim() || null
+    }
     if (editForm.id) {
       await updateCard(editForm.id, data)
       success.value = '卡密分组已更新'
@@ -615,6 +665,7 @@ async function removeGroup(id) {
 
 // ─── Import ───
 async function submitImport() {
+  if (!await guardFeatureAction()) return
   if (!groupsAvailable.value) return
   if (importing.value) return
   if (!importGroupId.value) {
@@ -883,32 +934,175 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* ── 页面容器 ── */
 .cw-page {
   width: 100%;
 }
 
+/* ── Toast 提示 ── */
+.cw-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  font-weight: 600;
+  animation: cw-toast-in .25s ease;
+}
+@keyframes cw-toast-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.cw-toast-icon { font-size: 15px; flex-shrink: 0; }
+.cw-toast-success { background: #ecfdf3; color: #067647; border: 1px solid #abefc6; }
+.cw-toast-error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+
+/* ── 页面头部 ── */
 .cw-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 18px;
-  padding: 2px 2px 0;
+  padding: 0 2px;
 }
 .cw-title {
   margin: 0;
-  font-size: 24px;
+  font-size: 26px;
   font-weight: 800;
   color: #15213d;
-  letter-spacing: .3px;
+  letter-spacing: -0.3px;
 }
 .cw-subtitle {
   margin: 6px 0 0;
   font-size: 14px;
   color: #7a879e;
 }
+.cw-header-actions {
+  display: flex;
+  gap: 10px;
+}
+.cw-header-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 16px;
+  border: 1px solid #dbe4f2;
+  border-radius: 10px;
+  background: #fff;
+  color: #526079;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .18s;
+}
+.cw-header-btn:hover:not(:disabled) {
+  border-color: #0d6bff;
+  color: #0d6bff;
+  background: #f0f6ff;
+}
+.cw-header-btn-primary {
+  background: linear-gradient(135deg, #0d6bff, #3b82f6);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(13, 107, 255, .25);
+}
+.cw-header-btn-primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #0b5fe6, #2563eb);
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(13, 107, 255, .3);
+}
+.cw-header-btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
 
-.cw-grid {
+/* ── 功能说明横幅 ── */
+.cw-banner {
+  display: flex;
+  align-items: center;
   gap: 18px;
+  padding: 18px 22px;
+  background: linear-gradient(135deg, #f0f7ff 0%, #e8f2ff 50%, #f5f3ff 100%);
+  border: 1px solid #d8e6ff;
+  border-radius: 16px;
+  margin-bottom: 18px;
+}
+.cw-banner-icon {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  background: linear-gradient(135deg, #fff, #e8f2ff);
+  border-radius: 14px;
+  box-shadow: 0 4px 12px rgba(13, 107, 255, .10);
+}
+.cw-banner-content {
+  flex: 1;
+  min-width: 0;
+}
+.cw-banner-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1a2742;
+  margin-bottom: 4px;
+}
+.cw-banner-desc {
+  margin: 0;
+  font-size: 13px;
+  color: #5b6b88;
+  line-height: 1.6;
+}
+.cw-banner-stats {
+  display: flex;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.cw-banner-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 14px;
+  background: #fff;
+  border-radius: 12px;
+  min-width: 72px;
+  box-shadow: 0 2px 8px rgba(31, 53, 94, .06);
+}
+.cw-banner-stat b {
+  font-size: 22px;
+  font-weight: 800;
+  color: #15213d;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.cw-banner-stat span {
+  font-size: 11px;
+  color: #8896ab;
+  font-weight: 600;
+  margin-top: 2px;
+}
+.cw-banner-stat-blue b { color: #0d6bff; }
+.cw-banner-stat-green b { color: #16bf78; }
+.cw-banner-stat-red b { color: #ef4444; }
+.cw-banner-stat-gray b { color: #98a2b3; }
+
+/* ── 布局 ── */
+.cw-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 18px;
+}
+.cw-left {
+  min-width: 0;
+}
+.cw-right {
+  min-width: 0;
 }
 
 /* ── 统计卡片 ── */
@@ -923,15 +1117,15 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 14px;
   background: #fff;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line, #e8edf5);
   border-radius: 14px;
   padding: 18px 16px;
-  box-shadow: var(--shadow);
+  box-shadow: 0 2px 8px rgba(31, 53, 94, .04);
   transition: transform .2s, box-shadow .2s;
 }
 .cw-stat-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(31, 53, 94, .10);
+  box-shadow: 0 6px 18px rgba(31, 53, 94, .10);
 }
 .cw-stat-icon {
   width: 44px;
@@ -978,32 +1172,51 @@ onBeforeUnmount(() => {
 .cw-stat-info strong.text-danger { color: #ef4444; }
 .cw-stat-info em.text-danger { color: #ef4444; }
 
-/* ── 工具栏 ── */
-.toolbar {
+/* ── 工具栏 / 搜索框 ── */
+.cw-toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   margin: 0 0 16px;
 }
-.toolbar-search {
+.cw-search {
   display: flex;
-  gap: 10px;
-  margin-right: auto;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid #e2e8f2;
+  border-radius: 10px;
+  background: #fff;
+  transition: all .18s;
 }
-.toolbar-search .input.large {
-  width: 300px;
-  transition: border-color .18s, box-shadow .18s;
-}
-.toolbar-search .input.large:focus {
+.cw-search:focus-within {
   border-color: #0d6bff;
   box-shadow: 0 0 0 3px rgba(13, 107, 255, .10);
+}
+.cw-search svg {
+  color: #98a2b3;
+  flex-shrink: 0;
+}
+.cw-search-input {
+  flex: 1;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 13px;
+  color: #1a2742;
+}
+.cw-search-input::placeholder {
+  color: #98a2b3;
 }
 
 /* ── 分组列表行 ── */
 .group-name-cell {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 .group-name-cell strong {
   font-size: 14px;
@@ -1016,6 +1229,22 @@ onBeforeUnmount(() => {
   color: #98a2b3;
   display: block;
   max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sku-tag {
+  display: inline-block;
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #2d5bff;
+  background: #eef2ff;
+  border-radius: 10px;
+  border: 1px solid #c7d2fe;
+  max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1040,8 +1269,8 @@ onBeforeUnmount(() => {
   color: #0d6bff;
   font-weight: 600;
   font-size: 13px;
-  padding: 4px 8px;
-  border-radius: 6px;
+  padding: 5px 10px;
+  border-radius: 8px;
   cursor: pointer;
   transition: background .15s, color .15s;
   margin: 0;
@@ -1068,7 +1297,7 @@ onBeforeUnmount(() => {
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 13px;
   line-height: 1.7;
-  border-color: var(--line);
+  border-color: #e2e8f2;
   border-radius: 10px;
   transition: border-color .18s, box-shadow .18s;
 }
@@ -1099,15 +1328,15 @@ onBeforeUnmount(() => {
 .import-tabs {
   display: flex;
   gap: 4px;
-  background: #f5f6fa;
-  border-radius: 10px;
+  background: #f5f7fb;
+  border-radius: 12px;
   padding: 4px;
 }
 .import-tab {
   flex: 1;
-  padding: 9px 14px;
+  padding: 10px 14px;
   border: none;
-  border-radius: 8px;
+  border-radius: 9px;
   background: transparent;
   color: #526079;
   font-size: 13px;
@@ -1122,7 +1351,7 @@ onBeforeUnmount(() => {
 .import-tab.active {
   background: #fff;
   color: #0d6bff;
-  box-shadow: 0 2px 6px rgba(31, 53, 94, .08);
+  box-shadow: 0 2px 8px rgba(31, 53, 94, .08);
 }
 
 /* ── 文件拖放区 ── */
@@ -1157,20 +1386,49 @@ onBeforeUnmount(() => {
 .import-duplicate { color: #f59e0b; }
 .import-fail { color: #ef4444; }
 
-/* ── 右侧详情面板 Tab ── */
-.tab-bar {
+/* ── 输入框基础样式 ── */
+.cw-input {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid #e2e8f2;
+  border-radius: 9px;
+  font-size: 13px;
+  color: #1a2742;
+  background: #fff;
+  transition: all .18s;
+}
+.cw-input-sm {
+  height: 34px;
+  font-size: 12px;
+}
+.cw-input:focus {
+  outline: none;
+  border-color: #0d6bff;
+  box-shadow: 0 0 0 3px rgba(13, 107, 255, .10);
+}
+select.cw-input {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7a90' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+}
+
+/* ── 右侧详情面板 Tabs ── */
+.cw-tabs {
   display: flex;
   gap: 4px;
   margin-bottom: 16px;
-  background: #f5f6fa;
-  border-radius: 10px;
+  background: #f5f7fb;
+  border-radius: 12px;
   padding: 4px;
 }
-.tab-btn {
+.cw-tab {
   flex: 1;
   padding: 10px 14px;
   border: none;
-  border-radius: 8px;
+  border-radius: 9px;
   background: transparent;
   color: #526079;
   font-size: 13px;
@@ -1178,21 +1436,34 @@ onBeforeUnmount(() => {
   font-weight: 600;
   transition: all .18s;
 }
-.tab-btn:hover:not(.active) {
+.cw-tab:hover:not(.active) {
   color: #0d6bff;
   background: rgba(13, 107, 255, .05);
 }
-.tab-btn.active {
+.cw-tab.active {
   background: #fff;
   color: #0d6bff;
-  box-shadow: 0 2px 6px rgba(31, 53, 94, .08);
+  box-shadow: 0 2px 8px rgba(31, 53, 94, .08);
 }
 
-/* ── 表格信息 ── */
-.table-info {
-  font-size: 14px;
+/* ── 迷你工具栏 ── */
+.cw-mini-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.cw-table-count {
+  font-size: 13px;
   color: #526079;
   font-weight: 600;
+  margin-right: auto;
+}
+.cw-table-count b {
+  color: #0d6bff;
+  font-weight: 800;
+  font-size: 15px;
+  margin: 0 2px;
 }
 
 /* ── 卡密内容文本 ── */
@@ -1207,8 +1478,8 @@ onBeforeUnmount(() => {
   font-size: 13px;
   color: #1e3a6b;
   background: #f6f9ff;
-  padding: 3px 8px;
-  border-radius: 5px;
+  padding: 4px 10px;
+  border-radius: 6px;
   border: 1px solid #e8eef8;
 }
 
@@ -1292,15 +1563,15 @@ onBeforeUnmount(() => {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(20, 36, 58, .50);
-  backdrop-filter: blur(3px);
+  background: rgba(15, 23, 42, .45);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  animation: cw-fade-in .2s ease;
+  animation: cw-overlay-in .2s ease;
 }
-@keyframes cw-fade-in {
+@keyframes cw-overlay-in {
   from { opacity: 0; }
   to { opacity: 1; }
 }
@@ -1308,19 +1579,19 @@ onBeforeUnmount(() => {
   background: #fff;
   border-radius: 20px;
   padding: 30px;
-  max-width: 560px;
+  max-width: 580px;
   width: 90%;
-  max-height: 82vh;
+  max-height: 85vh;
   overflow-y: auto;
   box-shadow: 0 28px 80px rgba(17, 35, 67, .22);
   animation: cw-modal-in .25s cubic-bezier(.2,1,.3,1);
 }
 @keyframes cw-modal-in {
-  from { opacity: 0; transform: translateY(12px) scale(.98); }
+  from { opacity: 0; transform: translateY(16px) scale(.97); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 .modal-content h3 {
-  margin: 0 0 20px;
+  margin: 0 0 22px;
   font-size: 20px;
   font-weight: 800;
   color: #16213e;
@@ -1334,7 +1605,7 @@ onBeforeUnmount(() => {
   grid-column: 1 / -1;
 }
 .required { color: #ef4444; }
-.subtle { color: #98a2b3; font-size: 13px; }
+.subtle { color: #98a2b3; font-size: 12px; font-weight: 500; }
 .text-success { color: #16bf78 !important; }
 .text-warning { color: #f59e0b !important; }
 .text-danger { color: #ef4444 !important; }
@@ -1343,6 +1614,7 @@ onBeforeUnmount(() => {
 :deep(.form-row input),
 :deep(.form-row select) {
   transition: border-color .18s, box-shadow .18s;
+  border-radius: 10px;
 }
 :deep(.form-row input:focus),
 :deep(.form-row select:focus) {
@@ -1352,6 +1624,12 @@ onBeforeUnmount(() => {
 }
 :deep(.form-row label) {
   font-size: 13px;
+  font-weight: 600;
+  color: #4a5b75;
+}
+:deep(.form-row .input) {
+  border-radius: 10px;
+  border-color: #e2e8f2;
 }
 
 /* ── 右侧详情面板固定 ── */
@@ -1370,13 +1648,38 @@ onBeforeUnmount(() => {
 }
 
 /* ── 响应式 ── */
-@media (max-width: 1500px) {
-  .cw-grid {
+@media (max-width: 1400px) {
+  .cw-layout {
     grid-template-columns: 1fr;
   }
   .cw-detail-panel {
     position: static;
     max-height: none;
+  }
+  .cw-stat-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 900px) {
+  .cw-banner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .cw-banner-stats {
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .cw-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .cw-stat-grid {
+    grid-template-columns: 1fr;
+  }
+  .stock-stats {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 </style>

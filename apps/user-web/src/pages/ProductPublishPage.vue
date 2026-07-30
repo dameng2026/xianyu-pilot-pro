@@ -208,7 +208,7 @@
         </div>
       </CardPanel>
 
-      <CardPanel style="margin-top:16px">
+      <CardPanel ref="multispecCardRef" style="margin-top:16px">
         <template #title>
           <div class="multispec-card-title">
             <span class="multispec-card-title-icon" aria-hidden="true">⚙</span>
@@ -232,6 +232,10 @@
           <span class="multispec-banner-icon" aria-hidden="true">✓</span>
           <span>当前账号为鱼小铺，可开启多规格商品（最多 2 个规格类型）</span>
         </div>
+        <div v-else class="multispec-banner multispec-banner-active">
+          <span class="multispec-banner-icon" aria-hidden="true">✓</span>
+          <span>已开启多规格商品，当前商品支持设置多规格，最多支持 2 个规格类型，价格和库存请在 SKU 组合中填写</span>
+        </div>
 
         <!-- 多规格开关 -->
         <div class="auto-delivery-toggle multispec-toggle-row" :class="{ 'multispec-toggle-on': form.multiSpecEnabled }">
@@ -240,7 +244,7 @@
               <span class="multispec-toggle-status-dot" :class="{ 'on': form.multiSpecEnabled }" aria-hidden="true"></span>
               开启多规格
             </span>
-            <span class="subtle">开启后可设置规格类型、规格值、规格图片，并自动生成 SKU 笛卡尔积（价格、库存按 SKU 维度填写）</span>
+            <span class="subtle">开启后可设置规格类型和规格值，系统自动生成 SKU 组合，价格和库存在 SKU 组合中填写</span>
           </div>
           <ToggleSwitch :on="form.multiSpecEnabled" @click="toggleMultiSpec" />
         </div>
@@ -249,7 +253,6 @@
         <MultiSpecEditor
           v-if="form.multiSpecEnabled"
           v-model="multiSpecData"
-          @upload-spec-image="onUploadSpecImage"
           @upload-sku-cover="onUploadSkuCover"
         />
       </CardPanel>
@@ -360,7 +363,7 @@ import ToggleSwitch from '../components/ToggleSwitch.vue'
 import PublishAddressCascader from '../components/PublishAddressCascader.vue'
 import MultiSpecEditor from '../components/MultiSpecEditor.vue'
 import { getLiteAccounts, checkAccountAuth } from '../api/accounts.js'
-import { createGoods, getGoods } from '../api/goods.js'
+import { createGoods, createGoodsWithRetry, stashPendingLocalGoods, getGoods } from '../api/goods.js'
 import { getDeliverySources, applyDeliverySourceToGoods } from '../api/autoDelivery.js'
 import { publishItem, autoCategory } from '../api/items.js'
 import { publishFishShopItem } from '../api/fishShop.js'
@@ -379,6 +382,7 @@ import { loadPublishDraft, savePublishDraft, clearPublishDraft } from '../utils/
 import { loadLastPublishAddress, saveLastPublishAddress } from '../utils/publishLastAddress.js'
 import { setNavigationGuard, clearNavigationGuard } from '../utils/navigationGuard.js'
 import { promptDraftChoice } from '../composables/draftGuardState.js'
+import { guardFeatureAction } from '../composables/featureGuard.js'
 import { friendlyError } from '../utils/friendlyError.js'
 
 const emit = defineEmits(['navigate'])
@@ -391,6 +395,7 @@ const submitting = ref(false)
 const fileInput = ref(null)
 const dragIndex = ref(-1)
 const categoryRefreshGate = createRequestGate()
+const multispecCardRef = ref(null)
 
 // ---- 分类级联 ----
 const categories = ref([])
@@ -933,40 +938,6 @@ function toggleAutoDelivery() {
   }
 }
 
-// 多规格：规格图片上传（复用项目已有 uploadImage 能力）
-async function onUploadSpecImage({ pIdx, vIdx }) {
-  if (!form.accountId) {
-    error.value = '请先选择闲鱼账号'
-    return
-  }
-  // 触发文件选择
-  const input = document.createElement('input')
-  input.type = 'file'
-  input.accept = 'image/jpeg,image/png,image/gif,image/webp'
-  input.onchange = async () => {
-    const file = input.files?.[0]
-    if (!file) return
-    const validationMsg = imageUploadValidationMessage(file)
-    if (validationMsg) {
-      error.value = validationMsg
-      return
-    }
-    try {
-      const res = await uploadImage(form.accountId, file)
-      const url = res?.data?.url
-      if (!url) throw new Error('上传响应格式异常')
-      // 写入到对应的规格值
-      const prop = multiSpecData.propertyGroups[pIdx]
-      if (prop && prop.propertyValues[vIdx]) {
-        prop.propertyValues[vIdx].propertyValueImg = url
-      }
-    } catch (e) {
-      error.value = `规格图片上传失败：${e?.message || '请稍后重试'}`
-    }
-  }
-  input.click()
-}
-
 // 多规格：SKU 封面图上传（复用 uploadImage 能力）
 async function onUploadSkuCover({ sIdx }) {
   if (!form.accountId) {
@@ -1042,10 +1013,76 @@ const checks = computed(() => [
   { text: '已上传商品图片', ok: form.imageUrls.length > 0 },
   { text: '分类已选择', ok: !!selectedCategoryName.value },
   { text: '已完成省、市、区选择', ok: isPublishAddressComplete(selectedAddress.value) },
-  { text: '价格已填写', ok: Number(form.price) > 0 },
-  { text: '库存数大于 0', ok: totalStock.value > 0 },
+  { text: '价格已填写', ok: form.multiSpecEnabled ? multiSpecAllPricesValid.value : Number(form.price) > 0 },
+  { text: '库存数大于 0', ok: form.multiSpecEnabled ? multiSpecAllStocksValid.value : totalStock.value > 0 },
   { text: '自动发货货源已选择', ok: !autoDelivery.enabled || !!autoDelivery.sourceId },
 ])
+
+// 多规格场景下：所有 SKU 价格已填写且合法
+const multiSpecAllPricesValid = computed(() => {
+  if (!form.multiSpecEnabled) return false
+  if (multiSpecData.skuList.length === 0) return false
+  return multiSpecData.skuList.every(s => {
+    const p = parseFloat(s.price)
+    return !isNaN(p) && p >= 0
+  })
+})
+
+// 多规格场景下：所有 SKU 库存已填写且合法
+const multiSpecAllStocksValid = computed(() => {
+  if (!form.multiSpecEnabled) return false
+  if (multiSpecData.skuList.length === 0) return false
+  return multiSpecData.skuList.every(s => {
+    const q = parseInt(s.quantity, 10)
+    return !isNaN(q) && q >= 0
+  })
+})
+
+// 多规格 SKU 校验：返回第一个未完成项的描述
+function findMultiSpecIncomplete() {
+  if (!form.multiSpecEnabled) return null
+  if (multiSpecData.propertyGroups.length === 0) {
+    return { text: '多规格：至少需要添加一个规格类型', section: 'multispec' }
+  }
+  // 至少需要一个有效规格值
+  const hasValidValue = multiSpecData.propertyGroups.some(g =>
+    (g.propertyValues || []).some(v => (v.propertyValue || '').trim())
+  )
+  if (!hasValidValue) {
+    return { text: '多规格：至少需要填写一个规格值', section: 'multispec' }
+  }
+  if (multiSpecData.skuList.length === 0) {
+    return { text: '多规格：SKU 列表为空，请检查规格值', section: 'multispec' }
+  }
+  for (let i = 0; i < multiSpecData.skuList.length; i++) {
+    const sku = multiSpecData.skuList[i]
+    const price = parseFloat(sku.price)
+    if (isNaN(price) || price < 0) {
+      return { text: `多规格：第 ${i + 1} 个 SKU 价格未填写或非法`, section: 'multispec' }
+    }
+    const qty = parseInt(sku.quantity, 10)
+    if (isNaN(qty) || qty < 0) {
+      return { text: `多规格：第 ${i + 1} 个 SKU 库存未填写或非法`, section: 'multispec' }
+    }
+  }
+  return null
+}
+
+// 滚动到多规格板块
+function scrollToMultispec() {
+  try {
+    const refEl = multispecCardRef.value?.$el || multispecCardRef.value
+    if (refEl && refEl.scrollIntoView) {
+      refEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    } else {
+      // 兜底：通过 class 查找
+      const el = document.querySelector('.multispec-card-title')
+      if (el && el.scrollIntoView) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    }
+  } catch (e) { /* 忽略滚动异常 */ }
+}
 
 // 触发文件选择
 function triggerUpload() {
@@ -1259,6 +1296,7 @@ async function load() {
 
 const aiDescLoading = ref(false)
 async function aiDesc() {
+  if (!await guardFeatureAction()) return
   if (aiDescLoading.value) return
   if (!form.title && !form.description) {
     error.value = '请先填写商品标题或基础描述'
@@ -1292,7 +1330,27 @@ function insertPhrase() {
 
 function validate() {
   const miss = checks.value.find(i => !i.ok)
-  if (miss) { error.value = `"${miss.text}" 检查未通过，请完善后再提交`; return false }
+  if (miss) {
+    error.value = `"${miss.text}" 检查未通过，请完善后再提交`
+    // 多规格场景下，自动定位到多规格板块
+    if (form.multiSpecEnabled) {
+      const incomplete = findMultiSpecIncomplete()
+      if (incomplete) {
+        error.value = incomplete.text + '，请完善后再提交'
+        scrollToMultispec()
+      }
+    }
+    return false
+  }
+  // 多规格专属校验（即便 checks 全部 ok，仍需检查 SKU 是否完整）
+  if (form.multiSpecEnabled) {
+    const incomplete = findMultiSpecIncomplete()
+    if (incomplete) {
+      error.value = incomplete.text + '，请完善后再提交'
+      scrollToMultispec()
+      return false
+    }
+  }
   return true
 }
 
@@ -1334,6 +1392,7 @@ async function ensureSelectedAccountCookieValid() {
 }
 
 async function submit() {
+  if (!await guardFeatureAction()) return
   error.value = ''
   success.value = ''
   if (!initializationAvailable.value) {
@@ -1427,7 +1486,10 @@ async function submit() {
       const itemUrl = publishRes.data?.itemUrl || ''
       if (!itemId) throw new Error('发布接口未返回有效闲鱼商品ID，本地不会保存为在售商品')
       publishedItemId = itemId
-      await createGoods({
+      // 商品已成功发布到闲鱼，接下来保存本地商品记录。
+      // 使用带重试的 createGoods：503/网络错误自动重试 3 次；仍失败时暂存到 localStorage，
+      // 进入商品管理页面时会自动补建本地记录，避免用户进退两难。
+      const localGoodsPayload = {
         accountId: Number(form.accountId),
         externalGoodsId: itemId,
         title: form.title.slice(0, 30),
@@ -1439,6 +1501,12 @@ async function submit() {
         stock: finalStock,
         detailUrl: itemUrl,
         status: 0,
+      }
+      await createGoodsWithRetry(localGoodsPayload, {
+        onRetry: (attempt, maxRetries) => {
+          // 重试中不抛错，仅在控制台留痕，不影响用户感知
+          console.warn(`[publish] 本地商品记录保存重试 ${attempt}/${maxRetries}，itemId=${itemId}`)
+        },
       })
       success.value = '发布成功！'
       // 自动发货货源绑定（发布成功且本地商品已保存后执行）
@@ -1456,10 +1524,14 @@ async function submit() {
       error.value = friendlyError({ message: publishRes.msg || '发布到闲鱼失败', requestId: publishRes?.requestId }, '发布到闲鱼失败，请稍后重试')
     }
   } catch (e) {
-    error.value = publishedItemId
-      ? `商品已发布到闲鱼（ID：${publishedItemId}），但本地商品记录保存失败：${friendlyError(e, '服务异常')}。请勿重复发布，先到商品管理执行同步。`
-      : friendlyError(e, '发布失败，请稍后重试')
-    if (publishedItemId) localStorage.setItem('xianyu_pending_sync', 'true')
+    if (publishedItemId) {
+      // 商品已发布到闲鱼，但本地保存失败：暂存商品信息，进入商品管理页面时自动补建
+      stashPendingLocalGoods(localGoodsPayload)
+      localStorage.setItem('xianyu_pending_sync', 'true')
+      error.value = `商品已发布到闲鱼（ID：${publishedItemId}），本地商品记录因服务暂时繁忙保存失败，已自动暂存。进入「商品管理」页面时会自动补建本地记录，请勿重复发布。`
+    } else {
+      error.value = friendlyError(e, '发布失败，请稍后重试')
+    }
   } finally {
     submitting.value = false
   }
@@ -2016,7 +2088,7 @@ onBeforeUnmount(() => {
   width: 22px;
   height: 22px;
   border-radius: 6px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  background: linear-gradient(135deg, #0d6bff, #3186ff);
   color: #fff;
   font-size: 12px;
   font-weight: 700;
@@ -2094,17 +2166,26 @@ onBeforeUnmount(() => {
   background: #22c55e;
   color: #fff;
 }
+.multispec-banner-active {
+  background: #ecfdf5;
+  color: #065f46;
+  border-color: #6ee7b7;
+}
+.multispec-banner-active .multispec-banner-icon {
+  background: #10b981;
+  color: #fff;
+}
 .multispec-toggle-row {
   padding: 12px 14px;
-  border-radius: 12px;
-  border: 1px solid #e5e7eb;
-  background: #fafafa;
+  border-radius: 10px;
+  border: 1px solid #e5eaf2;
+  background: #fafcff;
   transition: all 0.2s;
 }
 .multispec-toggle-row.multispec-toggle-on {
-  border-color: #c4b5fd;
-  background: #f5f3ff;
-  box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.1);
+  border-color: #93b8ff;
+  background: #f0f6ff;
+  box-shadow: 0 0 0 1px rgba(13, 107, 255, 0.1);
 }
 .multispec-toggle-status-dot {
   display: inline-block;
@@ -2112,13 +2193,13 @@ onBeforeUnmount(() => {
   height: 8px;
   border-radius: 50%;
   background: #d1d5db;
-  margin-right: 4px;
+  margin-right: 6px;
   vertical-align: middle;
   transition: all 0.2s;
 }
 .multispec-toggle-status-dot.on {
-  background: #8b5cf6;
-  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.18);
+  background: #0d6bff;
+  box-shadow: 0 0 0 3px rgba(13, 107, 255, 0.18);
 }
 
 /* ---- 自动发货板块 ---- */

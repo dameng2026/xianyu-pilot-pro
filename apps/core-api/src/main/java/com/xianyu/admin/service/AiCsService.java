@@ -5,9 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xianyu.admin.common.BizException;
 import com.xianyu.admin.common.PageResult;
 import com.xianyu.admin.common.PageUtils;
+import com.xianyu.admin.security.AdminContext;
+import com.xianyu.admin.security.TenantContext;
 import com.xianyu.admin.security.UserContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Service;
@@ -57,9 +60,22 @@ public class AiCsService {
     private final JdbcTemplate jdbcTemplate;
     private final AiBillingService aiBillingService;
 
+    @Value("${xianyu.automation.internal-token:}")
+    private String internalToken;
+
+    private static final String DEV_INTERNAL_TOKEN = "dev-only-internal-api-token-change-me-32-chars";
+
     public AiCsService(JdbcTemplate jdbcTemplate, AiBillingService aiBillingService) {
         this.jdbcTemplate = jdbcTemplate;
         this.aiBillingService = aiBillingService;
+    }
+
+    /** 获取内部 API 令牌（供 AiCsController 校验 Python 回调）。 */
+    public String getInternalApiToken() {
+        if (internalToken != null && !internalToken.isBlank()) {
+            return internalToken.trim();
+        }
+        return DEV_INTERNAL_TOKEN;
     }
 
     // ==================== 会话管理 ====================
@@ -95,12 +111,171 @@ public class AiCsService {
         // 每日统计：会话计数 +1
         bumpDailyStat(userId, tenantId, "session", 1);
 
+        // 保留策略：每用户最多保留 30 条未归档会话，超出的标记为 archived=1
+        enforceSessionRetentionLimit(userId, tenantId, 30);
+
         return Map.of(
                 "sessionId", sessionId,
                 "sessionToken", sessionToken,
                 "welcomeMessage", WELCOME_MESSAGE,
                 "messageCount", 0
         );
+    }
+
+    /**
+     * 列出当前用户最近的历史会话（仅未归档，按最后活跃时间倒序）。
+     * 每条会话附带首条用户消息作为预览，便于用户识别会话主题。
+     * 默认上限 30 条，与 enforceSessionRetentionLimit 的保留策略一致。
+     */
+    public List<Map<String, Object>> listUserSessions(int limit) {
+        Long userId = UserContext.userId();
+        Long tenantId = UserContext.getTenantId();
+        if (userId == null || tenantId == null) throw new BizException(401, "请先登录");
+        int safeLimit = Math.max(1, Math.min(limit <= 0 ? 30 : limit, 100));
+
+        // 查询用户最近 N 条未归档会话（活跃会话优先，再按最后活跃时间倒序）
+        // status=1 排前，便于用户快速回到当前对话
+        List<Map<String, Object>> sessions = jdbcTemplate.queryForList(
+                "SELECT id, session_token, status, message_count, casual_count, " +
+                        "LEFT(compressed_summary, 200) AS compressed_summary_preview, " +
+                        "last_active_time, created_time " +
+                        "FROM ai_cs_session WHERE user_id=? AND tenant_id=? AND archived=0 " +
+                        "ORDER BY status DESC, last_active_time DESC, id DESC LIMIT ?",
+                userId, tenantId, safeLimit);
+
+        if (sessions.isEmpty()) return sessions;
+
+        // 批量查询每个会话的首条用户消息作为预览（一次 SQL，避免 N+1）
+        List<Long> sessionIds = new ArrayList<>();
+        for (Map<String, Object> s : sessions) {
+            Object id = s.get("id");
+            if (id instanceof Number) sessionIds.add(((Number) id).longValue());
+        }
+        if (!sessionIds.isEmpty()) {
+            // 构建 IN 占位符
+            String inClause = sessionIds.stream().map(s -> "?").collect(java.util.stream.Collectors.joining(","));
+            Object[] args = new Object[sessionIds.size() + 2];
+            args[0] = userId;
+            args[1] = tenantId;
+            for (int i = 0; i < sessionIds.size(); i++) args[i + 2] = sessionIds.get(i);
+            // 子查询：每个 session 的首条 user 消息 id
+            List<Map<String, Object>> previews = jdbcTemplate.queryForList(
+                    "SELECT m.session_id, m.content FROM ai_cs_message m " +
+                            "INNER JOIN (" +
+                            "  SELECT session_id, MIN(id) AS min_id FROM ai_cs_message " +
+                            "  WHERE user_id=? AND tenant_id=? AND role='user' AND session_id IN (" + inClause + ") " +
+                            "  GROUP BY session_id" +
+                            ") t ON m.id=t.min_id", args);
+            Map<Long, String> previewMap = new HashMap<>();
+            for (Map<String, Object> p : previews) {
+                Object sid = p.get("session_id");
+                Object content = p.get("content");
+                if (sid instanceof Number && content instanceof String) {
+                    String c = (String) content;
+                    // 截取前 80 字符作为预览，避免传输过大
+                    previewMap.put(((Number) sid).longValue(), c.length() > 80 ? c.substring(0, 80) + "..." : c);
+                }
+            }
+            // 将预览写入会话列表
+            for (Map<String, Object> s : sessions) {
+                Object id = s.get("id");
+                Long sidLong = id instanceof Number ? ((Number) id).longValue() : null;
+                s.put("firstUserMessagePreview", sidLong != null ? previewMap.getOrDefault(sidLong, "") : "");
+                // 兼容前端字段命名
+                s.put("sessionId", s.get("id"));
+                s.put("sessionToken", s.get("session_token"));
+                s.put("messageCount", s.get("message_count"));
+                s.put("casualCount", s.get("casual_count"));
+                s.put("lastActiveTime", s.get("last_active_time"));
+                s.put("createdTime", s.get("created_time"));
+                s.put("isActive", Integer.valueOf(1).equals(s.get("status")));
+            }
+        }
+        return sessions;
+    }
+
+    /**
+     * 恢复已关闭的会话为活跃状态，用于"继续对话"。
+     * 若目标会话已是活跃状态，直接返回；否则关闭当前活跃会话（如果有），将目标会话 status=1。
+     * 不允许恢复已归档（archived=1）的会话。
+     */
+    @Transactional
+    public Map<String, Object> resumeSession(Long sessionId) {
+        Long userId = UserContext.userId();
+        Long tenantId = UserContext.getTenantId();
+        if (userId == null || tenantId == null) throw new BizException(401, "请先登录");
+        if (sessionId == null || sessionId <= 0) throw new BizException(400, "会话 ID 非法");
+        // 校验会话归属且未归档（不要求 status=1，允许恢复已关闭会话）
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM ai_cs_session WHERE id=? AND user_id=? AND tenant_id=? AND archived=0",
+                Integer.class, sessionId, userId, tenantId);
+        if (count == null || count == 0) {
+            throw new BizException(403, "会话不存在或无权访问");
+        }
+        // 查询目标会话当前状态
+        Integer currentStatus = jdbcTemplate.queryForObject(
+                "SELECT status FROM ai_cs_session WHERE id=?", Integer.class, sessionId);
+        if (currentStatus != null && currentStatus == 1) {
+            // 已是活跃会话，无需恢复
+            return buildSessionResponse(sessionId);
+        }
+        // 关闭该用户已有的活跃会话（每用户同时只保留一个活跃会话）
+        jdbcTemplate.update(
+                "UPDATE ai_cs_session SET status=0 WHERE user_id=? AND tenant_id=? AND status=1 AND id<>?",
+                userId, tenantId, sessionId);
+        // 恢复目标会话为活跃
+        jdbcTemplate.update(
+                "UPDATE ai_cs_session SET status=1, last_active_time=NOW() WHERE id=?",
+                sessionId);
+        // 应用归档保留策略
+        enforceSessionRetentionLimit(userId, tenantId, 30);
+        return buildSessionResponse(sessionId);
+    }
+
+    /**
+     * 保留每用户最近 maxKeep 条未归档会话，超出的标记为 archived=1。
+     * 已归档会话仍保留在数据库中（后台审计仍可查询），但前台历史列表不再展示。
+     * 在 createSession / resumeSession 后调用，确保数据量可控。
+     */
+    @Transactional
+    public void enforceSessionRetentionLimit(Long userId, Long tenantId, int maxKeep) {
+        if (maxKeep <= 0) return;
+        try {
+            Integer total = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM ai_cs_session WHERE user_id=? AND tenant_id=? AND archived=0",
+                    Integer.class, userId, tenantId);
+            if (total == null || total <= maxKeep) return;
+            int toArchive = total - maxKeep;
+            // MySQL 不允许 UPDATE 直接引用同一张表的子查询，需嵌套一层
+            jdbcTemplate.update(
+                    "UPDATE ai_cs_session SET archived=1 WHERE id IN (" +
+                            "  SELECT id FROM (" +
+                            "    SELECT id FROM ai_cs_session " +
+                            "    WHERE user_id=? AND tenant_id=? AND archived=0 " +
+                            "    ORDER BY last_active_time ASC, id ASC LIMIT ?" +
+                            "  ) AS t" +
+                            ")",
+                    userId, tenantId, toArchive);
+            log.info("AI 客服会话归档 userId={}, archived {} sessions (keep {})", userId, toArchive, maxKeep);
+        } catch (Exception e) {
+            log.warn("AI 客服会话归档失败 userId={}: {}", userId, e.getMessage());
+        }
+    }
+
+    /** 构建会话响应数据（用于 resumeSession 返回）。 */
+    private Map<String, Object> buildSessionResponse(Long sessionId) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT id, session_token, message_count, casual_count, casual_reminded, " +
+                        "compressed_summary, last_active_time, created_time " +
+                        "FROM ai_cs_session WHERE id=?", sessionId);
+        if (rows.isEmpty()) throw new BizException(404, "会话不存在");
+        Map<String, Object> row = rows.get(0);
+        Map<String, Object> res = new LinkedHashMap<>(row);
+        res.put("sessionId", row.get("id"));
+        res.put("sessionToken", row.get("session_token"));
+        res.put("welcomeMessage", WELCOME_MESSAGE);
+        res.put("resumed", true);
+        return res;
     }
 
     /**
@@ -147,12 +322,29 @@ public class AiCsService {
     }
 
     /**
+     * 校验会话归属但不要求 status=1（允许查看已关闭的历史会话）。
+     * 仅用于"查看历史会话消息"等只读场景；发送消息等需调用 validateSessionOwnership（要求活跃）。
+     * 不允许访问已归档（archived=1）的会话。
+     */
+    public void validateSessionOwnershipAnyStatus(Long sessionId, Long userId, Long tenantId) {
+        if (sessionId == null || sessionId <= 0) throw new BizException(400, "会话 ID 非法");
+        if (userId == null || tenantId == null) throw new BizException(401, "请先登录");
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM ai_cs_session WHERE id=? AND user_id=? AND tenant_id=? AND archived=0",
+                Integer.class, sessionId, userId, tenantId);
+        if (count == null || count == 0) {
+            throw new BizException(403, "会话不存在或无权访问");
+        }
+    }
+
+    /**
      * 拉取会话历史消息（含开场白）。按 id 升序返回，最多 limit 条。
+     * 使用宽松校验（允许查看已关闭的历史会话消息），但要求会话未归档且归属当前用户。
      */
     public List<Map<String, Object>> listMessages(Long sessionId, int limit) {
         Long userId = UserContext.userId();
         Long tenantId = UserContext.getTenantId();
-        validateSessionOwnership(sessionId, userId, tenantId);
+        validateSessionOwnershipAnyStatus(sessionId, userId, tenantId);
         int safeLimit = Math.max(1, Math.min(limit <= 0 ? 100 : limit, 200));
         return jdbcTemplate.queryForList(
                 "SELECT id, role, content, tokens_charged, is_casual, tool_calls, created_time " +
@@ -295,45 +487,54 @@ public class AiCsService {
     /**
      * 持久化一条 assistant 消息并扣费。
      * 仅在 AI 成功回复后调用；扣费失败不阻断消息保存。
+     *
+     * @param userId   用户 ID（由 Controller 从请求体传入，支持内部回调场景）
+     * @param tenantId 租户 ID（由 Controller 从请求体传入，支持内部回调场景）
      */
     @Transactional
-    public Map<String, Object> appendAssistantMessageAndCharge(Long sessionId, String content, String toolCallsJson) {
-        Long userId = UserContext.userId();
-        Long tenantId = UserContext.getTenantId();
+    public Map<String, Object> appendAssistantMessageAndCharge(Long sessionId, String content, String toolCallsJson,
+                                                                Long userId, Long tenantId) {
+        // 解析 toolCallsJson（Python 端格式：[{"tool":..., "arguments":..., "requiresConfirm":..., "description":...}]）
+        // 对每个工具调用写入 ai_cs_tool_call 表并返回真实 ID，供前端确认按钮使用。
+        List<Map<String, Object>> toolCallIds = new ArrayList<>();
+        if (StringUtils.hasText(toolCallsJson)) {
+            try {
+                List<Map<String, Object>> parsed = M.readValue(
+                        toolCallsJson, new TypeReference<List<Map<String, Object>>>() {});
+                for (Map<String, Object> tc : parsed) {
+                    String toolName = text(tc.get("tool"));
+                    if (!StringUtils.hasText(toolName)) continue;
+                    String argsJson;
+                    Object args = tc.get("arguments");
+                    if (args == null) {
+                        argsJson = "{}";
+                    } else if (args instanceof String) {
+                        argsJson = (String) args;
+                    } else {
+                        argsJson = M.writeValueAsString(args);
+                    }
+                    boolean requiresConfirm = Boolean.TRUE.equals(tc.get("requiresConfirm"));
+                    long tcId = logToolCall(sessionId, userId, tenantId, toolName, argsJson, requiresConfirm);
+                    if (tcId > 0) {
+                        Map<String, Object> entry = new LinkedHashMap<>();
+                        entry.put("toolCallId", tcId);
+                        entry.put("tool", toolName);
+                        toolCallIds.add(entry);
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("解析 toolCallsJson 失败 sessionId={}: {}", sessionId, e.getMessage());
+            }
+        }
         int perMessageTokens = getPerMessageTokens(tenantId);
-        // 每日免费额度判断：用户今日已发送的 user 消息数（含本条，因为 appendUserMessage 已执行）
-        // 若今日 user 消息数 <= dailyFreeQuota，则本条 assistant 回复不扣费
-        int dailyFreeQuota = getDailyFreeQuota(tenantId);
-        int todayUserCount = getTodayUserMessageCount(userId, tenantId);
-        boolean freeQuotaCovered = dailyFreeQuota > 0 && todayUserCount <= dailyFreeQuota;
+        // AI 客服对话对用户完全免费（项目规则：用户无每日免费自动回复额度限制，
+        // 仅系统 AI 客服"小梦"保留额度）。因此这里不再调用 AiBillingService.charge 扣费，
+        // 避免因用户 Token 余额不足导致对话中断。
+        // 注意：工具调用中涉及通用模型计费的（如 polish_product_title）仍由 AiProviderService 单独扣费。
         long balanceAfter = -1L;
         boolean deducted = false;
         String chargeError = null;
-        if (freeQuotaCovered) {
-            // 免费额度内：不扣费，仅记录
-            log.info("AI 客服免费额度内 sessionId={}, userId={}, todayCount={}/{}", sessionId, userId, todayUserCount, dailyFreeQuota);
-        } else {
-            // 超出免费额度：调用 AiBillingService.charge 扣费
-            try {
-                Map<String, Object> usage = new HashMap<>();
-                usage.put("userId", userId);
-                usage.put("tenantId", tenantId);
-                usage.put("scene", "ai_customer_service");
-                usage.put("modelType", "chat");
-                usage.put("billingMode", "per_call");
-                usage.put("requestId", "ai-cs-" + sessionId + "-" + System.currentTimeMillis());
-                Map<String, Object> chargeResult = aiBillingService.charge(usage);
-                deducted = Boolean.TRUE.equals(chargeResult.get("deducted"));
-                Object ba = chargeResult.get("balanceAfter");
-                if (ba instanceof Number) balanceAfter = ((Number) ba).longValue();
-            } catch (BizException e) {
-                chargeError = e.getMessage();
-                log.warn("AI 客服扣费失败 sessionId={}, userId={}, err={}", sessionId, userId, e.getMessage());
-            } catch (Exception e) {
-                chargeError = e.getMessage();
-                log.error("AI 客服扣费异常 sessionId={}, userId={}", sessionId, userId, e);
-            }
-        }
+        log.info("AI 客服对话免费 sessionId={}, userId={}", sessionId, userId);
         int charged = deducted ? perMessageTokens : 0;
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbcTemplate.update(connection -> {
@@ -360,6 +561,7 @@ public class AiCsService {
         res.put("balanceAfter", balanceAfter);
         res.put("deducted", deducted);
         res.put("chargeError", chargeError);
+        res.put("toolCallIds", toolCallIds);
         return res;
     }
 
@@ -369,6 +571,17 @@ public class AiCsService {
     public long logToolCall(Long sessionId, String toolName, String argumentsJson, boolean requiresConfirm) {
         Long userId = UserContext.userId();
         Long tenantId = UserContext.getTenantId();
+        return logToolCall(sessionId, userId, tenantId, toolName, argumentsJson, requiresConfirm);
+    }
+
+    /**
+     * 内部回调专用：在 Python /complete 回调链路中写入工具调用记录（无 UserContext）。
+     * 返回新生成的 ai_cs_tool_call.id。
+     */
+    @Transactional
+    public long logToolCall(Long sessionId, Long userId, Long tenantId,
+                            String toolName, String argumentsJson, boolean requiresConfirm) {
+        if (sessionId == null || sessionId <= 0 || userId == null || tenantId == null) return 0L;
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbcTemplate.update(connection -> {
             var ps = connection.prepareStatement(
@@ -383,6 +596,18 @@ public class AiCsService {
             return ps;
         }, keyHolder);
         return keyHolder.getKey().longValue();
+    }
+
+    /**
+     * 查询单条工具调用记录（confirmTool 用，用于透传 tool_name/arguments 给 Python）。
+     * 返回空 Map 表示不存在。
+     */
+    public Map<String, Object> getToolCall(Long toolCallId) {
+        if (toolCallId == null || toolCallId <= 0) return java.util.Collections.emptyMap();
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT id, session_id, user_id, tenant_id, tool_name, arguments, status, requires_confirm " +
+                        "FROM ai_cs_tool_call WHERE id=?", toolCallId);
+        return rows.isEmpty() ? java.util.Collections.emptyMap() : rows.get(0);
     }
 
     @Transactional
@@ -486,8 +711,14 @@ public class AiCsService {
 
     @Transactional
     public Map<String, Object> saveBillingConfig(Map<String, Object> data) {
+        // admin 后台调用时 UserContext 未被设置（JwtAuthFilter 仅设置 AdminContext/TenantContext），
+        // 此处允许 tenantId 为 null 以写入"平台级"配置（tenant_id IS NULL 的全局记录）。
         Long tenantId = UserContext.getTenantId();
-        if (tenantId == null) throw new BizException(401, "请先登录");
+        if (tenantId == null) tenantId = TenantContext.getCurrentTenantId();
+        boolean isAdminCall = AdminContext.userId() != null;
+        if (tenantId == null && !isAdminCall) {
+            throw new BizException(401, "请先登录");
+        }
         int perMessageTokens = parseInt(data.get("perMessageTokens"), 3);
         int maxContext = parseInt(data.get("maxContextMessages"), 50);
         int casualThreshold = parseInt(data.get("casualThreshold"), 5);
@@ -496,16 +727,17 @@ public class AiCsService {
         String reminderText = text(data.get("casualReminderText"));
         if (!StringUtils.hasText(reminderText)) reminderText = DEFAULT_CASUAL_REMINDER;
         int enabled = parseBool(data.get("enabled")) ? 1 : 0;
-        // upsert
-        Integer existing = jdbcTemplate.queryForObject(
+        // upsert（使用 queryForList 避免首次保存无记录时抛出 EmptyResultDataAccessException）
+        List<Map<String, Object>> existingRows = jdbcTemplate.queryForList(
                 "SELECT id FROM ai_cs_billing_config WHERE tenant_id <=> ? ORDER BY tenant_id IS NULL, tenant_id LIMIT 1",
-                Integer.class, tenantId);
-        if (existing == null) {
+                tenantId);
+        if (existingRows.isEmpty()) {
             jdbcTemplate.update(
                     "INSERT INTO ai_cs_billing_config(tenant_id, per_message_tokens, max_context_messages, casual_threshold, casual_reminder_text, daily_free_quota, enabled, created_time, updated_time) " +
-                            "VALUES(?,?,?,?,?,?,?,?,NOW(),NOW())",
+                            "VALUES(?,?,?,?,?,?,?,NOW(),NOW())",
                     tenantId, perMessageTokens, maxContext, casualThreshold, reminderText, dailyFreeQuota, enabled);
         } else {
+            Integer existing = ((Number) existingRows.get(0).get("id")).intValue();
             jdbcTemplate.update(
                     "UPDATE ai_cs_billing_config SET per_message_tokens=?, max_context_messages=?, casual_threshold=?, casual_reminder_text=?, daily_free_quota=?, enabled=?, updated_time=NOW() WHERE id=?",
                     perMessageTokens, maxContext, casualThreshold, reminderText, dailyFreeQuota, enabled, existing);
@@ -691,12 +923,30 @@ public class AiCsService {
                 "SELECT COUNT(*) FROM ai_cs_message m" + where, Long.class, args.toArray());
         List<Object> pageArgs = new ArrayList<>(args);
         pageArgs.add(safeSize); pageArgs.add(offset);
+        // 返回 content 字段（完整内容，前端表格有溢出处理）
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT m.id, m.session_id, m.user_id, u.username, m.tenant_id, m.role, LEFT(m.content, 500) AS content_preview, " +
+                "SELECT m.id, m.session_id, m.user_id, u.username, m.tenant_id, m.role, m.content, " +
                         "m.tokens_charged, m.is_casual, m.tool_calls, m.created_time " +
                         "FROM ai_cs_message m LEFT JOIN sys_user u ON u.id=m.user_id" + where +
                         " ORDER BY m.id DESC LIMIT ? OFFSET ?", pageArgs.toArray());
         return new PageResult<>(rows, safeCurrent, safeSize, total == null ? 0 : total);
+    }
+
+    /**
+     * 后台会话审计：获取指定会话的全部消息（按时间正序，返回完整内容）。
+     * 供"对话气泡视图"使用，一次性加载完整对话流，不分页。
+     * 上限 1000 条以防异常会话拖垮接口。
+     */
+    public List<Map<String, Object>> adminListSessionMessages(Long sessionId) {
+        if (sessionId == null || sessionId <= 0) {
+            return java.util.Collections.emptyList();
+        }
+        return jdbcTemplate.queryForList(
+                "SELECT m.id, m.session_id, m.user_id, u.username, m.tenant_id, m.role, m.content, " +
+                        "m.tokens_charged, m.is_casual, m.tool_calls, m.created_time " +
+                        "FROM ai_cs_message m LEFT JOIN sys_user u ON u.id=m.user_id " +
+                        "WHERE m.session_id=? ORDER BY m.id ASC LIMIT 1000",
+                sessionId);
     }
 
     public PageResult<Map<String, Object>> adminPageToolCalls(int current, int size, Long sessionId, String status) {

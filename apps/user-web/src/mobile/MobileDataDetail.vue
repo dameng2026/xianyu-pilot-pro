@@ -598,10 +598,9 @@ onBeforeUnmount(() => {
 .m-quick-section {
   margin-bottom: var(--m-space-4);
   padding: var(--m-space-4);
-  border: 1px solid var(--m-color-border);
-  border-radius: var(--m-radius-lg);
+  border-radius: var(--m-radius-xl);
   background: var(--m-color-bg-card);
-  box-shadow: var(--m-shadow-card);
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-section-header {
@@ -687,7 +686,7 @@ onBeforeUnmount(() => {
 .m-trend-pills {
   display: inline-flex;
   background: var(--m-color-bg-subtle);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   padding: 3px;
   gap: var(--m-space-1);
 }
@@ -699,7 +698,7 @@ onBeforeUnmount(() => {
   font-size: var(--m-font-size-caption);
   font-weight: var(--m-font-weight-semibold);
   padding: var(--m-space-1) var(--m-space-3);
-  border-radius: var(--m-radius-sm);
+  border-radius: var(--m-radius-lg);
   cursor: pointer;
   transition: background 0.2s, color 0.2s;
 }
@@ -707,7 +706,7 @@ onBeforeUnmount(() => {
 .m-trend-pill.active {
   background: var(--m-color-bg-card);
   color: var(--m-color-primary);
-  box-shadow: var(--m-shadow-card);
+  box-shadow: var(--m-shadow-xs);
   font-weight: var(--m-font-weight-bold);
 }
 
@@ -906,9 +905,9 @@ onBeforeUnmount(() => {
   min-width: 0;
   gap: var(--m-space-2);
   padding: var(--m-space-3);
-  border: 1px solid var(--m-color-border);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   background: var(--m-color-bg-card);
+  box-shadow: var(--m-shadow-xs);
   color: var(--m-color-text-secondary);
   font: inherit;
   font-size: var(--m-font-size-caption);
@@ -1032,9 +1031,11 @@ onBeforeUnmount(() => {
 
 .m-more-button {
   border: 0;
-  background: transparent;
+  background: var(--m-color-bg-subtle);
   color: var(--m-color-primary);
   font-size: var(--m-font-size-caption);
+  padding: var(--m-space-1) var(--m-space-3);
+  border-radius: var(--m-radius-lg);
   cursor: pointer;
 }
 

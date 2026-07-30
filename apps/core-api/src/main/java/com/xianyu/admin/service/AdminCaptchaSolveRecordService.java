@@ -3,7 +3,10 @@ package com.xianyu.admin.service;
 import com.xianyu.admin.common.PageResult;
 import com.xianyu.admin.common.PageUtils;
 import com.xianyu.admin.dto.AdminCaptchaSolveRecordVO;
+import com.xianyu.admin.dto.CaptchaAttemptDetailVO;
+import com.xianyu.admin.dto.CaptchaAttemptStatsVO;
 import com.xianyu.admin.dto.CaptchaSolveStatsVO;
+import com.xianyu.admin.mapper.XianyuCaptchaSolveAttemptMapper;
 import com.xianyu.admin.mapper.XianyuCaptchaSolveRecordMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,9 +44,133 @@ public class AdminCaptchaSolveRecordService {
     private static final Pattern SCREENSHOT_PATTERN = Pattern.compile("screenshot=([^\\s\\]]+)", Pattern.CASE_INSENSITIVE);
 
     private final XianyuCaptchaSolveRecordMapper recordMapper;
+    private final XianyuCaptchaSolveAttemptMapper attemptMapper;
 
-    public AdminCaptchaSolveRecordService(XianyuCaptchaSolveRecordMapper recordMapper) {
+    public AdminCaptchaSolveRecordService(XianyuCaptchaSolveRecordMapper recordMapper,
+                                          XianyuCaptchaSolveAttemptMapper attemptMapper) {
         this.recordMapper = recordMapper;
+        this.attemptMapper = attemptMapper;
+    }
+
+    // ==================== 尝试明细成功率统计 ====================
+
+    /** 聚合字段白名单（防止 SQL 注入，仅允许这些列名传入 ${field}） */
+    private static final java.util.Set<String> ALLOWED_AGG_FIELDS = java.util.Set.of(
+            "solve_scheme", "drag_method", "speed_strategy", "attempt_no");
+
+    /**
+     * 尝试明细成功率统计：按求解方案、拖动方法、速度策略、尝试轮次四个维度聚合。
+     *
+     * @param days      时间范围（最近 N 天），<=0 或 null 表示全量
+     * @param userId    用户 ID 过滤（与 accountId 互斥，accountId 优先）
+     * @param accountId 账号 ID 过滤
+     */
+    public CaptchaAttemptStatsVO attemptStats(Integer days, Long userId, Long accountId) {
+        LocalDateTime startTime = computeStartTime(days);
+        int safeDays = (days == null || days <= 0) ? 0 : Math.min(365, days);
+
+        CaptchaAttemptStatsVO vo = new CaptchaAttemptStatsVO();
+        vo.setDays(safeDays);
+        vo.setAccountId(accountId == null ? 0L : accountId);
+
+        // 按求解方案聚合
+        vo.setBySolveScheme(buildDimensionStats("solve_scheme", startTime, userId, accountId));
+        // 按拖动方法聚合
+        vo.setByDragMethod(buildDimensionStats("drag_method", startTime, userId, accountId));
+        // 按速度策略聚合
+        vo.setBySpeedStrategy(buildDimensionStats("speed_strategy", startTime, userId, accountId));
+        // 按尝试轮次聚合（需要转换为 AttemptNoStat）
+        vo.setByAttemptNo(buildAttemptNoStats(startTime, userId, accountId));
+
+        // 总计
+        Map<String, Object> totals = attemptMapper.selectTotals(startTime, userId, accountId);
+        long totalAttempts = getLong(totals, "total");
+        long totalSuccess = getLong(totals, "success");
+        vo.setTotalAttempts(totalAttempts);
+        vo.setTotalSuccess(totalSuccess);
+        vo.setOverallSuccessRate(totalAttempts > 0
+                ? Math.round(totalSuccess * 10000.0 / totalAttempts) / 100.0
+                : 0.0);
+
+        return vo;
+    }
+
+    /**
+     * 查询单条求解记录的尝试明细列表（用于前端查看详情）。
+     */
+    public java.util.List<CaptchaAttemptDetailVO> listRecordAttempts(Long recordId) {
+        if (recordId == null || recordId <= 0) {
+            return java.util.Collections.emptyList();
+        }
+        java.util.List<Map<String, Object>> rows = attemptMapper.selectByRecordId(recordId);
+        java.util.List<CaptchaAttemptDetailVO> items = new java.util.ArrayList<>(rows.size());
+        for (Map<String, Object> row : rows) {
+            CaptchaAttemptDetailVO item = new CaptchaAttemptDetailVO();
+            item.setAttemptNo(getInteger(row, "attempt_no"));
+            item.setSolveScheme(getString(row, "solve_scheme"));
+            item.setDragMethod(getString(row, "drag_method"));
+            item.setSpeedStrategy(getString(row, "speed_strategy"));
+            Object successObj = row.get("success");
+            item.setSuccess(successObj != null && (
+                    (successObj instanceof Number && ((Number) successObj).intValue() == 1) ||
+                    Boolean.TRUE.equals(successObj)));
+            item.setDurationMs(getLong(row, "duration_ms"));
+            item.setErrorMessage(getString(row, "error_message"));
+            item.setCreatedAt(toLocalDateTime(row.get("created_at")));
+            items.add(item);
+        }
+        return items;
+    }
+
+    private java.util.List<CaptchaAttemptStatsVO.DimensionStat> buildDimensionStats(
+            String field, LocalDateTime startTime, Long userId, Long accountId) {
+        if (!ALLOWED_AGG_FIELDS.contains(field)) {
+            throw new IllegalArgumentException("Invalid aggregate field: " + field);
+        }
+        java.util.List<Map<String, Object>> rows = attemptMapper.selectDimensionStats(field, startTime, userId, accountId);
+        java.util.List<CaptchaAttemptStatsVO.DimensionStat> stats = new java.util.ArrayList<>(rows.size());
+        for (Map<String, Object> row : rows) {
+            CaptchaAttemptStatsVO.DimensionStat stat = new CaptchaAttemptStatsVO.DimensionStat();
+            stat.setDim(getString(row, "dim"));
+            long total = getLong(row, "total");
+            stat.setTotal(total);
+            stat.setSuccess(getLong(row, "success"));
+            Object rateObj = row.get("success_rate");
+            if (rateObj instanceof Number) {
+                stat.setSuccessRate(((Number) rateObj).doubleValue());
+            } else {
+                stat.setSuccessRate(0.0);
+            }
+            stat.setAvgDurationMs(getLong(row, "avg_duration_ms"));
+            stats.add(stat);
+        }
+        return stats;
+    }
+
+    private java.util.List<CaptchaAttemptStatsVO.AttemptNoStat> buildAttemptNoStats(
+            LocalDateTime startTime, Long userId, Long accountId) {
+        java.util.List<Map<String, Object>> rows = attemptMapper.selectDimensionStats(
+                "attempt_no", startTime, userId, accountId);
+        java.util.List<CaptchaAttemptStatsVO.AttemptNoStat> stats = new java.util.ArrayList<>(rows.size());
+        for (Map<String, Object> row : rows) {
+            CaptchaAttemptStatsVO.AttemptNoStat stat = new CaptchaAttemptStatsVO.AttemptNoStat();
+            Integer attemptNo = getInteger(row, "dim");
+            stat.setAttemptNo(attemptNo == null ? 0 : attemptNo);
+            long total = getLong(row, "total");
+            stat.setTotal(total);
+            stat.setSuccess(getLong(row, "success"));
+            Object rateObj = row.get("success_rate");
+            if (rateObj instanceof Number) {
+                stat.setSuccessRate(((Number) rateObj).doubleValue());
+            } else {
+                stat.setSuccessRate(0.0);
+            }
+            stat.setAvgDurationMs(getLong(row, "avg_duration_ms"));
+            stats.add(stat);
+        }
+        // 按 attemptNo 升序排序（1-5）
+        stats.sort(java.util.Comparator.comparingInt(CaptchaAttemptStatsVO.AttemptNoStat::getAttemptNo));
+        return stats;
     }
 
     /**
@@ -252,6 +379,7 @@ public class AdminCaptchaSolveRecordService {
     }
 
     private long getLong(Map<String, Object> map, String key) {
+        if (map == null) return 0L;
         Object val = map.get(key);
         if (val == null) return 0L;
         if (val instanceof Number) return ((Number) val).longValue();
@@ -259,6 +387,7 @@ public class AdminCaptchaSolveRecordService {
     }
 
     private Integer getInteger(Map<String, Object> map, String key) {
+        if (map == null) return null;
         Object val = map.get(key);
         if (val == null) return null;
         if (val instanceof Integer) return (Integer) val;
@@ -267,6 +396,7 @@ public class AdminCaptchaSolveRecordService {
     }
 
     private String getString(Map<String, Object> map, String key) {
+        if (map == null) return null;
         Object val = map.get(key);
         return val != null ? String.valueOf(val) : null;
     }

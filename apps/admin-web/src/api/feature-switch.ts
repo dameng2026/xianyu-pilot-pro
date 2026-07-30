@@ -18,6 +18,11 @@ export interface FeatureSwitchItem {
   svp: boolean
   /** 维护开关：开启后所有用户进入该页面均弹窗提示"正在维护升级中"（优先级高于等级开关） */
   maintenance?: boolean
+  /** 限制模式（单选，全局统一配置，与等级开关正交）：
+   * - none：无限制（默认，正常使用）
+   * - preview：预览模式（可进入页面查看，但不可执行业务操作/发送业务请求）
+   * - blocked：不可进入（直接无法访问该页面） */
+  limitMode?: 'none' | 'preview' | 'blocked'
   /** 关闭原因（仅 manual-slider-solve 使用，选填）
    * 管理员填写后，前台被拦截时展示给用户；未填写时使用系统默认文案。
    * 后端会做长度截断（≤200）与 HTML 标签过滤。 */

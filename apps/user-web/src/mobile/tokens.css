@@ -1,125 +1,275 @@
 /**
- * 闲鱼助手移动端设计 Token 系统
+ * 闲鱼助手移动端设计 Token 系统 v13 - 严格对齐PC版
  *
- * 作用域：.mobile-shell（不污染 PC 端 :root）
- * 风格基线：飞书管理后台（克制中性 · 灰白底 · 大留白）
- *
- * 详见：docs/superpowers/specs/2026-07-22-mobile-redesign-design.md
+ * 设计理念：与PC版完全一致的企业级SaaS风格
+ * 核心特点：
+ *   - 主色 #0d6bff（与PC版一致）
+ *   - 浅蓝渐变背景（与PC版一致）
+ *   - 14-16px 大圆角（与PC版一致）
+ *   - 柔和多层阴影（与PC版一致）
+ *   - 渐变按钮（与PC版一致）
+ *   - 彩色统计图标背景（与PC版一致）
  */
 
 .mobile-shell {
-  /* === 品牌主色 === */
-  --m-color-primary: #3380ff;
-  --m-color-primary-hover: #2563eb;
-  --m-color-primary-active: #1d4ed8;
-  --m-color-primary-bg: #e8f3ff;
-  --m-color-primary-bg-hover: #d6e8ff;
+  /* === 品牌主色系（严格对齐PC版 #0d6bff） === */
+  --m-color-primary: #0d6bff;
+  --m-color-primary-hover: #3186ff;
+  --m-color-primary-active: #0865f4;
+  --m-color-primary-light: #3186ff;
+  --m-color-primary-lighter: #edf5ff;
+  --m-color-primary-bg: rgba(13, 107, 255, 0.08);
+  --m-color-primary-bg-hover: rgba(13, 107, 255, 0.15);
+  --m-color-primary-bg-solid: #edf5ff;
+  --m-color-primary-gradient: linear-gradient(90deg, #0865f4, #147dff);
+  --m-color-primary-soft-glow: 0 9px 18px rgba(13, 107, 255, 0.20);
 
-  /* === 中性色 === */
-  --m-color-bg-page: #f5f6f7;
-  --m-color-bg-card: #ffffff;
-  --m-color-bg-elevated: #ffffff;
-  --m-color-bg-subtle: #f0f1f2;
-  --m-color-bg-hover: #f5f6f7;
+  /* === 功能色（严格对齐PC版） === */
+  --m-color-gold: #ff9f22;
+  --m-color-gold-light: #ffb84d;
+  --m-color-gold-dark: #e08a10;
+  --m-color-gold-bg: rgba(255, 159, 34, 0.08);
+  --m-color-gold-bg-solid: #fff5e6;
 
-  /* === 文字色 === */
-  --m-color-text-primary: #1f2329;
-  --m-color-text-secondary: #4e5969;
-  --m-color-text-tertiary: #86909c;
-  --m-color-text-disabled: #c9cdd4;
-  --m-color-text-placeholder: #86909c;
-  --m-color-text-inverse: #ffffff;
+  --m-color-emerald: #16bf78;
+  --m-color-emerald-dark: #0fa566;
+  --m-color-emerald-light: #34d48f;
+  --m-color-emerald-bg: rgba(22, 191, 120, 0.08);
+  --m-color-emerald-bg-solid: #e9fbf3;
 
-  /* === 边框与分隔 === */
-  --m-color-border: #e5e6eb;
-  --m-color-border-light: #f2f3f5;
-  --m-color-divider: #e5e6eb;
+  --m-color-violet: #8b5cf6;
+  --m-color-violet-light: #a78bfa;
+  --m-color-violet-dark: #7c3aed;
+  --m-color-violet-bg: rgba(139, 92, 246, 0.08);
+  --m-color-violet-bg-solid: #f4efff;
+  --m-color-purple: #8b5cf6;
+  --m-color-purple-bg: rgba(139, 92, 246, 0.08);
+
+  --m-color-rose: #ff5b61;
+  --m-color-rose-light: #ff797f;
+  --m-color-rose-dark: #e84349;
+  --m-color-rose-bg: rgba(255, 91, 97, 0.08);
+  --m-color-rose-bg-solid: #fff0f1;
+  --m-color-danger: #ff5b61;
+  --m-color-danger-light: #ff797f;
+  --m-color-danger-bg: rgba(255, 91, 97, 0.08);
+  --m-color-danger-bg-solid: #fff0f1;
+
+  --m-color-cyan: #11b5d8;
+  --m-color-cyan-light: #22c8eb;
+  --m-color-cyan-bg: rgba(17, 181, 216, 0.08);
+  --m-color-cyan-bg-solid: #eafcff;
+
+  --m-color-indigo: #0d6bff;
+  --m-color-indigo-light: #3186ff;
+  --m-color-indigo-bg: rgba(13, 107, 255, 0.08);
+  --m-color-indigo-bg-solid: #edf5ff;
+
+  /* === 中性色（严格对齐PC版） === */
+  --m-color-bg-page: #f6f9ff;
+  --m-color-bg-page-secondary: #f8fbff;
+  --m-color-bg-card: #FFFFFF;
+  --m-color-bg-elevated: #FFFFFF;
+  --m-color-bg-subtle: #f8fbff;
+  --m-color-bg-hover: #f0f5ff;
+  --m-color-bg-input: #FFFFFF;
+  --m-color-bg-overlay: rgba(20, 36, 58, 0.58);
+  --m-color-bg-glass: rgba(255, 255, 255, 0.86);
+  --m-color-bg-glass-strong: rgba(255, 255, 255, 0.96);
+  --m-color-bg-glass-dark: rgba(29, 33, 41, 0.8);
+  --m-color-bg-grouped: #f6f9ff;
+  --m-color-bg-grouped-card: #FFFFFF;
+  --m-color-bg-section: #f8fbff;
+  --m-color-bg-gradient: linear-gradient(180deg, #f8fbff 0%, #f4f8ff 100%);
+
+  /* === 文字色（严格对齐PC版） === */
+  --m-color-text-primary: #15213d;
+  --m-color-text-secondary: #44536f;
+  --m-color-text-tertiary: #72809a;
+  --m-color-text-quaternary: #98a4b7;
+  --m-color-text-disabled: #c0c8d6;
+  --m-color-text-placeholder: #a0aabc;
+  --m-color-text-inverse: #FFFFFF;
+  --m-color-text-link: #0d6bff;
+
+  /* === 边框（严格对齐PC版 #e7edf7） === */
+  --m-color-border: #e7edf7;
+  --m-color-border-light: #eef3fa;
+  --m-color-border-ultralight: #f5f8fd;
+  --m-color-border-focus: #0d6bff;
+  --m-color-divider: #eef3fa;
+  --m-color-separator: #e7edf7;
+  --m-color-separator-opaque: #e7edf7;
+  --m-color-hairline: #e7edf7;
 
   /* === 状态色 === */
   --m-color-success: #16bf78;
-  --m-color-success-bg: #e8f5e9;
-  --m-color-success-border: #c8e6c9;
-  --m-color-success-text: #2e7d32;
+  --m-color-success-bg: rgba(22, 191, 120, 0.08);
+  --m-color-success-bg-solid: #e9fbf3;
+  --m-color-success-border: rgba(22, 191, 120, 0.2);
 
   --m-color-warning: #ff9f22;
-  --m-color-warning-bg: #fff3e0;
-  --m-color-warning-border: #ffe0b2;
-  --m-color-warning-text: #d98012;
+  --m-color-warning-bg: rgba(255, 159, 34, 0.08);
+  --m-color-warning-bg-solid: #fff5e6;
+  --m-color-warning-border: rgba(255, 159, 34, 0.2);
+  --m-color-warning-text: #d97706;
 
-  --m-color-danger: #ff5252;
-  --m-color-danger-bg: #ffebee;
-  --m-color-danger-border: #ffcdd2;
-  --m-color-danger-text: #c62828;
+  --m-color-info: #0d6bff;
+  --m-color-info-bg: rgba(13, 107, 255, 0.08);
+  --m-color-info-bg-solid: #edf5ff;
+  --m-color-info-border: rgba(13, 107, 255, 0.2);
 
-  --m-color-info: #3380ff;
-  --m-color-info-bg: #e3f2fd;
-  --m-color-info-border: #bbdefb;
-  --m-color-info-text: #1565c0;
+  /* === 阴影系统（严格对齐PC版） === */
+  --m-shadow-none: none;
+  --m-shadow-xs: 0 1px 2px rgba(31, 53, 94, 0.04);
+  --m-shadow-sm: 0 1px 2px rgba(31, 53, 94, 0.04), 0 2px 6px rgba(31, 53, 94, 0.03);
+  --m-shadow-card: 0 1px 2px rgba(31, 53, 94, 0.04), 0 8px 24px rgba(31, 53, 94, 0.06);
+  --m-shadow-md: 0 2px 8px rgba(31, 53, 94, 0.06), 0 10px 26px rgba(31, 53, 94, 0.055);
+  --m-shadow-lg: 0 8px 24px rgba(31, 53, 94, 0.08), 0 14px 36px rgba(31, 53, 94, 0.08);
+  --m-shadow-xl: 0 12px 32px rgba(31, 53, 94, 0.1), 0 22px 50px rgba(17, 35, 67, 0.12);
+  --m-shadow-fab: 0 9px 18px rgba(13, 107, 255, 0.25), 0 4px 12px rgba(31, 53, 94, 0.1);
+  --m-shadow-drawer: 2px 0 40px rgba(17, 35, 67, 0.15);
+  --m-shadow-menu: 0 8px 24px rgba(31, 53, 94, 0.08), 0 0 0 1px rgba(31, 53, 94, 0.05);
+  --m-shadow-tabbar: 0 -1px 0 rgba(231, 237, 247, 1);
+  --m-shadow-primary-card: 0 10px 20px rgba(13, 107, 255, 0.22);
 
-  /* === 业务扩展色 === */
-  --m-color-purple: #8b5cf6;
-  --m-color-purple-bg: #f3e8ff;
-  --m-color-cyan: #11b5d8;
-  --m-color-cyan-bg: #e0f7fa;
-
-  /* === 阴影 === */
-  --m-shadow-card: 0 1px 2px rgba(31, 53, 94, 0.04), 0 4px 12px rgba(31, 53, 94, 0.04);
-  --m-shadow-elevated: 0 4px 16px rgba(31, 53, 94, 0.08);
-  --m-shadow-fab: 0 6px 18px rgba(51, 128, 255, 0.28), 0 2px 8px rgba(51, 128, 255, 0.2);
-  --m-shadow-tabbar: 0 -2px 12px rgba(31, 53, 94, 0.04);
+  /* === 内阴影 === */
+  --m-inner-shadow-top: none;
+  --m-inner-shadow-bottom: none;
+  --m-inner-shadow-input: inset 0 0 0 1px #e7edf7;
+  --m-inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --m-inner-highlight-soft: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  --m-icon-highlight: none;
+  --m-card-highlight: none;
 
   /* === 遮罩 === */
-  --m-mask-drawer: rgba(15, 25, 50, 0.4);
-  --m-mask-modal: rgba(15, 25, 50, 0.5);
+  --m-mask-drawer: rgba(20, 36, 58, 0.58);
+  --m-mask-modal: rgba(20, 36, 58, 0.58);
+  --m-mask-toast: rgba(0, 0, 0, 0.75);
+  --m-mask-light: rgba(20, 36, 58, 0.3);
 
-  /* === 间距（4px 网格）=== */
+  /* === 间距（8px网格 - 对齐PC版） === */
+  --m-space-0: 0;
+  --m-space-0-5: 2px;
   --m-space-1: 4px;
+  --m-space-1-5: 6px;
   --m-space-2: 8px;
+  --m-space-2-5: 10px;
   --m-space-3: 12px;
+  --m-space-3-5: 14px;
   --m-space-4: 16px;
   --m-space-5: 20px;
   --m-space-6: 24px;
+  --m-space-7: 28px;
   --m-space-8: 32px;
   --m-space-10: 40px;
   --m-space-12: 48px;
+  --m-space-16: 64px;
 
-  /* === 字号 === */
+  /* === 字号（对齐PC版） === */
   --m-font-size-hero: 28px;
+  --m-font-size-hero-sm: 24px;
+  --m-font-size-display: 24px;
   --m-font-size-h1: 22px;
-  --m-font-size-h2: 17px;
-  --m-font-size-h3: 15px;
+  --m-font-size-h2: 18px;
+  --m-font-size-h3: 17px;
+  --m-font-size-h4: 15px;
   --m-font-size-body: 14px;
   --m-font-size-body-sm: 13px;
   --m-font-size-caption: 12px;
-  --m-font-size-tiny: 10px;
+  --m-font-size-tiny: 12px;
+  --m-font-size-micro: 11px;
+  --m-font-size-large-title: 28px;
+  --m-font-size-title-1: 24px;
+  --m-font-size-title-2: 20px;
+  --m-font-size-title-3: 18px;
+  --m-font-size-headline: 16px;
+  --m-font-size-callout: 15px;
+  --m-font-size-footnote: 12px;
 
-  /* === 字重 === */
+  /* === 字重（对齐PC版 - 500/600/800） === */
+  --m-font-weight-thin: 300;
   --m-font-weight-regular: 400;
-  --m-font-weight-medium: 500;
-  --m-font-weight-semibold: 600;
+  --m-font-weight-medium: 520;
+  --m-font-weight-semibold: 650;
   --m-font-weight-bold: 700;
-  --m-font-weight-extrabold: 800;
+  --m-font-weight-heavy: 800;
 
   /* === 行高 === */
+  --m-line-height-none: 1;
   --m-line-height-tight: 1.2;
-  --m-line-height-base: 1.5;
-  --m-line-height-relaxed: 1.6;
+  --m-line-height-snug: 1.3;
+  --m-line-height-base: 1.4;
+  --m-line-height-relaxed: 1.5;
+  --m-line-height-loose: 1.7;
 
-  /* === 字体栈 === */
-  --m-font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
-                   "Microsoft YaHei", "Segoe UI", Roboto, Arial, sans-serif;
-  --m-font-family-mono: "SF Mono", "JetBrains Mono", Consolas, monospace;
+  /* === 字体栈（对齐PC版） === */
+  --m-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  --m-font-family-mono: ui-monospace, Menlo, Consolas, monospace;
+  --m-font-family-number: "SF Pro Display", "PingFang SC", "Helvetica Neue", Roboto, Arial, sans-serif;
+  --m-font-family-rounded: "PingFang SC", "Microsoft YaHei", sans-serif;
 
-  /* === 圆角 === */
-  --m-radius-sm: 6px;
+  /* === 圆角（严格对齐PC版 - 大圆角风格） === */
+  --m-radius-xs: 6px;
+  --m-radius-sm: 7px;
   --m-radius-md: 8px;
   --m-radius-lg: 12px;
-  --m-radius-xl: 16px;
-  --m-radius-2xl: 20px;
-  --m-radius-pill: 100px;
+  --m-radius-xl: 14px;
+  --m-radius-2xl: 16px;
+  --m-radius-3xl: 18px;
+  --m-radius-pill: 999px;
   --m-radius-circle: 50%;
+  --m-radius-continuous: 14px;
+  --m-radius-squircle-sm: 8px;
+  --m-radius-squircle-md: 12px;
+  --m-radius-squircle-lg: 14px;
+  --m-radius-squircle-xl: 16px;
+  --m-radius-icon-sm: 8px;
+  --m-radius-icon-md: 10px;
+  --m-radius-icon-lg: 14px;
+  --m-radius-card: 14px;
+  --m-radius-button: 8px;
+  --m-radius-input: 7px;
+  --m-radius-chip: 7px;
+
+  /* === 动画（流畅自然） === */
+  --m-duration-instant: 100ms;
+  --m-duration-fast: 150ms;
+  --m-duration-base: 200ms;
+  --m-duration-slow: 250ms;
+  --m-duration-slower: 300ms;
+  --m-duration-page-enter: 280ms;
+  --m-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --m-ease-spring: cubic-bezier(0.25, 0.8, 0.25, 1);
+  --m-ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --m-ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --m-ease-ios: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --m-ease-ios-spring: cubic-bezier(0.25, 0.8, 0.25, 1);
+  --m-ease-gentle: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --m-ease-linear: linear;
+
+  /* === 毛玻璃（精致克制） === */
+  --m-blur-glass: blur(12px) saturate(150%);
+  --m-blur-glass-strong: blur(20px) saturate(180%);
+  --m-blur-subtle: blur(6px);
+  --m-blur-thick: blur(16px);
+  --m-blur-xthick: blur(24px);
+  --m-blur-tabbar: blur(20px) saturate(180%);
 
   /* === 安全区 === */
   --m-safe-area-top: env(safe-area-inset-top);
   --m-safe-area-bottom: env(safe-area-inset-bottom);
+  --m-safe-area-left: env(safe-area-inset-left);
+  --m-safe-area-right: env(safe-area-inset-right);
+
+  /* === Z-index === */
+  --m-z-base: 1;
+  --m-z-card: 10;
+  --m-z-dropdown: 50;
+  --m-z-sticky: 100;
+  --m-z-overlay: 200;
+  --m-z-modal: 300;
+  --m-z-popover: 400;
+  --m-z-toast: 500;
+  --m-z-tooltip: 600;
 }

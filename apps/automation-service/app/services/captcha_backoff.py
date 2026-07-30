@@ -1,12 +1,10 @@
 """
-全自动滑块失败指数退避
-====================
+滑块求解失败冷却
+================
 策略（仅自动路径 / 全自动）：
 - 成功：清空 fail_count，允许立即再求
-- 失败：fail_count += 1，冷却 = min(6h, 30min * 2^(fail_count-1))
-  即 30m → 60m → 120m → 240m → 360m(封顶)
-- 手动触发 (manual / manual_retry) 默认也尊重退避，但可 force=True 跳过
-  （当前产品要求全自动，手动同样遵守退避，避免狂点把 punish 打满）
+- 失败：fail_count += 1，固定冷却 60 秒
+- 手动触发 (manual / manual_retry) 跳过冷却（force=True）
 
 状态持久化到 xianyu_captcha_backoff，进程重启不丢失。
 """
@@ -23,21 +21,20 @@ from ..core.failure_logging import log_service_failure
 
 logger = logging.getLogger(__name__)
 
-BASE_COOLDOWN_SEC = 5 * 60           # 5 分钟（避免账号长时间失联）
-MAX_COOLDOWN_SEC = 6 * 60 * 60       # 6 小时
+# 固定冷却时长（秒）：失败后 60 秒内禁止自动求解，避免频繁触发风控
+COOLDOWN_SEC = 60
 _ENSURED = False
 
 
 def _cooldown_seconds(fail_count: int) -> int:
+    """返回固定 60 秒冷却。fail_count <= 0 时不冷却。"""
     if fail_count <= 0:
         return 0
-    # 2^(n-1) * 30min，封顶 6h
-    sec = BASE_COOLDOWN_SEC * (2 ** max(0, fail_count - 1))
-    return int(min(MAX_COOLDOWN_SEC, sec))
+    return COOLDOWN_SEC
 
 
 async def ensure_backoff_table() -> None:
-    """幂等建表，避免迁移未跑导致退避失效。"""
+    """幂等建表，避免迁移未跑导致冷却失效。"""
     global _ENSURED
     if _ENSURED:
         return
@@ -129,15 +126,15 @@ async def assert_auto_solve_allowed(
 ) -> Optional[dict[str, Any]]:
     """若处于冷却期返回阻断信息 dict；允许则返回 None。
 
-    策略：5m → 10m → 20m → 40m → 80m → ... → 6h（封顶）。
-    force=True 时跳过冷却（手动触发场景）。
+    策略：固定 60 秒冷却。
+    force=True 时跳过冷却（手动触发场景 manual / manual_retry）。
     """
     if force:
         return None
     st = await get_backoff_status(account_id, tenant_id)
     if not st.get("allowed"):
         return {
-            "error": "指数退避冷却中",
+            "error": "滑块求解冷却中",
             "remainingSec": st.get("remainingSec", 0),
             "nextAllowedAt": st.get("nextAllowedAt"),
             "failCount": st.get("failCount", 0),
@@ -166,7 +163,7 @@ async def record_solve_success(account_id: int, tenant_id: int) -> None:
                 {"aid": account_id, "tid": tenant_id},
             )
             await db.commit()
-        logger.info("滑块退避已重置(成功) accountId=%d", account_id)
+        logger.info("滑块冷却已重置(成功) accountId=%d", account_id)
     except Exception as e:
         log_service_failure(
             logger, e, operation="record_captcha_backoff_success",
@@ -178,14 +175,72 @@ async def record_solve_failure(
     account_id: int,
     tenant_id: int,
     error: str = "",
+    *,
+    skip_backoff: bool = False,
 ) -> dict[str, Any]:
-    """记录失败并计算下次允许时间，返回退避状态。"""
+    """记录失败并计算下次允许时间，返回冷却状态。
+
+    Args:
+        account_id: 账号 ID
+        tenant_id: 租户 ID
+        error: 错误消息
+        skip_backoff: 是否跳过指数退避累加（仅记录 last_error，不累加 fail_count、不设置 next_allowed_at）。
+            用于浏览器崩溃等临时性错误：这类错误重试一次可能就成功，
+            不应让账号进入 60 秒冷却期导致后续求解被阻断。
+            2026-07-29 事故修复：浏览器崩溃（Page crashed / browserContext closed）
+            原先被归为 service_unavailable 并累加退避，导致 WS 每次重连触发求解时
+            都被 assert_auto_solve_allowed 拦截，账号长时间无法自动求解。
+    """
     await ensure_backoff_table()
+    err = (error or "")[:500]
+
+    if skip_backoff:
+        # 仅记录 last_error，不累加 fail_count、不设置 next_allowed_at
+        # 账号仍可立即再次求解（assert_auto_solve_allowed 不会被拦截）
+        try:
+            async with async_session() as db:
+                await db.execute(
+                    text(
+                        """
+                        INSERT INTO xianyu_captcha_backoff
+                          (account_id, tenant_id, fail_count, next_allowed_at, last_fail_at, last_error, updated_at)
+                        VALUES (:aid, :tid, 0, NULL, NOW(), :err, NOW())
+                        ON DUPLICATE KEY UPDATE
+                          last_fail_at = NOW(),
+                          last_error = :err,
+                          tenant_id = :tid,
+                          updated_at = NOW()
+                        """
+                    ),
+                    {
+                        "aid": account_id,
+                        "tid": tenant_id,
+                        "err": err,
+                    },
+                )
+                await db.commit()
+            logger.info(
+                "滑块失败已记录(跳过退避) accountId=%d error=%s — 临时性错误，不累加冷却",
+                account_id, err[:120],
+            )
+        except Exception as e:
+            log_service_failure(
+                logger, e, operation="record_captcha_backoff_failure_skip",
+                tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
+            )
+        return {
+            "failCount": 0,
+            "cooldownSec": 0,
+            "nextAllowedAt": None,
+            "allowed": True,
+            "remainingSec": 0,
+            "lastError": err,
+        }
+
     st = await get_backoff_status(account_id, tenant_id)
     fail_count = int(st.get("failCount") or 0) + 1
     cool = _cooldown_seconds(fail_count)
     next_at = datetime.now() + timedelta(seconds=cool)
-    err = (error or "")[:500]
     try:
         async with async_session() as db:
             await db.execute(
@@ -213,7 +268,7 @@ async def record_solve_failure(
             )
             await db.commit()
         logger.warning(
-            "滑块退避已更新(失败) accountId=%d failCount=%d cooldownSec=%d next=%s",
+            "滑块冷却已更新(失败) accountId=%d failCount=%d cooldownSec=%d next=%s",
             account_id, fail_count, cool, next_at.isoformat(sep=" ", timespec="seconds"),
         )
     except Exception as e:

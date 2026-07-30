@@ -14,7 +14,7 @@ import { handleCaptcha, getCaptchaQueuePosition } from '../api/captcha.js'
  *     - success: 求解成功
  *     - fail: 求解失败（滑块通过失败）
  *     - timeout: 求解超时
- *     - precheck_rejected: 预校验拒绝（Cookie 失效/账号不活跃/hasLogin 服务不可用）
+ *     - precheck_rejected: 预校验拒绝（账号不活跃/Cookie 失效/hasLogin 服务不可用/冷却中）
  *   result: 'slider_success' | 'slider_fail' | 'precheck_fail' | ''
  *   queuePosition: number (排队位置，1=下一个出队，0=不在排队中/已开始处理)
  *   queueTotal: number (排队中总数)
@@ -103,7 +103,7 @@ function startQueuePolling(accountId, recordId) {
             success: '求解成功',
             fail: '求解失败',
             timeout: '求解超时',
-            precheck_rejected: '预校验拒绝（Cookie 失效或服务不可用）',
+            precheck_rejected: '预校验拒绝（账号状态不满足求解条件）',
           }
           solveStates[key] = {
             ...prev,

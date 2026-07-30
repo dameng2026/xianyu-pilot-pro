@@ -84,4 +84,37 @@ public class DeliveryGoodsConfigController {
         );
         return Result.ok(null);
     }
+
+    /**
+     * GET /api/auto-delivery/goods/{goodsId}/skus
+     * 获取商品的 SKU 列表（仅多规格商品返回非空列表）。
+     * 返回：[{skuId, inventoryId, propertyKey, propertyText, priceCent, quantity}, ...]
+     */
+    @GetMapping("/{goodsId}/skus")
+    public Result<List<Map<String, Object>>> listGoodsSkus(@PathVariable Long goodsId) {
+        return Result.ok(configService.listGoodsSkus(TenantContext.getCurrentTenantId(), goodsId));
+    }
+
+    /**
+     * GET /api/auto-delivery/goods/{goodsId}/sku-rules
+     * 获取商品的 SKU 发货规则（从 config_json.skuRules）。
+     */
+    @GetMapping("/{goodsId}/sku-rules")
+    public Result<List<Map<String, Object>>> getSkuRules(@PathVariable Long goodsId) {
+        return Result.ok(configService.readSkuRules(TenantContext.getCurrentTenantId(), goodsId));
+    }
+
+    /**
+     * PUT /api/auto-delivery/goods/{goodsId}/sku-rules
+     * 保存商品的 SKU 发货规则。
+     * 请求体：[{skuId, propertyKey, propertyText, payDelivery:{...}, confirmDelivery:{...}, reviewDelivery:{...}}, ...]
+     */
+    @PutMapping("/{goodsId}/sku-rules")
+    public Result<Map<String, Object>> saveSkuRules(@PathVariable Long goodsId,
+                                                    @RequestBody List<Map<String, Object>> body) {
+        int count = configService.saveSkuRules(TenantContext.getCurrentTenantId(), goodsId, body);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("saved", count);
+        return Result.ok(result);
+    }
 }

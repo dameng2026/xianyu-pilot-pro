@@ -48,11 +48,12 @@ export const invalidateFeatureSwitchCache = () => {
 /**
  * 查询当前用户对指定功能的拦截信息。
  * 返回：
- *   { allowed: true }  → 允许使用
- *   { allowed: false, reason, required_level, reason_text? }  → 被拦截
+ *   { allowed: true, preview: false }  → 允许使用（正常模式）
+ *   { allowed: true, preview: true, reason_text }  → 允许进入但预览模式（不可执行业务操作）
+ *   { allowed: false, preview: false, reason, required_level, reason_text? }  → 被拦截
  *
  * 内部复用 getFeatureSwitchStatus 缓存，避免重复请求。
- * 失败降级：返回 { allowed: true }，避免后端故障锁死用户操作。
+ * 失败降级：返回 { allowed: true, preview: false }，避免后端故障锁死用户操作。
  *
  * @param {string} featureKey 功能 key（如 'manual-slider-solve'）
  * @param {object} options { force?: boolean }
@@ -62,22 +63,29 @@ export const getFeatureStatus = async (featureKey, options = {}) => {
     const status = await getFeatureSwitchStatus(options)
     const accessible = status?.accessible || {}
     const blocked = status?.blocked || {}
+    const preview = status?.preview || {}
     if (accessible[featureKey] === true) {
-      return { allowed: true }
+      const previewInfo = preview[featureKey]
+      return {
+        allowed: true,
+        preview: !!previewInfo,
+        reason_text: previewInfo?.reason_text || ''
+      }
     }
     const info = blocked[featureKey]
     if (!info) {
       // 既不在 accessible 也不在 blocked，视为允许（向后兼容）
-      return { allowed: true }
+      return { allowed: true, preview: false }
     }
     return {
       allowed: false,
+      preview: false,
       reason: info.reason || 'disabled',
       required_level: info.required_level || 'vip',
       reason_text: info.reason_text || '',
     }
   } catch {
     // 后端故障降级放行
-    return { allowed: true }
+    return { allowed: true, preview: false }
   }
 }

@@ -17,10 +17,11 @@
 - 是否已完成卖家评价，优先结合 rateItemVOList 中是否存在 seller=true 的记录
 - 不仅凭 rateItemVOList 为空就认定一定可评价，还需结合订单状态
 
-评价等级映射（需求第十七节）：
-- 当前真实请求只确认好评 rate=1
-- 中评、差评的 UI 可完成，但未经确认的等级不得提交
-- 列表响应中的 rate=-1 不能直接认定为差评
+评价等级映射（已通过真实接口样本确认）：
+- 好评 rate=1、中评 rate=-1、差评 rate=0
+- 列表响应中的 rate=-1 不可无条件认定为中评：
+  只有 seller=true 的记录才是卖家评价，才按等级映射展示；
+  seller=false 且 feedback 为"未做出评价内容"占位记录保持安全展示。
 """
 from __future__ import annotations
 
@@ -82,13 +83,17 @@ MAX_CONCURRENT_ACCOUNTS = 3
 # 单账号分页请求间隔（避免风控）
 PAGE_REQUEST_INTERVAL_SECONDS = 0.5
 
-# 评价等级映射（需求第十七节）
-# 当前真实请求只确认好评 rate=1
-# 中评、差评未经确认，不得提交猜测值
-RATE_LEVEL_GOOD = 1  # 好评（已确认）
-# RATE_LEVEL_NEUTRAL / RATE_LEVEL_BAD 未确认，不设常量，阻止提交
-# 已确认的可提交等级集合
-CONFIRMED_RATE_LEVELS: frozenset[int] = frozenset({RATE_LEVEL_GOOD})
+# 评价等级映射（已通过真实接口样本确认：需求第一节、第二节、第三节）
+# 好评 rate=1、中评 rate=-1、差评 rate=0
+RATE_LEVEL_GOOD = 1  # 好评
+RATE_LEVEL_NEUTRAL = -1  # 中评
+RATE_LEVEL_BAD = 0  # 差评
+# 已确认的可提交等级集合（需求第五节）
+CONFIRMED_RATE_LEVELS: frozenset[int] = frozenset({
+    RATE_LEVEL_GOOD,
+    RATE_LEVEL_NEUTRAL,
+    RATE_LEVEL_BAD,
+})
 
 # 评价内容最大长度（保守上限，闲鱼真实规则未在项目中确认）
 RATE_FEEDBACK_MAX_LENGTH = 500
@@ -494,7 +499,7 @@ def call_create_rate(
     - tradeIdList 使用 orderId（字符串），不用 itemId
     - 单条评价只包含一个 orderId
     - imageUrls 始终为空数组（本需求不实现图片上传）
-    - rate 必须是已确认的等级（好评=1）
+    - rate 必须是已确认的等级（好评=1、中评=-1、差评=0）
 
     返回：
         {"success": True/False, "data": {...}, "error": "..."}
@@ -1082,6 +1087,7 @@ async def sync_rates_for_account(
 
 async def sync_all_rates(
     db: AsyncSession, tenant_id: int,
+    force_full: bool = False,
 ) -> dict:
     """全部账号模式：受控并发刷新所有鱼小铺账号。
 
@@ -1090,6 +1096,7 @@ async def sync_all_rates(
     - 每个账号同一时间只能有一轮评价同步
     - 某一个账号失败不影响其他账号
     - 全部账号模式加入合理抖动，避免所有账号同一毫秒请求
+    - force_full=True 时强制每个账号执行完整分页同步
     """
     fish_shop_accounts = await list_fish_shop_accounts(db, tenant_id)
     if not fish_shop_accounts:
@@ -1106,12 +1113,15 @@ async def sync_all_rates(
         async with sem:
             session_factory = _get_async_session()
             async with session_factory() as sub_db:
-                result = await sync_rates_for_account(sub_db, account_info["id"], tenant_id)
+                result = await sync_rates_for_account(
+                    sub_db, account_info["id"], tenant_id, force_full=force_full
+                )
                 return {
                     "accountId": account_info["id"],
                     "nickname": account_info.get("nickname"),
                     "ok": result.get("ok", False),
                     "total": result.get("total", 0),
+                    "totalCount": result.get("totalCount", 0),
                     "error": result.get("error"),
                 }
 
@@ -1165,7 +1175,10 @@ def _get_async_session():
 # - all: 全部
 # - pending: 待评价（has_seller_rate=0 且 rate_reviewable=1）
 # - done: 已评价（has_seller_rate=1）
-SUPPORTED_CATEGORIES = ["all", "pending", "done"]
+# - good: 卖家好评（has_seller_rate=1 且 seller_rate_level='1'）
+# - neutral: 卖家中评（has_seller_rate=1 且 seller_rate_level='-1'）
+# - bad: 卖家差评（has_seller_rate=1 且 seller_rate_level='0'）
+SUPPORTED_CATEGORIES = ["all", "pending", "done", "good", "neutral", "bad"]
 
 
 async def query_local_rates(
@@ -1199,12 +1212,23 @@ async def query_local_rates(
     if account_id is not None:
         conditions.append(XianyuRate.account_id == account_id)
 
-    # 分类筛选（本地筛选）
+    # 分类筛选（本地筛选，需求第十二节）
+    # 等级筛选只匹配 seller=true 的卖家评价（has_seller_rate=1 且 seller_rate_level 对应）
+    # 不得把买家占位记录计入卖家等级筛选
     if category == "pending":
         conditions.append(XianyuRate.has_seller_rate == 0)
         conditions.append(XianyuRate.rate_reviewable == 1)
     elif category == "done":
         conditions.append(XianyuRate.has_seller_rate == 1)
+    elif category == "good":
+        conditions.append(XianyuRate.has_seller_rate == 1)
+        conditions.append(XianyuRate.seller_rate_level == "1")
+    elif category == "neutral":
+        conditions.append(XianyuRate.has_seller_rate == 1)
+        conditions.append(XianyuRate.seller_rate_level == "-1")
+    elif category == "bad":
+        conditions.append(XianyuRate.has_seller_rate == 1)
+        conditions.append(XianyuRate.seller_rate_level == "0")
     # all 不加条件
 
     # 关键词搜索（本地搜索）
@@ -1449,12 +1473,13 @@ async def create_rate(
     if not order_id or not isinstance(order_id, str):
         return {"ok": False, "error": "orderId 不能为空"}
 
-    # 6. 评价等级校验（需求第十七节）
-    # 仅允许已确认的等级（好评=1）
+    # 6. 评价等级校验（需求第一节、第五节）
+    # 已确认等级：好评=1、中评=-1、差评=0
+    # 注意：rate=0（差评）是合法值，不可用 if not rate 判断
     if rate not in CONFIRMED_RATE_LEVELS:
         return {
             "ok": False,
-            "error": "当前评价等级未确认映射，仅支持好评（rate=1）。中评和差评的真实值尚未通过真实接口样本确认，暂不可提交。",
+            "error": "评价等级不合法，仅支持好评(1)、中评(-1)、差评(0)。",
         }
 
     # 7. 评价内容校验
@@ -1618,14 +1643,19 @@ async def get_rate_overview(
 ) -> dict:
     """获取评价概览统计（用于概览卡片）。
 
-    仅展示可以可靠计算的数据（需求第十二节）：
+    展示已确认的统计（需求第十三节）：
     - 评价记录总数
     - 待评价数量
     - 已评价数量
+    - 好评 / 中评 / 差评 数量（仅统计 seller=true 的卖家评价）
     - 最近同步时间
 
-    好评、中评、差评统计仅在评价等级数值映射得到可靠确认后才可展示（需求第十二节）。
-    当前只确认好评=1，不展示等级统计。
+    等级统计约束（需求第十三节）：
+    - 只统计 has_seller_rate=1 且 seller_rate_level 对应的记录
+    - 买家评价不计入卖家评价统计
+    - 买家未评价占位不计入中评
+    - rate=0 不会因真假判断漏计差评
+    - 已评价数量以存在卖家评价记录为准
     """
     conditions = [
         XianyuRate.tenant_id == tenant_id,
@@ -1649,13 +1679,39 @@ async def get_rate_overview(
     )
     pending = pending_result.scalar() or 0
 
-    # 已评价数量
+    # 已评价数量（以存在卖家评价记录为准，需求第十三节）
     done_conditions = list(conditions)
     done_conditions.append(XianyuRate.has_seller_rate == 1)
     done_result = await db.execute(
         select(func.count(XianyuRate.id)).where(and_(*done_conditions))
     )
     done = done_result.scalar() or 0
+
+    # 好评 / 中评 / 差评 数量（仅统计 seller=true 的卖家评价）
+    # seller_rate_level 存储为字符串："1" / "-1" / "0"
+    good_conditions = list(conditions)
+    good_conditions.append(XianyuRate.has_seller_rate == 1)
+    good_conditions.append(XianyuRate.seller_rate_level == "1")
+    good_result = await db.execute(
+        select(func.count(XianyuRate.id)).where(and_(*good_conditions))
+    )
+    good = good_result.scalar() or 0
+
+    neutral_conditions = list(conditions)
+    neutral_conditions.append(XianyuRate.has_seller_rate == 1)
+    neutral_conditions.append(XianyuRate.seller_rate_level == "-1")
+    neutral_result = await db.execute(
+        select(func.count(XianyuRate.id)).where(and_(*neutral_conditions))
+    )
+    neutral = neutral_result.scalar() or 0
+
+    bad_conditions = list(conditions)
+    bad_conditions.append(XianyuRate.has_seller_rate == 1)
+    bad_conditions.append(XianyuRate.seller_rate_level == "0")
+    bad_result = await db.execute(
+        select(func.count(XianyuRate.id)).where(and_(*bad_conditions))
+    )
+    bad = bad_result.scalar() or 0
 
     # 最近同步时间
     if account_id is not None:
@@ -1691,5 +1747,8 @@ async def get_rate_overview(
         "total": total,
         "pending": pending,
         "done": done,
+        "good": good,
+        "neutral": neutral,
+        "bad": bad,
         "lastSyncTime": last_sync_time,
     }

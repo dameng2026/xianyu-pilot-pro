@@ -45,7 +45,7 @@ function iconFor(type) {
   padding: 10px var(--m-space-4);
   border-radius: var(--m-radius-lg);
   background: var(--m-color-bg-elevated);
-  box-shadow: var(--m-shadow-elevated);
+  box-shadow: var(--m-shadow-xs);
   font-size: var(--m-font-size-body);
   font-weight: var(--m-font-weight-medium);
   color: var(--m-color-text-primary);

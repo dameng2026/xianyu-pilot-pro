@@ -317,6 +317,13 @@ import {
   getRefundFishShopAccounts,
 } from '../api/refunds.js'
 import { accountName } from '../utils/format.js'
+import {
+  saveRefundListState,
+  consumeRefundListState,
+} from '../utils/refundListState.js'
+
+// 路由跳转事件（App.vue 监听 navigate，调用 navigate() 切换 hash）
+const emit = defineEmits(['navigate'])
 
 // ============================================================
 // 分类标签定义
@@ -708,14 +715,31 @@ function buildSyncSuccessMessage(data) {
 // ============================================================
 // 操作：查看详情
 // ============================================================
+// 需求第二节：退款列表点击"查看详情"进入项目内部详情页，不再默认跳转外部闲鱼详情。
+// 需求第三节：进入详情必须能确定 所属账号 + orderId + refundId + 列表摘要；
+//            同一订单可能有多次退款，必须以 refundId 定位当前退款。
+// 需求第三节：返回列表时恢复 账号筛选 / 分类 / 页码 / 滚动位置。
 function onViewDetail(row) {
-  const btn = findButton(row, 'viewRefundDetail')
-  const url = btn?.clickEvent?.data?.url
-  if (!url) {
-    showNotice('该退款记录未返回有效的详情链接', 'warn')
+  const accountId = row?.accountId
+  const orderId = row?.externalOrderId
+  const refundId = row?.externalRefundId
+  if (!accountId || !orderId || !refundId) {
+    showNotice('该退款记录缺少必要参数，无法打开详情', 'warn')
     return
   }
-  openExternalUrl(url)
+
+  // 保存列表筛选状态，供 RefundDetailPage 返回时恢复
+  saveRefundListState({
+    selectedAccountId: selectedAccountId.value,
+    category: selectedCategory.value,
+    page: query.page,
+    pageSize: query.pageSize,
+    scrollTop: typeof window === 'undefined' ? 0 : Math.max(0, window.scrollY || 0),
+  })
+
+  // 跳转到内部 refund-detail 路由（不带外部闲鱼链接）
+  // 路由形态：refund-detail/{accountId}/{orderId}/{refundId}
+  emit('navigate', `refund-detail/${accountId}/${encodeURIComponent(orderId)}/${encodeURIComponent(refundId)}`)
 }
 
 // ============================================================
@@ -881,6 +905,16 @@ function onPageVisibilityChange() {
 // 生命周期
 // ============================================================
 onMounted(async () => {
+  // 从详情页返回时恢复筛选状态（需求第三节：恢复账号筛选、分类、页码、滚动位置）
+  // consumeRefundListState 会清除状态，避免重复恢复
+  const savedState = consumeRefundListState()
+  if (savedState) {
+    selectedAccountId.value = savedState.selectedAccountId || ''
+    selectedCategory.value = savedState.category || 'all'
+    query.page = savedState.page > 0 ? savedState.page : 1
+    query.pageSize = savedState.pageSize > 0 ? savedState.pageSize : 20
+  }
+
   await loadFishShopAccounts()
   await loadSyncStatus()
   await loadRefunds(true)
@@ -892,6 +926,19 @@ onMounted(async () => {
 
   startSyncStatusPolling()
   document.addEventListener('visibilitychange', onPageVisibilityChange)
+
+  // 恢复滚动位置（在 DOM 渲染后执行）
+  if (savedState && savedState.scrollTop > 0) {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          window.scrollTo({ top: savedState.scrollTop, left: 0, behavior: 'instant' })
+        } catch {
+          window.scrollTo(0, savedState.scrollTop)
+        }
+      })
+    })
+  }
 })
 
 onBeforeUnmount(() => {

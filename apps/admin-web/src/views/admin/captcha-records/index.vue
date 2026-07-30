@@ -18,11 +18,14 @@
             <ElRadioButton :value="30">近 30 天</ElRadioButton>
             <ElRadioButton :value="0">全部</ElRadioButton>
           </ElRadioGroup>
-          <ElButton :loading="statsLoading" @click="loadStats">刷新概览</ElButton>
+          <ElButton :loading="statsLoading || attemptStatsLoading" @click="reloadAllStats">刷新概览</ElButton>
         </div>
       </div>
     </ElCard>
 
+    <!-- 主内容区：Tab 切换 -->
+    <ElTabs v-model="activeTab" class="main-tabs">
+      <ElTabPane label="求解概览" name="overview">
     <!-- 当前过滤提示 -->
     <ElAlert v-if="accountIdFilter || userIdFilter" type="success" :closable="false" class="filter-alert" show-icon>
       <template #title>
@@ -364,8 +367,230 @@
             <pre class="error-text">{{ detailDrawer.row.errorMessageText || '无' }}</pre>
           </ElDescriptionsItem>
         </ElDescriptions>
+
+        <!-- 每次尝试明细 -->
+        <div class="attempt-detail-section">
+          <div class="attempt-detail-title">
+            <span>每次尝试明细</span>
+            <ElButton v-if="!detailDrawer.attempts.length" link type="primary" size="small" :loading="detailDrawer.attemptsLoading" @click="loadRecordAttempts(detailDrawer.row.id)">
+              加载尝试明细
+            </ElButton>
+            <ElButton v-else link type="primary" size="small" :loading="detailDrawer.attemptsLoading" @click="loadRecordAttempts(detailDrawer.row.id)">
+              刷新
+            </ElButton>
+          </div>
+          <div v-if="detailDrawer.attemptsLoading" class="attempt-loading">加载中...</div>
+          <ElTable v-else-if="detailDrawer.attempts.length" :data="detailDrawer.attempts" border stripe size="small">
+            <ElTableColumn label="轮次" width="70">
+              <template #default="{ row }">第 {{ row.attemptNo }} 次</template>
+            </ElTableColumn>
+            <ElTableColumn label="求解方案" width="140">
+              <template #default="{ row }">
+                <ElTag size="small" type="info">{{ solveSchemeLabel(row.solveScheme) }}</ElTag>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="拖动方法" width="130">
+              <template #default="{ row }">
+                <ElTag size="small" type="info">{{ dragMethodLabel(row.dragMethod) }}</ElTag>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="速度策略" width="120">
+              <template #default="{ row }">
+                <ElTag size="small" type="info">{{ speedStrategyLabel(row.speedStrategy) }}</ElTag>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="结果" width="90">
+              <template #default="{ row }">
+                <ElTag v-if="row.success" type="success" size="small">成功</ElTag>
+                <ElTag v-else type="danger" size="small">失败</ElTag>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="耗时" width="100">
+              <template #default="{ row }">{{ formatDuration(row.durationMs) }}</template>
+            </ElTableColumn>
+            <ElTableColumn label="错误信息" min-width="200">
+              <template #default="{ row }">
+                <span v-if="row.errorMessage" class="attempt-error">{{ row.errorMessage }}</span>
+                <span v-else class="muted">—</span>
+              </template>
+            </ElTableColumn>
+          </ElTable>
+          <div v-else class="attempt-empty">
+            暂无尝试明细数据（可能为旧记录，未采集尝试明细）
+          </div>
+        </div>
       </template>
     </ElDrawer>
+      </ElTabPane>
+
+      <!-- ==================== 成功率统计 Tab ==================== -->
+      <ElTabPane label="成功率统计" name="attemptStats" lazy>
+        <!-- 整体 KPI -->
+        <div class="summary-grid">
+          <ElCard shadow="never">
+            <div class="metric-label">总尝试次数</div>
+            <div class="metric-value">{{ formatNumber(attemptStats.totalAttempts) }}</div>
+            <div class="metric-sub">每次 attempt 一条记录（最多 5 次/求解）</div>
+          </ElCard>
+          <ElCard shadow="never">
+            <div class="metric-label">成功次数</div>
+            <div class="metric-value text-success">{{ formatNumber(attemptStats.totalSuccess) }}</div>
+            <div class="metric-sub">success=1 的尝试数</div>
+          </ElCard>
+          <ElCard shadow="never">
+            <div class="metric-label">整体成功率</div>
+            <div class="metric-value" :class="attemptRateClass">{{ formatPercent100(attemptStats.overallSuccessRate) }}</div>
+            <div class="metric-sub">成功 / 总尝试</div>
+          </ElCard>
+          <ElCard shadow="never">
+            <div class="metric-label">统计范围</div>
+            <div class="metric-value small-value">{{ attemptRangeLabel }}</div>
+            <div class="metric-sub">{{ attemptAccountLabel }}</div>
+          </ElCard>
+        </div>
+
+        <ElAlert type="info" :closable="false" class="stats-scope-alert" show-icon>
+          <template #title>
+            <span>
+              统计口径：本页按「每次尝试（attempt）」粒度统计成功率，用于分析各求解方案/拖动方法/速度策略/尝试轮次的实际效果。
+              每次滑块求解最多重试 5 次，每次 attempt 采集方案、方法、策略、成功状态、耗时。
+              成功率低的方案可在后续优化中淘汰，更换为成功率更高的方案。
+            </span>
+          </template>
+        </ElAlert>
+
+        <ElCard shadow="never" class="section-card">
+          <template #header>
+            <div class="table-header">
+              <span>按求解方案聚合</span>
+              <span class="muted small">python_script=Python脚本 / playwright=Playwright CDP</span>
+            </div>
+          </template>
+          <ElTable v-loading="attemptStatsLoading" :data="attemptStats.bySolveScheme" border stripe>
+            <template #empty><div class="empty-state">暂无数据</div></template>
+            <ElTableColumn label="求解方案" min-width="180">
+              <template #default="{ row }">
+                <ElTag size="small" type="info">{{ solveSchemeLabel(row.dim) }}</ElTag>
+                <span class="dim-code">{{ row.dim }}</span>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="总次数" prop="total" width="120" sortable />
+            <ElTableColumn label="成功" prop="success" width="120" sortable>
+              <template #default="{ row }"><span class="text-success">{{ row.success }}</span></template>
+            </ElTableColumn>
+            <ElTableColumn label="成功率" width="140" sortable :sort-method="(a, b) => a.successRate - b.successRate">
+              <template #default="{ row }">
+                <div class="rate-cell">
+                  <ElProgress :percentage="row.successRate" :stroke-width="8" :show-text="false" :color="progressColor(row.successRate)" />
+                  <ElTag :type="rateTagType100(row.successRate)" size="small">{{ formatPercent100(row.successRate) }}</ElTag>
+                </div>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="平均耗时" width="140" sortable :sort-method="(a, b) => a.avgDurationMs - b.avgDurationMs">
+              <template #default="{ row }">{{ formatDuration(row.avgDurationMs) }}</template>
+            </ElTableColumn>
+          </ElTable>
+        </ElCard>
+
+        <ElCard shadow="never" class="section-card">
+          <template #header>
+            <div class="table-header">
+              <span>按拖动方法聚合</span>
+              <span class="muted small">in_container=容器内Y±8px / out_container=超出容器Y±50-120px / none=未拖动</span>
+            </div>
+          </template>
+          <ElTable v-loading="attemptStatsLoading" :data="attemptStats.byDragMethod" border stripe>
+            <template #empty><div class="empty-state">暂无数据</div></template>
+            <ElTableColumn label="拖动方法" min-width="180">
+              <template #default="{ row }">
+                <ElTag size="small" type="info">{{ dragMethodLabel(row.dim) }}</ElTag>
+                <span class="dim-code">{{ row.dim }}</span>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="总次数" prop="total" width="120" sortable />
+            <ElTableColumn label="成功" prop="success" width="120" sortable>
+              <template #default="{ row }"><span class="text-success">{{ row.success }}</span></template>
+            </ElTableColumn>
+            <ElTableColumn label="成功率" width="140" sortable :sort-method="(a, b) => a.successRate - b.successRate">
+              <template #default="{ row }">
+                <div class="rate-cell">
+                  <ElProgress :percentage="row.successRate" :stroke-width="8" :show-text="false" :color="progressColor(row.successRate)" />
+                  <ElTag :type="rateTagType100(row.successRate)" size="small">{{ formatPercent100(row.successRate) }}</ElTag>
+                </div>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="平均耗时" width="140" sortable :sort-method="(a, b) => a.avgDurationMs - b.avgDurationMs">
+              <template #default="{ row }">{{ formatDuration(row.avgDurationMs) }}</template>
+            </ElTableColumn>
+          </ElTable>
+        </ElCard>
+
+        <ElCard shadow="never" class="section-card">
+          <template #header>
+            <div class="table-header">
+              <span>按速度策略聚合</span>
+              <span class="muted small">standard=标准 / medium=中速 / fast=较快 / slow_pause=慢速+停顿 / random=随机 / none=未拖动</span>
+            </div>
+          </template>
+          <ElTable v-loading="attemptStatsLoading" :data="attemptStats.bySpeedStrategy" border stripe>
+            <template #empty><div class="empty-state">暂无数据</div></template>
+            <ElTableColumn label="速度策略" min-width="180">
+              <template #default="{ row }">
+                <ElTag size="small" type="info">{{ speedStrategyLabel(row.dim) }}</ElTag>
+                <span class="dim-code">{{ row.dim }}</span>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="总次数" prop="total" width="120" sortable />
+            <ElTableColumn label="成功" prop="success" width="120" sortable>
+              <template #default="{ row }"><span class="text-success">{{ row.success }}</span></template>
+            </ElTableColumn>
+            <ElTableColumn label="成功率" width="140" sortable :sort-method="(a, b) => a.successRate - b.successRate">
+              <template #default="{ row }">
+                <div class="rate-cell">
+                  <ElProgress :percentage="row.successRate" :stroke-width="8" :show-text="false" :color="progressColor(row.successRate)" />
+                  <ElTag :type="rateTagType100(row.successRate)" size="small">{{ formatPercent100(row.successRate) }}</ElTag>
+                </div>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="平均耗时" width="140" sortable :sort-method="(a, b) => a.avgDurationMs - b.avgDurationMs">
+              <template #default="{ row }">{{ formatDuration(row.avgDurationMs) }}</template>
+            </ElTableColumn>
+          </ElTable>
+        </ElCard>
+
+        <ElCard shadow="never" class="section-card">
+          <template #header>
+            <div class="table-header">
+              <span>按尝试轮次聚合</span>
+              <span class="muted small">attempt 1-5，分析哪一轮最容易成功</span>
+            </div>
+          </template>
+          <ElTable v-loading="attemptStatsLoading" :data="attemptStats.byAttemptNo" border stripe>
+            <template #empty><div class="empty-state">暂无数据</div></template>
+            <ElTableColumn label="尝试轮次" min-width="160">
+              <template #default="{ row }">
+                <ElTag size="small" :type="attemptNoTagType(row.attemptNo)">第 {{ row.attemptNo }} 次</ElTag>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="总次数" prop="total" width="120" sortable />
+            <ElTableColumn label="成功" prop="success" width="120" sortable>
+              <template #default="{ row }"><span class="text-success">{{ row.success }}</span></template>
+            </ElTableColumn>
+            <ElTableColumn label="成功率" width="140" sortable :sort-method="(a, b) => a.successRate - b.successRate">
+              <template #default="{ row }">
+                <div class="rate-cell">
+                  <ElProgress :percentage="row.successRate" :stroke-width="8" :show-text="false" :color="progressColor(row.successRate)" />
+                  <ElTag :type="rateTagType100(row.successRate)" size="small">{{ formatPercent100(row.successRate) }}</ElTag>
+                </div>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="平均耗时" width="140" sortable :sort-method="(a, b) => a.avgDurationMs - b.avgDurationMs">
+              <template #default="{ row }">{{ formatDuration(row.avgDurationMs) }}</template>
+            </ElTableColumn>
+          </ElTable>
+        </ElCard>
+      </ElTabPane>
+    </ElTabs>
   </div>
 </template>
 
@@ -381,9 +606,13 @@
     getCaptchaSolveStats,
     getCaptchaSolveRecords,
     getCaptchaQueueStatus,
+    getCaptchaAttemptStats,
+    getCaptchaRecordAttempts,
     type CaptchaSolveStats,
     type CaptchaQueueStatus,
-    type CaptchaRecordRow
+    type CaptchaRecordRow,
+    type CaptchaAttemptStats,
+    type CaptchaAttemptDetail
   } from '@/api/captcha-records'
 
   defineOptions({ name: 'AdminCaptchaRecordsPage' })
@@ -392,6 +621,9 @@
 
   const route = useRoute()
   const router = useRouter()
+
+  // ==================== Tab 切换 ====================
+  const activeTab = ref<'overview' | 'attemptStats'>('overview')
 
   // 触发场景选项（与 Python captcha_solve_record.TRIGGER_SCENE_DESC 保持一致）
   const triggerSceneOptions = [
@@ -571,6 +803,148 @@
 
   function onRangeChange() {
     loadStats()
+    // 切换时间范围时，如果当前在成功率统计 tab，也同步刷新
+    if (activeTab.value === 'attemptStats') {
+      loadAttemptStats()
+    }
+  }
+
+  // ==================== 尝试明细成功率统计 ====================
+
+  const attemptStatsLoading = ref(false)
+  const attemptStats = reactive<CaptchaAttemptStats>({
+    bySolveScheme: [],
+    byDragMethod: [],
+    bySpeedStrategy: [],
+    byAttemptNo: [],
+    totalAttempts: 0,
+    totalSuccess: 0,
+    overallSuccessRate: 0,
+    days: 0,
+    accountId: 0
+  })
+
+  const attemptRangeLabel = computed(() => {
+    if (attemptStats.days === 0) return '全部历史'
+    if (attemptStats.days === 1) return '今天'
+    return `近 ${attemptStats.days} 天`
+  })
+
+  const attemptAccountLabel = computed(() => {
+    if (attemptStats.accountId && attemptStats.accountId > 0) {
+      return `账号 ID ${attemptStats.accountId}`
+    }
+    if (accountIdFilter.value) return `账号 ID ${accountIdFilter.value}`
+    if (userIdFilter.value) return `用户 ID ${userIdFilter.value}`
+    return '所有账号'
+  })
+
+  const attemptRateClass = computed(() => {
+    const rate = attemptStats.overallSuccessRate
+    if (rate >= 90) return 'text-success'
+    if (rate >= 70) return 'text-warning'
+    return 'text-danger'
+  })
+
+  async function loadAttemptStats() {
+    attemptStatsLoading.value = true
+    try {
+      const params: any = {}
+      if (daysRange.value > 0) params.days = daysRange.value
+      if (accountIdFilter.value) params.accountId = accountIdFilter.value
+      else if (userIdFilter.value) params.userId = userIdFilter.value
+      const data = await getCaptchaAttemptStats(params)
+      Object.assign(attemptStats, data || {
+        bySolveScheme: [], byDragMethod: [], bySpeedStrategy: [], byAttemptNo: [],
+        totalAttempts: 0, totalSuccess: 0, overallSuccessRate: 0, days: 0, accountId: 0
+      })
+    } catch (error: any) {
+      console.warn('尝试明细统计加载失败:', error?.message)
+    } finally {
+      attemptStatsLoading.value = false
+    }
+  }
+
+  /** 刷新所有统计（顶部按钮调用） */
+  function reloadAllStats() {
+    loadStats()
+    loadQueueStatus()
+    if (activeTab.value === 'attemptStats') {
+      loadAttemptStats()
+    } else {
+      // 即使当前不在 attemptStats tab，也预加载一份，避免切换 tab 时空白
+      // 但 lazy tab 会自动触发加载，这里不强制加载
+    }
+  }
+
+  // 切换到成功率统计 tab 时自动加载
+  watch(activeTab, (val) => {
+    if (val === 'attemptStats') {
+      // 仅在未加载过或数据为空时加载
+      if (attemptStats.totalAttempts === 0 && !attemptStatsLoading.value) {
+        loadAttemptStats()
+      }
+    }
+  })
+
+  // 维度值标签映射
+  const solveSchemeLabel = (dim?: string) => {
+    if (!dim) return '—'
+    const map: Record<string, string> = {
+      python_script: 'Python 脚本',
+      playwright: 'Playwright CDP'
+    }
+    return map[dim] || dim
+  }
+
+  const dragMethodLabel = (dim?: string) => {
+    if (!dim) return '—'
+    const map: Record<string, string> = {
+      in_container: '容器内拖动',
+      out_container: '超出容器拖动',
+      none: '未拖动'
+    }
+    return map[dim] || dim
+  }
+
+  const speedStrategyLabel = (dim?: string) => {
+    if (!dim) return '—'
+    const map: Record<string, string> = {
+      standard: '标准',
+      medium: '中速',
+      fast: '较快',
+      slow_pause: '慢速+停顿',
+      random: '随机',
+      none: '未拖动'
+    }
+    return map[dim] || dim
+  }
+
+  const attemptNoTagType = (n: number): any => {
+    if (n === 1) return 'success'
+    if (n === 2) return 'primary'
+    if (n === 3) return 'warning'
+    if (n === 4) return 'info'
+    return 'danger'
+  }
+
+  // 成功率（0~100）相关辅助
+  function formatPercent100(rate: any): string {
+    const n = Number(rate)
+    if (!Number.isFinite(n)) return '0.00%'
+    return n.toFixed(2) + '%'
+  }
+
+  function rateTagType100(rate: number): any {
+    if (rate >= 90) return 'success'
+    if (rate >= 70) return 'warning'
+    return 'danger'
+  }
+
+  function progressColor(rate: number): string {
+    if (rate >= 90) return '#16a34a'
+    if (rate >= 70) return '#d97706'
+    return '#dc2626'
   }
 
   // ==================== 明细列表 ====================
@@ -644,14 +1018,41 @@
 
   // ==================== 详情抽屉 ====================
 
-  const detailDrawer = reactive<{ visible: boolean; row: CaptchaRecordRow | null }>({
+  const detailDrawer = reactive<{
+    visible: boolean
+    row: CaptchaRecordRow | null
+    attempts: CaptchaAttemptDetail[]
+    attemptsLoading: boolean
+  }>({
     visible: false,
-    row: null
+    row: null,
+    attempts: [],
+    attemptsLoading: false
   })
 
   function openDetail(row: any) {
     detailDrawer.row = row as CaptchaRecordRow
+    detailDrawer.attempts = []
+    detailDrawer.attemptsLoading = false
     detailDrawer.visible = true
+    // 打开抽屉时自动加载尝试明细
+    if (row && row.id) {
+      loadRecordAttempts(row.id)
+    }
+  }
+
+  async function loadRecordAttempts(recordId: number | string) {
+    if (!recordId) return
+    detailDrawer.attemptsLoading = true
+    try {
+      const data = await getCaptchaRecordAttempts(recordId)
+      detailDrawer.attempts = Array.isArray(data) ? data : []
+    } catch (error: any) {
+      console.warn('尝试明细加载失败:', error?.message)
+      detailDrawer.attempts = []
+    } finally {
+      detailDrawer.attemptsLoading = false
+    }
   }
 
   // ==================== 格式化辅助 ====================
@@ -706,6 +1107,10 @@
       loadStats()
       loadQueueStatus()
       loadList()
+      // 如果当前在成功率统计 tab，也同步刷新
+      if (activeTab.value === 'attemptStats') {
+        loadAttemptStats()
+      }
     },
     { immediate: true }
   )
@@ -983,5 +1388,85 @@
   .actions.small {
     width: 100%;
   }
+}
+
+/* ==================== 主 Tab 样式 ==================== */
+.main-tabs {
+  border-radius: 14px;
+}
+
+.main-tabs :deep(.el-tabs__header) {
+  margin-bottom: 16px;
+}
+
+.main-tabs :deep(.el-tabs__content) {
+  display: grid;
+  gap: 18px;
+}
+
+/* ==================== 成功率统计 Tab 样式 ==================== */
+.metric-value.small-value {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.dim-code {
+  margin-left: 8px;
+  font-size: 11px;
+  color: #9ca3af;
+  font-family: 'JetBrains Mono', Consolas, Menlo, monospace;
+}
+
+.rate-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rate-cell :deep(.el-progress) {
+  flex: 1;
+  min-width: 60px;
+  max-width: 100px;
+}
+
+/* ==================== 详情抽屉：尝试明细 ==================== */
+.attempt-detail-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.attempt-detail-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 10px;
+}
+
+.attempt-loading {
+  padding: 16px;
+  text-align: center;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.attempt-empty {
+  padding: 16px;
+  text-align: center;
+  color: #9ca3af;
+  font-size: 13px;
+  background: #f9fafb;
+  border-radius: 6px;
+}
+
+.attempt-error {
+  font-size: 12px;
+  color: #dc2626;
+  font-family: 'JetBrains Mono', Consolas, Menlo, monospace;
+  word-break: break-word;
 }
 </style>

@@ -52,6 +52,14 @@ public class CardGroup extends BaseEntity {
     private Integer remainCount;
 
     /**
+     * SKU 专属卡密池的规格键（对应 xianyu_goods_sku.property_key）
+     * 为空：通用卡密池（服务所有 SKU）
+     * 非空：SKU 专属卡密池（仅服务对应 SKU）
+     */
+    @Column(name = "sku_property_key")
+    private String skuPropertyKey;
+
+    /**
      * 状态：1启用 0禁用
      */
     @Column(name = "status")
@@ -159,6 +167,14 @@ public class CardGroup extends BaseEntity {
 
     public void setRemainCount(Integer remainCount) {
         this.remainCount = remainCount;
+    }
+
+    public String getSkuPropertyKey() {
+        return skuPropertyKey;
+    }
+
+    public void setSkuPropertyKey(String skuPropertyKey) {
+        this.skuPropertyKey = skuPropertyKey;
     }
 
     public Integer getStatus() {

@@ -258,6 +258,8 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { resetPassword as resetPasswordApi, sendEmailCode, verifyResetCode } from '../api/auth.js'
 import AuthIcon from '../components/auth/AuthIcon.vue'
+// 懒加载登录页专属样式，避免首屏加载
+import('../auth-pages.css')
 import AuthShell from '../components/auth/AuthShell.vue'
 import MobileAuthShell from '../components/auth/MobileAuthShell.vue'
 import MobileCaptcha from '../components/auth/MobileCaptcha.vue'

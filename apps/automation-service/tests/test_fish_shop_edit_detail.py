@@ -924,6 +924,174 @@ class TestParseEditDetailResponse:
         parsed = parse_edit_detail_response(result)
         assert parsed["itemId"] == "different_id"
 
+    def test_flat_response_without_nested_data_data(self):
+        """实测扁平响应结构：data 直接包含商品字段，无 data.data 嵌套。
+
+        复现用户反馈的"编辑时标题/正文/封面图无法显示" bug：
+        修复前 _extract_edit_detail_data() 会返回空 dict，导致所有字段为空。
+        修复后应正确返回 data 本身。
+        """
+        # 实测响应结构（来自 mtop.idle.pc.backend.idleitem.edit/editdetail）
+        result = {
+            "api": "mtop.idle.pc.backend.idleitem.editdetail",
+            "data": {
+                "itemId": "1070927252869",
+                "itemStatus": "0",
+                "itemTypeStr": "b",
+                "simpleItem": "true",
+                "itemTextDTO": {
+                    "title": "213",
+                    "desc": "\n感兴趣的话点“我想要”和我私聊吧～",
+                    "titleDescSeparate": "false",
+                    "descPath": "desc/icoss!01070927252869!11516426499",
+                },
+                "imageInfoDOList": [
+                    {
+                        "major": "true",
+                        "url": "http://img.alicdn.com/bao/uploaded/i2/O1CN01ocJcawoByfB1viRs_!!2211422464341-2-fleamarket.png",
+                        "widthSize": "951",
+                        "heightSize": "945",
+                        "type": "0",
+                    },
+                ],
+                "itemPriceDTO": {"priceInCent": "1200"},
+                "quantity": "9951",
+                "itemCatDTO": {
+                    "catId": "50025461",
+                    "catName": "软件安装包/序列号/激活码",
+                    "tbCatId": "50003316",
+                    "channelCatId": "201449620",
+                },
+                "itemAddrDTO": {
+                    "prov": "河南",
+                    "city": "郑州",
+                    "area": "中原区",
+                    "divisionId": "410102",
+                },
+                "itemPostFeeDTO": {
+                    "canFreeShipping": "true",
+                    "supportFreight": "true",
+                    "onlyTakeSelf": "false",
+                    "postPriceInCent": "0",
+                },
+                "itemSkuList": [
+                    {
+                        "priceInCent": "1200",
+                        "quantity": "111",
+                        "skuId": "6283370562403",
+                        "inventoryId": "1134613013910091082",
+                        "propertyList": [
+                            {"propertyText": "容量", "valueText": "123"},
+                            {"propertyText": "尺码", "valueText": "123"},
+                        ],
+                    },
+                ],
+                "propertyImageList": [
+                    {
+                        "major": "false",
+                        "property": {
+                            "propertyText": "容量",
+                            "valueText": "123",
+                        },
+                        "url": "https://img.alicdn.com/imgextra/i4/O1CN01EGA1HptxmgE1WPfQ_!!2211422464341-0-fleamarket.jpg",
+                    },
+                ],
+                "userRightsProtocols": [],
+            },
+            "ret": ["SUCCESS::调用成功"],
+            "v": "1.0",
+        }
+        parsed = parse_edit_detail_response(result)
+        # 修复前这些断言都会失败（字段为空）
+        assert parsed["itemId"] == "1070927252869"
+        assert parsed["title"] == "213"
+        assert parsed["description"] == "\n感兴趣的话点“我想要”和我私聊吧～"
+        assert len(parsed["imageUrls"]) == 1
+        assert parsed["imageUrls"][0] == "http://img.alicdn.com/bao/uploaded/i2/O1CN01ocJcawoByfB1viRs_!!2211422464341-2-fleamarket.png"
+        assert parsed["majorImageUrl"] == "http://img.alicdn.com/bao/uploaded/i2/O1CN01ocJcawoByfB1viRs_!!2211422464341-2-fleamarket.png"
+        assert parsed["priceInCent"] == 1200
+        assert parsed["quantity"] == 9951
+        assert parsed["catName"] == "软件安装包/序列号/激活码"
+        assert parsed["prov"] == "河南"
+        assert parsed["city"] == "郑州"
+        assert parsed["canFreeShipping"] is True
+        # 多规格字段
+        assert len(parsed["itemSkuList"]) == 1
+        assert parsed["itemSkuList"][0]["skuId"] == "6283370562403"
+        assert parsed["itemSkuList"][0]["priceInCent"] == 1200
+        assert parsed["itemSkuList"][0]["quantity"] == 111
+        # propertyImageList 嵌套结构解析
+        assert len(parsed["propertyImageList"]) == 1
+        assert parsed["propertyImageList"][0]["propertyText"] == "容量"
+        assert parsed["propertyImageList"][0]["valueText"] == "123"
+        assert parsed["propertyImageList"][0]["propertyValueImg"] == "https://img.alicdn.com/imgextra/i4/O1CN01EGA1HptxmgE1WPfQ_!!2211422464341-0-fleamarket.jpg"
+
+    def test_extract_data_prefers_non_empty_inner(self):
+        """_extract_edit_detail_data 优先返回非空的 data.data（保持向后兼容）。"""
+        result = {
+            "ret": ["SUCCESS::调用成功"],
+            "data": {
+                "data": {
+                    "itemId": "inner_id",
+                    "title": "inner_title",
+                },
+            },
+        }
+        data = _extract_edit_detail_data(result)
+        assert data["itemId"] == "inner_id"
+        assert data["title"] == "inner_title"
+
+    def test_extract_data_falls_back_to_data_when_inner_empty(self):
+        """_extract_edit_detail_data 在 data.data 为空时回退到 data 本身（关键 bug 修复）。"""
+        result = {
+            "ret": ["SUCCESS::调用成功"],
+            "data": {
+                "itemId": "flat_id",
+                "title": "flat_title",
+                # 没有 "data" 字段
+            },
+        }
+        data = _extract_edit_detail_data(result)
+        # 修复前：返回空 dict（因为 data.get("data", {}) 返回 {}，isinstance({}, dict) 为 True）
+        # 修复后：返回 data 本身
+        assert data["itemId"] == "flat_id"
+        assert data["title"] == "flat_title"
+
+    def test_property_image_list_nested_property_structure(self):
+        """propertyImageList 实测嵌套结构：property.propertyText / property.valueText / url。"""
+        images = [
+            {
+                "major": "false",
+                "property": {
+                    "propertyText": "容量",
+                    "valueText": "123",
+                    "valueId": "0",
+                    "propertyId": "0",
+                },
+                "url": "https://img.alicdn.com/imgextra/i4/test.jpg",
+            },
+        ]
+        parsed = _parse_property_image_list(images)
+        assert len(parsed) == 1
+        assert parsed[0]["propertyText"] == "容量"
+        assert parsed[0]["valueText"] == "123"
+        assert parsed[0]["propertyValueImg"] == "https://img.alicdn.com/imgextra/i4/test.jpg"
+
+    def test_property_image_list_flat_structure_still_supported(self):
+        """propertyImageList 扁平结构仍受支持（向后兼容）。"""
+        images = [
+            {
+                "propertyText": "颜色",
+                "valueText": "红色",
+                "propertyValueImg": "r.jpg",
+            },
+        ]
+        parsed = _parse_property_image_list(images)
+        assert len(parsed) == 1
+        assert parsed[0]["propertyText"] == "颜色"
+        assert parsed[0]["valueText"] == "红色"
+        assert parsed[0]["propertyValueImg"] == "r.jpg"
+
 
 # ============================================================
 # 请求去重与缓存

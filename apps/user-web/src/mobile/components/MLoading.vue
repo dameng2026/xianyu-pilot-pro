@@ -37,20 +37,14 @@ defineProps({
 <style scoped>
 /* 骨架块通用 */
 .m-skeleton-block {
-  background: linear-gradient(
-    90deg,
-    var(--m-color-bg-subtle) 25%,
-    var(--m-color-border-light) 37%,
-    var(--m-color-bg-subtle) 63%
-  );
-  background-size: 400% 100%;
-  animation: m-skeleton-shimmer 1.4s ease infinite;
-  border-radius: var(--m-radius-sm);
+  background: var(--m-color-bg-subtle);
+  animation: m-skeleton-pulse 1.5s ease-in-out infinite;
+  border-radius: var(--m-radius-lg);
 }
 
-@keyframes m-skeleton-shimmer {
-  0% { background-position: 100% 50%; }
-  100% { background-position: 0 50%; }
+@keyframes m-skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 /* 全屏骨架 */
@@ -60,7 +54,7 @@ defineProps({
 
 .m-skeleton-hero {
   height: 100px;
-  border-radius: var(--m-radius-lg);
+  border-radius: var(--m-radius-xl);
   margin-bottom: var(--m-space-4);
 }
 
@@ -73,13 +67,13 @@ defineProps({
 
 .m-skeleton-card {
   height: 72px;
-  border-radius: var(--m-radius-lg);
+  border-radius: var(--m-radius-xl);
 }
 
 .m-skeleton-list {
   height: 56px;
   margin-bottom: var(--m-space-2);
-  border-radius: var(--m-radius-lg);
+  border-radius: var(--m-radius-xl);
 }
 
 /* 卡片骨架 */
@@ -87,9 +81,9 @@ defineProps({
   padding: var(--m-space-3);
 }
 
-.m-skeleton-line-long { height: 16px; width: 100%; margin-bottom: var(--m-space-2); }
-.m-skeleton-line-medium { height: 14px; width: 70%; margin-bottom: var(--m-space-2); }
-.m-skeleton-line-short { height: 12px; width: 40%; }
+.m-skeleton-line-long { height: 16px; width: 100%; margin-bottom: var(--m-space-2); border-radius: var(--m-radius-lg); }
+.m-skeleton-line-medium { height: 14px; width: 70%; margin-bottom: var(--m-space-2); border-radius: var(--m-radius-lg); }
+.m-skeleton-line-short { height: 12px; width: 40%; border-radius: var(--m-radius-lg); }
 
 /* spinner */
 .m-spinner-wrap {

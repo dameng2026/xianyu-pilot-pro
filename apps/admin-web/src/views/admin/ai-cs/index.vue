@@ -122,7 +122,12 @@
             <ElTable :data="sessionList.records" border stripe height="480">
               <template #empty><div class="empty-state">暂无会话记录</div></template>
               <ElTableColumn prop="id" label="ID" width="70" />
-              <ElTableColumn prop="userId" label="用户 ID" width="100" />
+              <ElTableColumn label="用户" min-width="140">
+                <template #default="{ row }">
+                  <span>{{ row.userId }}</span>
+                  <span v-if="row.username" class="session-username">（{{ row.username }}）</span>
+                </template>
+              </ElTableColumn>
               <ElTableColumn prop="tenantId" label="租户 ID" width="90" />
               <ElTableColumn label="状态" width="100">
                 <template #default="{ row }">
@@ -137,7 +142,7 @@
               <ElTableColumn prop="createdTime" label="创建时间" min-width="160" show-overflow-tooltip />
               <ElTableColumn label="操作" width="120" fixed="right">
                 <template #default="{ row }">
-                  <ElButton link type="primary" size="small" @click="openSessionMessages(row as AiCsSessionRow)">查看消息</ElButton>
+                  <ElButton link type="primary" size="small" @click="openSessionMessages(row as AiCsSessionRow)">查看对话</ElButton>
                 </template>
               </ElTableColumn>
             </ElTable>
@@ -345,10 +350,16 @@
     <ElDrawer v-model="sessionDrawerVisible" title="会话消息审计" size="60%" destroy-on-close>
       <div v-if="currentSession" class="session-meta">
         <ElTag type="info">会话 #{{ currentSession.id }}</ElTag>
-        <ElTag>用户 {{ currentSession.userId }}</ElTag>
+        <ElTag>用户 {{ currentSession.userId }}{{ currentSession.username ? ` (${currentSession.username})` : '' }}</ElTag>
         <ElTag :type="currentSession.status === 'active' ? 'success' : 'info'">
           {{ currentSession.status === 'active' ? '活跃' : '已关闭' }}
         </ElTag>
+        <div class="session-meta-right">
+          <ElRadioGroup v-model="messageView" size="small" @change="onMessageViewChange">
+            <ElRadioButton label="bubble">对话视图</ElRadioButton>
+            <ElRadioButton label="table">表格视图</ElRadioButton>
+          </ElRadioGroup>
+        </div>
       </div>
       <AdminDataState v-if="messageState === 'loading'" state="loading" title="正在读取消息" compact />
       <AdminDataState
@@ -358,42 +369,79 @@
         :description="messageError"
         retry-text="重试"
         compact
-        @retry="loadSessionMessages"
+        @retry="reloadSessionMessages"
       />
       <template v-else>
-        <ElTable :data="messageList.records" border stripe height="600">
-          <template #empty><div class="empty-state">暂无消息</div></template>
-          <ElTableColumn prop="id" label="ID" width="70" />
-          <ElTableColumn label="角色" width="100">
-            <template #default="{ row }">
-              <ElTag :type="roleTagType(row.role)" size="small">{{ roleLabel(row.role) }}</ElTag>
-            </template>
-          </ElTableColumn>
-          <ElTableColumn label="内容" min-width="320">
-            <template #default="{ row }">
-              <div class="message-content-cell">{{ row.content }}</div>
-            </template>
-          </ElTableColumn>
-          <ElTableColumn prop="tokensCharged" label="扣费 Token" width="110" />
-          <ElTableColumn label="闲聊" width="80">
-            <template #default="{ row }">
-              <ElTag v-if="isRowEnabled(row.isCasual)" type="warning" size="small">闲聊</ElTag>
-              <span v-else>—</span>
-            </template>
-          </ElTableColumn>
-          <ElTableColumn prop="createdTime" label="时间" min-width="160" show-overflow-tooltip />
-        </ElTable>
-        <div class="pagination-bar">
-          <ElPagination
-            v-model:current-page="messageQuery.current"
-            v-model:page-size="messageQuery.size"
-            :total="messageList.total"
-            :page-sizes="[20, 50, 100]"
-            layout="total, sizes, prev, pager, next, jumper"
-            @current-change="loadSessionMessages"
-            @size-change="loadSessionMessages"
-          />
+        <!-- 对话气泡视图：按时间正序展示完整对话 -->
+        <div v-if="messageView === 'bubble'" class="chat-bubble-view">
+          <template v-if="bubbleMessages.length === 0">
+            <div class="empty-state">暂无消息</div>
+          </template>
+          <template v-else>
+            <div
+              v-for="msg in bubbleMessages"
+              :key="msg.id"
+              class="chat-row"
+              :class="`chat-${msg.role || 'system'}`"
+            >
+              <div class="chat-avatar" :class="`avatar-${msg.role || 'system'}`">
+                {{ roleInitial(msg.role) }}
+              </div>
+              <div class="chat-content-wrap">
+                <div class="chat-meta">
+                  <span class="chat-role">{{ roleLabel(msg.role) }}</span>
+                  <span v-if="msg.username" class="chat-username">{{ msg.username }}</span>
+                  <ElTag v-if="isRowEnabled(msg.isCasual)" type="warning" size="small" effect="plain">闲聊</ElTag>
+                  <span v-if="msg.tokensCharged" class="chat-tokens">扣 {{ msg.tokensCharged }} Token</span>
+                  <span class="chat-time">{{ msg.createdTime || '' }}</span>
+                </div>
+                <div class="chat-bubble" :class="`bubble-${msg.role || 'system'}`">
+                  <pre class="chat-bubble-text">{{ msg.content || '' }}</pre>
+                </div>
+                <details v-if="parseToolCalls(msg.toolCalls).length" class="chat-tool-details">
+                  <summary>工具调用 ({{ parseToolCalls(msg.toolCalls).length }})</summary>
+                  <pre class="chat-tool-json">{{ formatToolCalls(msg.toolCalls) }}</pre>
+                </details>
+              </div>
+            </div>
+          </template>
         </div>
+        <!-- 表格视图：保留原分页表格 -->
+        <template v-else>
+          <ElTable :data="messageList.records" border stripe height="600">
+            <template #empty><div class="empty-state">暂无消息</div></template>
+            <ElTableColumn prop="id" label="ID" width="70" />
+            <ElTableColumn label="角色" width="100">
+              <template #default="{ row }">
+                <ElTag :type="roleTagType(row.role)" size="small">{{ roleLabel(row.role) }}</ElTag>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="内容" min-width="320">
+              <template #default="{ row }">
+                <div class="message-content-cell">{{ row.content }}</div>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn prop="tokensCharged" label="扣费 Token" width="110" />
+            <ElTableColumn label="闲聊" width="80">
+              <template #default="{ row }">
+                <ElTag v-if="isRowEnabled(row.isCasual)" type="warning" size="small">闲聊</ElTag>
+                <span v-else>—</span>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn prop="createdTime" label="时间" min-width="160" show-overflow-tooltip />
+          </ElTable>
+          <div class="pagination-bar">
+            <ElPagination
+              v-model:current-page="messageQuery.current"
+              v-model:page-size="messageQuery.size"
+              :total="messageList.total"
+              :page-sizes="[20, 50, 100]"
+              layout="total, sizes, prev, pager, next, jumper"
+              @current-change="loadSessionMessages"
+              @size-change="loadSessionMessages"
+            />
+          </div>
+        </template>
       </template>
     </ElDrawer>
 
@@ -490,6 +538,7 @@
     getAiCsKnowledgeCategories,
     getAiCsKnowledgeDetail,
     getAiCsStats,
+    listSessionAiCsMessages,
     pageAiCsKnowledge,
     pageAiCsMessages,
     pageAiCsSessions,
@@ -588,13 +637,24 @@
   const messageList = reactive({ records: [] as AiCsMessageRow[], total: 0 })
   const messageState = ref<'loading' | 'ready' | 'error'>('loading')
   const messageError = ref('')
+  // 消息视图切换：bubble=对话气泡视图（按时间正序，完整内容），table=表格视图（分页）
+  // 默认 bubble，更直观地查看完整对话流，符合"点击查看详情查看对话记录"的需求
+  const messageView = ref<'bubble' | 'table'>('bubble')
+  // 对话气泡视图数据：一次性加载该会话全部消息（按时间正序）
+  const bubbleMessages = ref<AiCsMessageRow[]>([])
 
   function openSessionMessages(row: AiCsSessionRow) {
     currentSession.value = row
     messageQuery.sessionId = Number(row.id)
     messageQuery.current = 1
+    bubbleMessages.value = []
     sessionDrawerVisible.value = true
-    loadSessionMessages()
+    // 默认对话视图：加载完整消息流；切换到表格视图时再走分页
+    if (messageView.value === 'bubble') {
+      loadBubbleMessages()
+    } else {
+      loadSessionMessages()
+    }
   }
 
   async function loadSessionMessages() {
@@ -614,6 +674,37 @@
       messageError.value = getErrorMessage(error, '消息读取失败。')
       messageState.value = 'error'
     }
+  }
+
+  // 加载该会话的全部消息（按时间正序，完整内容），用于对话气泡视图
+  async function loadBubbleMessages() {
+    if (!messageQuery.sessionId) return
+    messageState.value = 'loading'
+    messageError.value = ''
+    try {
+      const list = await listSessionAiCsMessages(messageQuery.sessionId)
+      bubbleMessages.value = Array.isArray(list) ? list : []
+      messageState.value = 'ready'
+    } catch (error: unknown) {
+      messageError.value = getErrorMessage(error, '消息读取失败。')
+      bubbleMessages.value = []
+      messageState.value = 'error'
+    }
+  }
+
+  // 视图切换：从 bubble 切到 table 时按需加载分页数据；从 table 切到 bubble 时加载完整流
+  function onMessageViewChange(val: 'bubble' | 'table') {
+    if (val === 'table') {
+      if (messageList.records.length === 0) loadSessionMessages()
+    } else if (val === 'bubble') {
+      if (bubbleMessages.value.length === 0) loadBubbleMessages()
+    }
+  }
+
+  // 错误重试：按当前视图选择对应的加载方式
+  function reloadSessionMessages() {
+    if (messageView.value === 'bubble') loadBubbleMessages()
+    else loadSessionMessages()
   }
 
   // ===== 计费配置 =====
@@ -865,6 +956,42 @@
     return 'info'
   }
 
+  // 对话气泡视图：角色头像首字符
+  function roleInitial(role: unknown): string {
+    if (role === 'user') return '用'
+    if (role === 'assistant') return '梦'
+    if (role === 'system') return '系'
+    return '?'
+  }
+
+  // 解析 tool_calls 字段（可能是 JSON 字符串或数组）
+  function parseToolCalls(raw: unknown): any[] {
+    if (!raw) return []
+    if (Array.isArray(raw)) return raw as any[]
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim()
+      if (!trimmed) return []
+      try {
+        const parsed = JSON.parse(trimmed)
+        return Array.isArray(parsed) ? parsed : []
+      } catch (_) {
+        return []
+      }
+    }
+    return []
+  }
+
+  // 格式化 tool_calls 为可读 JSON
+  function formatToolCalls(raw: unknown): string {
+    const arr = parseToolCalls(raw)
+    if (!arr.length) return ''
+    try {
+      return JSON.stringify(arr, null, 2)
+    } catch (_) {
+      return String(raw)
+    }
+  }
+
   function getErrorMessage(error: unknown, fallback: string): string {
     return error instanceof Error && error.message.trim() ? error.message : fallback
   }
@@ -969,8 +1096,18 @@
   }
   .session-meta {
     display: flex;
+    align-items: center;
     gap: 8px;
     margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  .session-meta-right {
+    margin-left: auto;
+  }
+  .session-username {
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+    margin-left: 2px;
   }
   .message-content-cell {
     white-space: pre-wrap;
@@ -979,6 +1116,137 @@
     overflow-y: auto;
     font-size: 13px;
     line-height: 1.55;
+  }
+
+  /* ===== 对话气泡视图 ===== */
+  .chat-bubble-view {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 4px 4px 24px;
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+  .chat-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  /* 用户消息靠右，助手/系统靠左 */
+  .chat-user {
+    flex-direction: row-reverse;
+  }
+  .chat-avatar {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+    user-select: none;
+  }
+  .avatar-user {
+    background: var(--el-color-primary, #409eff);
+  }
+  .avatar-assistant {
+    background: var(--el-color-success, #67c23a);
+  }
+  .avatar-system {
+    background: var(--el-color-warning, #e6a23c);
+  }
+  .chat-content-wrap {
+    min-width: 0;
+    max-width: 78%;
+    display: flex;
+    flex-direction: column;
+  }
+  .chat-user .chat-content-wrap {
+    align-items: flex-end;
+  }
+  .chat-assistant .chat-content-wrap,
+  .chat-system .chat-content-wrap {
+    align-items: flex-start;
+  }
+  .chat-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+  }
+  .chat-user .chat-meta {
+    flex-direction: row-reverse;
+  }
+  .chat-role {
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+  }
+  .chat-username {
+    color: var(--el-text-color-secondary);
+  }
+  .chat-tokens {
+    color: var(--el-color-warning);
+  }
+  .chat-time {
+    color: var(--el-text-color-placeholder);
+  }
+  .chat-bubble {
+    padding: 10px 14px;
+    border-radius: 10px;
+    max-width: 100%;
+    word-break: break-word;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  }
+  .bubble-user {
+    background: var(--el-color-primary-light-1, #409eff);
+    color: #fff;
+    border-top-right-radius: 2px;
+  }
+  .bubble-assistant {
+    background: var(--el-fill-color-light, #f5f7fa);
+    color: var(--el-text-color-primary);
+    border-top-left-radius: 2px;
+  }
+  .bubble-system {
+    background: var(--el-color-warning-light-9, #fdf6ec);
+    color: var(--el-text-color-primary);
+    border: 1px dashed var(--el-color-warning-light-5, #e6a23c);
+    border-top-left-radius: 2px;
+  }
+  .chat-bubble-text {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: inherit;
+    font-size: 13.5px;
+    line-height: 1.6;
+  }
+  .chat-tool-details {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+  }
+  .chat-tool-details summary {
+    cursor: pointer;
+    user-select: none;
+    color: var(--el-color-primary);
+  }
+  .chat-tool-json {
+    margin: 6px 0 0;
+    padding: 8px 10px;
+    background: var(--el-fill-color-darker, #f0f2f5);
+    border-radius: 4px;
+    font-size: 12px;
+    max-height: 240px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
   }
   @media (max-width: 1280px) {
     .stats-grid {

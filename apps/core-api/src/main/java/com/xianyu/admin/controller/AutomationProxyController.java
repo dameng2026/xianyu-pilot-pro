@@ -340,6 +340,97 @@ public class AutomationProxyController {
     }
 
 
+    /**
+     * 鱼小铺数据分析 - 卖家数据概览。
+     *
+     * 仅统计鱼小铺账号（fish_shop_user=1），普通闲鱼账号不进入统计。
+     * Java 仅做透传，业务逻辑由 Python automation-service 的 fish_shop_datacompass 服务完成。
+     *
+     * 参数：
+     * - accountId：可选，不传表示"全部账号"（仅聚合鱼小铺账号）
+     * - dateType：recent1d / recent7d / recent30d，默认 recent7d
+     *
+     * 链路：前端 -> Java 网关 -> Python /api/fish-shop-data/summary
+     */
+    @GetMapping("/fish-shop-data/summary")
+    public Result<Object> fishShopDataSummary(
+            @RequestParam(required = false) Long accountId,
+            @RequestParam(defaultValue = "recent7d") String dateType) {
+        Long tenantId = TenantContext.getCurrentTenantId();
+        if (tenantId == null) {
+            throw new BizException(401, "登录状态已失效");
+        }
+
+        // dateType 白名单校验
+        String safeDateType = (dateType == null || dateType.isBlank()) ? "recent7d" : dateType.trim().toLowerCase();
+        if (!"recent1d".equals(safeDateType) && !"recent7d".equals(safeDateType) && !"recent30d".equals(safeDateType)) {
+            safeDateType = "recent7d";
+        }
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("dateType", safeDateType);
+        if (accountId != null && accountId > 0) {
+            params.put("accountId", accountId);
+        }
+
+        try {
+            // 超时 45 秒：全部账号模式下需要逐账号请求，并发上限 8
+            Map<String, Object> raw = automationClient.getInternal(
+                    "/api/fish-shop-data/summary",
+                    params,
+                    45
+            );
+            Object code = raw.get("code");
+            if (code != null && ("200".equals(String.valueOf(code)) || "0".equals(String.valueOf(code)))) {
+                return Result.ok(raw.get("data"));
+            }
+            String message = String.valueOf(raw.getOrDefault("msg", raw.getOrDefault("message", "鱼小铺数据分析暂时不可用")));
+            Object codeObj = raw.get("code");
+            int bizCode = 503;
+            if (codeObj != null) {
+                try {
+                    bizCode = Integer.parseInt(String.valueOf(codeObj));
+                } catch (NumberFormatException ignored) {
+                    // 保持默认 503
+                }
+            }
+            // 从 Python 的 data 字段提取 errorType
+            Object rawData = raw.get("data");
+            String errorType = "unknown";
+            if (rawData instanceof Map) {
+                Object et = ((Map<?, ?>) rawData).get("errorType");
+                if (et != null) {
+                    errorType = String.valueOf(et);
+                }
+            }
+            if ("cookie_expired".equals(errorType)) {
+                throw new BizException(409, message);
+            }
+            throw new BizException(bizCode == 503 ? 503 : 502, message);
+        } catch (BizException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            log.warn("Python 鱼小铺数据分析失败 accountId={}, dateType={}, errorType={}",
+                    accountId, safeDateType, ex.getClass().getSimpleName());
+            String detail = (ex.getMessage() != null) ? ex.getMessage() : "";
+            if (detail.contains("ConnectException") || detail.contains("Connection refused")
+                    || detail.contains("HttpHostConnectException") || detail.contains("NoRouteToHostException")) {
+                throw new BizException(503, "鱼小铺数据分析服务暂时不可用，请稍后重试");
+            }
+            if (detail.contains("timeout") || detail.contains("TimeoutException")
+                    || detail.contains("connect timed out") || detail.contains("Read timed out")) {
+                throw new BizException(503, "鱼小铺数据分析服务响应超时，请稍后重试");
+            }
+            if (detail.contains("Token 已过期") || detail.contains("登录已过期")
+                    || detail.contains("FAIL_SYS_TOKEN_EXOIRED") || detail.contains("FAIL_SYS_TOKEN_EXPIRED")
+                    || detail.contains("_m_h5_tk") || detail.contains("Cookie已失效") || detail.contains("Cookie 已失效")) {
+                throw new BizException(409, "闲鱼账号登录状态已失效，请重新登录后再查看");
+            }
+            throw new BizException(502, "鱼小铺数据分析失败，请稍后重试");
+        }
+    }
+
+
     @PostMapping("/account/list")
     public Result<Object> accountList() {
         Long tenantId = TenantContext.getCurrentTenantId();
@@ -514,6 +605,23 @@ public class AutomationProxyController {
         } catch (Exception e) {
             log.error("查询图片生成历史失败, errorType={}", e.getClass().getSimpleName());
             throw new BizException(503, "图片生成历史暂时无法查询，请稍后重试");
+        }
+    }
+
+    /**
+     * 生图记录统计聚合接口。
+     * 性能优化：替代前端拉取 1000 条记录循环统计，改为后端 SQL COUNT 聚合。
+     * 注意：该路由必须放在 /opportunity/image-history/{requestId} 之前，避免 "stats" 被识别为 requestId。
+     */
+    @GetMapping("/opportunity/image-history/stats")
+    public Result<Object> opportunityImageHistoryStats(@RequestParam(required = false, defaultValue = "all") String source) {
+        try {
+            return Result.ok(imageGenerationService.getHistoryStats(requireTenantId(), source));
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("查询生图记录统计失败, errorType={}", e.getClass().getSimpleName());
+            throw new BizException(503, "生图记录统计暂时无法查询，请稍后重试");
         }
     }
 
@@ -2101,6 +2209,75 @@ public class AutomationProxyController {
                 "/api/refunds/fish-shop-accounts", Map.of(), 10));
     }
 
+    // 退款详情：三接口并行调用 + 缓存优先 + 进行中请求去重 + 局部失败处理
+    // 后端多重校验（账号归属 + 鱼小铺 + 退款归属 + orderId/refundId 关系）由 Python 端完成
+    // 普通闲鱼账号不得访问详情、不得通过修改 URL 参数绕过（由 Python 端 verify_fish_shop_account 拦截）
+    @GetMapping("/refunds/detail")
+    public Result<Object> getRefundDetail(
+            @RequestParam Long accountId,
+            @RequestParam String orderId,
+            @RequestParam String refundId) {
+        if (accountId == null || accountId <= 0) {
+            throw new BizException(400, "accountId 参数无效");
+        }
+        if (orderId == null || orderId.isBlank()) {
+            throw new BizException(400, "orderId 不能为空");
+        }
+        if (refundId == null || refundId.isBlank()) {
+            throw new BizException(400, "refundId 不能为空");
+        }
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("accountId", accountId);
+        params.put("orderId", orderId);
+        params.put("refundId", refundId);
+        // 详情查询可能触发三接口并行调用，给予 45 秒超时
+        // 缓存命中时秒级返回；缓存未命中时三接口并行约 3-6 秒
+        return Result.ok(automationClient.getInternalForData(
+                "/api/refunds/detail", params, 45, TenantContext.getCurrentTenantId()));
+    }
+
+    @PostMapping("/refunds/detail/refresh")
+    public Result<Object> refreshRefundDetail(@RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> payload = body == null ? new LinkedHashMap<>() : new LinkedHashMap<>(body);
+        injectTenantId(payload);
+        Object accountId = payload.get("accountId");
+        if (accountId == null) {
+            throw new BizException(400, "accountId 不能为空");
+        }
+        if (payload.get("orderId") == null || String.valueOf(payload.get("orderId")).isBlank()) {
+            throw new BizException(400, "orderId 不能为空");
+        }
+        if (payload.get("refundId") == null || String.valueOf(payload.get("refundId")).isBlank()) {
+            throw new BizException(400, "refundId 不能为空");
+        }
+        // 手动刷新强制失效缓存并重新调用三接口，给予 45 秒超时
+        return Result.ok(automationClient.postInternalForData(
+                "/api/refunds/detail/refresh", payload, 45));
+    }
+
+    @PostMapping("/refunds/detail/retry")
+    public Result<Object> retryRefundDetailApi(@RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> payload = body == null ? new LinkedHashMap<>() : new LinkedHashMap<>(body);
+        injectTenantId(payload);
+        Object accountId = payload.get("accountId");
+        if (accountId == null) {
+            throw new BizException(400, "accountId 不能为空");
+        }
+        if (payload.get("orderId") == null || String.valueOf(payload.get("orderId")).isBlank()) {
+            throw new BizException(400, "orderId 不能为空");
+        }
+        if (payload.get("refundId") == null || String.valueOf(payload.get("refundId")).isBlank()) {
+            throw new BizException(400, "refundId 不能为空");
+        }
+        Object api = payload.get("api");
+        if (api == null || !String.valueOf(api).matches("service_record|full_info|refund_detail")) {
+            throw new BizException(400, "api 参数必须是 service_record / full_info / refund_detail");
+        }
+        // 单接口重试只请求失败接口，给予 30 秒超时
+        return Result.ok(automationClient.postInternalForData(
+                "/api/refunds/detail/retry", payload, 30));
+    }
+
     // ==================== 评价管理 ====================
     // 透传到 Python automation-service 的 /api/rates/*
     // 仅用于鱼小铺账号（fish_shop_user=1），普通账号由 Python 端拒绝
@@ -2156,5 +2333,36 @@ public class AutomationProxyController {
     public Result<Object> rateFishShopAccounts() {
         return Result.ok(automationClient.getInternalForData(
                 "/api/rates/fish-shop-accounts", Map.of(), 10));
+    }
+
+    // ==================== 自动补评价（定时任务） ====================
+    // 透传到 Python automation-service 的 /api/rates/auto-rate/*
+    // 调度器在 Python 端运行（每小时第 5 分钟检查 schedule_hour 匹配的账号），
+    // 这里仅提供日志查询、调度器状态查询与手动触发能力。
+
+    @GetMapping("/rates/auto-rate/logs")
+    public Result<Object> listAutoRateLogs(
+            @RequestParam(required = false) Long accountId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int pageSize) {
+        Map<String, Object> params = new LinkedHashMap<>();
+        if (accountId != null) params.put("accountId", accountId);
+        params.put("page", page);
+        params.put("pageSize", pageSize);
+        return Result.ok(automationClient.getInternalForData("/api/rates/auto-rate/logs", params, 10));
+    }
+
+    @GetMapping("/rates/auto-rate/scheduler-status")
+    public Result<Object> autoRateSchedulerStatus() {
+        return Result.ok(automationClient.getInternalForData(
+                "/api/rates/auto-rate/scheduler-status", Map.of(), 5));
+    }
+
+    @PostMapping("/rates/auto-rate/run")
+    public Result<Object> triggerAutoRateRun(@RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> payload = body == null ? new LinkedHashMap<>() : new LinkedHashMap<>(body);
+        injectTenantId(payload);
+        // 手动触发可能耗时较长（拉取评价列表 + 逐条提交），给予 120 秒超时
+        return Result.ok(automationClient.postInternalForData("/api/rates/auto-rate/run", payload, 120));
     }
 }

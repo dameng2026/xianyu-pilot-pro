@@ -18,8 +18,8 @@ _model_config_cache: Dict[str, Any] = {}
 _model_config_cache_ts: float = 0
 _MODEL_CONFIG_TTL = 60  # 缓存 60 秒
 _MAX_MESSAGES = 32
-_MAX_MESSAGE_CHARS = 64 * 1024
-_MAX_TOTAL_MESSAGE_CHARS = 256 * 1024
+_MAX_MESSAGE_CHARS = 128 * 1024
+_MAX_TOTAL_MESSAGE_CHARS = 512 * 1024
 _MAX_PROVIDER_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
@@ -553,6 +553,7 @@ async def call_llm_for_learning(
     conversations_text = "\n\n".join(conv_blocks)
 
     # 2. 构造 prompt
+    # V1.49 三级分类：必须从下列 68 个二级分类 code 中选择（不允许自创）
     system_prompt = """你是知识库提取助手。以下是一段真实的买家-卖家对话。
 请提取其中有价值的问答对（买家提问 + 卖家优质回复）。
 
@@ -565,32 +566,112 @@ async def call_llm_for_learning(
    - 收货地址 → [地址]
    - 银行卡/身份证 → [敏感信息]
    - 真实姓名 → [姓名]
-4. 为每个 Q&A 进行分类，category_code 必须从以下预定义分类中选择:
-   - stock_query: 库存查询（库存、有货、现货、缺货等）
-   - shipping_track: 发货跟踪（发货、物流、快递、单号等）
-   - refund_aftersale: 退款售后（退款、退货、换货、质量问题等）
-   - product_consult: 商品咨询（规格、材质、尺寸、功能等）
-   - price_discount: 价格优惠（优惠、折扣、满减、券等）
-   - account_login: 账号登录（登录、cookie、失效、掉线等）
-   - card_key_delivery: 卡密发货（卡密、激活码、虚拟商品等）
-   - workflow_config: 工作流配置（工作流、节点、流程等）
-   - scheduled_task: 定时任务（定时、上架、定时回复等）
-   - auto_reply: 自动回复（自动回复、模板、AI回复等）
-   - auto_delivery: 自动发货（自动发货、发货规则等）
-   - membership_recharge: 会员充值（Token、充值、VIP、会员等）
-   - system_usage: 系统使用（怎么用、功能、操作、教程等）
-   - troubleshoot: 故障排查（报错、错误、不能用、失败等）
-   - other: 其他（无法归入以上分类的）
-   若对话内容确实不属于以上任何分类，可使用 other。严禁自创分类名。
+4. 为每个 Q&A 进行分类，category_code 必须从以下 68 个二级分类中选择（严禁自创）:
+
+   【交易通用问题】
+   - general_stock_query: 库存查询（库存/有货/现货/还有吗/没货/缺货/断货/在不在）
+   - general_shipping_track: 发货跟踪（发货/物流/快递/什么时候发/单号/运单/发出/揽收）
+   - general_refund_aftersale: 退款售后（退款/退货/换货/质量/坏了/破损/不想要/退钱）
+   - general_product_consult: 商品咨询（规格/材质/尺寸/功能/详情/什么样/多大/多重）
+   - general_price_discount: 价格优惠（便宜点/优惠/满减/折扣/券/降价/打折/少点）
+   - general_account_login: 账号登录（登录/cookie/失效/掉线/登不上/扫码/二维码）
+
+   【服饰鞋包】
+   - fashion_men: 男装（男装/衬衫/T恤/外套/裤子/夹克）
+   - fashion_women: 女装（女装/连衣裙/半身裙/衬衫/外套/针织）
+   - fashion_shoes: 鞋类（鞋/运动鞋/板鞋/皮鞋/拖鞋/靴子）
+   - fashion_bags: 箱包（包/背包/手提包/钱包/行李箱/托特包）
+   - fashion_accessories: 配饰（配饰/帽子/围巾/皮带/手表/首饰）
+
+   【数码家电】
+   - digital_phone: 手机（手机/iPhone/华为/小米/三星/OPPO/vivo）
+   - digital_computer: 电脑平板（电脑/笔记本/台式机/平板/MacBook/联想/戴尔）
+   - digital_camera: 相机摄影（相机/单反/微单/镜头/摄影/三脚架/GoPro）
+   - digital_audio: 音频设备（耳机/音响/音箱/麦克风/AirPods/蓝牙音箱）
+   - digital_appliance_home: 家用电器（冰箱/洗衣机/空调/电视/微波炉/电饭煲）
+   - digital_smart: 智能设备（智能手表/智能手环/智能音箱/智能家居/平衡车）
+
+   【美妆个护】
+   - beauty_skincare: 护肤品（护肤/面霜/精华/面膜/洗面奶/爽肤水/乳液）
+   - beauty_makeup: 化妆品（化妆/口红/粉底/眼影/睫毛膏/腮红/BB霜）
+   - beauty_perfume: 香水（香水/香氛/淡香水/浓香水/香精/留香）
+   - beauty_personal_care: 个人护理（护理/洗发水/沐浴露/牙膏/卫生巾/剃须刀）
+   - beauty_tools: 美容工具（美容工具/化妆刷/美容仪/卷发棒/理发器/指甲刀）
+
+   【家居生活】
+   - home_furniture: 家具（沙发/床/衣柜/餐桌/椅子/书桌/茶几）
+   - home_textile: 家纺（床品/四件套/被子/枕头/毛巾/窗帘/地毯）
+   - home_kitchen: 厨房用品（厨具/锅/碗/刀/砧板/餐具/水壶）
+   - home_decor: 装饰摆件（装饰/摆件/挂画/花瓶/相框/香薰）
+   - home_storage: 收纳整理（收纳/整理/收纳箱/衣架/挂钩/置物架）
+
+   【母婴用品】
+   - baby_formula: 奶粉辅食（奶粉/辅食/米粉/果泥/奶粉段/配方奶）
+   - baby_diaper: 纸尿裤（纸尿裤/尿不湿/拉拉裤/NB/S/M/L/XL）
+   - baby_toys: 玩具书籍（玩具/积木/绘本/故事书/早教/拼图）
+   - baby_pregnant: 孕妇用品（孕妇/孕妇装/胎心仪/月子/待产/防辐射）
+   - baby_clothes: 婴幼服装（婴儿/宝宝/童装/婴儿服/连体衣/肚兜）
+
+   【运动户外】
+   - sports_equipment: 运动器材（哑铃/跑步机/瑜伽/健身/杠铃/拉力器）
+   - sports_outdoor_gear: 户外装备（帐篷/睡袋/登山/背包/炉具/登山杖）
+   - sports_apparel: 运动服饰（运动服/速干衣/运动裤/运动文胸/瑜伽服）
+   - sports_cycling: 骑行装备（自行车/电动车/头盔/骑行服/车灯/车锁）
+   - sports_fishing: 垂钓用品（鱼竿/鱼线/鱼饵/鱼钩/渔轮/钓箱）
+
+   【图书教材】
+   - books_textbook: 教材教辅（教材/教辅/课本/练习册/试卷/参考书）
+   - books_novel: 小说文学（小说/文学/名著/散文/诗集/网络小说）
+   - books_magazine: 杂志期刊（杂志/期刊/读者/意林/时尚/国家地理）
+   - books_professional: 专业书籍（专业/技术/编程/医学/法律/经管）
+   - books_children: 儿童读物（绘本/童话/儿童/启蒙/拼音/故事）
+
+   【艺术品收藏】
+   - art_calligraphy: 字画书法（字画/书法/国画/油画/水墨/篆刻）
+   - art_stamp_coin: 邮票钱币（邮票/钱币/纪念币/古币/银元/纸币）
+   - art_antique: 古董收藏（古董/古玩/瓷器/玉器/青铜/鼻烟壶）
+   - art_trendy: 潮玩手办（手办/盲盒/高达/乐高/模型/扭蛋）
+   - art_memorabilia: 纪念品（纪念/徽章/门票/球星卡/明信片/绝版）
+
+   【宠物用品】
+   - pet_food: 宠物食品（猫粮/狗粮/零食/罐头/主粮/幼猫/成猫）
+   - pet_toys: 宠物玩具（逗猫棒/球/飞盘/咬胶/猫爬架/玩具）
+   - pet_clothes: 宠物服饰（宠物衣服/牵引绳/项圈/雨衣/鞋子）
+   - pet_supplies_misc: 宠物用具（猫砂盆/食盆/笼子/航空箱/牵引）
+   - pet_aquarium: 水族用品（鱼缸/鱼食/过滤器/加热棒/造景/热带鱼）
+
+   【汽车用品】
+   - auto_decor: 汽车装饰（脚垫/座套/香水/挂件/方向盘套/贴纸）
+   - auto_parts: 汽车配件（雨刷/灯泡/轮胎/机油/滤芯/火花塞）
+   - auto_electronics: 汽车电子（行车记录仪/导航/倒车雷达/充电器/车载冰箱）
+   - auto_motorcycle: 摩托车（摩托车/头盔/骑行服/机车/踏板）
+   - auto_bicycle: 自行车（自行车/山地车/公路车/电动车/车锁）
+
+   【手工DIY】
+   - handcraft_materials: 手工材料（毛线/布料/串珠/粘土/颜料/画笔）
+   - handcraft_products: 手工成品（手作/DIY/定制/手工/礼物/创意）
+   - handcraft_knitting: 编织工艺（编织/钩针/毛衣/围巾/玩偶/抱枕）
+   - handcraft_ceramic: 陶艺作品（陶艺/陶瓷/手工/花瓶/杯子/摆件）
+   - handcraft_wood: 木工作品（木工/木质/手工/家具/摆件/模型）
+
+   【虚拟货源】
+   - virtual_software: 软件安装包（安装包/破解/激活/软件/Windows/Office）
+   - virtual_deployment: 程序部署服务（部署/代搭/环境/服务器/Docker/Linux/安装）
+   - virtual_webdesign: 网页设计（网页/设计/网站/H5/前端/模板/建站）
+   - virtual_activation: 激活码（激活码/序列号/授权/License/注册码/兑换码）
+   - virtual_ebook: 电子书（电子书/PDF/epub/资料/教程/文档）
+   - virtual_template: 设计模板（模板/素材/PSD/PPT/设计/资源/素材库）
+
+   若对话内容无法精准匹配以上 68 个二级分类，使用 general_product_consult 兜底。严禁自创分类名。
 5. 为每个 Q&A 生成:
-   - category_code: 上方预定义分类的 code（如 stock_query）
+   - category_code: 上方二级分类的 code（如 general_stock_query）
    - score: 0-100 价值评分
    - tags: 3-5 个标签（逗号分隔）
    - source_summary: 一句话摘要
 6. 输出严格 JSON 数组格式，无其他文字
 
 输出格式示例:
-[{"question":"...","answer":"...","category_code":"stock_query","score":80,"tags":"...","source_summary":"..."}]
+[{"question":"...","answer":"...","category_code":"general_stock_query","score":80,"tags":"...","source_summary":"..."}]
 """
 
     user_prompt = f"以下是需要分析的 {len(conversations)} 个对话：\n\n{conversations_text}"

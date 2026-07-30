@@ -309,12 +309,26 @@ async def try_auto_solve(
 
     resolved_headless = _resolve_headless_mode(headless)
 
+    # crawler-service 内部重试次数：保留传入值（默认 5 次）
+    # 重试覆盖场景：点击框体重试、加载转圈、下载消息失败刷新等，单次操作很快，
+    # 5 次重试整体通常在 120-150 秒内完成，能显著提升偶发抖动场景的成功率。
+    #
+    # 项目硬约束（不可违反）：
+    # - httpx 超时必须保持 180s
+    # - maxRetries 必须保持 5
+    # - timeoutMs 必须保持 30000（单次操作超时 30 秒）
+    # 理论最大耗时 5×30s=150s，在 httpx 180s 超时以内，确保 5 次重试能完整执行。
+    # 2026-07-29 修复：原先 timeoutMs=90000，理论最大 5×90s=450s 远超 httpx 180s，
+    # 导致单次操作卡住时 httpx 先超时，retry_count=0，5 次重试根本没机会执行。
+    # 降到 30 秒后，单次操作超时后立即进入下一次重试，5 次总耗时 ≤150s < 180s。
+    # 详见 project_memory.md "滑块求解时长配置硬约束"。
+    effective_max_retries = max(1, min(int(max_retries), 5))
     payload = {
         "cookie": cookie_str,
         "targetUrl": target_url,
         "headless": resolved_headless,
-        "maxRetries": max_retries,
-        "timeoutMs": 90000,
+        "maxRetries": effective_max_retries,
+        "timeoutMs": 30000,
         # profile 策略：persistent（默认持久化，累积历史降低风控）/ seed / temp
         "profileStrategy": profile_strategy,
         # 半自动人工兜底：全自动失败后保留窗口供人工拖拽
@@ -334,6 +348,53 @@ async def try_auto_solve(
         async with httpx.AsyncClient(timeout=180.0) as client:
             resp = await client.post(endpoint, json=payload, headers=headers)
             data = resp.json()
+    except httpx.TimeoutException as e:
+        # HTTP 超时（ReadTimeout/ConnectTimeout/PoolTimeout）
+        # 2026-07-29 事故修复：原先所有 httpx 异常统一归为 CAPTCHA_SOLVER_UNAVAILABLE → service_unavailable
+        # （不可重试 + 累加退避），导致 crawler-service 临时繁忙/浏览器操作耗时较长时账号被冷却 60s，
+        # WS 每次重连触发求解都被 assert_auto_solve_allowed 拦截，账号长时间无法自动求解。
+        # 修复：超时是临时性错误，归为 timeout（可重试 1 次 + 不累加退避）。
+        # 注意：httpx 超时 180s 是项目硬约束，不得缩短（见 project_memory.md）。
+        log_service_failure(
+            logger, e, operation="solve_captcha",
+            tenant_id=tenant_id, account_id=account_id,
+        )
+        await record_solve_failure(
+            account_id, tenant_id,
+            error=f"滑块求解超时：{type(e).__name__}",
+            skip_backoff=True,  # 超时是临时性错误，不累加退避
+        )
+        return {
+            "success": False,
+            "solved": False,
+            "captchaDetected": False,
+            "attempts": 0,
+            "errorCode": "CAPTCHA_SOLVER_TIMEOUT",
+            "error": f"滑块求解超时（{type(e).__name__}），请稍后重试",
+            "durationMs": int((time.time() - started) * 1000),
+        }
+    except (httpx.ConnectError, httpx.NetworkError) as e:
+        # 网络连接错误（ConnectError/ReadError/WriteError 等）
+        # 2026-07-29 事故修复：原先归为 service_unavailable 并累加退避，
+        # 但网络错误也是临时性，不累加退避避免账号被冷却。
+        log_service_failure(
+            logger, e, operation="solve_captcha",
+            tenant_id=tenant_id, account_id=account_id,
+        )
+        await record_solve_failure(
+            account_id, tenant_id,
+            error=f"滑块求解网络错误：{type(e).__name__}",
+            skip_backoff=True,  # 网络错误是临时性，不累加退避
+        )
+        return {
+            "success": False,
+            "solved": False,
+            "captchaDetected": False,
+            "attempts": 0,
+            "errorCode": "CAPTCHA_SOLVER_UNAVAILABLE",
+            "error": "滑块求解服务网络异常，请稍后重试",
+            "durationMs": int((time.time() - started) * 1000),
+        }
     except Exception as e:
         log_service_failure(
             logger, e, operation="solve_captcha",
@@ -363,9 +424,15 @@ async def try_auto_solve(
     if solve_ok and bool(data.get("solved")):
         await record_solve_success(account_id, tenant_id)
     else:
+        # 浏览器崩溃错误跳过指数退避（临时性错误，重试可能成功）
+        # 2026-07-29 事故修复：浏览器崩溃（Page crashed / browserContext closed）
+        # 原先累加退避导致账号被冷却 60s，WS 每次重连触发求解都被
+        # assert_auto_solve_allowed 拦截，账号长时间无法自动求解。
+        is_browser_crash = _is_browser_launch_failure(crawler_error)
         await record_solve_failure(
             account_id, tenant_id,
             error=crawler_error or "滑块验证未通过",
+            skip_backoff=is_browser_crash,
         )
 
     # 如果求解成功且有最新 cookies，立即更新数据库中的 cookie
@@ -415,6 +482,8 @@ async def try_auto_solve(
         "screenshotPath": data.get("screenshotPath"),
         "durationMs": duration_ms,
         "cookies": fresh_cookies if solve_ok else None,
+        # 每次尝试的明细（用于成功率统计），由 crawler-service 的 sliderSolver 采集
+        "attemptsDetail": data.get("attemptsDetail") or [],
     }
 
 
@@ -666,7 +735,7 @@ async def handle_captcha_for_account(
     from .notify_dispatcher import notify_captcha_required
     from .captcha_solve_record import (
         create_solve_record, update_solve_record, broadcast_captcha_solve,
-        _lookup_account_name,
+        _lookup_account_name, batch_insert_solve_attempts,
     )
     from .captcha_precheck import (
         precheck_cookie_status, precheck_account_active,
@@ -845,26 +914,51 @@ async def handle_captcha_for_account(
 
         # === 预校验通过，开始实际求解 ===
 
-        # 先查指数退避：冷却中则直接落库失败记录，不启动浏览器
+        # 先查冷却：冷却中则直接落库失败记录，不启动浏览器
+        # 手动触发场景（manual/manual_retry）跳过冷却，让用户能主动解除冷却并求解
         from .captcha_backoff import assert_auto_solve_allowed
-        blocked = await assert_auto_solve_allowed(account_id, tenant_id, force=False)
+        from .captcha_precheck import MANUAL_TRIGGER_SCENES
+        skip_cooldown = trigger_scene in MANUAL_TRIGGER_SCENES
+        blocked = await assert_auto_solve_allowed(account_id, tenant_id, force=skip_cooldown)
         if blocked:
-            failure_reason = "slider_fail"
+            # 冷却拦截本质是预校验拒绝（不需要尝试求解），
+            # 归类为 precheck_rejected（在 NON_RETRYABLE_REASONS 中，不会触发重试），
+            # engine=Backoff 标识拦截来源，前端据此区分展示（而非误判为 Cookie 失效）。
+            failure_reason = "precheck_rejected"
+            backoff_msg = blocked.get("error") or "滑块求解冷却中"
+            remaining_sec = int(blocked.get("remainingSec") or 0)
+            err_detail = f"{backoff_msg}（剩余 {remaining_sec} 秒，failCount={blocked.get('failCount', 0)}）"
             if not solve_record_id:
                 solve_record_id = await create_solve_record(
                     account_id, tenant_id, trigger_scene=trigger_scene,
                     open_reason=open_reason or "全自动冷却拦截",
-                    solve_reason=solve_reason or blocked.get("error") or "指数退避冷却中",
+                    solve_reason=solve_reason or err_detail,
                 )
+            # 注意：result 必须用 precheck_fail（与预校验失败一致），
+            # status 用 precheck_rejected，engine=Backoff 标识退避拦截来源
             await update_solve_record(
-                solve_record_id, status="fail", result="slider_fail",
-                error_message=blocked.get("error") or "全自动滑块冷却中",
+                solve_record_id, status="precheck_rejected", result="precheck_fail",
+                error_message=err_detail,
                 engine="Backoff",
             )
+            # 同步更新 failure_reason 字段（update_solve_record 不支持 failure_reason 参数）
+            if solve_record_id:
+                try:
+                    async with async_session() as db:
+                        await db.execute(
+                            text(
+                                "UPDATE xianyu_captcha_solve_record "
+                                "SET failure_reason = :fr, finished_at = NOW() WHERE id = :rid"
+                            ),
+                            {"fr": failure_reason, "rid": solve_record_id},
+                        )
+                        await db.commit()
+                except Exception as e:
+                    log_service_failure(logger, e, operation="update_backoff_failure_reason", level=logging.WARNING)
             await broadcast_captcha_solve(
                 tenant_id, account_id, account_name,
-                status="fail", result="slider_fail",
-                reason=blocked.get("error") or "全自动滑块冷却中",
+                status="precheck_rejected", result="precheck_fail",
+                reason=err_detail,
                 record_id=solve_record_id,
             )
             return {
@@ -917,6 +1011,30 @@ async def handle_captcha_for_account(
         )
 
         auto_solve_result = await try_auto_solve(account_id, tenant_id)
+
+        # === 成功率统计：批量写入每次尝试的明细（用于后台成功率统计） ===
+        # crawler-service 的 sliderSolver 已在 attemptsDetail 中采集每次 attempt 的方案/方法/策略/成功状态/耗时
+        # 此处持久化到 xianyu_captcha_solve_attempt 表，供后台统计页面聚合查询
+        # 失败不影响主流程，batch_insert_solve_attempts 内部已捕获异常
+        attempts_detail_data = auto_solve_result.get("attemptsDetail") or []
+        if attempts_detail_data and solve_record_id:
+            try:
+                inserted = await batch_insert_solve_attempts(
+                    record_id=solve_record_id,
+                    tenant_id=tenant_id,
+                    account_id=account_id,
+                    attempts_detail=attempts_detail_data,
+                )
+                if inserted:
+                    logger.info(
+                        "已记录滑块求解尝试明细 recordId=%d count=%d accountId=%d",
+                        solve_record_id, inserted, account_id,
+                    )
+            except Exception as e:
+                log_service_failure(
+                    logger, e, operation="persist_solve_attempts_detail",
+                    tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
+                )
 
         if auto_solve_result.get("solved"):
             logger.info("账号 %d 滑块自动求解成功", account_id)
@@ -1100,20 +1218,35 @@ async def handle_captcha_for_account(
             error_code = auto_solve_result.get("errorCode") or ""
 
             # 根据错误码/错误消息细分失败原因
-            if error_code == "CAPTCHA_SOLVER_UNAVAILABLE":
+            if error_code == "CAPTCHA_SOLVER_TIMEOUT":
+                # HTTP 超时（httpx ReadTimeout/ConnectTimeout/PoolTimeout）
+                # 2026-07-29 事故修复：原先超时被归为 service_unavailable（不可重试 + 累加退避），
+                # 导致 crawler-service 临时繁忙时账号被冷却 60s，WS 每次重连触发求解都被拦截。
+                # 修复：归为 timeout（可重试 1 次 + 不累加退避），让队列自动重试一次。
+                # 注意：httpx 超时 180s 是项目硬约束，不得缩短（见 project_memory.md）。
+                failure_reason = "timeout"
+                logger.warning(
+                    "账号 %d 滑块求解失败：HTTP 超时，归类为 timeout（可重试1次，不累加退避）error=%s",
+                    account_id, error_msg[:200],
+                )
+            elif error_code == "CAPTCHA_SOLVER_UNAVAILABLE":
                 failure_reason = "service_unavailable"
             elif "Cookie" in error_msg or "cookie" in error_msg:
                 failure_reason = "cookie_invalid"
             elif _is_browser_launch_failure(error_msg):
-                # Chrome 启动失败/浏览器崩溃/资源耗尽 → service_unavailable
-                # 原因：sliderSolver.ts 返回的这类错误无 errorCode，仅含 error 消息，
-                # 原先默认归为 slider_fail（会重试 3 次），每次重试又立即失败，
-                # 配合 WS 频繁重连导致记录数爆炸增长（曾出现单账号 13000+ 条失败记录）。
-                # 归为 service_unavailable 后：不可重试 + token_refresh 场景 10 分钟冷却，
-                # 避免无效重试放大问题。
-                failure_reason = "service_unavailable"
+                # Chrome 启动失败/浏览器崩溃/资源耗尽 → browser_crashed（可重试 1 次，不累加退避）
+                # 原因：sliderSolver.ts 返回的这类错误无 errorCode，仅含 error 消息。
+                # 演进历史：
+                # - v1：归为 slider_fail（会重试 3 次），每次重试又立即失败，
+                #   配合 WS 频繁重连导致记录数爆炸增长（曾出现单账号 13000+ 条失败记录）
+                # - v2：归为 service_unavailable（不可重试 + 累加退避），避免无效重试放大问题
+                # - v3（当前）：归为 browser_crashed（可重试 1 次 + 不累加退避）
+                #   原因：浏览器崩溃是临时性资源问题，重试一次可能就成功。
+                #   不累加退避避免账号被冷却 60s 导致 WS 重连触发求解被拦截。
+                #   仅重试 1 次（而非 slider_fail 的 3 次）避免记录数爆炸。
+                failure_reason = "browser_crashed"
                 logger.warning(
-                    "账号 %d 滑块求解失败：浏览器启动/崩溃错误，归类为 service_unavailable（不可重试）error=%s",
+                    "账号 %d 滑块求解失败：浏览器启动/崩溃错误，归类为 browser_crashed（可重试1次，不累加退避）error=%s",
                     account_id, error_msg[:200],
                 )
 

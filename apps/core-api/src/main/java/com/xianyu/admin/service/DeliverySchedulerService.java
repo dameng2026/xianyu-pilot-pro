@@ -541,13 +541,17 @@ public class DeliverySchedulerService {
      */
     @Scheduled(fixedRate = 600000, initialDelay = 60000)
     public void autoSyncOrdersFromXianyu() {
+        // 修复：订单同步是基础功能，不应仅依赖 delivery_goods_config 配置。
+        // 改为查询所有拥有"已登录账号"的租户，确保订单统计覆盖全部有效租户。
         List<Long> tenantIds;
         try {
             tenantIds = jdbcTemplate.queryForList(
-                    "SELECT DISTINCT tenant_id FROM delivery_goods_config WHERE deleted=0 AND config_json IS NOT NULL AND config_json!=''",
+                    "SELECT DISTINCT a.tenant_id FROM xianyu_account a " +
+                    "INNER JOIN xianyu_account_auth auth ON auth.account_id = a.id AND auth.tenant_id = a.tenant_id AND auth.deleted = 0 " +
+                    "WHERE a.deleted = 0 AND a.status = 1 AND auth.cookie_status = 1",
                     Long.class);
         } catch (Exception e) {
-            log.debug("查询自动发货配置租户列表失败, errorType={}", e.getClass().getSimpleName());
+            log.warn("查询有效账号租户列表失败, errorType={}, msg={}", e.getClass().getSimpleName(), e.getMessage());
             return;
         }
         if (tenantIds == null || tenantIds.isEmpty()) {
@@ -559,7 +563,7 @@ public class DeliverySchedulerService {
             try {
                 totalSynced += syncOrdersForTenant(tenantId);
             } catch (Exception e) {
-                log.warn("租户 {} 自动同步订单异常, errorType={}", tenantId, e.getClass().getSimpleName());
+                log.warn("租户 {} 自动同步订单异常, errorType={}, msg={}", tenantId, e.getClass().getSimpleName(), e.getMessage());
             }
         }
         if (totalSynced > 0) {
@@ -569,16 +573,20 @@ public class DeliverySchedulerService {
 
     /**
      * 同步指定租户下所有有效账号的订单
-     * 只同步 cookie_status=1（已登录）且 status=1（正常）的账号，避免无效 API 调用
+     * 修复：cookie_status 字段在 xianyu_account_auth 表，不在 xianyu_account 表。
+     * 原 SQL 查询 xianyu_account.cookie_status 会抛 Unknown column 异常并被静默吞掉，
+     * 导致定时任务从未同步任何账号的订单。
      */
     private int syncOrdersForTenant(Long tenantId) {
         List<Map<String, Object>> accounts;
         try {
             accounts = jdbcTemplate.queryForList(
-                    "SELECT id FROM xianyu_account WHERE tenant_id=? AND deleted=0 AND status=1 AND cookie_status=1",
+                    "SELECT a.id FROM xianyu_account a " +
+                    "INNER JOIN xianyu_account_auth auth ON auth.account_id = a.id AND auth.tenant_id = a.tenant_id AND auth.deleted = 0 " +
+                    "WHERE a.tenant_id = ? AND a.deleted = 0 AND a.status = 1 AND auth.cookie_status = 1",
                     tenantId);
         } catch (Exception e) {
-            log.debug("查询租户 {} 有效账号失败, errorType={}", tenantId, e.getClass().getSimpleName());
+            log.warn("查询租户 {} 有效账号失败, errorType={}, msg={}", tenantId, e.getClass().getSimpleName(), e.getMessage());
             return 0;
         }
         if (accounts == null || accounts.isEmpty()) {

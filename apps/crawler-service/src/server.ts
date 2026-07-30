@@ -9,7 +9,7 @@ import { closePool, getPool, runMigrations } from './db/index.js';
 import { crawlGoofishSearch } from './crawler/goofishSearch.js';
 import { fetchGoofishItemDetail } from './crawler/goofishItemDetail.js';
 import { resolveStoreUserId } from './crawler/goofish.js';
-import { solveGoofishSlider, isHeadedDisplayAvailable } from './crawler/sliderSolver.js';
+import { solveGoofishSlider, isHeadedDisplayAvailable, type SlideSolveResult } from './crawler/sliderSolver.js';
 import { captureQrCodeOnly, completeQrLoginSession } from './crawler/qrLoginSolver.js';
 import { processRegistry, processMonitor } from './crawler/processRegistry.js';
 import {
@@ -803,21 +803,51 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
     const slotType = req.body?.slotType;
     const releaseBrowser = acquireSlot(tenantId, slotType);
     if (!releaseBrowser) return browserCapacityUnavailable(res);
+
+    // 整体超时保护：170 秒（略小于 httpx 180 秒，确保先返回超时响应而非 HTTP 超时）
+    // 2026-07-29 事故修复：solveGoofishSlider 内部某些操作（如 chromium.launchPersistentContext、
+    // page.goto 在网络异常时）可能卡住无限期，导致 httpx 180 秒超时后客户端断开，
+    // 但 crawler-service 内部仍在卡着（BrowserSlot 5 分钟超时才释放槽位）。
+    // 修复：用 Promise.race 添加整体超时，170 秒后返回超时响应，释放槽位。
+    // solveGoofishSlider 在后台继续执行，其 finally 块最终会清理浏览器资源。
+    const SOLVE_OVERALL_TIMEOUT_MS = 170_000;
+    const requestId = (req as RequestWithTrace).requestId;
+
     const result = await (async () => {
+      let solveTimeoutId: NodeJS.Timeout | undefined;
       try {
-        return await solveGoofishSlider({
-          cookieStr,
-          targetUrl: safeTargetUrl,
-          headless: resolvedHeadless,
-          maxRetries: Math.max(1, Math.min(Number(maxRetries) || 5, 8)),
-          timeoutMs: Math.max(5000, Math.min(Number(timeoutMs) || 90000, 180000)),
-          proxy: safeProxy,
-          // profile 策略：persistent（默认持久化，累积历史降低风控）/ seed / temp
-          profileStrategy: (profileStrategy === 'seed' || profileStrategy === 'temp') ? profileStrategy : 'persistent',
-          // 半自动人工兜底：全自动失败后保留窗口供人工拖拽
-          semiAutoFallback: semiAutoFallback === true,
+        const timeoutPromise = new Promise<SlideSolveResult>((resolve) => {
+          solveTimeoutId = setTimeout(() => {
+            console.warn(`[SliderSolver] requestId=${requestId} 整体超时 ${SOLVE_OVERALL_TIMEOUT_MS}ms，返回超时响应`);
+            resolve({
+              ok: false,
+              solved: false,
+              captchaDetected: false,
+              attempts: 0,
+              error: `滑块求解整体超时（${SOLVE_OVERALL_TIMEOUT_MS / 1000}秒），浏览器启动或页面操作卡住，可能资源耗尽或网络异常`,
+              durationMs: SOLVE_OVERALL_TIMEOUT_MS,
+            });
+          }, SOLVE_OVERALL_TIMEOUT_MS);
+          // unref 让定时器不阻止进程退出
+          solveTimeoutId.unref?.();
         });
+        return await Promise.race([
+          solveGoofishSlider({
+            cookieStr,
+            targetUrl: safeTargetUrl,
+            headless: resolvedHeadless,
+            maxRetries: Math.max(1, Math.min(Number(maxRetries) || 5, 8)),
+            timeoutMs: Math.max(5000, Math.min(Number(timeoutMs) || 90000, 180000)),
+            proxy: safeProxy,
+            // profile 策略：persistent（默认持久化，累积历史降低风控）/ seed / temp
+            profileStrategy: (profileStrategy === 'seed' || profileStrategy === 'temp') ? profileStrategy : 'persistent',
+            // 半自动人工兜底：全自动失败后保留窗口供人工拖拽
+            semiAutoFallback: semiAutoFallback === true,
+          }),
+          timeoutPromise,
+        ]);
       } finally {
+        if (solveTimeoutId) clearTimeout(solveTimeoutId);
         releaseBrowser();
       }
     })();

@@ -208,11 +208,18 @@
 
     <Teleport to="body">
       <div v-if="announcementModalVisible && currentAnnouncement" class="announcement-modal-mask" @click.self="closeAnnouncementModal">
-        <section class="announcement-modal">
+        <section
+          class="announcement-modal"
+          :class="[
+            `announcement-modal--${announcementLayout.size}`,
+            `announcement-modal--align-${announcementLayout.align}`,
+            `announcement-modal--${announcementLayout.layout}`
+          ]"
+        >
           <button class="announcement-modal-close" type="button" @click="closeAnnouncementModal">×</button>
           <div class="announcement-modal-icon">📣</div>
           <h3>{{ currentAnnouncement.title }}</h3>
-          <p>{{ currentAnnouncement.content || firstLine }}</p>
+          <p class="announcement-modal-content">{{ currentAnnouncement.content || firstLine }}</p>
           <div class="announcement-modal-actions">
             <button class="strip-btn strip-btn-ghost modal-btn" type="button" @click="closeAnnouncementModal">查看详情</button>
             <button class="strip-btn strip-btn-primary modal-btn" type="button" @click="acknowledgeAnnouncement">我知道了</button>
@@ -352,6 +359,48 @@ const totalSlides = computed(() => carouselSlides.value.length)
 const carouselUnavailable = computed(() => navigationLoaded.value && navigationAvailable.value && contentAvailable.value && totalSlides.value === 0)
 const currentAnnouncement = computed(() => selectCurrentAnnouncement(announcements.value, dismissedAnnouncementIds.value))
 const firstLine = computed(() => getAnnouncementFirstLine(currentAnnouncement.value))
+
+// 公告弹窗智能排版：根据内容长度/结构动态选择宽度、对齐方式与排版模式
+// - size: compact(<=120字/<=3行) | medium(<=300字/<=8行) | large(>300字/>8行)
+// - align: center(短文本) | left(列表) | justify(长段落)
+// - layout: plain | list(多项以 - • * 或数字开头) | paragraphs(含空行分段)
+const announcementLayout = computed(() => {
+  const raw = String(currentAnnouncement.value?.content || firstLine.value || '')
+  const text = raw.replace(/\s+$/g, '')
+  const lines = text.split(/\r?\n/)
+  const nonEmptyLines = lines.filter(l => l.trim().length > 0)
+  const lineCount = nonEmptyLines.length
+  const charCount = text.length
+  const longestLine = nonEmptyLines.reduce((max, l) => Math.max(max, l.trim().length), 0)
+
+  const listItemPattern = /^\s*([-•*▪◦‣·]|\d+[.、)）]|[一二三四五六七八九十]+[、.）)])/u
+  const listLineCount = nonEmptyLines.filter(l => listItemPattern.test(l)).length
+  const isList = lineCount >= 2 && listLineCount >= Math.ceil(lineCount / 2)
+
+  const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim().length > 0)
+  const hasParagraphs = paragraphs.length >= 2
+
+  let size = 'compact'
+  if (charCount > 300 || lineCount > 8 || longestLine > 60) {
+    size = 'large'
+  } else if (charCount > 120 || lineCount > 3 || longestLine > 36) {
+    size = 'medium'
+  }
+
+  let align = 'center'
+  if (size === 'large' || size === 'medium') {
+    align = isList ? 'left' : 'justify'
+  }
+
+  let layout = 'plain'
+  if (isList) {
+    layout = 'list'
+  } else if (hasParagraphs) {
+    layout = 'paragraphs'
+  }
+
+  return { size, align, layout, charCount, lineCount, isList, hasParagraphs, longestLine }
+})
 
 const abnormalStatusCount = computed(() => systemStatus.value.filter(item => item.status === 'down').length)
 const unknownStatusCount = computed(() => systemStatus.value.filter(item => item.status === 'unknown').length)
@@ -1716,6 +1765,19 @@ onBeforeUnmount(() => {
   box-shadow: 0 28px 80px rgba(35, 61, 109, 0.22);
   padding: 34px 28px 24px;
   text-align: center;
+  transition: width 0.25s ease, max-height 0.25s ease;
+}
+
+/* 中等内容：增加宽度，避免窄列导致换行频繁 */
+.announcement-modal--medium {
+  width: min(100%, 560px);
+}
+
+/* 长内容：进一步加宽并允许纵向滚动，避免遮挡屏幕 */
+.announcement-modal--large {
+  width: min(100%, 760px);
+  max-height: 80vh;
+  overflow-y: auto;
 }
 
 .announcement-modal-close {
@@ -1755,6 +1817,35 @@ onBeforeUnmount(() => {
   font-size: 14px;
   line-height: 1.9;
   white-space: pre-wrap;
+}
+
+/* 智能对齐：左对齐（列表更易读） */
+.announcement-modal--align-left .announcement-modal-content {
+  text-align: left;
+}
+
+/* 智能对齐：两端对齐（长段落更整齐） */
+.announcement-modal--align-justify .announcement-modal-content {
+  text-align: justify;
+  text-justify: inter-character;
+  text-align-last: left;
+}
+
+/* 列表排版：缩进让项目符号更清晰，行距更舒展 */
+.announcement-modal--list .announcement-modal-content {
+  padding-left: 8px;
+  line-height: 2;
+}
+
+/* 段落排版：段间距分隔，提高可读性（依赖 pre-wrap 保留空行分段） */
+.announcement-modal--paragraphs .announcement-modal-content {
+  line-height: 2;
+}
+
+/* 长内容弹窗：内容区限定最大高度，避免按钮被推到屏外 */
+.announcement-modal--large .announcement-modal-content {
+  max-height: calc(80vh - 240px);
+  overflow-y: auto;
 }
 
 .announcement-modal-actions {

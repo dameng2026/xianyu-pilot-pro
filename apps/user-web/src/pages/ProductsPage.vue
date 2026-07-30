@@ -241,7 +241,7 @@ import { globalConfirm } from '../composables/confirmState.js'
 import { getLiteAccounts } from '../api/accounts.js'
 import { getBusinessSettings } from '../api/businessSettings.js'
 import { updateProductAutoReplyScope } from '../api/autoReplyScope.js'
-import { deleteGoodsLocal, getGoodsDetail, getGoods, getGoodsStats, updateGoods, updateGoodsAutoRelist } from '../api/goods.js'
+import { deleteGoodsLocal, getGoodsDetail, getGoods, getGoodsStats, updateGoods, updateGoodsAutoRelist, consumePendingLocalGoods, createGoods } from '../api/goods.js'
 import { refreshItems, getSyncProgress, getSyncTasks, publishItem, offShelfItem, updateItemPrice, remoteDeleteItem } from '../api/items.js'
 import { accountName, formatMoney, formatNumber, shortText } from '../utils/format.js'
 import { resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
@@ -544,8 +544,43 @@ async function init(){
   } catch {
     // 账号错误由专用不可用态展示；商品列表和统计仍可独立加载。
   }
-  await loadSyncTasks()
-  await autoTriggerSync()
+  // 先补建发布时暂存的本地商品记录（商品已发布到闲鱼但当时本地保存失败）
+  // 失败不阻塞主流程，下次进入页面会再次尝试
+  flushPendingLocalGoods().finally(() => {
+    loadSyncTasks()
+    autoTriggerSync()
+  })
+}
+
+/**
+ * 补建暂存的本地商品记录：商品已发布到闲鱼但当时本地保存失败时，前端会暂存到 localStorage。
+ * 进入商品管理页面时自动取出并补建，避免用户需要手动同步或重复发布。
+ */
+async function flushPendingLocalGoods() {
+  const pending = consumePendingLocalGoods()
+  if (!pending || pending.length === 0) return
+  let successCount = 0
+  let failCount = 0
+  for (const goodsData of pending) {
+    try {
+      await createGoods(goodsData)
+      successCount++
+    } catch (e) {
+      // 补建失败：重新暂存，下次进入页面再试
+      failCount++
+      try {
+        const list = JSON.parse(localStorage.getItem('xianyu_pending_local_goods') || '[]')
+        list.push(goodsData)
+        localStorage.setItem('xianyu_pending_local_goods', JSON.stringify(list.slice(-50)))
+      } catch { /* ignore */ }
+    }
+  }
+  if (successCount > 0) {
+    showNotice('success', `已自动补建 ${successCount} 条本地商品记录`)
+  }
+  if (failCount > 0) {
+    showNotice('warning', `${failCount} 条本地商品记录补建失败，将在下次进入时重试`)
+  }
 }
 function showAllProducts() {
   // 用户点击"查看全部商品"时清除仅展示同步结果的限制，加载全部商品
@@ -1238,9 +1273,7 @@ async function syncProducts(isAuto = false, overrideAccountId = null){
       query.pageNum = 1
       // 同步完成后加载商品列表，用 try/catch 防止超时错误冒泡为未处理异常
       try {
-        await loadItems({ excludeStatus: 3 })
-        // 前端二次过滤：确保已删除(status=3)的商品不展示
-        items.value = items.value.filter(item => Number(item.status ?? 1) !== 3)
+        await loadItems()
       } catch(e) {
         console.warn('[ProductsPage] 同步后加载商品列表失败', e)
       }
@@ -1348,8 +1381,7 @@ async function syncAllAccounts() {
       query.pageNum = 1
       // 用 try/catch 防止超时错误冒泡为未处理异常
       try {
-        await loadItems({ excludeStatus: 3 })
-        items.value = items.value.filter(item => Number(item.status ?? 1) !== 3)
+        await loadItems()
       } catch(e) {
         console.warn('[ProductsPage] 全账号同步后加载商品列表失败', e)
       }

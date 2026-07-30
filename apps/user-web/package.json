@@ -1,6 +1,6 @@
 {
   "name": "xianyu-assistant-user-web",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "private": true,
   "packageManager": "npm@11.16.0",
   "engines": {
@@ -28,7 +28,8 @@
     "@eslint/js": "10.0.1",
     "eslint": "10.5.0",
     "eslint-plugin-vue": "10.9.2",
-    "globals": "17.6.0"
+    "globals": "17.6.0",
+    "vite-plugin-compression": "^0.5.1"
   },
   "allowScripts": {
     "@humanfs/core": false,

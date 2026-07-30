@@ -341,12 +341,12 @@ watch(() => props.visible, (val) => {
   max-width: 500px;
   max-height: 80vh;
   background: var(--m-color-bg-elevated);
-  border-radius: var(--m-radius-2xl) var(--m-radius-2xl) 0 0;
+  border-radius: var(--m-radius-xl) var(--m-radius-xl) 0 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   padding-bottom: env(safe-area-inset-bottom);
-  box-shadow: var(--m-shadow-elevated);
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-sheet-enter-active,
@@ -388,7 +388,7 @@ watch(() => props.visible, (val) => {
   font-weight: var(--m-font-weight-semibold);
   padding: var(--m-space-2) var(--m-space-3);
   cursor: pointer;
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
 }
 
 .m-picker-cancel {
@@ -585,7 +585,7 @@ watch(() => props.visible, (val) => {
   background: var(--m-color-primary);
   color: var(--m-color-text-inverse);
   border: none;
-  border-radius: var(--m-radius-pill);
+  border-radius: var(--m-radius-lg);
   font-size: var(--m-font-size-body-sm);
   font-weight: var(--m-font-weight-semibold);
   cursor: pointer;

@@ -30,7 +30,7 @@ public class AdminModuleService {
      * 调用时由 catalog.get(moduleKey) 抛出 IllegalArgumentException 后转为 400 错误。
      */
     private static final Set<String> MODULES_WITHOUT_REAL_BACKEND = Set.of(
-            "licenses", "notify-channels", "notify-logs", "rag"
+            "notify-channels", "notify-logs", "rag"
     );
 
     private final JdbcTemplate jdbcTemplate;

@@ -33,8 +33,22 @@ export const adminRoutes: AppRouteRecord[] = [
       { path: 'promotion', name: 'AdminPromotion', component: '/admin/promotion/index', meta: { title: '会员充值活动', icon: 'ri:gift-2-line', roles: SUPER_ONLY } as any },
       { path: 'token-plans', name: 'AdminTokenPlans', component: '/admin/token-plans/index', meta: { title: 'Token 套餐', icon: 'ri:coin-line', roles: SUPER_ONLY } as any },
       { path: 'payment-config', name: 'AdminPaymentConfig', component: '/admin/payment-config/index', meta: { title: '支付配置', icon: 'ri:bank-card-line', roles: SUPER_ONLY } as any },
-      { path: 'recharge-records', name: 'AdminRechargeRecords', component: '/admin/recharge-records/index', meta: { title: '充值记录', icon: 'ri:bank-card-2-line', roles: SUPER_ONLY } as any },
-      { path: 'licenses', name: 'AdminLicenses', component: moduleComponent, meta: { title: '授权码管理', icon: 'ri:key-2-line', moduleKey: 'licenses', roles: SUPER_ONLY } as any }
+      { path: 'recharge-records', name: 'AdminRechargeRecords', component: '/admin/recharge-records/index', meta: { title: '充值记录', icon: 'ri:bank-card-2-line', roles: SUPER_ONLY } as any }
+    ]
+  },
+  {
+    name: 'AdminGrowthCenter',
+    path: '/admin/growth',
+    component: '/index/index',
+    meta: { title: '增长中心', icon: 'ri:rocket-2-line', roles: SUPER_ONLY },
+    children: [
+      { path: 'dashboard', name: 'AdminGrowthDashboard', component: '/admin/growth/dashboard/index', meta: { title: '增长仪表盘', icon: 'ri:dashboard-2-line', roles: SUPER_ONLY } as any },
+      { path: 'config', name: 'AdminGrowthConfig', component: '/admin/growth/config/index', meta: { title: '增长配置', icon: 'ri:settings-3-line', roles: SUPER_ONLY } as any },
+      { path: 'tier-config', name: 'AdminGrowthTierConfig', component: '/admin/growth/tier-config/index', meta: { title: '代理等级', icon: 'ri:medal-line', roles: SUPER_ONLY } as any },
+      { path: 'withdrawals', name: 'AdminGrowthWithdrawals', component: '/admin/growth/withdrawals/index', meta: { title: '提现审批', icon: 'ri:bank-card-line', roles: SUPER_ONLY } as any },
+      { path: 'invite-codes', name: 'AdminGrowthInviteCodes', component: '/admin/growth/invite-codes/index', meta: { title: '邀请码管理', icon: 'ri:coupon-3-line', roles: SUPER_ONLY } as any },
+      { path: 'leaderboard', name: 'AdminGrowthLeaderboard', component: '/admin/growth/leaderboard/index', meta: { title: '拉新排行榜', icon: 'ri:trophy-line', roles: SUPER_ONLY } as any },
+      { path: 'referrals', name: 'AdminGrowthReferrals', component: '/admin/growth/referrals/index', meta: { title: '推荐关系', icon: 'ri:share-line', roles: SUPER_ONLY } as any }
     ]
   },
   {

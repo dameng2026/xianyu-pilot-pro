@@ -137,17 +137,35 @@
         <PublishAddressCascader v-model="selectedAddress" />
       </CardPanel>
 
-      <CardPanel v-if="!loading && detail" title="多规格商品（鱼小铺专属）" style="margin-top:16px">
-        <div class="auto-delivery-toggle">
+      <CardPanel v-if="!loading && detail" ref="multispecCardRef" style="margin-top:16px">
+        <template #title>
+          <div class="multispec-card-title">
+            <span class="multispec-card-title-icon" aria-hidden="true">⚙</span>
+            <span>多规格商品（鱼小铺专属）</span>
+            <span v-if="isFishShopAccount" class="multispec-account-badge multispec-account-badge-ok">鱼小铺账号</span>
+          </div>
+        </template>
+
+        <!-- 多规格状态提示横幅 -->
+        <div class="multispec-banner multispec-banner-active">
+          <span class="multispec-banner-icon" aria-hidden="true">✓</span>
+          <span>已开启多规格商品，最多支持 2 个规格类型，价格和库存请在 SKU 组合中填写</span>
+        </div>
+
+        <!-- 多规格开关（编辑场景下禁用，始终开启） -->
+        <div class="auto-delivery-toggle multispec-toggle-row multispec-toggle-on">
           <div class="auto-delivery-toggle-info">
-            <span class="auto-delivery-title">多规格已开启</span>
+            <span class="auto-delivery-title">
+              <span class="multispec-toggle-status-dot on" aria-hidden="true"></span>
+              多规格已开启
+            </span>
             <span class="subtle">编辑场景下多规格始终开启，至少需要一个规格类型与一个 SKU</span>
           </div>
           <ToggleSwitch :on="true" :disabled="true" />
         </div>
+
         <MultiSpecEditor
           v-model="multiSpecData"
-          @upload-spec-image="onUploadSpecImage"
           @upload-sku-cover="onUploadSkuCover"
         />
       </CardPanel>
@@ -226,6 +244,7 @@ import { confirmAction } from '../utils/confirmAction.js'
 import { imageUploadValidationMessage as uploadImageValidationMessage } from '../utils/imageUploadPolicy.js'
 import { isPublishAddressComplete, normalizePublishAddress } from '../utils/publishAddress.js'
 import { setNavigationGuard, clearNavigationGuard } from '../utils/navigationGuard.js'
+import { guardFeatureAction } from '../composables/featureGuard.js'
 import { friendlyError } from '../utils/friendlyError.js'
 
 const emit = defineEmits(['navigate'])
@@ -255,6 +274,7 @@ const success = ref('')
 const submitting = ref(false)
 const fileInput = ref(null)
 const dragIndex = ref(-1)
+const multispecCardRef = ref(null)
 const accounts = ref([])
 const detail = ref(null)
 const selectedAddress = ref(null)
@@ -556,38 +576,6 @@ function onDrop(idx, e) {
   dragIndex.value = -1
 }
 
-// 规格图片上传（复用 uploadImage 能力）
-async function onUploadSpecImage({ pIdx, vIdx }) {
-  if (!routeAccountId.value) {
-    error.value = '账号参数缺失，无法上传规格图片'
-    return
-  }
-  const input = document.createElement('input')
-  input.type = 'file'
-  input.accept = 'image/jpeg,image/png,image/gif,image/webp'
-  input.onchange = async () => {
-    const file = input.files?.[0]
-    if (!file) return
-    const validationMsg = uploadImageValidationMessage(file)
-    if (validationMsg) {
-      error.value = validationMsg
-      return
-    }
-    try {
-      const res = await uploadImage(Number(routeAccountId.value), file)
-      const url = res?.data?.url
-      if (!url) throw new Error('上传响应格式异常')
-      const prop = multiSpecData.propertyGroups[pIdx]
-      if (prop && prop.propertyValues[vIdx]) {
-        prop.propertyValues[vIdx].propertyValueImg = url
-      }
-    } catch (e) {
-      error.value = `规格图片上传失败：${e?.message || '请稍后重试'}`
-    }
-  }
-  input.click()
-}
-
 // SKU 封面图上传（复用 uploadImage 能力）
 async function onUploadSkuCover({ sIdx }) {
   if (!routeAccountId.value) {
@@ -623,16 +611,27 @@ function validate() {
   const miss = checks.value.find(i => !i.ok)
   if (miss) {
     error.value = `"${miss.text}" 检查未通过，请完善后再提交`
+    // 多规格相关检查未通过时滚动到多规格板块
+    if (miss.text && miss.text.includes('规格') || miss.text.includes('SKU') || miss.text.includes('价格') || miss.text.includes('库存')) {
+      scrollToMultispec()
+    }
     return false
   }
   // 规格名校验
   const names = multiSpecData.propertyGroups.map(g => (g.propertyName || '').trim()).filter(Boolean)
   if (names.length !== new Set(names).size) {
     error.value = '规格名称不能重复'
+    scrollToMultispec()
     return false
   }
   if (multiSpecData.propertyGroups.length > 2) {
     error.value = '最多只能添加 2 个规格类型'
+    scrollToMultispec()
+    return false
+  }
+  if (multiSpecData.propertyGroups.length === 0) {
+    error.value = '多规格：至少需要添加一个规格类型'
+    scrollToMultispec()
     return false
   }
   // 每个规格类型至少一个有效值
@@ -642,24 +641,57 @@ function validate() {
       .filter(Boolean)
     if (validValues.length === 0) {
       error.value = `规格「${g.propertyName || '未命名'}」至少需要一个有效规格值`
+      scrollToMultispec()
       return false
     }
     if (new Set(validValues).size !== validValues.length) {
       error.value = `规格「${g.propertyName}」下存在重复的规格值`
+      scrollToMultispec()
       return false
     }
   }
-  // 最多一个 supportImage=true
-  const supportImgCount = multiSpecData.propertyGroups.filter(g => g.supportImage).length
-  if (supportImgCount > 1) {
-    error.value = '最多只能有一个规格类型支持图片'
+  // SKU 列表完整性校验
+  if (multiSpecData.skuList.length === 0) {
+    error.value = '多规格：SKU 列表为空，请检查规格值'
+    scrollToMultispec()
     return false
+  }
+  for (let i = 0; i < multiSpecData.skuList.length; i++) {
+    const sku = multiSpecData.skuList[i]
+    const price = parseFloat(sku.price)
+    if (isNaN(price) || price < 0) {
+      error.value = `多规格：第 ${i + 1} 个 SKU 价格未填写或非法，请完善后再提交`
+      scrollToMultispec()
+      return false
+    }
+    const qty = parseInt(sku.quantity, 10)
+    if (isNaN(qty) || qty < 0) {
+      error.value = `多规格：第 ${i + 1} 个 SKU 库存未填写或非法，请完善后再提交`
+      scrollToMultispec()
+      return false
+    }
   }
   return true
 }
 
+// 滚动到多规格板块
+function scrollToMultispec() {
+  try {
+    const refEl = multispecCardRef.value?.$el || multispecCardRef.value
+    if (refEl && refEl.scrollIntoView) {
+      refEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    } else {
+      const el = document.querySelector('.multispec-card-title')
+      if (el && el.scrollIntoView) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    }
+  } catch (e) { /* 忽略滚动异常 */ }
+}
+
 // ---- 提交编辑 ----
 async function submit() {
+  if (!await guardFeatureAction()) return
   error.value = ''
   success.value = ''
   if (!detail.value || !routeItemId.value) {
@@ -1097,6 +1129,97 @@ onMounted(async () => {
   gap: 2px;
 }
 .auto-delivery-title { font-weight: 600; }
+
+/* ---- 多规格商品板块（与发布页保持一致） ---- */
+.multispec-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.multispec-card-title-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #0d6bff, #3186ff);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+.multispec-account-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  line-height: 1.4;
+}
+.multispec-account-badge-ok {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #86efac;
+}
+.multispec-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  margin-bottom: 8px;
+  border: 1px solid transparent;
+}
+.multispec-banner-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+}
+.multispec-banner-active {
+  background: #ecfdf5;
+  color: #065f46;
+  border-color: #6ee7b7;
+}
+.multispec-banner-active .multispec-banner-icon {
+  background: #10b981;
+  color: #fff;
+}
+.multispec-toggle-row {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #e5eaf2;
+  background: #fafcff;
+  transition: all 0.2s;
+}
+.multispec-toggle-row.multispec-toggle-on {
+  border-color: #93b8ff;
+  background: #f0f6ff;
+  box-shadow: 0 0 0 1px rgba(13, 107, 255, 0.1);
+}
+.multispec-toggle-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d1d5db;
+  margin-right: 6px;
+  vertical-align: middle;
+  transition: all 0.2s;
+}
+.multispec-toggle-status-dot.on {
+  background: #0d6bff;
+  box-shadow: 0 0 0 3px rgba(13, 107, 255, 0.18);
+}
 .product-cell { display: flex; gap: 12px; align-items: center; }
 .product-thumb {
   background: var(--bg-soft, #f3f4f6);

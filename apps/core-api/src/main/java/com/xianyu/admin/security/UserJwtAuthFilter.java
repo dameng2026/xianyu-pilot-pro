@@ -44,7 +44,9 @@ public class UserJwtAuthFilter extends OncePerRequestFilter {
                 || uri.startsWith("/api/proxy-image/")
                 || uri.startsWith("/api/payment/redirect/")
                 || uri.startsWith("/api/sync/")
-                || uri.startsWith("/api/v1/slider/")) {
+                || uri.startsWith("/api/v1/slider/")
+                // AI 客服内部回调：Python 端 SSE 完成后回调持久化消息+扣费，使用 X-Internal-Token 鉴权
+                || uri.equals("/api/ai-cs/complete") || uri.equals("/api/ai-cs/tool/result")) {
             // /api/sync/* 由 SyncAuthFilter 独立鉴权（数据同步接收端，后端到后端调用，无用户 JWT）
             // /api/payment/redirect/* 是易支付扫码跳转端点，用户在微信扫码后新浏览器窗口打开，无 JWT
             // /api/v1/slider/* 由 ApikeyAuthFilter 独立鉴权（对外滑块求解 API，X-Api-Key 鉴权）

@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
@@ -15,29 +16,64 @@ import java.util.stream.Collectors;
  *
  * <p>JWT signature validation alone cannot revoke an already issued token when
  * an account is disabled, its password changes, or an administrator's roles
- * are reduced.  This validator intentionally checks the authoritative row on
- * every protected request so those changes take effect immediately.</p>
+ * are reduced.  This validator checks the authoritative row on every protected
+ * request, but caches the result for a short TTL (5 seconds) to avoid
+ * exhausting the DB connection pool under high concurrency.  Security state
+ * changes (password change / account disable / role reduction) take effect
+ * within at most 5 seconds, which is acceptable for this product.</p>
  */
 @Component
 public class AuthSessionValidator {
     private final JdbcTemplate jdbcTemplate;
+
+    /** 缓存 TTL：5 秒。安全状态变更最多延迟 5 秒生效。 */
+    private static final long CACHE_TTL_MS = 5000L;
+
+    private static final class CacheEntry {
+        final long timestamp;
+        final boolean valid;
+        CacheEntry(long timestamp, boolean valid) {
+            this.timestamp = timestamp;
+            this.valid = valid;
+        }
+    }
+
+    /** key = userId + ":" + tenantId + ":" + securityVersion + ":" + username */
+    private final ConcurrentHashMap<String, CacheEntry> userCache = new ConcurrentHashMap<>();
+    /** key = userId + ":" + securityVersion + ":" + username + ":" + roles */
+    private final ConcurrentHashMap<String, CacheEntry> adminCache = new ConcurrentHashMap<>();
 
     public AuthSessionValidator(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
     }
 
     public void validateUser(long userId, long tenantId, String username, long securityVersion) {
+        String cacheKey = userId + ":" + tenantId + ":" + securityVersion + ":" + username;
+        long now = System.currentTimeMillis();
+        CacheEntry cached = userCache.get(cacheKey);
+        if (cached != null && (now - cached.timestamp) < CACHE_TTL_MS) {
+            if (cached.valid) {
+                return;
+            }
+            throw new InvalidAuthSessionException();
+        }
         try {
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(
                     "SELECT username, tenant_id, status, deleted, security_version FROM sys_user WHERE id=? LIMIT 1",
                     userId);
-            if (rows.size() != 1) throw new InvalidAuthSessionException();
-            Map<String, Object> row = rows.get(0);
-            if (number(row.get("tenant_id")) != tenantId
-                    || number(row.get("status")) != 1
-                    || number(row.get("deleted")) != 0
-                    || number(row.get("security_version")) != securityVersion
-                    || !safe(row.get("username")).equals(username)) {
+            boolean valid;
+            if (rows.size() != 1) {
+                valid = false;
+            } else {
+                Map<String, Object> row = rows.get(0);
+                valid = number(row.get("tenant_id")) == tenantId
+                        && number(row.get("status")) == 1
+                        && number(row.get("deleted")) == 0
+                        && number(row.get("security_version")) == securityVersion
+                        && safe(row.get("username")).equals(username);
+            }
+            userCache.put(cacheKey, new CacheEntry(now, valid));
+            if (!valid) {
                 throw new InvalidAuthSessionException();
             }
         } catch (InvalidAuthSessionException e) {
@@ -48,17 +84,32 @@ public class AuthSessionValidator {
     }
 
     public void validateAdmin(long userId, String username, String roles, long securityVersion) {
+        String cacheKey = userId + ":" + securityVersion + ":" + username + ":" + roles;
+        long now = System.currentTimeMillis();
+        CacheEntry cached = adminCache.get(cacheKey);
+        if (cached != null && (now - cached.timestamp) < CACHE_TTL_MS) {
+            if (cached.valid) {
+                return;
+            }
+            throw new InvalidAuthSessionException();
+        }
         try {
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(
                     "SELECT username, roles, status, deleted, security_version FROM sys_admin_user WHERE id=? LIMIT 1",
                     userId);
-            if (rows.size() != 1) throw new InvalidAuthSessionException();
-            Map<String, Object> row = rows.get(0);
-            if (number(row.get("status")) != 1
-                    || number(row.get("deleted")) != 0
-                    || number(row.get("security_version")) != securityVersion
-                    || !safe(row.get("username")).equals(username)
-                    || !roleSet(row.get("roles")).equals(roleSet(roles))) {
+            boolean valid;
+            if (rows.size() != 1) {
+                valid = false;
+            } else {
+                Map<String, Object> row = rows.get(0);
+                valid = number(row.get("status")) == 1
+                        && number(row.get("deleted")) == 0
+                        && number(row.get("security_version")) == securityVersion
+                        && safe(row.get("username")).equals(username)
+                        && roleSet(row.get("roles")).equals(roleSet(roles));
+            }
+            adminCache.put(cacheKey, new CacheEntry(now, valid));
+            if (!valid) {
                 throw new InvalidAuthSessionException();
             }
         } catch (InvalidAuthSessionException e) {

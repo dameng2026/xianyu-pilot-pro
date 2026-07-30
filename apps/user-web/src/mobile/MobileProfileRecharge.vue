@@ -216,10 +216,9 @@ onMounted(() => {
 }
 .m-recharge-item {
   background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-lg);
+  border-radius: var(--m-radius-xl);
   padding: var(--m-space-3) var(--m-space-4);
-  box-shadow: var(--m-shadow-card);
-  border: 1px solid var(--m-color-border-light);
+  box-shadow: var(--m-shadow-xs);
   display: flex;
   flex-direction: column;
   gap: var(--m-space-2);
@@ -233,7 +232,7 @@ onMounted(() => {
 .m-recharge-icon {
   width: 36px;
   height: 36px;
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   background: var(--m-color-success-bg);
   color: var(--m-color-success);
   display: flex;
@@ -315,7 +314,7 @@ onMounted(() => {
   font-size: var(--m-font-size-caption);
   color: var(--m-color-text-tertiary);
   background: var(--m-color-bg-subtle);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   padding: var(--m-space-2) var(--m-space-2);
   line-height: var(--m-line-height-base);
   overflow-wrap: anywhere;
@@ -347,8 +346,8 @@ onMounted(() => {
 .m-recharge-page-btn {
   width: 36px;
   height: 36px;
-  border-radius: var(--m-radius-circle);
-  border: 1px solid var(--m-color-border);
+  border-radius: var(--m-radius-lg);
+  border: none;
   background: var(--m-color-bg-card);
   color: var(--m-color-text-primary);
   display: flex;
@@ -356,11 +355,13 @@ onMounted(() => {
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
+  box-shadow: var(--m-shadow-xs);
 }
 .m-recharge-page-btn:disabled {
   color: var(--m-color-text-disabled);
   background: var(--m-color-bg-subtle);
   cursor: not-allowed;
+  box-shadow: none;
 }
 .m-recharge-page-btn:not(:disabled):active { background: var(--m-color-bg-hover); }
 .m-recharge-page-info {

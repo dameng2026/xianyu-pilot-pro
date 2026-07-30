@@ -547,8 +547,8 @@ onBeforeUnmount(() => {
   width: 100%;
   max-height: 92vh;
   background: var(--m-color-bg-page);
-  border-radius: var(--m-radius-2xl) var(--m-radius-2xl) 0 0;
-  box-shadow: var(--m-shadow-elevated);
+  border-radius: var(--m-radius-xl) var(--m-radius-xl) 0 0;
+  box-shadow: var(--m-shadow-xs);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -628,20 +628,20 @@ onBeforeUnmount(() => {
   padding: var(--m-space-4);
   border-radius: var(--m-radius-xl);
   background: var(--m-color-warning-bg);
-  border: 1px solid var(--m-color-warning-border);
+  border: none;
 }
 
 .m-pay-hero-icon {
   width: 46px;
   height: 46px;
-  border-radius: var(--m-radius-xl);
+  border-radius: var(--m-radius-lg);
   background: var(--m-color-warning);
   color: var(--m-color-text-inverse);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  box-shadow: var(--m-shadow-card);
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-pay-hero-copy strong {
@@ -684,17 +684,17 @@ onBeforeUnmount(() => {
   gap: var(--m-space-3);
   padding: var(--m-space-3);
   border-radius: var(--m-radius-xl);
-  border: 1.5px solid var(--m-color-border);
+  border: none;
   background: var(--m-color-bg-card);
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+  transition: box-shadow 0.18s ease;
   width: 100%;
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-pay-method.active,
 .m-pay-plan.active {
-  border-color: var(--m-color-primary);
   box-shadow: 0 0 0 2px var(--m-color-primary-bg);
 }
 
@@ -706,13 +706,18 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  background: var(--m-color-success-bg);
-  color: var(--m-color-success);
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-primary);
 }
 
 .m-pay-method-icon.alipay {
   background: var(--m-color-primary-bg);
   color: var(--m-color-primary);
+}
+
+.m-pay-method-icon.wechat {
+  background: var(--m-color-success-bg);
+  color: var(--m-color-success);
 }
 
 .m-pay-method-copy {
@@ -814,7 +819,8 @@ onBeforeUnmount(() => {
   padding: var(--m-space-3) var(--m-space-4);
   border-radius: var(--m-radius-xl);
   background: var(--m-color-warning-bg);
-  border: 1px solid var(--m-color-warning-border);
+  border: none;
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-pay-summary-label {
@@ -837,7 +843,7 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 48px;
   border: 0;
-  border-radius: var(--m-radius-xl);
+  border-radius: var(--m-radius-lg);
   background: var(--m-color-primary);
   color: var(--m-color-text-inverse);
   font-size: var(--m-font-size-h3);
@@ -940,7 +946,8 @@ onBeforeUnmount(() => {
   flex-direction: column;
   align-items: center;
   gap: var(--m-space-3);
-  border: 1px solid var(--m-color-border-light);
+  border: none;
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-pay-qr-wrap {
@@ -953,8 +960,8 @@ onBeforeUnmount(() => {
 .m-pay-qr {
   width: 200px;
   height: 200px;
-  border: 1px solid var(--m-color-border);
-  border-radius: var(--m-radius-xl);
+  border: none;
+  border-radius: var(--m-radius-lg);
   padding: var(--m-space-2);
   background: var(--m-color-bg-card);
   object-fit: contain;
@@ -1008,7 +1015,8 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: var(--m-space-2);
-  border: 1px solid var(--m-color-border-light);
+  border: none;
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-pay-order-row {
@@ -1053,7 +1061,8 @@ onBeforeUnmount(() => {
   padding: var(--m-space-3) var(--m-space-4);
   background: var(--m-color-bg-card);
   border-radius: var(--m-radius-xl);
-  border: 1px solid var(--m-color-border-light);
+  border: none;
+  box-shadow: var(--m-shadow-xs);
   color: var(--m-color-text-secondary);
 }
 
@@ -1083,8 +1092,8 @@ onBeforeUnmount(() => {
   min-width: 92px;
   height: 44px;
   border-radius: var(--m-radius-lg);
-  border: 1px solid var(--m-color-border);
-  background: var(--m-color-bg-card);
+  border: none;
+  background: var(--m-color-bg-subtle);
   color: var(--m-color-text-primary);
   font-size: var(--m-font-size-body-sm);
   font-weight: var(--m-font-weight-semibold);
@@ -1093,6 +1102,7 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-pay-secondary:disabled {
@@ -1115,7 +1125,8 @@ onBeforeUnmount(() => {
   gap: var(--m-space-3);
   background: var(--m-color-bg-card);
   border-radius: var(--m-radius-xl);
-  border: 1px solid var(--m-color-border-light);
+  border: none;
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-pay-success-icon {

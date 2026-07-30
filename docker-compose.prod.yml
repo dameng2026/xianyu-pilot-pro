@@ -12,7 +12,19 @@ services:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
       MYSQL_USER: ${MYSQL_APP_USER:?MYSQL_APP_USER must be set}
       MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?MYSQL_APP_PASSWORD must be set}
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-time-zone=+08:00 --sort-buffer-size=4194304 --tmp-table-size=67108864 --max-heap-table-size=67108864 --binlog-expire-logs-seconds=172800 --max-binlog-size=256M --innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-512M} --innodb-log-file-size=${MYSQL_INNODB_LOG_FILE_SIZE:-256M} --max-connections=${MYSQL_MAX_CONNECTIONS:-300} --innodb-flush-method=O_DIRECT --innodb-buffer-pool-instances=4
+    # MySQL 8.4 性能调优（16G 服务器专属配置）：
+    #   - innodb-buffer-pool-size=8G：核心热数据（订单/商品/生图记录）全量驻留内存，避免磁盘 I/O
+    #     原默认 512M 严重不足，百万级订单表扫描退化为磁盘 I/O，是慢查询根因
+    #   - innodb-log-file-size=1G：Redo Log 从 256M 提到 1G，减少 checkpoint 抖动
+    #   - innodb-buffer-pool-instances=8：配合 8G 池拆分为 8 个实例，减少锁竞争（原 4 个对应 512M 偏小）
+    #   - innodb-flush-log-at-trx-commit=2：每次事务提交仅写 OS Page Cache，不强制 fsync
+    #     业务可接受极端断电丢失最近 1s 事务，换取写入吞吐 3-5 倍提升
+    #   - innodb-flush-method=O_DIRECT：绕过 OS Page Cache，避免 Double Buffering
+    #   - tmp-table-size/max-heap-table-size=128M：临时表内存上限（原 64M 偏小，复杂 GROUP BY 会落盘）
+    #   - sort-buffer-size=4M：每个排序线程缓冲区（保持原值，过大反而浪费内存）
+    #   - join-buffer-size=4M：每个 join 线程缓冲区（新增，默认 256K 偏小）
+    #   - max-connections=500：连接数上限（原 300，配合 HikariCP 最大 50 + Python + crawler + 监控）
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-time-zone=+08:00 --sort-buffer-size=4194304 --tmp-table-size=134217728 --max-heap-table-size=134217728 --join-buffer-size=4194304 --binlog-expire-logs-seconds=172800 --max-binlog-size=256M --innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-8G} --innodb-log-file-size=${MYSQL_INNODB_LOG_FILE_SIZE:-1G} --max-connections=${MYSQL_MAX_CONNECTIONS:-500} --innodb-flush-method=O_DIRECT --innodb-buffer-pool-instances=8 --innodb-flush-log-at-trx-commit=2 --innodb-buffer-pool-dump-at-shutdown=ON --innodb-buffer-pool-load-at-startup=ON
     logging:
       driver: json-file
       options:
@@ -27,7 +39,16 @@ services:
     stop_grace_period: 1m
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}", "--maxmemory", "${REDIS_MAXMEMORY:-512mb}", "--maxmemory-policy", "volatile-lru"]
+    # Redis 性能调优：
+    #   - appendonly no：关闭 AOF 持久化。Redis 仅承担缓存层职责（鱼小铺数据缓存、
+    #     Token 缓存、维护横幅状态、限流计数），数据全部可从 MySQL 重建。
+    #     原 appendonly yes 每次写入都 fsync，对写入延迟有 5-10ms 影响
+    #   - save 300 10：RDB 快照，5 分钟内至少 10 个 key 变化才触发，几乎无开销
+    #     作为冷启动兜底，避免重启后缓存完全冷启动
+    #   - maxmemory 1gb：从 512M 提到 1G，容纳更多鱼小铺数据缓存（CACHE_TTL=300s）
+    #   - maxmemory-policy allkeys-lru：所有 key 参与 LRU 淘汰
+    #     原 volatile-lru 仅淘汰带 TTL 的 key，无 TTL key 会堆积占用内存
+    command: ["redis-server", "--appendonly", "no", "--save", "300 10", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}", "--maxmemory", "${REDIS_MAXMEMORY:-1gb}", "--maxmemory-policy", "allkeys-lru"]
     logging:
       driver: json-file
       options:

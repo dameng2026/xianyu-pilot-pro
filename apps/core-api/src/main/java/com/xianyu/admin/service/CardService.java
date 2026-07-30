@@ -82,6 +82,7 @@ public class CardService {
         group.setUsedCount(dto.getUsedCount() != null ? dto.getUsedCount() : 0);
         group.setRemainCount(dto.getRemainCount() != null ? dto.getRemainCount() : 0);
         group.setStatus(dto.getStatus() != null ? dto.getStatus() : 1);
+        group.setSkuPropertyKey(dto.getSkuPropertyKey());
         groupMapper.insert(group);
         log.info("创建卡片组成功: id={}, tenantId={}", group.getId(), tenantId);
         return group.getId();
@@ -356,6 +357,7 @@ public class CardService {
         vo.setTotalCount(g.getTotalCount());
         vo.setUsedCount(g.getUsedCount());
         vo.setRemainCount(g.getRemainCount());
+        vo.setSkuPropertyKey(g.getSkuPropertyKey());
         if (stats == null) {
             stats = itemMapper.statsByGroup(g.getTenantId(), g.getId());
         }

@@ -53,6 +53,18 @@ export interface SlideSolveResult {
   screenshotPath?: string;    // 失败时的截图路径
   durationMs: number;
   cookies?: string;           // 求解成功后的最新 cookies（Baxia 验证通过后服务器下发新 token，需更新数据库）
+  attemptsDetail?: SlideSolveAttemptDetail[]; // 每次尝试的明细（用于成功率统计）
+}
+
+/** 单次 attempt 的明细记录（用于成功率统计） */
+export interface SlideSolveAttemptDetail {
+  attemptNo: number;          // 尝试轮次编号（1-5）
+  solveScheme: string;        // 求解方案: python_script / playwright
+  dragMethod: string;         // 拖动方法: in_container / out_container / none
+  speedStrategy: string;      // 速度策略: standard / medium / fast / slow_pause / random / none
+  success: boolean;           // 本次尝试是否成功
+  durationMs: number;         // 本次尝试耗时（毫秒）
+  errorMessage?: string;      // 失败原因简述（成功时为空）
 }
 
 // 默认访问闲鱼消息页面 —— 滑块验证通常在消息页弹出（用户连接消息时触发）
@@ -1662,8 +1674,18 @@ async function solveSliderViaPythonScript(
           screenshotPath: parsed.screenshotPath || undefined,
           durationMs: Number(parsed.durationMs) || 0,
           cookies: typeof parsed.cookies === 'string' && parsed.cookies.length > 0 ? parsed.cookies : undefined,
+          // 提取 Python 脚本输出的 attemptsDetail（如有），用于成功率统计
+          attemptsDetail: Array.isArray(parsed.attemptsDetail) ? parsed.attemptsDetail.map((d: any) => ({
+            attemptNo: Number(d.attemptNo) || 0,
+            solveScheme: 'python_script',
+            dragMethod: String(d.dragMethod || 'none'),
+            speedStrategy: String(d.speedStrategy || 'none'),
+            success: Boolean(d.success),
+            durationMs: Number(d.durationMs) || 0,
+            errorMessage: d.errorMessage ? String(d.errorMessage) : undefined,
+          })) : undefined,
         };
-        console.log(`[SliderSolver] Python 脚本结果: ok=${result.ok}, solved=${result.solved}, attempts=${result.attempts}, hasCookies=${!!result.cookies}`);
+        console.log(`[SliderSolver] Python 脚本结果: ok=${result.ok}, solved=${result.solved}, attempts=${result.attempts}, hasCookies=${!!result.cookies}, attemptsDetail=${result.attemptsDetail?.length || 0}`);
         resolve(result);
       } catch (e) {
         console.warn(`[SliderSolver] 解析 Python 脚本输出失败: ${safeErrorType(e)}`);
@@ -1728,6 +1750,8 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
   let browserSessionId: string | null = null;
   // 浏览器进程的 deadline：solveGoofishSlider 总超时 = timeoutMs × maxRetries + 60s 启动预算
   const browserDeadlineAt = Date.now() + timeoutMs * maxRetries + 60_000;
+  // 每次尝试的明细记录（定义在 try 块外，确保 catch 块也能访问，用于成功率统计）
+  const attemptsDetail: SlideSolveAttemptDetail[] = [];
 
   try {
     const contextOptions: BrowserContextOptions = {
@@ -2056,6 +2080,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
         attempts: 0,
         error: 'Cookie Session 已过期，页面被重定向到登录页，请重新扫码登录闲鱼账号获取新 Cookie',
         durationMs: Date.now() - startTime,
+        attemptsDetail,
       };
     }
 
@@ -2077,6 +2102,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
         attempts: 0,
         error: 'Cookie Session 已过期，页面显示登录入口，请重新扫码登录闲鱼账号获取新 Cookie',
         durationMs: Date.now() - startTime,
+        attemptsDetail,
       };
     }
 
@@ -2123,6 +2149,27 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
           // 关闭旧的消息页窗口（如果不是首页窗口）
           if (page !== homePage) {
             await page.close().catch(() => {});
+          }
+          // 关键修复（2026-07-29 事故）：刷新重试前清除 Baxia 在访问过程中设置的 risk cookies。
+          // 初始化时虽然调用了 stripRiskCookies 清除原始 cookie 中的 risk 字段，
+          // 但浏览器访问 goofish.com 时 Baxia 会通过 Set-Cookie 重新设置 x5secdata/x5sec 等 punish 标记。
+          // 带着这些标记重新访问会持续被判定为高风险，形成"刷新→带 risk cookies→再次 punish→刷新"死循环，
+          // 最终触发整体超时（170s）返回 422。
+          // 修复：清除 context 中所有 risk cookies，让服务器重新评估会话，脱离 punish 状态。
+          try {
+            const currentCookies: Cookie[] = await context.cookies();
+            const riskCookies = currentCookies.filter(c => RISK_COOKIE_NAMES.has(c.name));
+            if (riskCookies.length > 0) {
+              console.log(`[SliderSolver] 检测到 Baxia 重新设置的 risk cookies: ${riskCookies.map(c => c.name).join(', ')}，清除后重新注入干净 cookies`);
+              const cleanCookies = currentCookies.filter(c => !RISK_COOKIE_NAMES.has(c.name));
+              await context.clearCookies();
+              if (cleanCookies.length > 0) {
+                await context.addCookies(cleanCookies);
+              }
+              console.log(`[SliderSolver] 已清除 ${riskCookies.length} 条 risk cookies，保留 ${cleanCookies.length} 条登录态 cookies`);
+            }
+          } catch (e: any) {
+            console.warn(`[SliderSolver] 清除 risk cookies 警告（不影响后续）: ${safeErrorType(e)}`);
           }
           // 从首页重新点击"消息"按钮，打开新的消息页窗口
           const newMessagePage = await navigateToMessagePage(homePage, timeoutMs);
@@ -2171,6 +2218,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
               attempts,
               error: 'Cookie Session 已过期，页面被重定向到登录页，请重新扫码登录闲鱼账号获取新 Cookie',
               durationMs: Date.now() - startTime,
+              attemptsDetail,
             };
           }
           console.log('[SliderSolver] 确认无滑块，可能已通过验证或不需要验证');
@@ -2183,6 +2231,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
               attempts,
               durationMs: Date.now() - startTime,
               cookies,
+              attemptsDetail,
             };
           }
         }
@@ -2202,6 +2251,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
             attempts,
             error: 'Cookie Session 已过期，页面被重定向到登录页，请重新扫码登录闲鱼账号获取新 Cookie',
             durationMs: Date.now() - startTime,
+            attemptsDetail,
           };
         }
         {
@@ -2213,6 +2263,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
             attempts,
             durationMs: Date.now() - startTime,
             cookies,
+            attemptsDetail,
           };
         }
       }
@@ -2316,6 +2367,10 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       await saveDebugScreenshot(page, `slider-pre-${attempt}`);
       // 阅读弹窗的短暂停顿
       await page.waitForTimeout(400 + Math.random() * 700);
+      // === 成功率统计：记录本次 attempt 的方案/方法/策略 ===
+      const attemptStartTime = Date.now();
+      const dragMethod = attempt % 2 === 0 ? 'out_container' : 'in_container';
+      const speedStrategy = attempt === 1 ? 'standard' : attempt === 2 ? 'medium' : attempt === 3 ? 'fast' : attempt === 4 ? 'slow_pause' : 'random';
       try {
         // 使用 page.mouse API 生成真实鼠标事件（isTrusted=true），对抗 Baxia 风控的合成事件检测
         // 传入 attempt 让每次重试使用不同的滑动速度和停顿策略，模拟真人滑动
@@ -2333,6 +2388,11 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       } catch (e: any) {
         lastError = '拖动滑块异常，请稍后重试';
         console.error(`[SliderSolver] operation=drag errorType=${safeErrorType(e)}`);
+        // === 成功率统计：拖动异常，记录失败 ===
+        attemptsDetail.push({
+          attemptNo: attempt, solveScheme: 'playwright', dragMethod, speedStrategy,
+          success: false, durationMs: Date.now() - attemptStartTime, errorMessage: '拖动滑块异常',
+        });
         // 拖动异常同样重置会话，避免惩罚态残留
         needReloadForRefresh = true;
         needCooldownAfterHumanAction = true;
@@ -2352,6 +2412,11 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
           console.log(
             `[SliderSolver] 拖动后检测到"刷新/连接中断"弹窗，将刷新页面重试 (${refreshRetryCount}/${MAX_REFRESH_RETRIES})`
           );
+          // === 成功率统计：拖动后刷新弹窗，记录失败 ===
+          attemptsDetail.push({
+            attemptNo: attempt, solveScheme: 'playwright', dragMethod, speedStrategy,
+            success: false, durationMs: Date.now() - attemptStartTime, errorMessage: '拖动后检测到刷新弹窗',
+          });
           needReloadForRefresh = true;
           attempt--;
           continue;
@@ -2370,6 +2435,11 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
           console.log(
             `[SliderSolver] 滑块通过但检测到"下载消息失败"，将在下一轮刷新页面重试 (${downloadRetryCount}/${MAX_DOWNLOAD_RETRIES})`
           );
+          // === 成功率统计：滑块已通过，记录成功（下载消息失败不影响滑块求解结果） ===
+          attemptsDetail.push({
+            attemptNo: attempt, solveScheme: 'playwright', dragMethod, speedStrategy,
+            success: true, durationMs: Date.now() - attemptStartTime,
+          });
           needReloadForDownload = true;
           // 刷新重试不消耗滑动配额，回退 attempt 计数
           attempt--;
@@ -2377,6 +2447,11 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
         }
 
         console.log('[SliderSolver] 滑块验证通过！');
+        // === 成功率统计：滑块验证通过，记录成功 ===
+        attemptsDetail.push({
+          attemptNo: attempt, solveScheme: 'playwright', dragMethod, speedStrategy,
+          success: true, durationMs: Date.now() - attemptStartTime,
+        });
         {
           const cookies = await exportContextCookies(context);
           return {
@@ -2386,6 +2461,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
             attempts,
             durationMs: Date.now() - startTime,
             cookies,
+            attemptsDetail,
           };
         }
       }
@@ -2415,6 +2491,11 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       // 而不是只在同页点"框体重试"。视觉复盘显示同页连续拖动几乎全是 error:xxx。
       lastError = `第 ${attempt} 次拖动后未通过验证`;
       console.warn(`[SliderSolver] ${lastError}，将重置页面会话后重试`);
+      // === 成功率统计：拖动后未通过验证，记录失败 ===
+      attemptsDetail.push({
+        attemptNo: attempt, solveScheme: 'playwright', dragMethod, speedStrategy,
+        success: false, durationMs: Date.now() - attemptStartTime, errorMessage: lastError,
+      });
 
       if (attempt >= HUMAN_ACTION_THRESHOLD && humanActionCount < MAX_HUMAN_ACTIONS) {
         humanActionCount++;
@@ -2469,6 +2550,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       error: lastError || `滑块验证失败，已重试 ${maxRetries} 次`,
       screenshotPath,
       durationMs: Date.now() - startTime,
+      attemptsDetail,
     };
   } catch (e: any) {
     console.error(`[SliderSolver] operation=solve errorType=${safeErrorType(e)} message=${e?.message || ''} stack=${e?.stack || ''}`);
@@ -2480,6 +2562,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       // 直接返回原始异常消息，便于前端诊断；不复用 toPublicCrawlerError（该规则仅用于采集接口）
       error: (e instanceof Error && e.message) ? e.message : '滑块验证处理失败，请稍后重试',
       durationMs: Date.now() - startTime,
+      attemptsDetail,
     };
   } finally {
     try {

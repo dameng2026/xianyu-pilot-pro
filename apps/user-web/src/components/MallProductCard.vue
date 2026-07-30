@@ -26,10 +26,11 @@
         </span>
       </div>
       <div class="mall-footer">
-        <span class="mall-price"><em>¥</em>{{ priceNum }}</span>
+        <span v-if="isFree" class="mall-price mall-price-free">免费</span>
+        <span v-else class="mall-price"><em>¥</em>{{ priceNum }}</span>
         <div class="mall-actions">
           <button class="mall-btn-outline" type="button" @click="$emit('detail')">上架该商品</button>
-          <button class="mall-btn-buy" type="button" @click="$emit('buy')">立即购买</button>
+          <button class="mall-btn-buy" type="button" @click="$emit('buy')">{{ isFree ? '立即领取' : '立即购买' }}</button>
         </div>
       </div>
     </div>
@@ -77,6 +78,25 @@ const priceNum = computed(() => {
     if (!Number.isNaN(n)) return (n / 100).toFixed(2)
   }
   return String(p.price || '').replace(/^¥\s*/, '')
+})
+
+// 是否为免费商品（价格为 0）
+const isFree = computed(() => {
+  const p = props.product || {}
+  if (p.priceCent != null) {
+    const n = Number(p.priceCent)
+    if (!Number.isNaN(n)) return n === 0
+  }
+  if (p.priceYuan != null) {
+    const n = Number(p.priceYuan)
+    if (!Number.isNaN(n)) return n === 0
+  }
+  const raw = String(p.price || '').replace(/[¥￥\s]/g, '')
+  if (raw !== '') {
+    const n = Number(raw)
+    if (!Number.isNaN(n)) return n === 0
+  }
+  return false
 })
 
 const boughtDisplay = computed(() => {
@@ -339,6 +359,12 @@ const tagClass = computed(() => {
   font-weight: 700;
   margin-right: 1px;
   margin-top: 2px;
+}
+
+.mall-price-free {
+  color: #00b578;
+  font-size: 18px;
+  letter-spacing: 1px;
 }
 
 .mall-actions {

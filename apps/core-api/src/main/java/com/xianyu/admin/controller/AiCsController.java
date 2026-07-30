@@ -14,6 +14,7 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -56,6 +57,27 @@ public class AiCsController {
         Long sessionId = parseLong(body.get("sessionId"));
         aiCsService.closeSession(sessionId);
         return Result.ok(null);
+    }
+
+    /**
+     * 列出当前用户的历史会话（最多 30 条未归档会话，按最后活跃时间倒序）。
+     * 每条会话附带首条用户消息作为预览，便于用户识别会话主题。
+     */
+    @GetMapping("/api/ai-cs/sessions")
+    public Result<List<Map<String, Object>>> listUserSessions(
+            @RequestParam(value = "limit", defaultValue = "30") int limit) {
+        return Result.ok(aiCsService.listUserSessions(limit));
+    }
+
+    /**
+     * 恢复已关闭的会话为活跃状态，用于"继续对话"。
+     * 关闭当前活跃会话（如果有），将目标会话 status=1。
+     * 不允许恢复已归档的会话。
+     */
+    @PostMapping("/api/ai-cs/session/resume")
+    public Result<Map<String, Object>> resumeSession(@RequestBody Map<String, Object> body) {
+        Long sessionId = parseLong(body.get("sessionId"));
+        return Result.ok(aiCsService.resumeSession(sessionId));
     }
 
     @GetMapping("/api/ai-cs/messages")
@@ -116,27 +138,11 @@ public class AiCsController {
         } catch (BizException e) {
             return out -> writeSseError(out, "error", e.getMessage());
         }
-        // 每日免费额度判断：今日已发送 user 消息数（不含本条）
-        int dailyFreeQuota = aiCsService.getDailyFreeQuota(tenantId);
-        int todayUserCountBefore = aiCsService.getTodayUserMessageCount(userId, tenantId);
-        boolean freeQuotaAvailable = dailyFreeQuota > 0 && todayUserCountBefore < dailyFreeQuota;
-        // 余额校验：仅当本条不在免费额度内时才校验
-        int perMessageTokens = aiCsService.getPerMessageTokens(tenantId);
-        long balance;
-        try {
-            Map<String, Object> bal = aiBillingService.balance(userId);
-            balance = ((Number) bal.get("tokenBalance")).longValue();
-        } catch (Exception e) {
-            return out -> writeSseError(out, "error", "余额查询失败，请稍后重试");
-        }
-        if (!freeQuotaAvailable && balance < perMessageTokens) {
-            return out -> {
-                String ev = "event: insufficient_balance\n" +
-                        "data: {\"type\":\"insufficient_balance\",\"message\":\"今日免费额度已用完且 Token 余额不足，请充值后继续\",\"freeQuota\":" + dailyFreeQuota + ",\"usedQuota\":" + todayUserCountBefore + ",\"buttons\":[{\"type\":\"recharge\",\"label\":\"立即充值\"}]}\n\n";
-                out.write(ev.getBytes(StandardCharsets.UTF_8));
-                out.flush();
-            };
-        }
+        // AI 客服对话对用户完全免费（项目规则：用户无每日免费自动回复额度限制，
+        // 仅系统 AI 客服"小梦"保留额度）。因此跳过余额校验与配额提示，
+        // 让所有用户都能无障碍使用 AI 客服对话功能。
+        // 注意：工具调用中涉及通用模型计费的（如 polish_product_title）仍遵循按次计费规则，
+        // 由 AiProviderService 在调用时单独扣费，与对话主流程解耦。
         // 持久化用户消息
         boolean isCasual = aiCsService.isCasualMessage(message);
         aiCsService.appendUserMessage(sessionId, message, isCasual);
@@ -151,28 +157,9 @@ public class AiCsController {
         int currentCount = ((Number) countInfo.get("currentCount")).intValue();
         int maxCount = ((Number) countInfo.get("maxCount")).intValue();
         boolean exceeded = Boolean.TRUE.equals(countInfo.get("exceeded"));
-        // 免费额度状态：本条发送后，今日已用条数
-        final int todayUsedAfter = todayUserCountBefore + 1;
-        final boolean quotaExceededNow = !freeQuotaAvailable;
-        final int finalDailyFreeQuota = dailyFreeQuota;
-        final int finalPerMessageTokens = perMessageTokens;
-        final long finalBalance = balance;
 
         return outputStream -> {
             try {
-                // 若免费额度已用完，发送 quota_exceeded 事件（不阻断，告知用户本条将扣费）
-                if (quotaExceededNow) {
-                    String ev = "event: quota_exceeded\n" +
-                            "data: {\"type\":\"quota_exceeded\",\"message\":\"今日免费额度已用完，后续每条消息将扣费 " + finalPerMessageTokens + " Token\",\"dailyFreeQuota\":" + finalDailyFreeQuota + ",\"usedQuota\":" + todayUsedAfter + ",\"perMessageTokens\":" + finalPerMessageTokens + ",\"balance\":" + finalBalance + "}\n\n";
-                    outputStream.write(ev.getBytes(StandardCharsets.UTF_8));
-                    outputStream.flush();
-                } else if (todayUsedAfter >= finalDailyFreeQuota) {
-                    // 本条是免费额度最后一条，提醒用户下一条开始扣费
-                    String ev = "event: quota_warning\n" +
-                            "data: {\"type\":\"quota_warning\",\"message\":\"今日免费额度还剩 0 条，下一条消息将开始扣费 " + finalPerMessageTokens + " Token/条\",\"dailyFreeQuota\":" + finalDailyFreeQuota + ",\"usedQuota\":" + todayUsedAfter + ",\"perMessageTokens\":" + finalPerMessageTokens + "}\n\n";
-                    outputStream.write(ev.getBytes(StandardCharsets.UTF_8));
-                    outputStream.flush();
-                }
                 // 若超限，先发送 context_exceeded 事件（不阻断，让用户在前端选择新会话或压缩）
                 if (exceeded) {
                     String ev = "event: context_exceeded\n" +
@@ -204,11 +191,27 @@ public class AiCsController {
     /**
      * Python 端 SSE 完成后的回调：写入 assistant 消息并扣费。
      * 由 Python 端在 SSE 流结束前调用，确保消息持久化与扣费。
+     *
+     * 本接口在 UserJwtAuthFilter 白名单中（无 JWT），通过 X-Internal-Token 鉴权，
+     * userId/tenantId 从请求体获取（Python 端 call_java_complete 传入）。
      */
     @PostMapping("/api/ai-cs/complete")
-    public Result<Map<String, Object>> complete(@RequestBody Map<String, Object> body) {
-        Long userId = UserContext.userId();
-        Long tenantId = UserContext.getTenantId();
+    public Result<Map<String, Object>> complete(@RequestBody Map<String, Object> body,
+                                                 @RequestHeader(value = "X-Internal-Token", required = false) String internalToken) {
+        // 验证内部令牌
+        if (internalToken == null || internalToken.isBlank()) {
+            return new Result<>(401, "缺少内部调用令牌", null);
+        }
+        String expectedToken = aiCsService.getInternalApiToken();
+        if (expectedToken == null || expectedToken.isBlank() || !expectedToken.equals(internalToken)) {
+            return new Result<>(401, "内部调用令牌无效", null);
+        }
+        // 从请求体获取 userId/tenantId（Python 端传入）
+        Long userId = parseLong(body.get("userId"));
+        Long tenantId = parseLong(body.get("tenantId"));
+        if (userId <= 0 || tenantId <= 0) {
+            return new Result<>(400, "userId/tenantId 不能为空", null);
+        }
         Long sessionId = parseLong(body.get("sessionId"));
         String content = text(body.get("content"));
         String toolCalls = text(body.get("toolCalls"));
@@ -216,7 +219,7 @@ public class AiCsController {
             return Result.ok(Map.of("messageId", 0, "tokensCharged", 0, "deducted", false));
         }
         aiCsService.validateSessionOwnership(sessionId, userId, tenantId);
-        Map<String, Object> res = aiCsService.appendAssistantMessageAndCharge(sessionId, content, toolCalls);
+        Map<String, Object> res = aiCsService.appendAssistantMessageAndCharge(sessionId, content, toolCalls, userId, tenantId);
         return Result.ok(res);
     }
 
@@ -251,6 +254,9 @@ public class AiCsController {
 
     /**
      * 工具调用确认/拒绝。
+     *
+     * 必须从 ai_cs_tool_call 表查询 tool_name 和 arguments 透传给 Python，
+     * 否则 Python 无法执行工具（execute_confirmed_tool 在 tool_name 为空时直接返回失败）。
      */
     @PostMapping("/api/ai-cs/tool/confirm")
     public Result<Map<String, Object>> confirmTool(@RequestBody Map<String, Object> body) {
@@ -261,6 +267,21 @@ public class AiCsController {
         boolean accept = Boolean.TRUE.equals(body.get("accept"));
         aiCsService.validateSessionOwnership(sessionId, userId, tenantId);
         aiCsService.updateToolCallStatus(toolCallId, accept ? "confirmed" : "rejected", null);
+        // 查询 ai_cs_tool_call 记录，校验归属后透传 tool/arguments 给 Python
+        Map<String, Object> toolCall = aiCsService.getToolCall(toolCallId);
+        String toolName = "";
+        Object argumentsObj = null;
+        if (!toolCall.isEmpty()) {
+            // 归属校验：tool_call 的 tenant/user 必须与当前用户一致
+            Long tcTenantId = toolCall.get("tenant_id") == null ? null : ((Number) toolCall.get("tenant_id")).longValue();
+            Long tcUserId = toolCall.get("user_id") == null ? null : ((Number) toolCall.get("user_id")).longValue();
+            if (tcTenantId == null || !tcTenantId.equals(tenantId)
+                    || tcUserId == null || !tcUserId.equals(userId)) {
+                throw new BizException(403, "无权操作此工具调用");
+            }
+            toolName = toolCall.get("tool_name") == null ? "" : String.valueOf(toolCall.get("tool_name"));
+            argumentsObj = toolCall.get("arguments");
+        }
         // 调用 Python 执行工具
         Map<String, Object> req = new LinkedHashMap<>();
         req.put("sessionId", sessionId);
@@ -268,15 +289,27 @@ public class AiCsController {
         req.put("tenantId", tenantId);
         req.put("toolCallId", toolCallId);
         req.put("accept", accept);
+        req.put("tool", toolName);
+        // arguments 在 DB 中是 JSON 字符串；Python 端会兼容字符串和 dict
+        req.put("arguments", argumentsObj == null ? "{}" : argumentsObj);
         Map<String, Object> result = automationClient.postInternalForData("/api/ai-cs/tool/execute", req, tenantId);
         return Result.ok(result);
     }
 
     /**
      * 工具调用执行结果回调（Python 端执行后回传结果）。
+     * 本接口在 UserJwtAuthFilter 白名单中（无 JWT），通过 X-Internal-Token 鉴权。
      */
     @PostMapping("/api/ai-cs/tool/result")
-    public Result<Void> toolResult(@RequestBody Map<String, Object> body) {
+    public Result<Void> toolResult(@RequestBody Map<String, Object> body,
+                                    @RequestHeader(value = "X-Internal-Token", required = false) String internalToken) {
+        if (internalToken == null || internalToken.isBlank()) {
+            return new Result<>(401, "缺少内部调用令牌", null);
+        }
+        String expectedToken = aiCsService.getInternalApiToken();
+        if (expectedToken == null || expectedToken.isBlank() || !expectedToken.equals(internalToken)) {
+            return new Result<>(401, "内部调用令牌无效", null);
+        }
         Long toolCallId = parseLong(body.get("toolCallId"));
         String status = text(body.get("status"));
         String resultJson = text(body.get("result"));

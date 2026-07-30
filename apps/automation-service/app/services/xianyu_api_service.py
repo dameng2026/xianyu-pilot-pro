@@ -621,21 +621,35 @@ def _build_mtop_request_headers(cookie_str: str) -> dict:
     }
 
 
-def _build_mtop_query_params(api_name: str, sign: str, t_ms: int) -> dict:
-    return {
+def _build_mtop_query_params(
+    api_name: str, sign: str, t_ms: int,
+    query_type: str = "json", include_value_type: bool = True,
+) -> dict:
+    """构造 MTOP 查询参数。
+
+    query_type: "json" 或 "originaljson"
+        - "json"：标准 JSON 响应（订单列表、full.info 等使用）
+        - "originaljson"：原始 JSON 响应（含动态 components 的接口使用，如 refund.detail / service.record）
+    include_value_type: 是否包含 valueType=string 参数
+        - full.info 需要 valueType=string
+        - service.record / refund.detail 不需要 valueType=string
+    """
+    params = {
         "jsv": JSV,
         "appKey": APP_KEY,
         "t": str(t_ms),
         "sign": sign,
         "v": "1.0",
-        "type": "json",
+        "type": query_type,
         "accountSite": "xianyu",
         "dataType": "json",
         "timeout": "20000",
         "api": api_name,
-        "valueType": "string",
         "sessionOption": "AutoLoginOnly",
     }
+    if include_value_type:
+        params["valueType"] = "string"
+    return params
 
 
 def _do_post_mtop_api(
@@ -644,11 +658,18 @@ def _do_post_mtop_api(
     api_name: str,
     data_str: str,
     timeout: int = 20,
+    query_type: str = "json",
+    include_value_type: bool = True,
 ) -> dict:
     """执行一次 MTOP POST 请求，返回包含 success/ret/updatedCookieStr 的字典。
 
     令牌过期时会从响应 Set-Cookie 提取新 Cookie 并放入 updatedCookieStr 字段，
     由调用方决定是否持久化并重试。
+
+    query_type / include_value_type：见 _build_mtop_query_params 的说明。
+    不同 MTOP 接口对 type 与 valueType 的要求不同，必须分别构造：
+    - 订单类接口（sold.get / refund.list / full.info）：type=json + valueType=string
+    - 退款详情类接口（refund.detail / service.record）：type=originaljson，不带 valueType
     """
     import re
 
@@ -663,7 +684,10 @@ def _do_post_mtop_api(
     t_ms = int(time.time() * 1000)
     sign = _make_sign(token, t_ms, data_str)
     api_url = f"{H5_API_BASE}/{api_name}/1.0/"
-    params = _build_mtop_query_params(api_name, sign, t_ms)
+    params = _build_mtop_query_params(
+        api_name, sign, t_ms,
+        query_type=query_type, include_value_type=include_value_type,
+    )
     headers = _build_mtop_request_headers(cookie_str)
 
     try:
@@ -685,15 +709,55 @@ def _do_post_mtop_api(
     ret = result.get("ret", [])
     ret_str = " ".join(ret) if isinstance(ret, list) else str(ret)
     if not ret or "SUCCESS" not in ret_str:
+        # 记录脱敏诊断信息（不记录 Cookie/token/sign/完整响应）
+        # 帮助定位"接口返回失败状态"的真实原因（需求第二节）
+        http_status = response.status_code
+        has_data = isinstance(result.get("data"), dict)
+        # 提取 traceId（如有）
+        trace_id = None
+        if isinstance(result.get("data"), dict):
+            trace_id = result.get("data", {}).get("traceId")
+        logger.warning(
+            "MTOP 接口返回失败 accountId=%s api=%s httpStatus=%s ret=%s "
+            "hasData=%s traceId=%s queryType=%s includeValueType=%s "
+            "orderIdLen=%s refundIdLen=%s",
+            account_id,
+            api_name,
+            http_status,
+            ret_str[:200],
+            has_data,
+            trace_id,
+            query_type,
+            include_value_type,
+            # 从 data_str 提取 ID 长度（脱敏：只记录长度，不记录值）
+            _extract_id_lengths_for_log(data_str),
+            _extract_id_lengths_for_log(data_str, key="refundId"),
+        )
         return {
             "success": False,
-            "error": ret_str[:500] or "订单接口调用失败",
+            "error": ret_str[:500] or "MTOP 接口调用失败",
             "ret": ret,
             "data": result.get("data"),
             "updatedCookieStr": updated_cookie_str,
+            "httpStatus": http_status,
         }
 
-    return {"success": True, "data": result.get("data") or {}, "updatedCookieStr": updated_cookie_str}
+    return {"success": True, "data": result.get("data") or {}, "ret": ret, "updatedCookieStr": updated_cookie_str}
+
+
+def _extract_id_lengths_for_log(data_str: str, key: str = "orderId") -> int:
+    """从 MTOP data JSON 字符串中提取指定 ID 字段的字符串长度（脱敏诊断）。
+
+    用于日志中记录请求 ID 的长度，帮助诊断 ID 精度问题，不记录 ID 实际值。
+    """
+    try:
+        parsed = json.loads(data_str)
+        val = parsed.get(key)
+        if val is None:
+            return 0
+        return len(str(val))
+    except (ValueError, TypeError):
+        return 0
 
 
 def _post_mtop_with_token_retry(
@@ -702,12 +766,23 @@ def _post_mtop_with_token_retry(
     api_name: str,
     data_str: str,
     timeout: int = 20,
+    query_type: str = "json",
+    include_value_type: bool = True,
 ) -> dict:
     """调用 MTOP 接口，令牌过期时自动刷新 Cookie 并重试一次。
 
     返回的字典始终包含 success 字段；成功时包含 data，失败时包含 error/ret。
+
+    query_type / include_value_type：见 _build_mtop_query_params 的说明。
+    三个退款详情接口必须分别传入不同的 query_type：
+    - service.record：query_type="originaljson", include_value_type=False
+    - full.info：query_type="json", include_value_type=True
+    - refund.detail：query_type="originaljson", include_value_type=False
     """
-    result = _do_post_mtop_api(account_id, cookie_str, api_name, data_str, timeout)
+    result = _do_post_mtop_api(
+        account_id, cookie_str, api_name, data_str, timeout,
+        query_type=query_type, include_value_type=include_value_type,
+    )
     if result.get("success"):
         return result
 
@@ -717,7 +792,10 @@ def _post_mtop_with_token_retry(
         if new_cookie_str and new_cookie_str != cookie_str:
             logger.info("MTOP 接口令牌过期，刷新 Cookie 后重试: accountId=%s api=%s", account_id, api_name)
             _persist_account_auth_cookies(account_id, new_cookie_str)
-            return _do_post_mtop_api(account_id, new_cookie_str, api_name, data_str, timeout)
+            return _do_post_mtop_api(
+                account_id, new_cookie_str, api_name, data_str, timeout,
+                query_type=query_type, include_value_type=include_value_type,
+            )
 
     return result
 

@@ -1,29 +1,34 @@
 <template>
   <div class="m-profile">
     <MobileUnavailableState v-if="overviewError" compact title="个人资料暂时无法加载" :description="overviewError" @retry="loadOverview" />
-    <!-- 用户卡片 -->
-    <div class="m-pro-hero">
-      <div class="m-pro-avatar">
-        <MIcon name="user" :size="32" />
+    
+    <!-- 用户信息卡片 -->
+    <div class="m-pro-hero-card">
+      <div class="m-pro-hero">
+        <div class="m-pro-avatar">
+          <MIcon name="user" :size="28" />
+        </div>
+        <div class="m-pro-info">
+          <div class="m-pro-name">{{ displayName }}</div>
+          <div class="m-pro-desc">
+            <span class="m-pro-plan-badge">
+              <MIcon name="crown" :size="12" /> {{ planName }}
+            </span>
+          </div>
+        </div>
       </div>
-      <div class="m-pro-info">
-        <div class="m-pro-name">{{ displayName }}</div>
-        <div class="m-pro-desc">
-          <MIcon name="crown" :size="12" /> {{ planName }}
-        </div>
-        <div class="m-pro-verify">
-          <span class="m-pro-tag" :class="verificationClass(emailVerificationState)">
-            <MIcon name="mail" :size="10" /> {{ verificationText(emailVerificationState, '邮箱') }}
-          </span>
-          <span class="m-pro-tag" :class="verificationClass(phoneVerificationState)">
-            <MIcon name="phone" :size="10" /> {{ verificationText(phoneVerificationState, '手机') }}
-          </span>
-        </div>
+      <div class="m-pro-verify">
+        <span class="m-pro-tag" :class="verificationClass(emailVerificationState)">
+          <MIcon name="mail" :size="10" /> {{ verificationText(emailVerificationState, '邮箱') }}
+        </span>
+        <span class="m-pro-tag" :class="verificationClass(phoneVerificationState)">
+          <MIcon name="phone" :size="10" /> {{ verificationText(phoneVerificationState, '手机') }}
+        </span>
       </div>
     </div>
 
     <!-- 数据统计 -->
-    <div class="m-pro-stats">
+    <div class="m-pro-stats-card">
       <div class="m-pro-stat" @click="$emit('navigate', 'accounts')">
         <div class="m-pro-stat-val">{{ metricText(stats.xianyuAccountCount) }}</div>
         <div class="m-pro-stat-label">闲鱼账号</div>
@@ -46,7 +51,7 @@
     </div>
 
     <!-- Token 余额卡片 -->
-    <div class="m-section m-token-card">
+    <div class="m-token-card">
       <div class="m-token-header">
         <div class="m-token-left">
           <div class="m-token-icon">
@@ -144,7 +149,7 @@
       <div class="m-menu-list">
         <div class="m-menu-item" @click="openDesktopProfile('overview')">
           <div class="m-menu-icon m-menu-icon--primary">
-            <MIcon name="user" :size="20" />
+            <MIcon name="user" :size="18" />
           </div>
           <div class="m-menu-info">
             <div class="m-menu-title">个人中心</div>
@@ -154,7 +159,7 @@
         </div>
         <div class="m-menu-item" @click="$emit('navigate', 'settings-notify')">
           <div class="m-menu-icon m-menu-icon--warning">
-            <MIcon name="bell" :size="20" />
+            <MIcon name="bell" :size="18" />
           </div>
           <div class="m-menu-info">
             <div class="m-menu-title">通知设置</div>
@@ -164,7 +169,7 @@
         </div>
         <div class="m-menu-item" @click="$emit('navigate', 'settings-ai-cs')">
           <div class="m-menu-icon m-menu-icon--success">
-            <MIcon name="settings" :size="20" />
+            <MIcon name="settings" :size="18" />
           </div>
           <div class="m-menu-info">
             <div class="m-menu-title">系统设置</div>
@@ -183,7 +188,7 @@
       <div class="m-menu-list">
         <div class="m-menu-item" @click="$emit('navigate', 'profile-security')">
           <div class="m-menu-icon m-menu-icon--purple">
-            <MIcon name="lock" :size="20" />
+            <MIcon name="lock" :size="18" />
           </div>
           <div class="m-menu-info">
             <div class="m-menu-title">修改密码</div>
@@ -193,7 +198,7 @@
         </div>
         <div class="m-menu-item" @click="$emit('navigate', 'profile-security')">
           <div class="m-menu-icon" :class="phoneVerificationState === true ? 'm-menu-icon--success' : 'm-menu-icon--warning'">
-            <MIcon name="phone" :size="20" />
+            <MIcon name="phone" :size="18" />
           </div>
           <div class="m-menu-info">
             <div class="m-menu-title">手机绑定</div>
@@ -205,7 +210,7 @@
         </div>
         <div class="m-menu-item" @click="$emit('navigate', 'profile-security')">
           <div class="m-menu-icon" :class="emailVerificationState === true ? 'm-menu-icon--success' : 'm-menu-icon--warning'">
-            <MIcon name="mail" :size="20" />
+            <MIcon name="mail" :size="18" />
           </div>
           <div class="m-menu-info">
             <div class="m-menu-title">邮箱绑定</div>
@@ -226,7 +231,7 @@
       <div class="m-menu-list">
         <div class="m-menu-item" @click="$emit('navigate', 'logs')">
           <div class="m-menu-icon m-menu-icon--purple">
-            <MIcon name="help" :size="20" />
+            <MIcon name="help" :size="18" />
           </div>
           <div class="m-menu-info">
             <div class="m-menu-title">操作日志</div>
@@ -236,7 +241,7 @@
         </div>
         <div class="m-menu-item" @click="$emit('navigate', 'vip')">
           <div class="m-menu-icon m-menu-icon--warning">
-            <MIcon name="rocket" :size="20" />
+            <MIcon name="rocket" :size="18" />
           </div>
           <div class="m-menu-info">
             <div class="m-menu-title">会员中心</div>
@@ -277,7 +282,6 @@ const tokenLedger = ref([])
 const overviewError = ref('')
 const ledgerError = ref('')
 const paymentVisible = ref(false)
-// 充值记录（最近 5 条，移动端只显示简要列表，完整记录跳转桌面版）
 const rechargeRecords = ref([])
 const rechargeError = ref('')
 const rechargeLoading = ref(false)
@@ -309,7 +313,6 @@ function openDesktopProfile(profileTab) {
 async function handleTokenPaid() {
   paymentVisible.value = false
   await loadOverview()
-  // 支付成功后同步刷新充值记录
   loadRechargeRecords()
 }
 
@@ -424,7 +427,6 @@ async function loadTokenLedger() {
   }
 }
 
-// 来源标签文案
 function rechargeSourceLabel(source) {
   if (!source) return '—'
   const map = {
@@ -473,98 +475,106 @@ onMounted(() => {
 
 <style scoped>
 .m-profile {
-  padding: var(--m-space-3) var(--m-space-4) 0;
+  padding: var(--m-space-3);
   width: 100%;
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
   overflow-x: hidden;
+  background: var(--m-color-bg-page);
 }
 
-/* === 用户 hero 卡 === */
-.m-pro-hero {
-  background: linear-gradient(135deg, var(--m-color-primary-bg) 0%, var(--m-color-bg-card) 100%);
+/* === 用户信息卡片 === */
+.m-pro-hero-card {
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border);
   border-radius: var(--m-radius-xl);
-  padding: var(--m-space-4);
-  display: flex;
-  align-items: flex-start;
-  gap: var(--m-space-4);
+  padding: var(--m-space-5);
   margin-bottom: var(--m-space-3);
-  border: 1px solid var(--m-color-border-light);
+  box-shadow: var(--m-shadow-card);
+}
+.m-pro-hero {
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-4);
+  margin-bottom: var(--m-space-4);
 }
 .m-pro-avatar {
-  width: 64px;
-  height: 64px;
+  width: 56px;
+  height: 56px;
   border-radius: var(--m-radius-circle);
-  background: var(--m-color-primary);
-  color: var(--m-color-text-inverse);
+  background: var(--m-color-primary-bg-solid);
+  color: var(--m-color-primary);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: var(--m-shadow-fab);
   flex-shrink: 0;
 }
 .m-pro-info { flex: 1; min-width: 0; }
 .m-pro-name {
-  font-size: var(--m-font-size-h2);
+  font-size: var(--m-font-size-h1);
   font-weight: var(--m-font-weight-bold);
   color: var(--m-color-text-primary);
-  margin-bottom: var(--m-space-1);
+  margin-bottom: var(--m-space-1-5);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .m-pro-desc {
-  font-size: var(--m-font-size-caption);
-  color: var(--m-color-text-secondary);
+  display: flex;
+  align-items: center;
+}
+.m-pro-plan-badge {
   display: inline-flex;
   align-items: center;
   gap: var(--m-space-1);
-  margin-bottom: var(--m-space-2);
-  max-width: 100%;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: var(--m-font-size-caption);
+  color: var(--m-color-warning);
+  background: var(--m-color-warning-bg-solid);
+  padding: var(--m-space-1) var(--m-space-2);
+  border-radius: var(--m-radius-md);
+  font-weight: var(--m-font-weight-medium);
 }
-.m-pro-desc :deep(svg) { color: var(--m-color-warning); }
+.m-pro-plan-badge :deep(svg) { color: var(--m-color-warning); }
 .m-pro-verify {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--m-space-1);
+  gap: var(--m-space-2);
 }
 .m-pro-tag {
   display: inline-flex;
   align-items: center;
   gap: var(--m-space-1);
-  font-size: var(--m-font-size-tiny);
+  font-size: var(--m-font-size-caption);
   padding: var(--m-space-1) var(--m-space-2);
-  border-radius: var(--m-radius-pill);
+  border-radius: var(--m-radius-md);
   font-weight: var(--m-font-weight-medium);
+  background: var(--m-color-bg-subtle);
+  color: var(--m-color-text-secondary);
 }
 .m-pro-tag.ok {
-  background: var(--m-color-success-bg);
-  color: var(--m-color-success-text);
+  background: var(--m-color-success-bg-solid);
+  color: var(--m-color-emerald-dark);
 }
 .m-pro-tag.warn {
-  background: var(--m-color-warning-bg);
+  background: var(--m-color-warning-bg-solid);
   color: var(--m-color-warning-text);
 }
 .m-pro-tag.unknown {
   background: var(--m-color-bg-subtle);
-  color: var(--m-color-text-secondary);
+  color: var(--m-color-text-tertiary);
 }
 
-/* === 数据统计 === */
-.m-pro-stats {
+/* === 数据统计卡片 === */
+.m-pro-stats-card {
   background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-lg);
+  border: 1px solid var(--m-color-border);
+  border-radius: var(--m-radius-xl);
   padding: var(--m-space-4) var(--m-space-2);
   display: flex;
   align-items: center;
   justify-content: space-around;
   margin-bottom: var(--m-space-3);
-  border: 1px solid var(--m-color-border-light);
   box-shadow: var(--m-shadow-card);
 }
 .m-pro-stat {
@@ -572,12 +582,18 @@ onMounted(() => {
   text-align: center;
   cursor: pointer;
   padding: var(--m-space-1);
+  border-radius: var(--m-radius-md);
+  transition: background var(--m-duration-fast);
+}
+.m-pro-stat:active {
+  background: var(--m-color-bg-hover);
 }
 .m-pro-stat-val {
   font-size: var(--m-font-size-h1);
-  font-weight: var(--m-font-weight-extrabold);
+  font-weight: var(--m-font-weight-bold);
   color: var(--m-color-text-primary);
   margin-bottom: var(--m-space-1);
+  font-family: var(--m-font-family-number);
 }
 .m-pro-stat-label {
   font-size: var(--m-font-size-caption);
@@ -586,17 +602,17 @@ onMounted(() => {
 .m-pro-stat-div {
   width: 1px;
   height: var(--m-space-8);
-  background: var(--m-color-border-light);
+  background: var(--m-color-border);
 }
 
 /* === 通用区块卡片 === */
 .m-section {
   background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-lg);
+  border: 1px solid var(--m-color-border);
+  border-radius: var(--m-radius-xl);
   padding: var(--m-space-4);
   margin-bottom: var(--m-space-3);
   box-shadow: var(--m-shadow-card);
-  border: 1px solid var(--m-color-border-light);
 }
 .m-section-header {
   margin-bottom: var(--m-space-3);
@@ -606,35 +622,40 @@ onMounted(() => {
 }
 .m-section-header h2 {
   margin: 0;
-  font-size: var(--m-font-size-h2);
-  font-weight: var(--m-font-weight-bold);
+  font-size: var(--m-font-size-h3);
+  font-weight: var(--m-font-weight-semibold);
   color: var(--m-color-text-primary);
 }
 .m-section-action {
   background: none;
   border: none;
-  color: var(--m-color-primary);
+  color: var(--m-color-text-tertiary);
   font-size: var(--m-font-size-caption);
   display: inline-flex;
   align-items: center;
-  gap: var(--m-space-1);
+  gap: var(--m-space-0-5);
   cursor: pointer;
-  padding: var(--m-space-1) var(--m-space-2);
-  border-radius: var(--m-radius-pill);
+  padding: var(--m-space-1) var(--m-space-1);
+  border-radius: var(--m-radius-md);
+  transition: all var(--m-duration-fast);
 }
-.m-section-action:active { background: var(--m-color-primary-bg); }
+.m-section-action:active { background: var(--m-color-bg-hover); color: var(--m-color-primary); }
 
 /* === Token 卡片 === */
 .m-token-card {
-  background: linear-gradient(135deg, var(--m-color-warning-bg) 0%, var(--m-color-bg-card) 100%);
-  border-color: var(--m-color-warning-border);
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border);
+  border-radius: var(--m-radius-xl);
+  padding: var(--m-space-5);
+  margin-bottom: var(--m-space-3);
+  box-shadow: var(--m-shadow-card);
 }
 .m-token-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--m-space-3);
-  margin-bottom: var(--m-space-3);
+  margin-bottom: var(--m-space-4);
 }
 .m-token-left {
   display: flex;
@@ -642,29 +663,31 @@ onMounted(() => {
   gap: var(--m-space-3);
 }
 .m-token-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--m-radius-md);
-  background: var(--m-color-warning);
-  color: var(--m-color-text-inverse);
+  width: 44px;
+  height: 44px;
+  border-radius: var(--m-radius-lg);
+  background: var(--m-color-primary-bg-solid);
+  color: var(--m-color-primary);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
 .m-token-label {
-  font-size: var(--m-font-size-caption);
-  color: var(--m-color-warning-text);
-  margin-bottom: var(--m-space-1);
+  font-size: var(--m-font-size-body-sm);
+  color: var(--m-color-text-secondary);
+  margin-bottom: var(--m-space-0-5);
+  font-weight: var(--m-font-weight-medium);
 }
 .m-token-val {
-  font-size: var(--m-font-size-hero);
-  font-weight: var(--m-font-weight-extrabold);
+  font-size: var(--m-font-size-hero-sm);
+  font-weight: var(--m-font-weight-bold);
   color: var(--m-color-text-primary);
   line-height: var(--m-line-height-tight);
+  font-family: var(--m-font-family-number);
 }
 .m-token-btn {
-  background: var(--m-color-warning);
+  background: var(--m-color-primary-gradient);
   color: var(--m-color-text-inverse);
   border: none;
   border-radius: var(--m-radius-pill);
@@ -673,12 +696,15 @@ onMounted(() => {
   font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
   flex-shrink: 0;
+  transition: all var(--m-duration-fast);
+  box-shadow: var(--m-color-primary-soft-glow);
 }
-.m-token-btn:active { transform: scale(0.96); }
+.m-token-btn:active { transform: scale(0.96); opacity: 0.9; }
 .m-token-plan {
-  background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-md);
-  padding: var(--m-space-3);
+  background: var(--m-color-bg-subtle);
+  border: 1px solid var(--m-color-border);
+  border-radius: var(--m-radius-lg);
+  padding: var(--m-space-3) var(--m-space-4);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -686,7 +712,7 @@ onMounted(() => {
 .m-token-plan-info {
   display: flex;
   flex-direction: column;
-  gap: var(--m-space-1);
+  gap: var(--m-space-0-5);
   min-width: 0;
 }
 .m-token-plan-name {
@@ -697,28 +723,29 @@ onMounted(() => {
 }
 .m-token-plan-expire {
   font-size: var(--m-font-size-caption);
-  color: var(--m-color-warning-text);
+  color: var(--m-color-text-tertiary);
 }
 .m-token-renew {
-  background: var(--m-color-bg-card);
-  color: var(--m-color-warning-text);
-  border: 1px solid var(--m-color-warning-border);
+  background: transparent;
+  color: var(--m-color-primary);
+  border: 1px solid var(--m-color-primary);
   border-radius: var(--m-radius-pill);
   padding: var(--m-space-1) var(--m-space-3);
   font-size: var(--m-font-size-caption);
   font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
   flex-shrink: 0;
+  transition: all var(--m-duration-fast);
 }
+.m-token-renew:active { background: var(--m-color-primary-gradient); color: var(--m-color-text-inverse); border-color: transparent; }
 
 /* === Token 流水 === */
 .m-ledger-list {
   display: flex;
   flex-direction: column;
-  gap: var(--m-space-1);
 }
 .m-ledger-empty {
-  padding: var(--m-space-5) 0;
+  padding: var(--m-space-6) 0;
   color: var(--m-color-text-tertiary);
   font-size: var(--m-font-size-body-sm);
   text-align: center;
@@ -729,15 +756,15 @@ onMounted(() => {
   justify-content: space-between;
   gap: var(--m-space-3);
   padding: var(--m-space-3) var(--m-space-1);
-  border-bottom: 1px solid var(--m-color-border-light);
+  border-bottom: 1px solid var(--m-color-border);
 }
 .m-ledger-item:last-child { border-bottom: none; }
 .m-ledger-info { flex: 1; min-width: 0; }
 .m-ledger-title {
-  font-size: var(--m-font-size-body-sm);
-  font-weight: var(--m-font-weight-semibold);
+  font-size: var(--m-font-size-body);
+  font-weight: var(--m-font-weight-medium);
   color: var(--m-color-text-primary);
-  margin-bottom: var(--m-space-1);
+  margin-bottom: var(--m-space-0-5);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -748,11 +775,12 @@ onMounted(() => {
 }
 .m-ledger-amount {
   font-size: var(--m-font-size-body);
-  font-weight: var(--m-font-weight-bold);
+  font-weight: var(--m-font-weight-semibold);
   flex-shrink: 0;
+  font-family: var(--m-font-family-number);
 }
-.m-ledger-amount.plus { color: var(--m-color-success-text); }
-.m-ledger-amount.minus { color: var(--m-color-danger-text); }
+.m-ledger-amount.plus { color: var(--m-color-emerald-dark); }
+.m-ledger-amount.minus { color: var(--m-color-rose-dark); }
 
 /* === 充值记录 === */
 .m-recharge-list {
@@ -764,15 +792,15 @@ onMounted(() => {
   align-items: center;
   gap: var(--m-space-3);
   padding: var(--m-space-3) 0;
-  border-bottom: 1px solid var(--m-color-border-light);
+  border-bottom: 1px solid var(--m-color-border);
 }
 .m-recharge-item:last-child { border-bottom: none; }
 .m-recharge-icon {
   width: 36px;
   height: 36px;
-  border-radius: var(--m-radius-md);
-  background: var(--m-color-success-bg);
-  color: var(--m-color-success);
+  border-radius: var(--m-radius-lg);
+  background: var(--m-color-emerald-bg-solid);
+  color: var(--m-color-emerald);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -781,7 +809,7 @@ onMounted(() => {
 .m-recharge-info { flex: 1; min-width: 0; }
 .m-recharge-title {
   font-size: var(--m-font-size-body);
-  font-weight: var(--m-font-weight-semibold);
+  font-weight: var(--m-font-weight-medium);
   color: var(--m-color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -790,20 +818,20 @@ onMounted(() => {
 .m-recharge-time {
   font-size: var(--m-font-size-caption);
   color: var(--m-color-text-tertiary);
-  margin-top: var(--m-space-1);
+  margin-top: var(--m-space-0-5);
 }
 .m-recharge-amount {
   font-size: var(--m-font-size-h3);
   font-weight: var(--m-font-weight-bold);
-  color: var(--m-color-success-text);
+  color: var(--m-color-emerald-dark);
   flex-shrink: 0;
+  font-family: var(--m-font-family-number);
 }
 
 /* === 菜单列表 === */
 .m-menu-list {
   display: flex;
   flex-direction: column;
-  gap: var(--m-space-1);
 }
 .m-menu-item {
   display: flex;
@@ -811,41 +839,41 @@ onMounted(() => {
   gap: var(--m-space-3);
   padding: var(--m-space-3) var(--m-space-1);
   cursor: pointer;
-  border-radius: var(--m-radius-md);
-  transition: background 0.15s;
+  border-radius: var(--m-radius-lg);
+  transition: background var(--m-duration-fast);
 }
 .m-menu-item:active { background: var(--m-color-bg-hover); }
 .m-menu-icon {
   width: 40px;
   height: 40px;
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
 .m-menu-icon--primary {
-  background: var(--m-color-primary-bg);
+  background: var(--m-color-primary-bg-solid);
   color: var(--m-color-primary);
 }
 .m-menu-icon--warning {
-  background: var(--m-color-warning-bg);
+  background: var(--m-color-warning-bg-solid);
   color: var(--m-color-warning);
 }
 .m-menu-icon--success {
-  background: var(--m-color-success-bg);
-  color: var(--m-color-success);
+  background: var(--m-color-emerald-bg-solid);
+  color: var(--m-color-emerald);
 }
 .m-menu-icon--purple {
-  background: var(--m-color-purple-bg);
-  color: var(--m-color-purple);
+  background: var(--m-color-violet-bg-solid);
+  color: var(--m-color-violet);
 }
 .m-menu-info { flex: 1; min-width: 0; }
 .m-menu-title {
   font-size: var(--m-font-size-body);
-  font-weight: var(--m-font-weight-semibold);
+  font-weight: var(--m-font-weight-medium);
   color: var(--m-color-text-primary);
-  margin-bottom: var(--m-space-1);
+  margin-bottom: var(--m-space-0-5);
 }
 .m-menu-desc {
   font-size: var(--m-font-size-caption);
@@ -855,22 +883,22 @@ onMounted(() => {
   white-space: nowrap;
 }
 .m-menu-arrow {
-  color: var(--m-color-text-disabled);
+  color: var(--m-color-text-quaternary);
   flex-shrink: 0;
 }
 .m-menu-status {
   font-size: var(--m-font-size-caption);
-  padding: var(--m-space-1) var(--m-space-2);
-  border-radius: var(--m-radius-pill);
-  font-weight: var(--m-font-weight-semibold);
+  padding: var(--m-space-0-5) var(--m-space-2);
+  border-radius: var(--m-radius-md);
+  font-weight: var(--m-font-weight-medium);
   flex-shrink: 0;
 }
 .m-menu-status.ok {
-  background: var(--m-color-success-bg);
-  color: var(--m-color-success-text);
+  background: var(--m-color-emerald-bg-solid);
+  color: var(--m-color-emerald-dark);
 }
 .m-menu-status.warn {
-  background: var(--m-color-warning-bg);
+  background: var(--m-color-warning-bg-solid);
   color: var(--m-color-warning-text);
 }
 .m-menu-status.unknown {
@@ -879,15 +907,16 @@ onMounted(() => {
 }
 
 @media (max-width: 480px) {
-  .m-pro-stats {
+  .m-pro-stats-card {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     justify-content: stretch;
-    padding: var(--m-space-2);
+    padding: var(--m-space-3) var(--m-space-2);
+    gap: var(--m-space-2);
   }
   .m-pro-stat {
     min-width: 0;
-    padding: var(--m-space-3) var(--m-space-2);
+    padding: var(--m-space-2) var(--m-space-2);
   }
   .m-pro-stat-div { display: none; }
   .m-pro-stat-val {
@@ -902,7 +931,6 @@ onMounted(() => {
     align-items: stretch;
     gap: var(--m-space-3);
   }
-
   .m-token-renew {
     align-self: flex-start;
   }
@@ -913,32 +941,28 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--m-space-3);
-  margin-top: var(--m-space-1);
+  padding-bottom: var(--m-space-4);
 }
 .m-btn {
   width: 100%;
   height: 48px;
-  border-radius: var(--m-radius-pill);
+  border-radius: var(--m-radius-xl);
   border: none;
   font-size: var(--m-font-size-h3);
   font-weight: var(--m-font-weight-semibold);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--m-space-1);
+  gap: var(--m-space-2);
   cursor: pointer;
-  transition: transform 0.1s;
+  transition: all var(--m-duration-fast);
 }
 .m-btn:active { transform: scale(0.98); }
-.m-btn-outline {
-  background: var(--m-color-bg-card);
-  color: var(--m-color-primary);
-  border: 1.5px solid var(--m-color-primary-bg-hover);
-}
 .m-btn-danger {
-  background: var(--m-color-danger-bg);
-  color: var(--m-color-danger);
-  border: 1.5px solid var(--m-color-danger-border);
+  background: var(--m-color-bg-card);
+  color: var(--m-color-rose);
+  border: 1px solid var(--m-color-rose);
+  box-shadow: var(--m-shadow-card);
 }
 
 .m-safe-bottom { height: 80px; }

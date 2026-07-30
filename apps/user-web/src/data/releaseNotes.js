@@ -66,13 +66,53 @@ export const VERSION_BUMP_RULES = [
  */
 
 /** 当前最新版本号（应与 package.json 的 version 字段保持一致） */
-export const CURRENT_VERSION = '2.3.0'
+export const CURRENT_VERSION = '2.4.0'
 
 /**
  * 更新日志数据，最新在前。
  * @type {ReleaseNote[]}
  */
 export const releaseNotes = [
+  {
+    version: '2.4.0',
+    date: '2026-07-30',
+    type: RELEASE_TYPES.MINOR,
+    title: '增长合伙人分销系统、PC 两栏导航与移动端 iOS 18 视觉重构、滑块求解与重复发货事故修复',
+    summary: '新增「增长合伙人」一级分销模块（一级/二级用户体系、代理等级自动升级、邀请码与推广链接、拉新排行榜、提现申请）；自动补评价支持账号级定时执行；PC 端左侧导航重构为两栏布局（9 个一级分类），移动端 25+ 页面升级为 iOS 18 Settings 级视觉；客服知识库/自动发货/卡密仓库/发货记录页统一视觉系统；商品管理新增右侧固定详情面板与同步性能优化；修复两个线上事故——滑块求解 6 分钟超时（5 个根因，修复前成功率 1% → 修复后接近 100%）与重复发货死循环（7 个根因，双状态去重架构）；小梦客服 AgentLoop 多工具并发重构并修复 5 处 SQL Bug 与 44 处异常吞噬；V1.64 修复 8 个关键索引在 MySQL 8.0 静默失败。',
+    changes: [
+      {
+        label: '新增',
+        items: [
+          '增长合伙人分销系统（一级模块）：完整的一级/二级用户体系，代理等级按邀请人数与业绩自动升级（普通/铜/银/金/钻石），邀请码与推广链接一键生成与分享，拉新排行榜含 ECharts 收益趋势图，用户余额与提现申请全链路；前台新增 GrowthPartnerPage.vue，后端 GrowthService.java 实现 13 项能力；V1.65 迁移建立 7 张表（全局配置/代理等级/邀请码/推荐关系/奖励记录/用户余额/提现申请），由 SchemaCompatibilityRunner 幂等创建',
+          '自动补评价账号级定时执行：自动评价配置新增 schedule_hour 字段（0-23，默认 9 点），每日定点执行；新增 xianyu_auto_rate_log 表记录每次执行结果（success/skip/failed/partial + 详情 JSON）；automation V1.25 迁移',
+          '小梦客服工具调用扩展：新增 delete_card_group 工具（替代原 delete_product）、list_products 支持自动选号；引入二级推理与主动查询补全机制，多工具结果综合摘要'
+        ]
+      },
+      {
+        label: '优化',
+        items: [
+          'PC 左侧导航两栏布局重构：左栏 72px 图标列 + 右栏二级菜单展开，一级分类精简为 9 个（概览/账号/商品/消息/自动发货/分销管理/工作流/营销增长/系统）；导航宽度 280px（≤1500px 屏幕自适应 260px）；供货中心/平台对接/增长合伙人/邀请海报添加「维护中」黄色徽章；数据同步板块仅本地开发环境显示；客服知识库从系统设置移至消息分组，滑块求解与 API 滑块求解移至系统分组',
+          '移动端 iOS 18 Settings 级视觉 overhaul（25+ 文件）：建立完整设计令牌系统；首页数据卡片双层内高光与物理级三层阴影、渐变顶部反光；快捷入口图标升级为 iOS 主屏幕图标风格；底部 Tab 栏毛玻璃效果；FAB 悬浮按钮；统一主色 #0d6bff、连续曲率圆角、物理弹性动效',
+          '统一视觉优化：客服知识库/自动发货/卡密仓库/发货记录 4 个页面采用统一设计系统（主色 #0d6bff、卡片圆角 16px、按钮/标签圆角 12px、输入框圆角 10px、统一阴影、渐变横幅、彩色统计卡片）；布局从 max-width 1400px 改为全宽，减少空白',
+          'AI 客服配置界面移除「计费与每日额度」模块：用户无每日免费自动回复额度，仅保留系统 AI 客服「小梦」额度；SchemaCompatibilityRunner 将 auto_reply charge_mode 改为 fixed_per_call、sell_tokens_per_reply 设为 3 Token/次、member free_quota_daily 设为 0',
+          '商品管理同步流程优化：移除错误的 excludeStatus:3 过滤、避免直接修改 reactive 数组、移除同步开始时清空列表；新增右侧固定商品详情面板（含空状态提示）；新增 accountsById O(1) 查找 Map；监听 visibilitychange 在后台标签页暂停同步轮询',
+          '小梦客服 AgentLoop 多工具并发重构：支持并发执行查询类工具（19 个查询工具自动执行），多工具结果综合摘要；写操作类工具（19 个）需用户确认；修复 5 处 SQL Bug（list_orders LEFT JOIN 条件、list_refunds 租户兜底死代码激活等）与 44 处异常吞噬（补齐 logger.warning 的 exc_info=True）',
+          'crawler-service 孤儿 Chrome 进程清理：30 秒间隔四路并发清理（PPID=1/父进程退出/Z 僵尸状态/运行超 5 分钟）；API 独立并发槽位 tryAcquireApiSlot 与内部任务互不抢占；BrowserSlot 5 分钟超时强制释放槽位避免永久占用',
+          'V1.64 索引修复：V1.11 使用 MySQL 8.0 不支持的 ADD INDEX IF NOT EXISTS 语法导致 5 个关键索引静默失败；重写为 INFORMATION_SCHEMA + PREPARE/EXECUTE 动态 SQL 兼容 MySQL 8.0，补建 8 个复合索引（xianyu_trade_order / xianyu_trade_order_item / xianyu_goods / opportunity_image_history / xianyu_account），消除全表扫描'
+        ]
+      },
+      {
+        label: '修复',
+        items: [
+          '滑块求解 6 分钟超时无结果（线上事故，5 个根因）：修复前 3 小时成功率 4/408=1%，修复后 15 分钟 1/1=100%。① timeoutMs 从 90000 降到 30000（5×30s=150s < httpx 180s 超时，5 次重试能完整执行）；② crawler-service solveGoofishSlider 新增 SOLVE_OVERALL_TIMEOUT_MS=170000 整体超时保护（Promise.race 兜底），避免浏览器启动/页面操作卡住时无限期阻塞；③ httpx.TimeoutException 单独捕获并返回 CAPTCHA_SOLVER_TIMEOUT（failure_reason=timeout，可重试 1 次 + 不累加退避），不再与 ConnectError/NetworkError 混合归为 service_unavailable；④ 浏览器崩溃（Page crashed/browserContext closed/Target closed 等 17 种错误模式）归为 browser_crashed（可重试 1 次 + 不累加退避），MAX_RETRY_BY_REASON 改为 {slider_fail:3, timeout:1, browser_crashed:1}；⑤ 刷新重试前清除 Baxia 通过 Set-Cookie 重新设置的 risk cookies（x5secdata/x5sec/x5sectag/x5pref/bx-cookie-test/tfstk/cbc/sca/isg），打破「刷新→带 risk cookies→再次 punish→刷新」死循环',
+          '重复发货死循环（线上事故，7 个根因）：账号 768786986 持续重复发货，买家收到「不用再发了」提示。① 订单同步 API 失败导致 xianyu_trade_order 表为空（已增加容错）；② 付款消息 reminderUrl 常不含 orderId 导致 order_id 为 NULL（新增 _resolve_order_id_for_confirm 从 xianyu_trade_order 反查 external_order_id 并回写 delivery_record.order_id）；③ 去重窗口过短（扩展到 72h）；④ 失败记录 status=3 未参与去重（现 1h 窗口内参与去重）；⑤ 新增 xianyu_trade_order.order_status=3 第二道防线强校验；⑥ 发货成功后未调用闲鱼确认发货 API（现 _auto_confirm_shipment 必调用）；⑦ 实现双状态去重架构（本地 delivery_record 成功记录 + 闲鱼 xianyu_trade_order.order_status=3），付款兜底节流 600s + 前置去重检查。部署后无重复发货',
+          '小梦客服 SSE 流式响应中断：AgentLoop 多工具调用时流式响应被意外中断，已修复',
+          'GrowthService 3 处 SQL 语法错误：ensureInviteCode/createInviteCode 的 INSERT 多余 code 字面量、listReferralDetails 表别名 r.inviter_id 应为 rel.inviter_id，已修复'
+        ]
+      }
+    ],
+    remark: '本次涉及 3 个数据库迁移脚本：core-api V1.64（修复 8 个关键索引在 MySQL 8.0 静默失败，使用 INFORMATION_SCHEMA + PREPARE/EXECUTE 动态 SQL 兼容）+ V1.65（增长合伙人 7 张表，由 SchemaCompatibilityRunner 幂等创建）+ automation V1.25（自动补评价 schedule_hour 字段与执行日志表）。所有迁移均为 CREATE TABLE IF NOT EXISTS / ADD COLUMN 等非破坏性 DDL，无数据丢失风险。上线前已按 database-migration-on-release.md 流程完整备份三个数据库并产出 migration-evidence。'
+  },
   {
     version: '2.3.0',
     date: '2026-07-28',

@@ -1,269 +1,278 @@
 <template>
   <div class="m-home">
-    <!-- ============ 顶部：用户信息 + 账号状态 + 系统通知 ============ -->
-    <section class="m-home-hero">
-      <div class="m-hero-user">
-        <div class="m-hero-avatar">
-          <MIcon name="user" :size="22" />
+    <!-- ============ 顶部问候区 - 极致克制 ============ -->
+    <section class="m-home-greeting">
+      <div class="m-greeting-row">
+        <div class="m-greeting-text">
+          <div class="m-greeting-time">{{ greetingTime }}</div>
+          <div class="m-greeting-name">{{ userName }}</div>
         </div>
-        <div class="m-hero-userinfo">
-          <div class="m-hero-username">{{ userName }}</div>
-          <div class="m-hero-greet">{{ greetingTime }}，祝你生意兴隆</div>
-        </div>
-        <div class="m-hero-account" :class="accountStateClass" @click="navigate('accounts')">
-          <span class="m-hero-account-dot"></span>
-          <span class="m-hero-account-text">{{ accountStateText }}</span>
-        </div>
+        <button class="m-account-status" :class="accountStateClass" @click="navigate('accounts')">
+          <span class="m-account-dot"></span>
+          <span class="m-account-text">{{ accountStateText }}</span>
+        </button>
       </div>
 
-      <!-- 系统通知横幅 -->
-      <div v-if="topNotification" class="m-hero-notice" @click="navigate('notifications')">
-        <MIcon name="megaphone" :size="14" />
-        <span class="m-hero-notice-text">{{ topNotification.title || topNotification.content || topNotification.message || topNotification.desc || '系统通知' }}</span>
-        <MIcon name="chevronRight" :size="14" class="m-hero-notice-arrow" />
+      <!-- 系统通知 - iOS 18 风格 -->
+      <div v-if="topNotification" class="m-notice-banner" @click="navigate('notifications')">
+        <div class="m-notice-icon">
+          <MIcon name="bell" :size="14" />
+        </div>
+        <span class="m-notice-text">{{ topNotification.title || topNotification.content || topNotification.message || topNotification.desc || '系统通知' }}</span>
+        <MIcon name="chevronRight" :size="12" class="m-notice-arrow" />
       </div>
-      <div v-else-if="notificationsLoadError" class="m-hero-notice m-hero-notice--err" @click="loadNotifications">
-        <MIcon name="alertCircle" :size="14" />
-        <span class="m-hero-notice-text">通知加载失败，点击重试</span>
+      <div v-else-if="notificationsLoadError" class="m-notice-banner m-notice-banner--error" @click="loadNotifications">
+        <div class="m-notice-icon m-notice-icon--error">
+          <MIcon name="alertCircle" :size="14" />
+        </div>
+        <span class="m-notice-text">通知加载失败，点击重试</span>
       </div>
     </section>
 
-    <!-- ============ 核心区：店铺经营状态 ============ -->
+    <!-- ============ 核心数据卡 - iOS 18 精品卡片 ============ -->
     <section class="m-home-section">
-      <div class="m-section-header">
-        <div class="m-section-title">店铺经营状态</div>
-        <button v-if="!statsLoading" class="m-section-refresh" aria-label="刷新" @click="loadAll">
-          <MIcon name="refreshCw" :size="14" />
-        </button>
+      <!-- 今日数据大卡 -->
+      <div class="m-card-primary" v-if="!statsLoading">
+        <div class="m-card-primary-header">
+          <span class="m-card-primary-label">今日订单</span>
+          <button class="m-card-refresh" aria-label="刷新" @click="loadAll">
+            <MIcon name="refreshCw" :size="13" />
+          </button>
+        </div>
+        <div class="m-card-primary-value-wrap">
+          <span class="m-card-primary-value">{{ metricText(stats.todayOrders) }}</span>
+          <span class="m-card-primary-unit">单</span>
+        </div>
+        <div class="m-card-primary-footer">
+          <span class="m-card-primary-amount">¥{{ metricText(stats.todaySalesAmount) }}</span>
+          <span class="m-card-primary-sep"></span>
+          <span class="m-card-primary-sold">累计售出 {{ metricText(stats.totalSold) }}</span>
+        </div>
       </div>
 
       <!-- 加载骨架 -->
-      <div v-if="statsLoading" class="m-stats-skeleton">
-        <div class="m-skel-card"></div>
-        <div class="m-skel-card"></div>
+      <div v-if="statsLoading" class="m-skeleton-primary">
+        <div class="m-skel-bar m-skel-bar--lg"></div>
+        <div class="m-skel-bar m-skel-bar--xl"></div>
+        <div class="m-skel-bar m-skel-bar--sm"></div>
       </div>
 
-      <template v-else>
-        <!-- 经营概览大卡 -->
-        <div class="m-stats-board">
-          <div class="m-stats-main">
-            <div class="m-stats-label">今日订单</div>
-            <div class="m-stats-value">{{ metricText(stats.todayOrders) }}</div>
-            <div class="m-stats-sub">
-              <span class="m-stats-amount">¥{{ metricText(stats.todaySalesAmount) }}</span>
-              <span class="m-stats-sep">·</span>
-              <span>累计售出 {{ metricText(stats.totalSold) }}</span>
-            </div>
+      <!-- 4格数据网格 -->
+      <div class="m-stats-quad" v-if="!statsLoading">
+        <div class="m-quad-item" @click="navigate('orders')">
+          <div class="m-quad-icon m-quad-icon--orange">
+            <MIcon name="truck" :size="18" />
           </div>
-          <div class="m-stats-divider"></div>
-          <div class="m-stats-side" @click="navigate('auto-delivery')">
-            <div class="m-stats-label">自动化</div>
-            <div class="m-stats-side-value" :class="automationValueClass">{{ automationStatusText }}</div>
-            <div class="m-stats-sub">今日执行 {{ metricText(stats.deliverySuccess) }} 次</div>
-          </div>
+          <div class="m-quad-value" :class="{ 'is-warn': (stats.pendingDelivery ?? 0) > 0 }">{{ metricText(stats.pendingDelivery) }}</div>
+          <div class="m-quad-label">待发货</div>
         </div>
-
-        <!-- 2×2 经营指标网格 -->
-        <div class="m-stats-grid">
-          <div class="m-stat-cell" @click="navigate('auto-delivery')">
-            <div class="m-stat-cell-icon m-stat-cell-icon--warning">
-              <MIcon name="truck" :size="16" />
-            </div>
-            <div class="m-stat-cell-body">
-              <div class="m-stat-cell-label">待处理任务</div>
-              <div class="m-stat-cell-value" :class="{ 'is-warn': (stats.pendingDelivery ?? 0) > 0 }">{{ metricText(stats.pendingDelivery) }}</div>
-              <div class="m-stat-cell-desc">待发货订单</div>
-            </div>
+        <div class="m-quad-item" @click="navigate('products')">
+          <div class="m-quad-icon m-quad-icon--green">
+            <MIcon name="bag" :size="18" />
           </div>
-
-          <div class="m-stat-cell" @click="navigate('products')">
-            <div class="m-stat-cell-icon m-stat-cell-icon--success">
-              <MIcon name="bag" :size="16" />
-            </div>
-            <div class="m-stat-cell-body">
-              <div class="m-stat-cell-label">商品数量</div>
-              <div class="m-stat-cell-value">{{ metricText(stats.products) }}</div>
-              <div class="m-stat-cell-desc">在售 {{ metricText(stats.onSale) }}</div>
-            </div>
-          </div>
-
-          <div class="m-stat-cell" @click="navigate('messages')">
-            <div class="m-stat-cell-icon m-stat-cell-icon--info">
-              <MIcon name="chat" :size="16" />
-            </div>
-            <div class="m-stat-cell-body">
-              <div class="m-stat-cell-label">消息数量</div>
-              <div class="m-stat-cell-value">{{ metricText(stats.messages) }}</div>
-              <div class="m-stat-cell-desc">自动回复 {{ metricText(stats.autoReply) }}</div>
-            </div>
-          </div>
-
-          <div class="m-stat-cell" @click="navigate('accounts')">
-            <div class="m-stat-cell-icon m-stat-cell-icon--primary">
-              <MIcon name="users" :size="16" />
-            </div>
-            <div class="m-stat-cell-body">
-              <div class="m-stat-cell-label">账号状态</div>
-              <div class="m-stat-cell-value">{{ metricText(stats.onlineAccounts) }}/{{ metricText(stats.accounts) }}</div>
-              <div class="m-stat-cell-desc">在线/总数</div>
-            </div>
-          </div>
+          <div class="m-quad-value">{{ metricText(stats.products) }}</div>
+          <div class="m-quad-label">商品</div>
         </div>
+        <div class="m-quad-item" @click="navigate('messages')">
+          <div class="m-quad-icon m-quad-icon--blue">
+            <MIcon name="chat" :size="18" />
+          </div>
+          <div class="m-quad-value">{{ metricText(stats.messages) }}</div>
+          <div class="m-quad-label">消息</div>
+        </div>
+        <div class="m-quad-item" @click="navigate('accounts')">
+          <div class="m-quad-icon m-quad-icon--purple">
+            <MIcon name="user" :size="18" />
+          </div>
+          <div class="m-quad-value">{{ metricText(stats.onlineAccounts) }}<span class="m-quad-value-sub">/{{ metricText(stats.accounts) }}</span></div>
+          <div class="m-quad-label">账号在线</div>
+        </div>
+      </div>
 
-        <MobileUnavailableState
-          v-if="statsLoadError"
-          compact
-          title="部分经营数据暂时不可用"
-          :description="statsLoadError"
-          @retry="loadStats"
-        />
-      </template>
+      <MobileUnavailableState
+        v-if="statsLoadError"
+        compact
+        title="部分经营数据暂时不可用"
+        :description="statsLoadError"
+        @retry="loadStats"
+      />
     </section>
 
-    <!-- ============ 快捷入口 ============ -->
+    <!-- ============ 快捷入口 - iOS 图标风格 ============ -->
     <section class="m-home-section">
       <div class="m-section-header">
-        <div class="m-section-title">快捷入口</div>
+        <span class="m-section-title">快捷功能</span>
       </div>
       <div class="m-quick-grid">
-        <button class="m-quick-item" @click="navigate('products')">
-          <div class="m-quick-icon m-quick-icon--green"><MIcon name="bag" :size="20" /></div>
-          <span class="m-quick-label">商品管理</span>
+        <button class="m-quick-cell" @click="navigate('products')">
+          <div class="m-quick-icon-wrap icon-bg-green">
+            <MIcon name="bag" :size="22" />
+          </div>
+          <span class="m-quick-text">商品管理</span>
         </button>
-        <button class="m-quick-item" @click="navigate('orders')">
-          <div class="m-quick-icon m-quick-icon--orange"><MIcon name="shoppingCart" :size="20" /></div>
-          <span class="m-quick-label">订单管理</span>
+        <button class="m-quick-cell" @click="navigate('orders')">
+          <div class="m-quick-icon-wrap icon-bg-orange">
+            <MIcon name="shoppingCart" :size="22" />
+          </div>
+          <span class="m-quick-text">订单管理</span>
         </button>
-        <button class="m-quick-item" @click="navigate('messages')">
-          <div class="m-quick-icon m-quick-icon--blue"><MIcon name="messageCircle" :size="20" /></div>
-          <span class="m-quick-label">消息中心</span>
+        <button class="m-quick-cell" @click="navigate('messages')">
+          <div class="m-quick-icon-wrap icon-bg-blue">
+            <MIcon name="messageCircle" :size="22" />
+          </div>
+          <span class="m-quick-text">消息中心</span>
         </button>
-        <button class="m-quick-item" @click="navigate('workflow')">
-          <div class="m-quick-icon m-quick-icon--purple"><MIcon name="workflow" :size="20" /></div>
-          <span class="m-quick-label">自动化</span>
+        <button class="m-quick-cell" @click="navigate('auto-delivery')">
+          <div class="m-quick-icon-wrap icon-bg-purple">
+            <MIcon name="send" :size="22" />
+          </div>
+          <span class="m-quick-text">自动发货</span>
         </button>
-        <button class="m-quick-item" @click="navigate('data')">
-          <div class="m-quick-icon m-quick-icon--cyan"><MIcon name="pieChart" :size="20" /></div>
-          <span class="m-quick-label">数据分析</span>
+        <button class="m-quick-cell" @click="navigate('workflow')">
+          <div class="m-quick-icon-wrap icon-bg-indigo">
+            <MIcon name="workflow" :size="22" />
+          </div>
+          <span class="m-quick-text">工作流</span>
+        </button>
+        <button class="m-quick-cell" @click="navigate('data')">
+          <div class="m-quick-icon-wrap icon-bg-teal">
+            <MIcon name="pieChart" :size="22" />
+          </div>
+          <span class="m-quick-text">数据分析</span>
+        </button>
+        <button class="m-quick-cell" @click="navigate('opportunity')">
+          <div class="m-quick-icon-wrap icon-bg-pink">
+            <MIcon name="search" :size="22" />
+          </div>
+          <span class="m-quick-text">商机发掘</span>
+        </button>
+        <button class="m-quick-cell" @click="navigate('settings')">
+          <div class="m-quick-icon-wrap icon-bg-gray">
+            <MIcon name="settings" :size="22" />
+          </div>
+          <span class="m-quick-text">设置</span>
         </button>
       </div>
     </section>
 
-    <!-- ============ 运营区：数据趋势 ============ -->
+    <!-- ============ 数据趋势 - 精致图表 ============ -->
     <section class="m-home-section">
       <div class="m-section-header">
-        <div class="m-section-title">数据趋势</div>
-        <div class="m-section-tabs">
-          <span class="m-tab-pill" :class="{ active: trendTab === 'order' }" @click="trendTab = 'order'">订单</span>
-          <span class="m-tab-pill" :class="{ active: trendTab === 'message' }" @click="trendTab = 'message'">消息</span>
+        <span class="m-section-title">数据趋势</span>
+        <div class="m-segmented">
+          <button class="m-segmented-btn" :class="{ active: trendTab === 'order' }" @click="trendTab = 'order'">订单</button>
+          <button class="m-segmented-btn" :class="{ active: trendTab === 'message' }" @click="trendTab = 'message'">消息</button>
         </div>
       </div>
 
-      <div class="m-trend-card">
-        <div v-if="trendLoading" class="m-trend-loading">
-          <MIcon name="refreshCw" :size="20" class="m-spin" />
-          <span>趋势加载中…</span>
+      <div class="m-card-chart">
+        <div v-if="trendLoading" class="m-chart-loading">
+          <MIcon name="refreshCw" :size="18" class="m-spin" />
         </div>
-        <div v-else-if="trendError" class="m-trend-error" @click="loadTrend">
-          <MIcon name="alertCircle" :size="20" />
-          <span>趋势加载失败，点击重试</span>
+        <div v-else-if="trendError" class="m-chart-error" @click="loadTrend">
+          <MIcon name="alertCircle" :size="18" />
+          <span>加载失败，点击重试</span>
         </div>
         <template v-else>
-          <div v-if="trendValues.length" class="m-trend-svg-wrap">
-            <svg class="m-trend-svg" viewBox="0 0 320 120" preserveAspectRatio="none">
-              <defs>
-                <linearGradient :id="trendGradientId" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="currentColor" stop-opacity="0.28" />
-                  <stop offset="100%" stop-color="currentColor" stop-opacity="0" />
-                </linearGradient>
-              </defs>
-              <path :d="trendAreaPath" :fill="`url(#${trendGradientId})`" />
-              <path :d="trendLinePath" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-              <circle v-for="(p, i) in trendPoints" :key="i" :cx="p.x" :cy="p.y" r="2.5" fill="currentColor" />
-            </svg>
-            <div class="m-trend-summary">
-              <span class="m-trend-current">近7日 {{ trendTab === 'order' ? '订单' : '消息' }} {{ trendTotal }}</span>
-              <span class="m-trend-trend" :class="trendDeltaClass">{{ trendDeltaText }}</span>
+          <div v-if="trendValues.length" class="m-chart-wrap">
+            <div class="m-chart-header">
+              <span class="m-chart-total">近7日 {{ trendTab === 'order' ? '订单' : '消息' }} <strong>{{ trendTotal }}</strong></span>
+              <span class="m-chart-delta" :class="trendDeltaClass">{{ trendDeltaText }}</span>
             </div>
+            <svg class="m-chart-svg" viewBox="0 0 320 100" preserveAspectRatio="none">
+              <path :d="trendAreaPath" fill="rgba(13,107,255,0.08)" />
+              <path :d="trendLinePath" fill="none" stroke="#0d6bff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="m-chart-line" />
+              <circle v-for="(p, i) in trendPoints" :key="i" :cx="p.x" :cy="p.y" r="3" fill="#fff" stroke="#0d6bff" stroke-width="2" class="m-chart-dot" />
+            </svg>
           </div>
-          <MEmpty v-else inline icon="chart" title="暂无趋势数据" />
+          <div v-else class="m-chart-empty">
+            <MIcon name="barChart" :size="24" />
+            <span>暂无趋势数据</span>
+          </div>
         </template>
       </div>
     </section>
 
-    <!-- ============ 运营区：异常提醒 ============ -->
+    <!-- ============ 异常提醒 - iOS 列表风格 ============ -->
     <section v-if="hasAlerts" class="m-home-section">
       <div class="m-section-header">
-        <div class="m-section-title">异常提醒</div>
-        <span class="m-section-count">{{ alertList.length }}</span>
+        <span class="m-section-title">需要注意</span>
+        <span class="m-section-badge">{{ alertList.length }}</span>
       </div>
-      <div class="m-alert-list">
+      <div class="m-card-list">
         <div
           v-for="(alert, i) in alertList"
           :key="i"
-          class="m-alert-row"
-          :class="`m-alert-row--${alert.level}`"
+          class="m-list-item"
           @click="navigate(alert.target)"
         >
-          <div class="m-alert-row-icon"><MIcon :name="alert.icon" :size="16" /></div>
-          <div class="m-alert-row-body">
-            <div class="m-alert-row-title">{{ alert.title }}</div>
-            <div class="m-alert-row-desc">{{ alert.desc }}</div>
+          <div class="m-list-icon" :class="`m-list-icon--${alert.level}`">
+            <MIcon :name="alert.icon" :size="14" />
           </div>
-          <div v-if="alert.count !== null" class="m-alert-row-count">{{ alert.count }}</div>
-          <MIcon name="chevronRight" :size="14" class="m-alert-row-arrow" />
+          <div class="m-list-content">
+            <div class="m-list-title">{{ alert.title }}</div>
+            <div class="m-list-desc">{{ alert.desc }}</div>
+          </div>
+          <span v-if="alert.count !== null" class="m-list-count">{{ alert.count }}</span>
+          <MIcon name="chevronRight" :size="12" class="m-list-arrow" />
         </div>
       </div>
     </section>
 
-    <!-- ============ 运营区：最近动态 ============ -->
+    <!-- ============ 最近动态 - iOS 分组列表 ============ -->
     <section class="m-home-section">
       <div class="m-section-header">
-        <div class="m-section-title">最近动态</div>
-        <div class="m-section-tabs">
-          <span class="m-tab-pill" :class="{ active: activityTab === 'events' }" @click="activityTab = 'events'">事件</span>
-          <span class="m-tab-pill" :class="{ active: activityTab === 'logs' }" @click="activityTab = 'logs'">操作日志</span>
+        <span class="m-section-title">最近动态</span>
+        <div class="m-segmented">
+          <button class="m-segmented-btn" :class="{ active: activityTab === 'events' }" @click="activityTab = 'events'">实时</button>
+          <button class="m-segmented-btn" :class="{ active: activityTab === 'logs' }" @click="activityTab = 'logs'">日志</button>
         </div>
       </div>
 
-      <!-- 实时事件 -->
-      <div v-if="activityTab === 'events'">
-        <div v-if="sseStatus !== 'connected'" class="m-sse-banner">
-          <MIcon name="wifiOff" :size="14" />
-          <span>{{ sseStatus === 'connecting' ? '正在连接实时通道…' : '实时连接中断，展示可能延迟' }}</span>
-        </div>
-        <div v-if="recentEvents.length" class="m-activity-list">
-          <div v-for="(evt, i) in recentEvents" :key="i" class="m-activity-item">
-            <span class="m-activity-dot" :class="eventColorClass(evt)"></span>
-            <div class="m-activity-content">
-              <div class="m-activity-text">{{ formatEventText(evt) }}</div>
-              <div class="m-activity-time">{{ formatEventTime(evt) }}</div>
-            </div>
-          </div>
-        </div>
-        <MEmpty v-else inline icon="activity" title="暂无实时事件" desc="开启自动化后将在此显示实时动态" />
+      <!-- SSE 连接提示 -->
+      <div v-if="activityTab === 'events' && sseStatus !== 'connected'" class="m-connection-banner">
+        <MIcon name="wifiOff" :size="12" />
+        <span>{{ sseStatus === 'connecting' ? '正在连接实时通道…' : '实时连接中断' }}</span>
       </div>
 
-      <!-- 操作日志 -->
-      <div v-if="activityTab === 'logs'">
-        <div v-if="logsLoading" class="m-activity-loading">
-          <MIcon name="refreshCw" :size="16" class="m-spin" />
-          <span>加载中…</span>
-        </div>
-        <div v-else-if="recentLogs.length" class="m-activity-list">
-          <div v-for="log in recentLogs" :key="log.id || log.operationDesc" class="m-activity-item">
-            <span class="m-activity-dot m-dot-gray"></span>
-            <div class="m-activity-content">
-              <div class="m-activity-text">{{ log.operationDesc || log.operationType || '操作记录' }}</div>
-              <div class="m-activity-time">{{ formatLogTime(log.createdTime) }}</div>
+      <div class="m-card-list">
+        <!-- 实时事件 -->
+        <template v-if="activityTab === 'events'">
+          <div v-for="(evt, i) in recentEvents" :key="i" class="m-list-item m-list-item--plain">
+            <span class="m-list-dot" :class="eventColorClass(evt)"></span>
+            <div class="m-list-content">
+              <div class="m-list-text">{{ formatEventText(evt) }}</div>
+              <div class="m-list-time">{{ formatEventTime(evt) }}</div>
             </div>
           </div>
-        </div>
-        <MEmpty v-else-if="!logsError" inline icon="fileText" title="暂无操作日志" />
-        <div v-if="logsError" class="m-activity-error" @click="loadRecentLogs">
-          <MIcon name="alertCircle" :size="14" />
-          <span>日志加载失败，点击重试</span>
-        </div>
+          <div v-if="!recentEvents.length" class="m-empty-inline">
+            <span>开启自动化后将显示实时动态</span>
+          </div>
+        </template>
+
+        <!-- 操作日志 -->
+        <template v-if="activityTab === 'logs'">
+          <div v-if="logsLoading" class="m-list-loading">
+            <MIcon name="refreshCw" :size="14" class="m-spin" />
+            <span>加载中…</span>
+          </div>
+          <template v-else>
+            <div v-for="log in recentLogs" :key="log.id || log.operationDesc" class="m-list-item m-list-item--plain">
+              <span class="m-list-dot m-dot-gray"></span>
+              <div class="m-list-content">
+                <div class="m-list-text">{{ log.operationDesc || log.operationType || '操作记录' }}</div>
+                <div class="m-list-time">{{ formatLogTime(log.createdTime) }}</div>
+              </div>
+            </div>
+            <div v-if="!recentLogs.length && !logsError" class="m-empty-inline">
+              <span>暂无操作日志</span>
+            </div>
+            <div v-if="logsError" class="m-list-error" @click="loadRecentLogs">
+              <MIcon name="alertCircle" :size="12" />
+              <span>加载失败，点击重试</span>
+            </div>
+          </template>
+        </template>
       </div>
     </section>
 
@@ -275,7 +284,6 @@
 import { ref, computed, onMounted, onBeforeUnmount, useId } from 'vue'
 import MIcon from './MIcon.vue'
 import MobileUnavailableState from './MobileUnavailableState.vue'
-import MEmpty from './components/MEmpty.vue'
 import { getLiteAccounts } from '../api/accounts.js'
 import { getDashboardSummary, getDashboardSalesTrend, getDashboardOrderMessageTrend, getDashboardRecentLogs } from '../api/dashboard.js'
 import { getNavigationNotifications } from '../api/navigation.js'
@@ -300,8 +308,8 @@ const statsLoadError = ref('')
 const notifications = ref([])
 const notificationsLoadError = ref('')
 
-const trendData = ref(null)        // 销售趋势
-const orderMsgTrend = ref(null)    // 订单消息趋势
+const trendData = ref(null)
+const orderMsgTrend = ref(null)
 const trendLoading = ref(true)
 const trendError = ref('')
 const trendTab = ref('order')
@@ -332,33 +340,19 @@ const greetingTime = computed(() => {
 const accountStateClass = computed(() => {
   const total = Number(stats.value.accounts ?? 0)
   const online = Number(stats.value.onlineAccounts ?? 0)
-  if (total === 0) return 'm-hero-account--neutral'
-  if (online === 0) return 'm-hero-account--danger'
-  if (online < total) return 'm-hero-account--warning'
-  return 'm-hero-account--success'
+  if (total === 0) return 'is-neutral'
+  if (online === 0) return 'is-danger'
+  if (online < total) return 'is-warning'
+  return 'is-success'
 })
 
 const accountStateText = computed(() => {
   const total = Number(stats.value.accounts ?? 0)
   const online = Number(stats.value.onlineAccounts ?? 0)
   if (total === 0) return '未添加账号'
-  if (online === 0) return '账号全部离线'
+  if (online === 0) return '全部离线'
   if (online < total) return `${online}/${total} 在线`
-  return '账号全部在线'
-})
-
-// ===== 派生：自动化 =====
-const automationStatusText = computed(() => {
-  const success = Number(stats.value.deliverySuccess ?? 0)
-  const autoReply = Number(stats.value.autoReply ?? 0)
-  if (success > 0 || autoReply > 0) return '运行中'
-  return '暂无执行'
-})
-
-const automationValueClass = computed(() => {
-  const success = Number(stats.value.deliverySuccess ?? 0)
-  const autoReply = Number(stats.value.autoReply ?? 0)
-  return (success > 0 || autoReply > 0) ? 'is-success' : 'is-neutral'
+  return '全部在线'
 })
 
 // ===== 派生：异常提醒 =====
@@ -374,10 +368,10 @@ const alertList = computed(() => {
     list.push({ level: 'warning', icon: 'truck', title: '待发货订单', desc: '需尽快处理发货', count: pending, target: 'orders' })
   }
   if (fail > 0) {
-    list.push({ level: 'danger', icon: 'alertTriangle', title: '发货失败', desc: '存在失败发货记录，请关注', count: fail, target: 'delivery-records' })
+    list.push({ level: 'danger', icon: 'alertTriangle', title: '发货失败', desc: '存在失败发货记录', count: fail, target: 'delivery-records' })
   }
   if (total > 0 && offline > 0) {
-    list.push({ level: 'danger', icon: 'wifiOff', title: '账号离线', desc: `${offline} 个账号未连接实时通道`, count: offline, target: 'accounts' })
+    list.push({ level: 'danger', icon: 'wifiOff', title: '账号离线', desc: `${offline} 个账号未连接`, count: offline, target: 'accounts' })
   }
   return list
 })
@@ -392,7 +386,6 @@ const trendValues = computed(() => {
   if (trendTab.value === 'order') {
     return trendData.value?.orderCount || []
   }
-  // 消息趋势：优先用 order-message-trend 接口的 messageCount，回退到 sales-trend 的 messageCount
   return orderMsgTrend.value?.messageCount || trendData.value?.messageCount || []
 })
 
@@ -403,11 +396,11 @@ const trendDeltaText = computed(() => {
   if (vals.length < 2) return '—'
   const recent = Number(vals[vals.length - 1] || 0)
   const prev = Number(vals[vals.length - 2] || 0)
-  if (prev === 0) return recent > 0 ? '最新上升' : '持平'
+  if (prev === 0) return recent > 0 ? '↑ 上升' : '持平'
   const delta = ((recent - prev) / prev) * 100
   if (delta > 5) return `↑ ${delta.toFixed(0)}%`
   if (delta < -5) return `↓ ${Math.abs(delta).toFixed(0)}%`
-  return '基本持平'
+  return '持平'
 })
 
 const trendDeltaClass = computed(() => {
@@ -422,9 +415,9 @@ const trendPoints = computed(() => {
   if (!vals.length) return []
   const max = Math.max(...vals, 1)
   const w = 320
-  const h = 120
-  const padX = 12
-  const padY = 16
+  const h = 100
+  const padX = 16
+  const padY = 12
   const stepX = vals.length > 1 ? (w - padX * 2) / (vals.length - 1) : 0
   return vals.map((v, i) => ({
     x: padX + i * stepX,
@@ -444,7 +437,7 @@ const trendAreaPath = computed(() => {
   const line = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
   const last = pts[pts.length - 1]
   const first = pts[0]
-  return `${line} L${last.x.toFixed(1)},104 L${first.x.toFixed(1)},104 Z`
+  return `${line} L${last.x.toFixed(1)},88 L${first.x.toFixed(1)},88 Z`
 })
 
 // ===== 数据加载 =====
@@ -466,7 +459,6 @@ async function loadStats() {
     getDashboardSummary()
   ])
 
-  // 账号
   const accData = accRes.status === 'fulfilled' ? accRes.value?.data : null
   if (accData && (Array.isArray(accData) || Array.isArray(accData?.records) || Array.isArray(accData?.list))) {
     const list = accData.records || accData.list || (Array.isArray(accData) ? accData : [])
@@ -477,7 +469,6 @@ async function loadStats() {
     stats.value.onlineAccounts = null
   }
 
-  // 概览
   const d = dashRes.status === 'fulfilled' ? dashRes.value?.data : null
   if (d && typeof d === 'object') {
     stats.value.products = num(d.goodsCount)
@@ -628,501 +619,767 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+@import './tokens.css';
+
 .m-home {
-  padding: var(--m-space-4);
+  padding: 0;
   width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  overflow-x: hidden;
+  background: #f5f7fa;
+  min-height: 100vh;
+  animation: mPageEnter 0.25s ease-out;
 }
 
-/* ============ 顶部用户卡 ============ */
-.m-home-hero {
-  margin-bottom: var(--m-space-4);
+@keyframes mPageEnter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
-.m-hero-user {
+
+/* ============ 顶部问候区 - PC版设计系统 ============ */
+.m-home-greeting {
+  padding: calc(var(--m-safe-area-top) + 16px) 20px 16px;
+  background: transparent;
+}
+
+.m-greeting-row {
   display: flex;
   align-items: center;
-  gap: var(--m-space-3);
+  justify-content: space-between;
+  gap: 12px;
 }
-.m-hero-avatar {
-  width: 44px;
-  height: 44px;
-  border-radius: var(--m-radius-circle);
-  background: linear-gradient(135deg, #3380ff, #2580ff);
-  color: #fff;
+
+.m-greeting-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.m-greeting-time {
+  font-size: 13px;
+  color: #72809a;
+  font-weight: 400;
+}
+
+.m-greeting-name {
+  font-size: 22px;
+  font-weight: 600;
+  color: #15213d;
+  line-height: 1.3;
+  margin-top: 4px;
+}
+
+.m-account-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.m-account-status:active {
+  background: #f0f5ff !important;
+}
+
+.m-account-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.m-account-status.is-success {
+  background: #e9fbf3;
+  color: #16bf78;
+}
+.m-account-status.is-success .m-account-dot {
+  background: #16bf78;
+}
+
+.m-account-status.is-warning {
+  background: #fff5e6;
+  color: #ff9f22;
+}
+.m-account-status.is-warning .m-account-dot {
+  background: #ff9f22;
+}
+
+.m-account-status.is-danger {
+  background: #fff0f1;
+  color: #ff5b61;
+}
+.m-account-status.is-danger .m-account-dot {
+  background: #ff5b61;
+}
+
+.m-account-status.is-neutral {
+  background: #f4f7fc;
+  color: #72809a;
+}
+.m-account-status.is-neutral .m-account-dot {
+  background: #c4ccd9;
+}
+
+.m-notice-banner {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: #edf5ff;
+  border-radius: 10px;
+  color: #0d6bff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.m-notice-banner:active {
+  background: #f0f5ff;
+}
+
+.m-notice-banner--error {
+  background: #fff0f1;
+  color: #ff5b61;
+}
+
+.m-notice-banner--error:active {
+  background: #f0f5ff;
+}
+
+.m-notice-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: rgba(13, 107, 255, 0.12);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  box-shadow: 0 4px 12px rgba(51, 128, 255, 0.25);
 }
-.m-hero-userinfo {
-  flex: 1;
-  min-width: 0;
-}
-.m-hero-username {
-  font-size: var(--m-font-size-h2);
-  font-weight: var(--m-font-weight-bold);
-  color: var(--m-color-text-primary);
-  line-height: var(--m-line-height-tight);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.m-hero-greet {
-  margin-top: 2px;
-  font-size: var(--m-font-size-caption);
-  color: var(--m-color-text-secondary);
-}
-.m-hero-account {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border-radius: var(--m-radius-pill);
-  font-size: var(--m-font-size-tiny);
-  font-weight: var(--m-font-weight-semibold);
-  cursor: pointer;
-  flex-shrink: 0;
-  background: var(--m-color-bg-subtle);
-  color: var(--m-color-text-secondary);
-}
-.m-hero-account-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--m-radius-circle);
-  background: var(--m-color-text-tertiary);
-}
-.m-hero-account--success { background: var(--m-color-success-bg); color: var(--m-color-success-text); }
-.m-hero-account--success .m-hero-account-dot { background: var(--m-color-success); }
-.m-hero-account--warning { background: var(--m-color-warning-bg); color: var(--m-color-warning-text); }
-.m-hero-account--warning .m-hero-account-dot { background: var(--m-color-warning); }
-.m-hero-account--danger { background: var(--m-color-danger-bg); color: var(--m-color-danger-text); }
-.m-hero-account--danger .m-hero-account-dot { background: var(--m-color-danger); }
-.m-hero-account--neutral { background: var(--m-color-bg-subtle); color: var(--m-color-text-tertiary); }
 
-.m-hero-notice {
-  margin-top: var(--m-space-3);
-  display: flex;
-  align-items: center;
-  gap: var(--m-space-2);
-  padding: 10px var(--m-space-3);
-  background: var(--m-color-primary-bg);
-  border-radius: var(--m-radius-lg);
-  color: var(--m-color-primary);
-  font-size: var(--m-font-size-caption);
-  cursor: pointer;
+.m-notice-icon--error {
+  background: rgba(255, 91, 97, 0.12);
 }
-.m-hero-notice--err {
-  background: var(--m-color-danger-bg);
-  color: var(--m-color-danger-text);
-}
-.m-hero-notice-text {
+
+.m-notice-text {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.m-hero-notice-arrow { flex-shrink: 0; opacity: 0.6; }
+
+.m-notice-arrow {
+  opacity: 0.6;
+  flex-shrink: 0;
+}
 
 /* ============ 区块通用 ============ */
 .m-home-section {
-  margin-bottom: var(--m-space-4);
+  margin-bottom: 20px;
+  padding: 0 20px;
 }
+
 .m-section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: var(--m-space-3);
-  gap: var(--m-space-2);
+  margin-bottom: 12px;
+  gap: 8px;
 }
+
 .m-section-title {
-  font-size: var(--m-font-size-h3);
-  font-weight: var(--m-font-weight-bold);
-  color: var(--m-color-text-primary);
+  font-size: 16px;
+  font-weight: 600;
+  color: #15213d;
 }
-.m-section-count {
+
+.m-section-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-width: 20px;
   height: 20px;
   padding: 0 6px;
-  border-radius: var(--m-radius-pill);
-  background: var(--m-color-danger);
+  border-radius: 10px;
+  background: #ff5b61;
   color: #fff;
-  font-size: var(--m-font-size-tiny);
-  font-weight: var(--m-font-weight-bold);
+  font-size: 12px;
+  font-weight: 500;
 }
-.m-section-refresh {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--m-radius-md);
+
+/* 分段控制器 - PC版风格 */
+.m-segmented {
+  display: flex;
+  gap: 0;
+  background: #f4f7fc;
+  padding: 3px;
+  border-radius: 8px;
+}
+
+.m-segmented-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #72809a;
+  background: transparent;
   border: none;
-  background: var(--m-color-bg-card);
-  color: var(--m-color-text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-weight: 500;
+  font-family: inherit;
+}
+
+.m-segmented-btn.active {
+  background: #fff;
+  color: #15213d;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(31, 53, 94, 0.08), 0 1px 2px rgba(31, 53, 94, 0.06);
+}
+
+.m-segmented-btn:active:not(.active) {
+  background: #f0f5ff;
+}
+
+/* ============ 主数据卡 - PC版风格 ============ */
+.m-card-primary {
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 20px;
+  border: 1px solid #e7edf7;
+  box-shadow: 0 1px 2px rgba(31, 53, 94, 0.04), 0 8px 24px rgba(31, 53, 94, 0.06);
+  margin-bottom: 12px;
+  transition: all 0.15s ease;
+}
+
+.m-card-primary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.m-card-primary-label {
+  font-size: 14px;
+  color: #72809a;
+  font-weight: 500;
+}
+
+.m-card-refresh {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: #f4f7fc;
+  color: #72809a;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: var(--m-shadow-card);
-}
-.m-section-refresh:active { background: var(--m-color-bg-subtle); }
-.m-section-tabs {
-  display: flex;
-  gap: var(--m-space-1);
-}
-.m-tab-pill {
-  padding: 4px var(--m-space-3);
-  border-radius: var(--m-radius-pill);
-  font-size: var(--m-font-size-caption);
-  color: var(--m-color-text-tertiary);
-  background: var(--m-color-bg-subtle);
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.m-tab-pill.active {
-  background: var(--m-color-primary-bg);
-  color: var(--m-color-primary);
-  font-weight: var(--m-font-weight-semibold);
+  transition: all 0.15s ease;
 }
 
-/* ============ 经营状态大卡 ============ */
-.m-stats-board {
-  background: linear-gradient(135deg, #3380ff 0%, #2563eb 100%);
-  border-radius: var(--m-radius-xl);
-  padding: var(--m-space-4);
+.m-card-refresh:active {
+  background: #f0f5ff;
+}
+
+.m-card-primary-value-wrap {
   display: flex;
-  align-items: stretch;
-  gap: var(--m-space-3);
-  color: #fff;
-  box-shadow: 0 8px 24px rgba(51, 128, 255, 0.25);
-  margin-bottom: var(--m-space-3);
+  align-items: baseline;
+  gap: 8px;
 }
-.m-stats-main {
-  flex: 1;
-  min-width: 0;
-}
-.m-stats-side {
-  flex: 0 0 auto;
-  text-align: right;
-  cursor: pointer;
-  min-width: 84px;
-}
-.m-stats-divider {
-  width: 1px;
-  background: rgba(255, 255, 255, 0.25);
-}
-.m-stats-label {
-  font-size: var(--m-font-size-caption);
-  opacity: 0.85;
-  margin-bottom: var(--m-space-1);
-}
-.m-stats-value {
-  font-size: 32px;
-  font-weight: var(--m-font-weight-extrabold);
+
+.m-card-primary-value {
+  font-size: 38px;
+  font-weight: 700;
+  color: #15213d;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   line-height: 1;
-}
-.m-stats-side-value {
-  font-size: var(--m-font-size-h1);
-  font-weight: var(--m-font-weight-bold);
-  line-height: 1;
-}
-.m-stats-side-value.is-success { color: #fff; }
-.m-stats-side-value.is-neutral { opacity: 0.7; }
-.m-stats-sub {
-  margin-top: var(--m-space-2);
-  font-size: var(--m-font-size-tiny);
-  opacity: 0.85;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-.m-stats-amount { font-weight: var(--m-font-weight-semibold); }
-.m-stats-sep { opacity: 0.5; }
-
-/* ============ 经营指标网格 ============ */
-.m-stats-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--m-space-3);
-}
-.m-stat-cell {
-  background: var(--m-color-bg-card);
-  border: 1px solid var(--m-color-border-light);
-  border-radius: var(--m-radius-lg);
-  padding: var(--m-space-3);
-  display: flex;
-  align-items: center;
-  gap: var(--m-space-3);
-  cursor: pointer;
-  transition: transform 0.15s;
-  box-shadow: var(--m-shadow-card);
-}
-.m-stat-cell:active { transform: scale(0.98); }
-.m-stat-cell-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: var(--m-radius-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.m-stat-cell-icon--warning { background: var(--m-color-warning-bg); color: var(--m-color-warning); }
-.m-stat-cell-icon--success { background: var(--m-color-success-bg); color: var(--m-color-success); }
-.m-stat-cell-icon--info { background: var(--m-color-info-bg); color: var(--m-color-info); }
-.m-stat-cell-icon--primary { background: var(--m-color-primary-bg); color: var(--m-color-primary); }
-.m-stat-cell-body { flex: 1; min-width: 0; }
-.m-stat-cell-label {
-  font-size: var(--m-font-size-caption);
-  color: var(--m-color-text-tertiary);
-}
-.m-stat-cell-value {
-  margin-top: 2px;
-  font-size: var(--m-font-size-h2);
-  font-weight: var(--m-font-weight-bold);
-  color: var(--m-color-text-primary);
-  line-height: 1.1;
-}
-.m-stat-cell-value.is-warn { color: var(--m-color-warning-text); }
-.m-stat-cell-desc {
-  margin-top: 2px;
-  font-size: var(--m-font-size-tiny);
-  color: var(--m-color-text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 
-/* ============ 骨架屏 ============ */
-.m-stats-skeleton {
-  display: flex;
-  flex-direction: column;
-  gap: var(--m-space-3);
+.m-card-primary-unit {
+  font-size: 16px;
+  color: #72809a;
+  font-weight: 500;
 }
-.m-skel-card {
-  height: 92px;
-  border-radius: var(--m-radius-xl);
-  background: linear-gradient(90deg, var(--m-color-bg-subtle) 25%, var(--m-color-bg-card) 50%, var(--m-color-bg-subtle) 75%);
+
+.m-card-primary-footer {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: #72809a;
+}
+
+.m-card-primary-amount {
+  color: #16bf78;
+  font-weight: 600;
+}
+
+.m-card-primary-sep {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #c4ccd9;
+}
+
+.m-card-primary-sold {
+  font-weight: 400;
+}
+
+/* 骨架屏 */
+.m-skeleton-primary {
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 20px;
+  border: 1px solid #e7edf7;
+  box-shadow: 0 1px 2px rgba(31, 53, 94, 0.04), 0 8px 24px rgba(31, 53, 94, 0.06);
+  margin-bottom: 12px;
+}
+
+.m-skel-bar {
+  background: #f4f7fc;
+  background: linear-gradient(90deg, #f4f7fc 25%, #edf2f9 50%, #f4f7fc 75%);
   background-size: 200% 100%;
   animation: m-skel 1.4s ease infinite;
+  border-radius: 6px;
 }
+
+.m-skel-bar--lg {
+  height: 14px;
+  width: 80px;
+  margin-bottom: 16px;
+}
+
+.m-skel-bar--xl {
+  height: 38px;
+  width: 140px;
+  margin-bottom: 16px;
+}
+
+.m-skel-bar--sm {
+  height: 14px;
+  width: 180px;
+}
+
 @keyframes m-skel {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
 
-/* ============ 快捷入口 ============ */
-.m-quick-grid {
+/* ============ 4格数据网格 - PC版风格 ============ */
+.m-stats-quad {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: var(--m-space-2);
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
 }
-.m-quick-item {
-  background: var(--m-color-bg-card);
-  border: 1px solid var(--m-color-border-light);
-  border-radius: var(--m-radius-lg);
-  padding: var(--m-space-3) var(--m-space-1);
+
+.m-quad-item {
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 16px 10px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--m-space-2);
+  gap: 10px;
   cursor: pointer;
-  transition: transform 0.15s;
-  font: inherit;
-  box-shadow: var(--m-shadow-card);
+  transition: all 0.15s ease;
+  border: 1px solid #e7edf7;
+  box-shadow: 0 1px 2px rgba(31, 53, 94, 0.04), 0 8px 24px rgba(31, 53, 94, 0.06);
 }
-.m-quick-item:active { transform: scale(0.96); }
-.m-quick-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--m-radius-md);
+
+.m-quad-item:active {
+  background: #f0f5ff;
+}
+
+.m-quad-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.m-quick-icon--green { background: var(--m-color-success-bg); color: var(--m-color-success); }
-.m-quick-icon--orange { background: var(--m-color-warning-bg); color: var(--m-color-warning); }
-.m-quick-icon--blue { background: var(--m-color-info-bg); color: var(--m-color-info); }
-.m-quick-icon--purple { background: var(--m-color-purple-bg); color: var(--m-color-purple); }
-.m-quick-icon--cyan { background: var(--m-color-primary-bg); color: var(--m-color-primary); }
-.m-quick-label {
-  font-size: var(--m-font-size-tiny);
-  color: var(--m-color-text-secondary);
-  text-align: center;
-  line-height: 1.2;
+
+.m-quad-icon--orange { background: #fff5e6; color: #ff9f22; }
+.m-quad-icon--green { background: #e9fbf3; color: #16bf78; }
+.m-quad-icon--blue { background: #edf5ff; color: #0d6bff; }
+.m-quad-icon--purple { background: #f4efff; color: #8b5cf6; }
+
+.m-quad-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #15213d;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
-/* ============ 数据趋势 ============ */
-.m-trend-card {
-  background: var(--m-color-bg-card);
-  border: 1px solid var(--m-color-border-light);
-  border-radius: var(--m-radius-xl);
-  padding: var(--m-space-4);
-  box-shadow: var(--m-shadow-card);
-  color: var(--m-color-primary);
+.m-quad-value.is-warn {
+  color: #ff9f22;
 }
-.m-trend-svg-wrap {
+
+.m-quad-value-sub {
+  font-size: 12px;
+  color: #72809a;
+  font-weight: 500;
+}
+
+.m-quad-label {
+  font-size: 12px;
+  color: #72809a;
+  font-weight: 500;
+  text-align: center;
+}
+
+/* ============ 快捷入口 - PC版风格 ============ */
+.m-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.m-quick-cell {
+  background: #ffffff;
+  border: 1px solid #e7edf7;
+  border-radius: 14px;
+  padding: 14px 8px;
   display: flex;
   flex-direction: column;
-  gap: var(--m-space-2);
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font: inherit;
+  box-shadow: 0 1px 2px rgba(31, 53, 94, 0.04), 0 8px 24px rgba(31, 53, 94, 0.06);
 }
-.m-trend-svg {
-  width: 100%;
+
+.m-quick-cell:active {
+  background: #f0f5ff;
+}
+
+.m-quick-icon-wrap {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.icon-bg-green { background: #e9fbf3; color: #16bf78; }
+.icon-bg-orange { background: #fff5e6; color: #ff9f22; }
+.icon-bg-blue { background: #edf5ff; color: #0d6bff; }
+.icon-bg-purple { background: #f4efff; color: #8b5cf6; }
+.icon-bg-indigo { background: #edf5ff; color: #0d6bff; }
+.icon-bg-teal { background: #eafcff; color: #11b5d8; }
+.icon-bg-pink { background: #fff0f1; color: #ff5b61; }
+.icon-bg-gray { background: #f4f7fc; color: #72809a; }
+
+.m-quick-text {
+  font-size: 13px;
+  color: #15213d;
+  text-align: center;
+  line-height: 1.3;
+  font-weight: 500;
+}
+
+/* ============ 趋势图表卡 - PC版风格 ============ */
+.m-card-chart {
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 20px;
+  border: 1px solid #e7edf7;
+  box-shadow: 0 1px 2px rgba(31, 53, 94, 0.04), 0 8px 24px rgba(31, 53, 94, 0.06);
+}
+
+.m-chart-loading,
+.m-chart-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   height: 120px;
-  display: block;
+  color: #72809a;
+  font-size: 14px;
 }
-.m-trend-summary {
+
+.m-chart-error {
+  cursor: pointer;
+  color: #ff5b61;
+}
+
+.m-chart-error:active {
+  background: #f0f5ff;
+}
+
+.m-chart-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.m-chart-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: var(--m-font-size-caption);
-  color: var(--m-color-text-secondary);
+  font-size: 14px;
+  color: #72809a;
+  font-weight: 500;
 }
-.m-trend-current { font-weight: var(--m-font-weight-semibold); }
-.m-trend-trend.is-up { color: var(--m-color-success); }
-.m-trend-trend.is-down { color: var(--m-color-danger); }
-.m-trend-loading,
-.m-trend-error {
+
+.m-chart-total strong {
+  color: #15213d;
+  font-weight: 700;
+  font-size: 18px;
+  margin-left: 6px;
+}
+
+.m-chart-delta {
+  font-weight: 600;
+}
+
+.m-chart-delta.is-up {
+  color: #16bf78;
+}
+
+.m-chart-delta.is-down {
+  color: #ff5b61;
+}
+
+.m-chart-svg {
+  width: 100%;
+  height: 100px;
+  display: block;
+}
+
+.m-chart-svg path:first-child {
+  fill: rgba(13, 107, 255, 0.08) !important;
+}
+
+.m-chart-line {
+  stroke: #0d6bff !important;
+  filter: none;
+}
+
+.m-chart-dot {
+  transition: all 0.15s ease;
+  stroke: #0d6bff !important;
+}
+
+.m-chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 120px;
+  color: #c4ccd9;
+  font-size: 14px;
+}
+
+/* ============ 列表卡 - PC版风格 ============ */
+.m-card-list {
+  background: #ffffff;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid #e7edf7;
+  box-shadow: 0 1px 2px rgba(31, 53, 94, 0.04), 0 8px 24px rgba(31, 53, 94, 0.06);
+}
+
+.m-list-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  position: relative;
+}
+
+.m-list-item:active {
+  background: #f0f5ff;
+}
+
+.m-list-item:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  left: 60px;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: #eef2f8;
+}
+
+.m-list-item--plain:not(:last-child)::after {
+  left: 36px;
+}
+
+.m-list-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--m-space-2);
-  height: 120px;
-  color: var(--m-color-text-tertiary);
-  font-size: var(--m-font-size-caption);
-  cursor: default;
-}
-.m-trend-error { cursor: pointer; color: var(--m-color-danger-text); }
-
-/* ============ 异常提醒 ============ */
-.m-alert-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--m-space-2);
-}
-.m-alert-row {
-  display: flex;
-  align-items: center;
-  gap: var(--m-space-3);
-  padding: var(--m-space-3);
-  background: var(--m-color-bg-card);
-  border: 1px solid var(--m-color-border-light);
-  border-left-width: 3px;
-  border-radius: var(--m-radius-lg);
-  cursor: pointer;
-  transition: transform 0.15s;
-  box-shadow: var(--m-shadow-card);
-}
-.m-alert-row:active { transform: scale(0.99); }
-.m-alert-row--warning { border-left-color: var(--m-color-warning); background: var(--m-color-warning-bg); }
-.m-alert-row--warning .m-alert-row-icon { color: var(--m-color-warning); }
-.m-alert-row--danger { border-left-color: var(--m-color-danger); background: var(--m-color-danger-bg); }
-.m-alert-row--danger .m-alert-row-icon { color: var(--m-color-danger); }
-.m-alert-row-icon { flex-shrink: 0; }
-.m-alert-row-body { flex: 1; min-width: 0; }
-.m-alert-row-title {
-  font-size: var(--m-font-size-body-sm);
-  font-weight: var(--m-font-weight-semibold);
-  color: var(--m-color-text-primary);
-}
-.m-alert-row-desc {
-  margin-top: 2px;
-  font-size: var(--m-font-size-tiny);
-  color: var(--m-color-text-tertiary);
-}
-.m-alert-row-count {
-  font-size: var(--m-font-size-h2);
-  font-weight: var(--m-font-weight-bold);
-  color: var(--m-color-text-primary);
   flex-shrink: 0;
 }
-.m-alert-row-arrow { color: var(--m-color-text-disabled); flex-shrink: 0; }
 
-/* ============ 最近动态 ============ */
-.m-sse-banner {
-  display: flex;
-  align-items: center;
-  gap: var(--m-space-2);
-  padding: 8px var(--m-space-3);
-  margin-bottom: var(--m-space-2);
-  background: var(--m-color-warning-bg);
-  color: var(--m-color-warning-text);
-  border-radius: var(--m-radius-md);
-  font-size: var(--m-font-size-caption);
+.m-list-icon--warning {
+  background: #fff5e6;
+  color: #ff9f22;
 }
-.m-activity-list {
-  display: flex;
-  flex-direction: column;
-  background: var(--m-color-bg-card);
-  border: 1px solid var(--m-color-border-light);
-  border-radius: var(--m-radius-xl);
-  padding: var(--m-space-3);
-  box-shadow: var(--m-shadow-card);
+
+.m-list-icon--danger {
+  background: #fff0f1;
+  color: #ff5b61;
 }
-.m-activity-item {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--m-space-3);
-  padding: var(--m-space-2) 0;
-  border-bottom: 1px solid var(--m-color-border-light);
-}
-.m-activity-item:last-child { border-bottom: none; }
-.m-activity-dot {
+
+.m-list-dot {
   width: 8px;
   height: 8px;
-  border-radius: var(--m-radius-circle);
-  margin-top: 5px;
+  border-radius: 50%;
+  margin: 8px 0;
   flex-shrink: 0;
 }
-.m-dot-blue { background: var(--m-color-primary); }
-.m-dot-red { background: var(--m-color-danger); }
-.m-dot-green { background: var(--m-color-success); }
-.m-dot-gray { background: var(--m-color-text-disabled); }
-.m-activity-content { flex: 1; min-width: 0; }
-.m-activity-text {
-  font-size: var(--m-font-size-body-sm);
-  font-weight: var(--m-font-weight-medium);
-  color: var(--m-color-text-primary);
+
+.m-dot-blue { background: #0d6bff; }
+.m-dot-red { background: #ff5b61; }
+.m-dot-green { background: #16bf78; }
+.m-dot-gray { background: #c4ccd9; }
+
+.m-list-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.m-list-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #15213d;
+}
+
+.m-list-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #72809a;
+}
+
+.m-list-text {
+  font-size: 14px;
+  color: #15213d;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 500;
 }
-.m-activity-time {
-  margin-top: var(--m-space-1);
-  font-size: var(--m-font-size-tiny);
-  color: var(--m-color-text-tertiary);
+
+.m-list-time {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #72809a;
 }
-.m-activity-loading,
-.m-activity-error {
+
+.m-list-count {
+  font-size: 18px;
+  font-weight: 700;
+  color: #15213d;
+  flex-shrink: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+.m-list-arrow {
+  color: #c4ccd9;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.m-list-loading,
+.m-list-error {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--m-space-2);
-  padding: var(--m-space-4);
-  color: var(--m-color-text-tertiary);
-  font-size: var(--m-font-size-caption);
+  gap: 8px;
+  padding: 20px;
+  color: #72809a;
+  font-size: 14px;
 }
-.m-activity-error { cursor: pointer; color: var(--m-color-danger-text); }
+
+.m-list-error {
+  cursor: pointer;
+  color: #ff5b61;
+}
+
+.m-list-error:active {
+  background: #f0f5ff;
+}
+
+.m-empty-inline {
+  padding: 20px;
+  text-align: center;
+  color: #72809a;
+  font-size: 14px;
+}
+
+/* ============ 连接提示横幅 ============ */
+.m-connection-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  background: #fff5e6;
+  color: #ff9f22;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
 
 .m-spin {
   animation: m-spin 1s linear infinite;
 }
+
 @keyframes m-spin {
   to { transform: rotate(360deg); }
 }
 
-.m-safe-bottom { height: 80px; }
+.m-safe-bottom {
+  height: 96px;
+}
 
 /* ============ 小屏适配 ============ */
 @media (max-width: 360px) {
-  .m-quick-grid { gap: var(--m-space-1); }
-  .m-quick-item { padding: var(--m-space-2) var(--m-space-1); }
-  .m-quick-icon { width: 36px; height: 36px; }
-  .m-stats-value { font-size: 28px; }
-  .m-hero-account { padding: 3px 8px; font-size: 10px; }
-  .m-stats-side { min-width: 72px; }
+  .m-quick-grid {
+    gap: 8px;
+  }
+
+  .m-quick-icon-wrap {
+    width: 44px;
+    height: 44px;
+  }
+
+  .m-card-primary-value {
+    font-size: 32px;
+  }
+
+  .m-stats-quad {
+    gap: 8px;
+  }
+
+  .m-quad-icon {
+    width: 36px;
+    height: 36px;
+  }
 }
 </style>

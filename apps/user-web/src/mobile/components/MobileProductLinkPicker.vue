@@ -270,13 +270,13 @@ watch(
   max-width: 100%;
   max-height: 85vh;
   background: var(--m-color-bg-elevated);
-  border-top-left-radius: var(--m-radius-2xl);
-  border-top-right-radius: var(--m-radius-2xl);
+  border-top-left-radius: var(--m-radius-xl);
+  border-top-right-radius: var(--m-radius-xl);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   padding-bottom: env(safe-area-inset-bottom);
-  box-shadow: var(--m-shadow-elevated);
+  box-shadow: var(--m-shadow-xs);
 }
 .m-picker-header {
   display: flex;
@@ -448,12 +448,13 @@ watch(
 }
 .m-picker-load-more button {
   padding: var(--m-space-2) var(--m-space-5);
-  border-radius: var(--m-radius-xl);
-  border: 1px solid var(--m-color-border);
-  background: var(--m-color-bg-card);
+  border-radius: var(--m-radius-lg);
+  border: none;
+  background: var(--m-color-bg-subtle);
   color: var(--m-color-primary);
   font-size: var(--m-font-size-body-sm);
   cursor: pointer;
+  box-shadow: var(--m-shadow-xs);
 }
 .m-picker-load-more button:disabled {
   opacity: 0.6;

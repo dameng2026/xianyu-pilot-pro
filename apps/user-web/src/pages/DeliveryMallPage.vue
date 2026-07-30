@@ -298,9 +298,10 @@
             <div v-if="payStep === 'select'">
               <div class="mall-pay-product">
                 <div class="mall-pay-product-title">{{ currentPayProduct?.title }}</div>
-                <div class="mall-pay-product-price"><em>¥</em>{{ payAmountYuan }}</div>
+                <div v-if="isCurrentPayFree" class="mall-pay-product-price mall-pay-product-free">免费</div>
+                <div v-else class="mall-pay-product-price"><em>¥</em>{{ payAmountYuan }}</div>
               </div>
-              <div class="mall-form-row">
+              <div v-if="!isCurrentPayFree" class="mall-form-row">
                 <label class="mall-form-label">支付方式</label>
                 <div class="mall-pay-methods">
                   <button
@@ -313,8 +314,8 @@
                 </div>
               </div>
               <div v-if="payError" class="mall-form-error">{{ payError }}</div>
-              <button type="button" class="mall-form-submit" :disabled="paySubmitting || !payMethod" @click="createMallOrder">
-                {{ paySubmitting ? '正在创建订单...' : '确认支付' }}
+              <button type="button" class="mall-form-submit" :disabled="paySubmitting || (!isCurrentPayFree && !payMethod)" @click="createMallOrder">
+                {{ paySubmitting ? (isCurrentPayFree ? '正在领取...' : '正在创建订单...') : (isCurrentPayFree ? '立即领取' : '确认支付') }}
               </button>
             </div>
             <div v-else-if="payStep === 'qr'">
@@ -469,7 +470,8 @@
             <div class="detail-info-grid">
               <div class="detail-info-cell">
                 <div class="detail-info-label">价格</div>
-                <div class="detail-info-value detail-price-value"><em>¥</em>{{ detailPriceDisplay }}</div>
+                <div v-if="isDetailFree" class="detail-info-value detail-price-value detail-price-free">免费</div>
+                <div v-else class="detail-info-value detail-price-value"><em>¥</em>{{ detailPriceDisplay }}</div>
               </div>
               <div class="detail-info-cell">
                 <div class="detail-info-label">创建时间</div>
@@ -524,7 +526,7 @@
                       <path d="M3 10H17" stroke="currentColor" stroke-width="1.5"/>
                     </svg>
                   </span>
-                  立即支付 ¥{{ detailPriceDisplay }}
+                  {{ isDetailFree ? '立即领取' : '立即支付' }}{{ isDetailFree ? '' : ` ¥${detailPriceDisplay}` }}
                 </button>
               </template>
               <template v-else>
@@ -1026,6 +1028,25 @@ const payAmountYuan = computed(() => {
   return String(p.price || '').replace(/^¥\s*/, '')
 })
 
+// 当前待支付商品是否免费（价格为 0）
+const isCurrentPayFree = computed(() => {
+  const p = currentPayProduct.value || {}
+  if (p.priceCent != null) {
+    const n = Number(p.priceCent)
+    if (!Number.isNaN(n)) return n === 0
+  }
+  if (p.priceYuan != null) {
+    const n = Number(p.priceYuan)
+    if (!Number.isNaN(n)) return n === 0
+  }
+  const raw = String(p.price || '').replace(/[¥￥\s]/g, '')
+  if (raw !== '') {
+    const n = Number(raw)
+    if (!Number.isNaN(n)) return n === 0
+  }
+  return false
+})
+
 const payCountdownText = computed(() => {
   const s = payCountdownSeconds.value
   if (s <= 0) return '00:00'
@@ -1042,6 +1063,11 @@ async function handleBuy(product) {
   currentOrder.value = null
   payCountdownSeconds.value = 0
   payModalVisible.value = true
+  // 免费商品：跳过支付方式选择，直接创建订单（后端会自动标记为已支付）
+  if (isProductFree(product)) {
+    await createMallOrder()
+    return
+  }
   if (paymentMethods.value.length === 0) {
     try {
       const data = await getPaymentMethods()
@@ -1061,20 +1087,54 @@ async function handleBuy(product) {
   }
 }
 
+// 判断商品是否免费（价格为 0）
+function isProductFree(p) {
+  if (!p) return false
+  if (p.priceCent != null) {
+    const n = Number(p.priceCent)
+    if (!Number.isNaN(n)) return n === 0
+  }
+  if (p.priceYuan != null) {
+    const n = Number(p.priceYuan)
+    if (!Number.isNaN(n)) return n === 0
+  }
+  const raw = String(p.price || '').replace(/[¥￥\s]/g, '')
+  if (raw !== '') {
+    const n = Number(raw)
+    if (!Number.isNaN(n)) return n === 0
+  }
+  return false
+}
+
 async function createMallOrder() {
-  if (!currentPayProduct.value || !payMethod.value) return
+  if (!currentPayProduct.value) return
+  // 免费商品无需选择支付方式；付费商品必须选择
+  if (!isCurrentPayFree.value && !payMethod.value) return
   paySubmitting.value = true
   payError.value = ''
   try {
-    const order = await purchaseMallProduct({
-      productId: currentPayProduct.value.id,
-      paymentMethod: payMethod.value
-    })
+    const payload = {
+      productId: currentPayProduct.value.id
+    }
+    // 免费商品不传 paymentMethod，后端会跳过支付网关直接完成订单
+    if (!isCurrentPayFree.value) {
+      payload.paymentMethod = payMethod.value
+    }
+    const order = await purchaseMallProduct(payload)
     currentOrder.value = order
-    payStep.value = 'qr'
-    payCountdownSeconds.value = PAY_TIMEOUT_SECONDS
-    startPayPolling()
-    startPayCountdown()
+    // 免费商品：订单已自动标记为已支付，直接显示成功
+    if (isCurrentPayFree.value) {
+      payStep.value = 'success'
+      stopPayPolling()
+      stopPayCountdown()
+      // 免费领取后刷新列表，避免重复领取
+      try { await loadProducts() } catch { /* ignore */ }
+    } else {
+      payStep.value = 'qr'
+      payCountdownSeconds.value = PAY_TIMEOUT_SECONDS
+      startPayPolling()
+      startPayCountdown()
+    }
   } catch (e) {
     payError.value = e?.message || '创建订单失败，请稍后重试'
   } finally {
@@ -1264,6 +1324,25 @@ const detailPriceDisplay = computed(() => {
     if (!Number.isNaN(n)) return (n / 100).toFixed(2)
   }
   return String(p.price || '').replace(/^¥\s*/, '')
+})
+
+// 详情弹窗中商品是否免费
+const isDetailFree = computed(() => {
+  const p = detailProduct.value || {}
+  if (p.priceCent != null) {
+    const n = Number(p.priceCent)
+    if (!Number.isNaN(n)) return n === 0
+  }
+  if (p.priceYuan != null) {
+    const n = Number(p.priceYuan)
+    if (!Number.isNaN(n)) return n === 0
+  }
+  const raw = String(p.price || '').replace(/[¥￥\s]/g, '')
+  if (raw !== '') {
+    const n = Number(raw)
+    if (!Number.isNaN(n)) return n === 0
+  }
+  return false
 })
 
 const detailCoverUrl = computed(() => {
@@ -3339,6 +3418,18 @@ onBeforeUnmount(() => {
   font-weight: 700;
   margin-right: 1px;
   margin-top: 3px;
+}
+
+/* 免费商品价格样式 */
+.detail-price-free,
+.mall-pay-product-free {
+  color: #00b578;
+  font-weight: 800;
+}
+
+.mall-pay-product-free {
+  font-size: 22px;
+  letter-spacing: 1px;
 }
 
 .detail-text-product-tip {

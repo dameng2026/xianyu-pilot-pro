@@ -50,8 +50,20 @@ logger = logging.getLogger(__name__)
 REFUND_LIST_API = "mtop.taobao.idle.merchant.refund.list"
 # 同意退款接口（需求第十一节确认，白名单）
 REFUND_AGREE_API = "mtop.taobao.idle.merchant.refund.agree.refund"
+# 退款服务记录接口（需求第六节确认）
+REFUND_SERVICE_RECORD_API = "mtop.taobao.idle.merchant.refund.service.record"
+# 完整订单信息接口（需求第七节确认）
+REFUND_FULL_INFO_API = "mtop.taobao.idle.trade.merchant.full.info"
+# 退款核心详情接口（需求第八节确认）
+REFUND_DETAIL_API = "mtop.taobao.idle.merchant.refund.detail"
 # 允许执行的 MTOP 操作 API 白名单（防止 rightVO 返回任意 API 被执行）
 ALLOWED_MTOP_ACTION_APIS = frozenset({REFUND_AGREE_API})
+# 详情接口白名单（仅允许查询类接口，禁止执行类接口）
+DETAIL_QUERY_APIS = frozenset({
+    REFUND_SERVICE_RECORD_API,
+    REFUND_FULL_INFO_API,
+    REFUND_DETAIL_API,
+})
 
 # 全部订单查询的 queryCode（需求第五节确认）
 QUERY_CODE_ALL = "ALL"
@@ -66,6 +78,11 @@ SINGLE_ACCOUNT_CACHE_TTL_SECONDS = 60
 ALL_ACCOUNTS_CACHE_TTL_SECONDS = 120
 # 完整同步间隔（需求第十七节）：较长间隔执行完整校验
 FULL_SYNC_INTERVAL_SECONDS = 30 * 60  # 30 分钟
+
+# 退款详情组合缓存：进程内短时缓存 + 进行中请求去重
+# 缓存命中时立即返回旧数据，过期则后台刷新
+REFUND_DETAIL_CACHE_TTL_SECONDS = 60  # 60 秒短缓存（需求第十九节）
+REFUND_DETAIL_CACHE_MAX_ENTRIES = 200  # 防止内存膨胀
 
 # 多账号并发控制（需求第十八节）
 MAX_CONCURRENT_ACCOUNTS = 3
@@ -93,6 +110,14 @@ DANGEROUS_PROTOCOLS = frozenset({"javascript:", "data:", "file:", "vbscript:"})
 # 进程内同步任务去重锁（同账号同时只能一轮同步）
 _account_sync_locks: dict[int, asyncio.Lock] = {}
 _locks_guard = asyncio.Lock()
+
+# 退款详情组合缓存（需求第十九节）：按 (tenant_id, account_id, order_id, refund_id) 隔离
+# value: {"data": combined_dict, "saved_at": datetime, "last_success_at": datetime}
+_refund_detail_cache: dict[tuple, dict] = {}
+# 退款详情进行中请求去重：同一详情并发进入只发一组请求
+# value: asyncio.Future
+_refund_detail_inflight: dict[tuple, asyncio.Future] = {}
+_refund_detail_cache_guard = asyncio.Lock()
 
 
 # ============================================================
@@ -1401,3 +1426,1730 @@ def is_all_accounts_cache_expired(latest_sync_time: Optional[datetime]) -> bool:
     if latest_sync_time is None:
         return True
     return (datetime.now() - latest_sync_time).total_seconds() > ALL_ACCOUNTS_CACHE_TTL_SECONDS
+
+
+# ============================================================
+# 退款详情：三个 MTOP 接口调用 + 数据解析 + 缓存
+# ============================================================
+# 需求覆盖：第六节（接口一 service.record）、第七节（接口二 full.info）、
+# 第八节（接口三 refund.detail）、第九节（components 按 render 解析）、
+# 第十节（状态和流程）、第十一节（基本信息）、第十二节（物流和凭证）、
+# 第十三节（富文本安全）、第十四节（详情页操作）、第十五节（数据职责）、
+# 第十六节（一致性校验）、第十七节（成功判断）、第十八节（签名和 Cookie）、
+# 第十九节（缓存和去重）、第二十节（局部失败和重试）
+
+
+# ----- HTML 实体解码与富文本安全（需求第十三节） -----
+
+import html as _html
+import re as _re
+
+# 允许的有限安全样式白名单（其他样式忽略）
+_SAFE_STYLE_PROPERTIES = frozenset({
+    "color", "font-size", "font-weight", "line-height",
+    "margin-top", "margin-bottom", "text-align",
+})
+
+# 富文本 linkUrl 协议白名单（仅 https）
+# 注意：urlparse().scheme 返回值不带冒号，所以这里不能写 "https:"
+_RICH_TEXT_LINK_PROTOCOLS = frozenset({"https"})
+
+# 富文本 linkUrl 域名白名单（与退款详情官方域名一致）
+_RICH_TEXT_LINK_HOSTS = frozenset({
+    "goofish.com",
+    "www.goofish.com",
+    "seller.goofish.com",
+    "taobao.com",
+    "www.taobao.com",
+    "alibaba.com",
+    "www.alibaba.com",
+    "alipay.com",
+    "www.alipay.com",
+})
+
+
+def _decode_html_entities(text: Any) -> str:
+    """安全解码 HTML 实体（如 &yen; &amp; &lt;），返回纯文本。
+
+    使用标准库 html.unescape，不引入任何 HTML 解析器。
+    """
+    if text is None:
+        return ""
+    s = str(text)
+    if not s:
+        return ""
+    try:
+        return _html.unescape(s)
+    except Exception:
+        return s
+
+
+def _validate_rich_text_link(url: Any) -> Optional[str]:
+    """校验富文本 linkUrl：仅允许 https + 官方域名白名单。
+
+    拒绝 javascript/data/file 协议；拒绝非白名单域名。
+    返回安全 URL 或 None。
+    """
+    if not url or not isinstance(url, str):
+        return None
+    s = url.strip()
+    if not s:
+        return None
+    lower = s.lower()
+    for proto in DANGEROUS_PROTOCOLS:
+        if lower.startswith(proto):
+            return None
+    try:
+        parsed = urlparse(s)
+    except (ValueError, TypeError):
+        return None
+    if parsed.scheme not in _RICH_TEXT_LINK_PROTOCOLS:
+        return None
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return None
+    for trusted in _RICH_TEXT_LINK_HOSTS:
+        if host == trusted or host.endswith("." + trusted):
+            return s
+    return None
+
+
+def _safe_style_dict(style_value: Any) -> dict:
+    """解析内联样式字符串为有限安全样式 dict，未识别样式忽略。"""
+    if not style_value or not isinstance(style_value, str):
+        return {}
+    result: dict[str, str] = {}
+    for part in style_value.split(";"):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        key, _, val = part.partition(":")
+        key = key.strip().lower()
+        val = val.strip()
+        if not key or not val:
+            continue
+        if key in _SAFE_STYLE_PROPERTIES:
+            # 限制值长度，防止溢出
+            if len(val) <= 32:
+                result[key] = val
+    return result
+
+
+def _normalize_rich_text_items(items: Any) -> list[dict]:
+    """标准化富文本数组为安全渲染结构。
+
+    输入项可能含字段：content, linkUrl, style, type, lineHeight, marginTop。
+    输出项：{ content: str, linkUrl: str|null, style: dict, type: str }
+    - content 作为纯文本，HTML 实体解码
+    - linkUrl 经过协议和官方域名白名单校验
+    - style 仅保留有限安全样式
+    """
+    if not isinstance(items, list):
+        return []
+    result = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        content = _decode_html_entities(item.get("content"))
+        link_url = _validate_rich_text_link(item.get("linkUrl"))
+        # 兼容字段名：lineHeight / marginTop 单独字段
+        style_dict = _safe_style_dict(item.get("style"))
+        if "lineHeight" in item and isinstance(item["lineHeight"], (str, int, float)):
+            lh = str(item["lineHeight"]).strip()
+            if lh and len(lh) <= 16:
+                style_dict.setdefault("line-height", lh)
+        if "marginTop" in item and isinstance(item["marginTop"], (str, int, float)):
+            mt = str(item["marginTop"]).strip()
+            if mt and len(mt) <= 16:
+                style_dict.setdefault("margin-top", mt)
+        item_type = str(item.get("type") or "text").strip().lower() or "text"
+        if item_type not in ("text", "link"):
+            item_type = "text"
+        result.append({
+            "content": content,
+            "linkUrl": link_url,
+            "style": style_dict,
+            "type": item_type,
+        })
+    return result
+
+
+# ----- 凭证图片 URL 校验（需求第十二节） -----
+
+# 凭证图片 URL 允许的协议（仅 https）
+# 注意：urlparse().scheme 返回值不带冒号，所以这里不能写 "https:"
+_PROOF_IMAGE_PROTOCOLS = frozenset({"https"})
+
+# 凭证图片 URL 允许的域名白名单（闲鱼/阿里官方 CDN）
+_PROOF_IMAGE_HOSTS = frozenset({
+    "img.alicdn.com",
+    "gw.alicdn.com",
+    "cdn.alicdn.com",
+    "img.taobaocdn.com",
+    "aos-cdn.goofish.com",
+    "img.goofish.com",
+    "gw.goofish.com",
+})
+
+
+def _validate_proof_image_url(url: Any) -> Optional[str]:
+    """校验凭证图片 URL：仅允许可信 HTTPS 官方媒体地址。
+
+    拒绝 javascript/data/file 协议；拒绝非白名单域名。
+    返回安全 URL 或 None。
+    """
+    if not url or not isinstance(url, str):
+        return None
+    s = url.strip()
+    if not s:
+        return None
+    # 兼容 //cdn.example.com/x.jpg 协议相对 URL（统一升级为 https）
+    if s.startswith("//"):
+        s = "https:" + s
+    lower = s.lower()
+    for proto in DANGEROUS_PROTOCOLS:
+        if lower.startswith(proto):
+            return None
+    try:
+        parsed = urlparse(s)
+    except (ValueError, TypeError):
+        return None
+    if parsed.scheme not in _PROOF_IMAGE_PROTOCOLS:
+        return None
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return None
+    for trusted in _PROOF_IMAGE_HOSTS:
+        if host == trusted or host.endswith("." + trusted):
+            return s
+    return None
+
+
+def _normalize_proof_media_list(items: Any) -> list[dict]:
+    """标准化凭证多媒体列表为安全结构。
+
+    输入项可能含字段：url, type, width, height, etc.
+    输出项：{ url: str, type: str }
+    - url 必须经过 _validate_proof_image_url 校验
+    - 非法 URL 直接跳过（不返回 None 项）
+    """
+    if not isinstance(items, list):
+        return []
+    result = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        url = item.get("url") or item.get("picUrl") or item.get("imageUrl")
+        safe_url = _validate_proof_image_url(url)
+        if not safe_url:
+            continue
+        media_type = str(item.get("type") or "image").strip().lower() or "image"
+        if media_type not in ("image", "video"):
+            media_type = "image"
+        result.append({"url": safe_url, "type": media_type})
+    return result
+
+
+# ----- 三个 MTOP 接口调用（同步函数，使用 _post_mtop_with_token_retry） -----
+
+# 错误分类枚举（脱敏）：用于前端按类别展示友好提示
+# 不直接暴露 Cookie / sign / 完整 ret
+REFUND_ERROR_CODES = frozenset({
+    "MTOP_RET_FAILURE",        # MTOP ret 不含 SUCCESS
+    "AUTH_EXPIRED",            # 令牌过期 / 登录态失效
+    "INVALID_RESPONSE_SHAPE",  # 响应结构异常（缺少 data.data / data.module 等）
+    "ID_CONSISTENCY_ERROR",    # 响应 orderId/refundId 与请求不一致
+    "ACCOUNT_MISMATCH",        # 退款与账号不匹配（不应出现于 fetch 层）
+    "REFUND_NOT_FOUND",        # 退款记录不存在
+    "NETWORK_TIMEOUT",         # 请求超时
+    "NETWORK_ERROR",           # 网络异常
+    "EMPTY_CREDENTIAL",        # Cookie / token 为空
+    "UNKNOWN_ERROR",           # 兜底
+})
+
+
+def _classify_mtop_error(ret: Any, error_message: Optional[str] = None) -> str:
+    """根据 MTOP ret 与错误信息推断脱敏错误类别（供前端展示）。
+
+    判定顺序：
+    1. 令牌过期 / 登录态失效（FAIL_SYS_TOKEN_EXOIRED / FAIL_SYS_TOKEN_EMPTY / 令牌过期）
+    2. 网络超时
+    3. 网络异常（XIANYU_API_UNAVAILABLE 等）
+    4. MTOP ret 失败（含 SUCCESS::FAIL_*)
+    5. 兜底 UNKNOWN_ERROR
+    """
+    err_text = str(error_message or "")
+    ret_text = ""
+    if ret:
+        if isinstance(ret, list):
+            ret_text = " ".join(str(r) for r in ret)
+        else:
+            ret_text = str(ret)
+    combined = (ret_text + " " + err_text).upper()
+
+    # 1. 登录态失效
+    if (
+        "FAIL_SYS_TOKEN_EXOIRED" in combined
+        or "FAIL_SYS_TOKEN_EMPTY" in combined
+        or "令牌过期" in err_text
+        or "令牌为空" in err_text
+        or "FAIL_SYS_SESSION_EXPIRED" in combined
+    ):
+        return "AUTH_EXPIRED"
+
+    # 2. 网络超时
+    if "请求超时" in err_text or "TIMEOUT" in combined:
+        return "NETWORK_TIMEOUT"
+
+    # 3. 网络异常
+    if "XIANYU_API_UNAVAILABLE" in combined or "闲鱼接口请求失败" in err_text:
+        return "NETWORK_ERROR"
+
+    # 4. MTOP ret 失败（ret 存在但不含 SUCCESS）
+    if ret_text:
+        return "MTOP_RET_FAILURE"
+
+    # 5. 兜底
+    return "UNKNOWN_ERROR"
+
+
+def fetch_refund_service_record(
+    account_id: int, order_id: str, timeout: int = 20
+) -> dict:
+    """拉取退款服务记录（接口一，需求第六节）。
+
+    data: {"orderId": "目标订单ID"}
+    主要响应：data.data.refundRecordList / data.data.postageRefundRecordList
+
+    查询参数（需求第六节确认）：
+    - type=originaljson（不是 json）
+    - 不带 valueType=string
+    之前使用共享的 type=json + valueType=string 会导致接口返回失败，
+    必须使用 type=originaljson 才能正确返回退款记录数据。
+    """
+    if not order_id or not isinstance(order_id, str):
+        return {"success": False, "error": "orderId 不能为空"}
+    auth = _get_account_auth(account_id)
+    if not auth:
+        return {"success": False, "error": "无法获取账号认证信息"}
+    cookie_str = _decrypt_value(auth.get("encrypted_cookie") or "")
+    if not cookie_str:
+        return {"success": False, "error": "Cookie为空"}
+
+    data_obj = {"orderId": order_id}
+    data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
+
+    result = _post_mtop_with_token_retry(
+        account_id, cookie_str, REFUND_SERVICE_RECORD_API, data_str, timeout,
+        query_type="originaljson", include_value_type=False,
+    )
+    if not result.get("success"):
+        return {
+            "success": False,
+            "error": result.get("error") or "退款服务记录接口调用失败",
+            "ret": result.get("ret"),
+            "errorCode": _classify_mtop_error(result.get("ret"), result.get("error")),
+        }
+    return {"success": True, "data": result.get("data") or {}, "ret": result.get("ret")}
+
+
+def fetch_refund_full_info(
+    account_id: int, order_id: str, timeout: int = 20
+) -> dict:
+    """拉取完整订单信息（接口二，需求第七节）。
+
+    注意：参数名是 tid，不是 orderId/refundId/itemId。
+    data: {"tid": "目标订单ID"}
+    主要响应：data.module
+
+    查询参数（需求第七节确认）：
+    - type=json
+    - valueType=string
+    """
+    if not order_id or not isinstance(order_id, str):
+        return {"success": False, "error": "orderId 不能为空"}
+    auth = _get_account_auth(account_id)
+    if not auth:
+        return {"success": False, "error": "无法获取账号认证信息"}
+    cookie_str = _decrypt_value(auth.get("encrypted_cookie") or "")
+    if not cookie_str:
+        return {"success": False, "error": "Cookie为空"}
+
+    # 严格按需求第七节：参数名是 tid
+    data_obj = {"tid": order_id}
+    data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
+
+    result = _post_mtop_with_token_retry(
+        account_id, cookie_str, REFUND_FULL_INFO_API, data_str, timeout,
+        query_type="json", include_value_type=True,
+    )
+    if not result.get("success"):
+        return {
+            "success": False,
+            "error": result.get("error") or "完整订单信息接口调用失败",
+            "ret": result.get("ret"),
+            "errorCode": _classify_mtop_error(result.get("ret"), result.get("error")),
+        }
+    return {"success": True, "data": result.get("data") or {}, "ret": result.get("ret")}
+
+
+def fetch_refund_detail(
+    account_id: int, order_id: str, refund_id: str, timeout: int = 20
+) -> dict:
+    """拉取退款核心详情（接口三，需求第八节）。
+
+    data: {"orderId": "目标订单ID", "refundId": "目标退款ID"}
+    主要响应：data.data（含 components / basicRefundInfo / 等）
+
+    查询参数（需求第八节确认）：
+    - type=originaljson（不是 json）
+    - 不带 valueType=string
+    之前使用共享的 type=json + valueType=string 会导致接口返回失败，
+    必须使用 type=originaljson 才能正确返回 components 动态组件数组。
+    """
+    if not order_id or not isinstance(order_id, str):
+        return {"success": False, "error": "orderId 不能为空"}
+    if not refund_id or not isinstance(refund_id, str):
+        return {"success": False, "error": "refundId 不能为空"}
+    auth = _get_account_auth(account_id)
+    if not auth:
+        return {"success": False, "error": "无法获取账号认证信息"}
+    cookie_str = _decrypt_value(auth.get("encrypted_cookie") or "")
+    if not cookie_str:
+        return {"success": False, "error": "Cookie为空"}
+
+    data_obj = {"orderId": order_id, "refundId": refund_id}
+    data_str = json.dumps(data_obj, separators=(",", ":"), ensure_ascii=False)
+
+    result = _post_mtop_with_token_retry(
+        account_id, cookie_str, REFUND_DETAIL_API, data_str, timeout,
+        query_type="originaljson", include_value_type=False,
+    )
+    if not result.get("success"):
+        return {
+            "success": False,
+            "error": result.get("error") or "退款核心详情接口调用失败",
+            "ret": result.get("ret"),
+            "errorCode": _classify_mtop_error(result.get("ret"), result.get("error")),
+        }
+    return {"success": True, "data": result.get("data") or {}, "ret": result.get("ret")}
+
+
+# ----- 成功判定（需求第十七节） -----
+
+def _is_mtop_success(ret: Any) -> bool:
+    """判断 MTOP ret 是否包含 SUCCESS。"""
+    if not ret:
+        return False
+    if isinstance(ret, list):
+        return any(isinstance(r, str) and r.startswith("SUCCESS") for r in ret)
+    if isinstance(ret, str):
+        return ret.startswith("SUCCESS")
+    return False
+
+
+def _check_service_record_success(result: dict) -> tuple[bool, str]:
+    """service.record 成功判定：data.data 存在，两个记录列表安全回退为空数组。"""
+    if not result.get("success"):
+        return False, result.get("error") or "接口调用失败"
+    if not _is_mtop_success(result.get("ret")):
+        return False, "接口返回失败状态"
+    data = result.get("data")
+    if not isinstance(data, dict) or "data" not in data:
+        return False, "退款服务记录返回结构异常：缺少 data.data"
+    inner_data = data.get("data")
+    if not isinstance(inner_data, dict):
+        return False, "退款服务记录返回结构异常：data.data 非对象"
+    return True, ""
+
+
+def _check_full_info_success(result: dict) -> tuple[bool, str]:
+    """full.info 成功判定：data.module 存在。"""
+    if not result.get("success"):
+        return False, result.get("error") or "接口调用失败"
+    if not _is_mtop_success(result.get("ret")):
+        return False, "接口返回失败状态"
+    data = result.get("data")
+    if not isinstance(data, dict) or "module" not in data:
+        return False, "完整订单信息返回结构异常：缺少 data.module"
+    module = data.get("module")
+    if not isinstance(module, dict):
+        return False, "完整订单信息返回结构异常：data.module 非对象"
+    return True, ""
+
+
+def _check_refund_detail_success(result: dict, expected_order_id: str, expected_refund_id: str) -> tuple[bool, str]:
+    """refund.detail 成功判定：data.data 存在，components 为数组，orderId 和 refundId 合法。
+
+    同时执行一致性校验（需求第十六节）：响应 orderId/refundId 必须与请求一致。
+    """
+    if not result.get("success"):
+        return False, result.get("error") or "接口调用失败"
+    if not _is_mtop_success(result.get("ret")):
+        return False, "接口返回失败状态"
+    data = result.get("data")
+    if not isinstance(data, dict) or "data" not in data:
+        return False, "退款核心详情返回结构异常：缺少 data.data"
+    inner_data = data.get("data")
+    if not isinstance(inner_data, dict):
+        return False, "退款核心详情返回结构异常：data.data 非对象"
+    components = inner_data.get("components")
+    if components is not None and not isinstance(components, list):
+        return False, "退款核心详情返回结构异常：components 非数组"
+    # 一致性校验：响应 orderId/refundId 必须等于请求
+    resp_order_id = inner_data.get("orderId")
+    resp_refund_id = inner_data.get("refundId")
+    if resp_order_id is not None and str(resp_order_id) != str(expected_order_id):
+        return False, f"退款核心详情响应 orderId 不一致：期望 {expected_order_id}，实际 {resp_order_id}"
+    if resp_refund_id is not None and str(resp_refund_id) != str(expected_refund_id):
+        return False, f"退款核心详情响应 refundId 不一致：期望 {expected_refund_id}，实际 {resp_refund_id}"
+    return True, ""
+
+
+def _check_full_info_order_id_consistency(module: dict, expected_order_id: str) -> tuple[bool, str]:
+    """full.info 一致性校验（需求第十六节）：merchantCommonData.orderId 等于请求。"""
+    if not isinstance(module, dict):
+        return True, ""  # 已在前置校验拦截
+    common_data = module.get("merchantCommonData")
+    if not isinstance(common_data, dict):
+        return True, ""  # 模块缺失不视为不一致
+    resp_order_id = common_data.get("orderId")
+    if resp_order_id is None:
+        return True, ""
+    if str(resp_order_id) != str(expected_order_id):
+        return False, f"完整订单信息响应 orderId 不一致：期望 {expected_order_id}，实际 {resp_order_id}"
+    return True, ""
+
+
+# ----- components 按 render 解析（需求第九节） -----
+
+# 已确认的 render 值
+SUPPORTED_REFUND_DETAIL_RENDERS = frozenset({
+    "nodeStatusInfo",
+    "refundStatusInfo",
+    "investigationInfo",
+    "refundDescribe",
+    "progressDetail",
+    "bottomBar",
+    "bottomShow",
+    "popPostageUrl",
+    "basicRefundInfo",
+    "postageRefundInfo",
+})
+
+
+def _find_component_by_render(components: list, render: str) -> Optional[dict]:
+    """按 render 字段查找组件，不按固定下标。
+
+    需求第九节：顺序变化不影响页面，缺失组件只隐藏对应区域。
+    """
+    if not isinstance(components, list):
+        return None
+    for comp in components:
+        if isinstance(comp, dict) and comp.get("render") == render:
+            return comp
+    return None
+
+
+def _parse_refund_detail_components(inner_data: dict, current_refund_id: str) -> dict:
+    """按 render 解析 components 数组，返回标准化结构。
+
+    输出结构（按需求第十~十三节）：
+    {
+        "basicRefundInfo": {...},      # 退款基本信息
+        "refundStatusInfo": {...},     # 退款状态头部
+        "nodeStatusInfo": {...},       # 退款阶段节点
+        "progressDetail": {...},       # 退款进度
+        "refundDescribe": {...},       # 退款说明（富文本安全渲染）
+        "bottomBar": [...],            # 底部操作（已过滤递归按钮）
+        "bottomShow": [...],           # 底部展示信息
+        "postageRefundInfo": {...},    # 退运费信息
+        "popPostageUrl": str|null,     # 退运费链接
+        "unknown_renders": [...],      # 未识别 render（仅记录名，不报错）
+    }
+    """
+    result = {
+        "basicRefundInfo": None,
+        "refundStatusInfo": None,
+        "nodeStatusInfo": None,
+        "progressDetail": None,
+        "refundDescribe": None,
+        "bottomBar": [],
+        "bottomShow": [],
+        "postageRefundInfo": None,
+        "popPostageUrl": None,
+        "unknown_renders": [],
+    }
+    if not isinstance(inner_data, dict):
+        return result
+    components = inner_data.get("components")
+    if not isinstance(components, list):
+        return result
+
+    for comp in components:
+        if not isinstance(comp, dict):
+            continue
+        render = comp.get("render")
+        if not render:
+            continue
+        if render not in SUPPORTED_REFUND_DETAIL_RENDERS:
+            # 未识别 render 安全忽略（需求第九节）
+            if isinstance(render, str) and len(render) <= 64:
+                result["unknown_renders"].append(render)
+            continue
+        if render == "basicRefundInfo":
+            result["basicRefundInfo"] = _parse_basic_refund_info(comp)
+        elif render == "refundStatusInfo":
+            result["refundStatusInfo"] = _parse_refund_status_info(comp)
+        elif render == "nodeStatusInfo":
+            result["nodeStatusInfo"] = _parse_node_status_info(comp)
+        elif render == "progressDetail":
+            result["progressDetail"] = _parse_progress_detail(comp)
+        elif render == "refundDescribe":
+            result["refundDescribe"] = _parse_refund_describe(comp)
+        elif render == "bottomBar":
+            result["bottomBar"] = _parse_bottom_bar(comp, current_refund_id)
+        elif render == "bottomShow":
+            result["bottomShow"] = _parse_bottom_show(comp)
+        elif render == "postageRefundInfo":
+            result["postageRefundInfo"] = _parse_postage_refund_info(comp)
+        elif render == "popPostageUrl":
+            result["popPostageUrl"] = _parse_pop_postage_url(comp)
+        # investigationInfo 问卷本次不实现（需求第十三节明确）
+    return result
+
+
+def _parse_basic_refund_info(comp: dict) -> Optional[dict]:
+    """解析 basicRefundInfo 组件（需求第十一节）。"""
+    if not isinstance(comp, dict):
+        return None
+    data = comp.get("data") or comp
+    if not isinstance(data, dict):
+        return None
+    # 凭证图片安全校验
+    proof = data.get("refundProof") or {}
+    if not isinstance(proof, dict):
+        proof = {}
+    proof_media = _normalize_proof_media_list(proof.get("proofMultiMediaList"))
+
+    # 物流信息：买家退货物流 vs 卖家发货物流（需求第十二节）
+    buyer_return_log = data.get("buyerReturnLogisticInfo") or {}
+    if not isinstance(buyer_return_log, dict):
+        buyer_return_log = {}
+    trade_log = data.get("tradeLogisticInfo") or {}
+    if not isinstance(trade_log, dict):
+        trade_log = {}
+
+    return {
+        "applyMoney": _safe_decimal(data.get("applyMoney")),
+        "csStatus": data.get("csStatus"),
+        "csStatusDesc": data.get("csStatusDesc"),
+        "disputeEndTime": _parse_datetime(data.get("disputeEndTime")),
+        "gmtCreatedTime": _parse_datetime(data.get("gmtCreatedTime")),
+        "gmtModifiedTime": _parse_datetime(data.get("gmtModifiedTime")),
+        "goodsStatus": data.get("goodsStatus"),
+        "goodsStatusDesc": data.get("goodsStatusDesc"),
+        "postFeeBear": data.get("postFeeBear"),
+        "reasonText": data.get("reasonText"),
+        "reasonTextId": data.get("reasonTextId"),
+        "refundId": str(data["refundId"]) if data.get("refundId") is not None else None,
+        "refundProof": {"proofMultiMediaList": proof_media} if proof_media else {"proofMultiMediaList": []},
+        "refundStatus": data.get("refundStatus"),
+        "refundStatusDesc": data.get("refundStatusDesc"),
+        "refundType": data.get("refundType"),
+        "refundTypeDesc": data.get("refundTypeDesc"),
+        # 物流：买家退货 vs 卖家发货（明确区分）
+        "buyerReturnLogisticInfo": _normalize_logistic_info(buyer_return_log),
+        "tradeLogisticInfo": _normalize_logistic_info(trade_log),
+    }
+
+
+def _normalize_logistic_info(log_info: dict) -> dict:
+    """标准化物流信息：明确区分买家退货物流和卖家发货物流。"""
+    if not isinstance(log_info, dict):
+        return {"companyName": None, "mailNo": None, "consignTime": None}
+    return {
+        "companyName": log_info.get("companyName"),
+        "mailNo": _mask_mail_no(log_info.get("mailNo")),
+        "consignTime": _parse_datetime(log_info.get("consignTime")),
+    }
+
+
+def _parse_refund_status_info(comp: dict) -> Optional[dict]:
+    """解析 refundStatusInfo 组件（退款状态头部）。"""
+    if not isinstance(comp, dict):
+        return None
+    data = comp.get("data") or comp
+    if not isinstance(data, dict):
+        return None
+    return {
+        "title": data.get("title"),
+        "desc": _decode_html_entities(data.get("desc")),
+        "status": data.get("status"),
+    }
+
+
+def _parse_node_status_info(comp: dict) -> Optional[dict]:
+    """解析 nodeStatusInfo 组件（退款阶段节点，需求第十节）。"""
+    if not isinstance(comp, dict):
+        return None
+    data = comp.get("data") or comp
+    if not isinstance(data, dict):
+        return None
+    need_show = data.get("needShowStatusNode")
+    if need_show is not None:
+        need_show = _parse_bool_string(need_show)
+    nodes = data.get("nodeStatusList") or []
+    if not isinstance(nodes, list):
+        nodes = []
+    parsed_nodes = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        parsed_nodes.append({
+            "nodeStatus": node.get("nodeStatus"),
+            "time": _parse_datetime(node.get("time")),
+            "txt": _decode_html_entities(node.get("txt")),
+        })
+    return {
+        "needShowStatusNode": need_show,
+        "nodeStatusList": parsed_nodes,
+    }
+
+
+def _parse_progress_detail(comp: dict) -> Optional[dict]:
+    """解析 progressDetail 组件（退款进度，需求第十节）。"""
+    if not isinstance(comp, dict):
+        return None
+    data = comp.get("data") or comp
+    if not isinstance(data, dict):
+        return None
+    title = _decode_html_entities(data.get("title"))
+    nodes = data.get("progressNodeList") or []
+    if not isinstance(nodes, list):
+        nodes = []
+    parsed_nodes = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        # tips 可能含 HTML 实体（如 &yen;），安全解码后作为纯文本
+        tips = node.get("tips")
+        if tips is not None:
+            tips = _decode_html_entities(tips)
+        # proofInfoList 凭证
+        proof_info_list = node.get("proofInfoList") or []
+        if not isinstance(proof_info_list, list):
+            proof_info_list = []
+        parsed_proof = _normalize_proof_media_list(proof_info_list)
+        parsed_nodes.append({
+            "actionCode": node.get("actionCode"),
+            "proofInfoList": parsed_proof,
+            "text": _decode_html_entities(node.get("text")),
+            "timeStr": node.get("timeStr"),
+            "tips": tips,
+        })
+    return {
+        "title": title,
+        "progressNodeList": parsed_nodes,
+    }
+
+
+def _parse_refund_describe(comp: dict) -> Optional[dict]:
+    """解析 refundDescribe 组件（退款说明，富文本安全，需求第十三节）。"""
+    if not isinstance(comp, dict):
+        return None
+    data = comp.get("data") or comp
+    if not isinstance(data, dict):
+        return None
+    title = _decode_html_entities(data.get("title"))
+    desc_rich_text = data.get("descRichText")
+    return {
+        "title": title,
+        "descRichText": _normalize_rich_text_items(desc_rich_text),
+    }
+
+
+def _parse_bottom_bar(comp: dict, current_refund_id: str) -> list:
+    """解析 bottomBar 组件（详情页操作，需求第十四节）。
+
+    关键约束：
+    - 不再次显示会跳回相同退款详情的"退款详情"按钮（避免递归跳转）
+    - 只允许 viewRefundDetail / applyDisputePage / agreeRefundApply（白名单）
+    - URL 类按钮做安全校验
+    - doubleCheck 类按钮保留 doubleCheck 数据
+    """
+    if not isinstance(comp, dict):
+        return []
+    data = comp.get("data") or comp
+    btn_list = data
+    if isinstance(data, dict):
+        btn_list = data.get("btnList") or data.get("buttons") or []
+    if not isinstance(btn_list, list):
+        return []
+    # 支持的 code 白名单
+    supported_codes = {"applyDisputePage", "agreeRefundApply"}
+    # 注意：viewRefundDetail 不在此处显示（避免递归跳转）
+    result = []
+    for btn in btn_list:
+        if not isinstance(btn, dict):
+            continue
+        code = btn.get("code")
+        if code not in supported_codes:
+            continue
+        click_event = btn.get("clickEvent") or {}
+        if not isinstance(click_event, dict):
+            click_event = {}
+        event_type = click_event.get("type")
+        safe_btn = {
+            "code": code,
+            "name": btn.get("name"),
+            "clickEvent": {"type": event_type},
+        }
+        if event_type == "url":
+            url = (click_event.get("data") or {}).get("url")
+            safe_url = _safe_url_for_open(url)
+            if not safe_url:
+                continue  # URL 不可信，跳过此按钮
+            safe_btn["clickEvent"]["data"] = {"url": safe_url}
+        elif event_type == "doubleCheck":
+            dc_data = click_event.get("data") or {}
+            if not isinstance(dc_data, dict):
+                dc_data = {}
+            safe_btn["clickEvent"]["data"] = {
+                "title": dc_data.get("title"),
+                "confirmText": dc_data.get("confirmText"),
+                "riskDesc": dc_data.get("riskDesc") or dc_data.get("riskDescription"),
+                "confirmButtonText": dc_data.get("confirmButtonText") or dc_data.get("buttonText"),
+            }
+        else:
+            # 未知 clickEvent 类型不动态执行
+            continue
+        result.append(safe_btn)
+    return result
+
+
+def _parse_bottom_show(comp: dict) -> list:
+    """解析 bottomShow 组件（底部展示信息，按服务端顺序渲染）。"""
+    if not isinstance(comp, dict):
+        return []
+    data = comp.get("data") or comp
+    items = data
+    if isinstance(data, dict):
+        items = data.get("list") or data.get("items") or []
+    if not isinstance(items, list):
+        return []
+    result = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        result.append({
+            "title": _decode_html_entities(item.get("title")),
+            "value": _decode_html_entities(item.get("value")),
+            "copyable": _parse_bool_string(item.get("copyable")),
+        })
+    return result
+
+
+def _parse_postage_refund_info(comp: dict) -> Optional[dict]:
+    """解析 postageRefundInfo 组件（退运费信息）。"""
+    if not isinstance(comp, dict):
+        return None
+    data = comp.get("data") or comp
+    if not isinstance(data, dict):
+        return None
+    return {
+        "applyMoney": _safe_decimal(data.get("applyMoney")),
+        "refundStatus": data.get("refundStatus"),
+        "refundStatusDesc": data.get("refundStatusDesc"),
+        "reasonText": data.get("reasonText"),
+    }
+
+
+def _parse_pop_postage_url(comp: dict) -> Optional[str]:
+    """解析 popPostageUrl 组件（退运费链接，经过安全校验）。"""
+    if not isinstance(comp, dict):
+        return None
+    data = comp.get("data") or comp
+    url = None
+    if isinstance(data, dict):
+        url = data.get("url") or data.get("linkUrl")
+    elif isinstance(data, str):
+        url = data
+    return _safe_url_for_open(url)
+
+
+# ----- service.record 解析（退款历史，需求第六节） -----
+
+def _parse_service_record_data(inner_data: dict, current_refund_id: str) -> dict:
+    """解析 service.record 的 data.data，返回退款历史结构。
+
+    需求第六节：
+    - refundRecordList: 退款记录列表（可能含多条退款，按服务端顺序展示）
+    - postageRefundRecordList: 退运费记录列表（可能为空）
+    - 当前 refundId 高亮，不取第一条冒充当前退款（需求第十六节）
+    """
+    if not isinstance(inner_data, dict):
+        return {
+            "refundRecordList": [],
+            "postageRefundRecordList": [],
+            "currentRefundId": str(current_refund_id) if current_refund_id else None,
+        }
+
+    raw_records = inner_data.get("refundRecordList") or []
+    if not isinstance(raw_records, list):
+        raw_records = []
+    parsed_records = []
+    for record in raw_records:
+        if not isinstance(record, dict):
+            continue
+        refund_id_raw = record.get("refundId")
+        refund_id_str = str(refund_id_raw) if refund_id_raw is not None else None
+        parsed_records.append({
+            "endTime": _parse_datetime(record.get("endTime")),
+            "gmtCreatedTime": _parse_datetime(record.get("gmtCreatedTime")),
+            "money": _safe_decimal(record.get("money")),
+            "reasonId": record.get("reasonId"),
+            "reasonText": record.get("reasonText"),
+            "reasonTextId": record.get("reasonTextId"),
+            "refundId": refund_id_str,
+            "refundType": record.get("refundType"),
+            "status": record.get("status"),
+            "statusDesc": record.get("statusDesc"),
+            "isCurrent": refund_id_str is not None and refund_id_str == str(current_refund_id),
+        })
+
+    raw_postage = inner_data.get("postageRefundRecordList") or []
+    if not isinstance(raw_postage, list):
+        raw_postage = []
+    parsed_postage = []
+    for record in raw_postage:
+        if not isinstance(record, dict):
+            continue
+        parsed_postage.append({
+            "endTime": _parse_datetime(record.get("endTime")),
+            "gmtCreatedTime": _parse_datetime(record.get("gmtCreatedTime")),
+            "money": _safe_decimal(record.get("money")),
+            "refundId": str(record["refundId"]) if record.get("refundId") is not None else None,
+            "status": record.get("status"),
+            "statusDesc": record.get("statusDesc"),
+        })
+
+    return {
+        "refundRecordList": parsed_records,
+        "postageRefundRecordList": parsed_postage,
+        "currentRefundId": str(current_refund_id) if current_refund_id else None,
+    }
+
+
+# ----- full.info 解析（完整订单信息，需求第七节） -----
+
+def _parse_full_info_module(module: dict) -> dict:
+    """解析 full.info 的 data.module，返回标准化结构。
+
+    需求第七节：
+    - merchantCommonData: 商品ID/订单ID/订单状态/下单付款发货时间
+    - merchantItemVO: 商品图片/标题/规格
+    - merchantPriceVO: 金额明细
+    - merchantBuyerVO: 买家脱敏信息（仅展示服务端已脱敏内容）
+    - orderInfoVO: 动态订单信息
+    - orderStatusVO: 订单时间线
+    - bottomBarVO: 提醒收货等操作（本次不实现，安全忽略）
+    """
+    if not isinstance(module, dict):
+        return {"_valid": False}
+
+    result = {"_valid": True}
+
+    # merchantCommonData
+    common_data = module.get("merchantCommonData") or {}
+    if not isinstance(common_data, dict):
+        common_data = {}
+    result["merchantCommonData"] = {
+        "consignTime": _parse_datetime(common_data.get("consignTime")),
+        "createTime": _parse_datetime(common_data.get("createTime")),
+        "itemId": str(common_data["itemId"]) if common_data.get("itemId") is not None else None,
+        "orderId": str(common_data["orderId"]) if common_data.get("orderId") is not None else None,
+        "orderStatus": common_data.get("orderStatus"),
+        "paySuccessTime": _parse_datetime(common_data.get("paySuccessTime")),
+        "inRefund": _parse_bool_string(common_data.get("inRefund")) if common_data.get("inRefund") is not None else None,
+        "showDetail": common_data.get("showDetail"),
+    }
+
+    # merchantItemVO
+    item_vo = module.get("merchantItemVO") or {}
+    if not isinstance(item_vo, dict):
+        item_vo = {}
+    item_info_lines = item_vo.get("itemInfoLines")
+    if item_info_lines is not None and not isinstance(item_info_lines, str):
+        try:
+            item_info_lines = json.dumps(item_info_lines, ensure_ascii=False)
+        except (TypeError, ValueError):
+            item_info_lines = None
+    result["merchantItemVO"] = {
+        "itemPicUrl": _validate_proof_image_url(item_vo.get("itemPicUrl")),
+        "title": item_vo.get("title"),
+        "itemInfoLines": item_info_lines,
+    }
+
+    # merchantPriceVO（金额，使用 Decimal 安全处理）
+    price_vo = module.get("merchantPriceVO") or {}
+    if not isinstance(price_vo, dict):
+        price_vo = {}
+    result["merchantPriceVO"] = {
+        "auctionPrice": _safe_decimal(price_vo.get("auctionPrice")),
+        "buyNum": str(price_vo["buyNum"]) if price_vo.get("buyNum") is not None else None,
+        "confirmFee": _safe_decimal(price_vo.get("confirmFee")),
+        "discountFee": _safe_decimal(price_vo.get("discountFee")),
+        "postFee": _safe_decimal(price_vo.get("postFee")),
+        "refundFee": _safe_decimal(price_vo.get("refundFee")),
+        "totalPrice": _safe_decimal(price_vo.get("totalPrice")),
+    }
+
+    # merchantBuyerVO（买家信息，仅展示服务端已脱敏内容）
+    buyer_vo = module.get("merchantBuyerVO") or {}
+    if not isinstance(buyer_vo, dict):
+        buyer_vo = {}
+    # 不尝试解密 encryptedPhone，仅展示 phone 字段（已脱敏）
+    result["merchantBuyerVO"] = {
+        "address": buyer_vo.get("address"),
+        "buyerId": str(buyer_vo["buyerId"]) if buyer_vo.get("buyerId") is not None else None,
+        "name": buyer_vo.get("name"),
+        "phone": buyer_vo.get("phone"),
+        "userIcon": _validate_proof_image_url(buyer_vo.get("userIcon")),
+        "userNick": buyer_vo.get("userNick"),
+    }
+
+    # orderInfoVO（动态订单信息）
+    order_info_vo = module.get("orderInfoVO") or {}
+    if not isinstance(order_info_vo, dict):
+        order_info_vo = {}
+    raw_info_list = order_info_vo.get("orderInfoList") or []
+    if not isinstance(raw_info_list, list):
+        raw_info_list = []
+    parsed_info_list = []
+    for info in raw_info_list:
+        if not isinstance(info, dict):
+            continue
+        parsed_info_list.append({
+            "title": _decode_html_entities(info.get("title")),
+            "value": _decode_html_entities(info.get("value")),
+            "copyable": _parse_bool_string(info.get("copyable")),
+            # needOutShow / clickEvent / expanded 本次不执行（需求第七节）
+        })
+    # priceInfo
+    price_info = order_info_vo.get("priceInfo") or {}
+    if not isinstance(price_info, dict):
+        price_info = {}
+    result["orderInfoVO"] = {
+        "orderInfoList": parsed_info_list,
+        "priceInfo": {
+            "amount": _safe_decimal(price_info.get("amount")),
+            # billList / softwareServiceFeeList 透传（已脱敏金额数据）
+            "billList": price_info.get("billList") if isinstance(price_info.get("billList"), list) else [],
+            "softwareServiceFeeList": price_info.get("softwareServiceFeeList") if isinstance(price_info.get("softwareServiceFeeList"), list) else [],
+        },
+    }
+
+    # orderStatusVO（订单时间线，与退款时间线分开展示）
+    order_status_vo = module.get("orderStatusVO") or {}
+    if not isinstance(order_status_vo, dict):
+        order_status_vo = {}
+    order_status_info = order_status_vo.get("orderStatusInfo") or {}
+    if not isinstance(order_status_info, dict):
+        order_status_info = {}
+    raw_nodes = order_status_vo.get("orderStatusNodeList") or []
+    if not isinstance(raw_nodes, list):
+        raw_nodes = []
+    parsed_status_nodes = []
+    for node in raw_nodes:
+        if not isinstance(node, dict):
+            continue
+        # completed 可能是字符串 "true"/"false"，必须安全转换（需求第七节）
+        parsed_status_nodes.append({
+            "completed": _parse_bool_string(node.get("completed")),
+            "time": _parse_datetime(node.get("time")),
+            "title": _decode_html_entities(node.get("title")),
+        })
+    result["orderStatusVO"] = {
+        "orderStatusInfo": {
+            "status": order_status_info.get("status"),
+            "title": _decode_html_entities(order_status_info.get("title")),
+        },
+        "orderStatusNodeList": parsed_status_nodes,
+    }
+
+    # bottomBarVO：提醒收货等操作（本次不实现，安全忽略）
+    # 不动态执行响应中返回的任意 MTOP API（需求第十四节）
+
+    return result
+
+
+# ----- 组合调用（并行 + 缓存 + 去重，需求第五、十九、二十节） -----
+
+async def _fetch_refund_detail_combined_internal(
+    db: AsyncSession, tenant_id: int, account_id: int,
+    order_id: str, refund_id: str,
+    apis_to_call: Optional[set] = None,
+) -> dict:
+    """内部：并行调用三个接口，分别状态记录，分别失败处理。
+
+    apis_to_call: 指定要调用的接口集合（None 表示全部三接口）
+        {"service_record", "full_info", "refund_detail"}
+
+    返回组合结构：
+    {
+        "summary": {...},  # 从退款列表缓存读取的摘要（由调用方填充）
+        "serviceRecord": {"status": "ok|failed|skipped", "data": {...}, "error": str, "lastUpdate": iso},
+        "fullInfo": {"status": "ok|failed|skipped", "data": {...}, "error": str, "lastUpdate": iso},
+        "refundDetail": {"status": "ok|failed|skipped", "data": {...}, "error": str, "lastUpdate": iso},
+        "lastSuccessAt": iso|null,  # 最后一次成功刷新时间（任一接口成功即更新）
+        "partialFailure": bool,
+    }
+    """
+    now_iso = datetime.now().isoformat()
+    result = {
+        "serviceRecord": {"status": "skipped", "data": None, "error": None, "lastUpdate": now_iso},
+        "fullInfo": {"status": "skipped", "data": None, "error": None, "lastUpdate": now_iso},
+        "refundDetail": {"status": "skipped", "data": None, "error": None, "lastUpdate": now_iso},
+        "lastSuccessAt": None,
+        "partialFailure": False,
+    }
+
+    call_all = apis_to_call is None
+    call_service = call_all or "service_record" in apis_to_call
+    call_full = call_all or "full_info" in apis_to_call
+    call_detail = call_all or "refund_detail" in apis_to_call
+
+    # 并行调用三个接口（用 asyncio.to_thread 包装同步函数）
+    tasks = {}
+    if call_service:
+        tasks["service_record"] = asyncio.to_thread(
+            fetch_refund_service_record, account_id, order_id
+        )
+    if call_full:
+        tasks["full_info"] = asyncio.to_thread(
+            fetch_refund_full_info, account_id, order_id
+        )
+    if call_detail:
+        tasks["refund_detail"] = asyncio.to_thread(
+            fetch_refund_detail, account_id, order_id, refund_id
+        )
+
+    # 并行执行（return_exceptions=True 防止单个失败影响其他）
+    if not tasks:
+        return result
+
+    keys = list(tasks.keys())
+    coros = [tasks[k] for k in keys]
+    raw_results = await asyncio.gather(*coros, return_exceptions=True)
+    raw_map = dict(zip(keys, raw_results))
+
+    any_success = False
+
+    # service.record
+    if "service_record" in raw_map:
+        raw = raw_map["service_record"]
+        if isinstance(raw, Exception):
+            err_code = "NETWORK_ERROR" if isinstance(raw, (asyncio.TimeoutError,)) else "UNKNOWN_ERROR"
+            result["serviceRecord"] = {
+                "status": "failed", "data": None,
+                "error": f"接口异常: {type(raw).__name__}",
+                "errorCode": err_code,
+                "lastUpdate": now_iso,
+            }
+        else:
+            ok, err = _check_service_record_success(raw)
+            if ok:
+                inner_data = (raw.get("data") or {}).get("data") or {}
+                parsed = _parse_service_record_data(inner_data, refund_id)
+                result["serviceRecord"] = {
+                    "status": "ok", "data": parsed,
+                    "error": None, "errorCode": None, "lastUpdate": now_iso,
+                }
+                any_success = True
+            else:
+                # 透传 fetch 层已分类的 errorCode，未提供时按错误文本二次分类
+                err_code = raw.get("errorCode") or _classify_mtop_error(raw.get("ret"), err)
+                # 结构异常单独标记
+                if "结构异常" in str(err) or "缺少" in str(err):
+                    err_code = "INVALID_RESPONSE_SHAPE"
+                result["serviceRecord"] = {
+                    "status": "failed", "data": None,
+                    "error": err, "errorCode": err_code, "lastUpdate": now_iso,
+                }
+
+    # full.info
+    if "full_info" in raw_map:
+        raw = raw_map["full_info"]
+        if isinstance(raw, Exception):
+            err_code = "NETWORK_ERROR" if isinstance(raw, (asyncio.TimeoutError,)) else "UNKNOWN_ERROR"
+            result["fullInfo"] = {
+                "status": "failed", "data": None,
+                "error": f"接口异常: {type(raw).__name__}",
+                "errorCode": err_code,
+                "lastUpdate": now_iso,
+            }
+        else:
+            ok, err = _check_full_info_success(raw)
+            if ok:
+                module = (raw.get("data") or {}).get("module") or {}
+                # 一致性校验（需求第十六节）
+                id_ok, id_err = _check_full_info_order_id_consistency(module, order_id)
+                if not id_ok:
+                    result["fullInfo"] = {
+                        "status": "failed", "data": None,
+                        "error": id_err, "errorCode": "ID_CONSISTENCY_ERROR",
+                        "lastUpdate": now_iso,
+                    }
+                else:
+                    parsed = _parse_full_info_module(module)
+                    result["fullInfo"] = {
+                        "status": "ok", "data": parsed,
+                        "error": None, "errorCode": None, "lastUpdate": now_iso,
+                    }
+                    any_success = True
+            else:
+                err_code = raw.get("errorCode") or _classify_mtop_error(raw.get("ret"), err)
+                if "结构异常" in str(err) or "缺少" in str(err):
+                    err_code = "INVALID_RESPONSE_SHAPE"
+                result["fullInfo"] = {
+                    "status": "failed", "data": None,
+                    "error": err, "errorCode": err_code, "lastUpdate": now_iso,
+                }
+
+    # refund.detail
+    if "refund_detail" in raw_map:
+        raw = raw_map["refund_detail"]
+        if isinstance(raw, Exception):
+            err_code = "NETWORK_ERROR" if isinstance(raw, (asyncio.TimeoutError,)) else "UNKNOWN_ERROR"
+            result["refundDetail"] = {
+                "status": "failed", "data": None,
+                "error": f"接口异常: {type(raw).__name__}",
+                "errorCode": err_code,
+                "lastUpdate": now_iso,
+            }
+        else:
+            ok, err = _check_refund_detail_success(raw, order_id, refund_id)
+            if ok:
+                inner_data = (raw.get("data") or {}).get("data") or {}
+                parsed_components = _parse_refund_detail_components(inner_data, refund_id)
+                # 透传顶层字段（已确认的：encryptedPhone / idleRefundStatus / itemId / orderId / peerUserId / refundId / refundStatus / seller）
+                # 注意：encryptedPhone 不解密、不展示（需求第七节）
+                top_level = {
+                    "orderId": str(inner_data["orderId"]) if inner_data.get("orderId") is not None else None,
+                    "refundId": str(inner_data["refundId"]) if inner_data.get("refundId") is not None else None,
+                    "itemId": str(inner_data["itemId"]) if inner_data.get("itemId") is not None else None,
+                    "idleRefundStatus": inner_data.get("idleRefundStatus"),
+                    "refundStatus": inner_data.get("refundStatus"),
+                    "peerUserId": str(inner_data["peerUserId"]) if inner_data.get("peerUserId") is not None else None,
+                    # encryptedPhone 不透传（保护隐私）
+                }
+                result["refundDetail"] = {
+                    "status": "ok",
+                    "data": {"topLevel": top_level, "components": parsed_components},
+                    "error": None, "errorCode": None, "lastUpdate": now_iso,
+                }
+                any_success = True
+            else:
+                err_code = raw.get("errorCode") or _classify_mtop_error(raw.get("ret"), err)
+                if "结构异常" in str(err) or "缺少" in str(err):
+                    err_code = "INVALID_RESPONSE_SHAPE"
+                if "不一致" in str(err):
+                    err_code = "ID_CONSISTENCY_ERROR"
+                result["refundDetail"] = {
+                    "status": "failed", "data": None,
+                    "error": err, "errorCode": err_code, "lastUpdate": now_iso,
+                }
+
+    if any_success:
+        result["lastSuccessAt"] = now_iso
+    result["partialFailure"] = any(
+        result[k]["status"] == "failed" for k in ("serviceRecord", "fullInfo", "refundDetail")
+    )
+    return result
+
+
+def _detail_cache_key(tenant_id: int, account_id: int, order_id: str, refund_id: str) -> tuple:
+    """构造详情缓存键：按 (tenant_id, account_id, order_id, refund_id) 隔离。"""
+    return (int(tenant_id), int(account_id), str(order_id), str(refund_id))
+
+
+async def _get_cached_detail(tenant_id: int, account_id: int, order_id: str, refund_id: str) -> Optional[dict]:
+    """读取缓存（命中返回数据，过期或不存在返回 None）。"""
+    key = _detail_cache_key(tenant_id, account_id, order_id, refund_id)
+    async with _refund_detail_cache_guard:
+        entry = _refund_detail_cache.get(key)
+        if entry is None:
+            return None
+        saved_at = entry.get("saved_at")
+        if saved_at is None:
+            _refund_detail_cache.pop(key, None)
+            return None
+        age = (datetime.now() - saved_at).total_seconds()
+        if age > REFUND_DETAIL_CACHE_TTL_SECONDS:
+            # 过期：返回旧数据但仍保留（让调用方先展示旧数据再后台刷新）
+            return entry.get("data")
+        return entry.get("data")
+
+
+async def _save_cached_detail(tenant_id: int, account_id: int, order_id: str, refund_id: str, data: dict) -> None:
+    """保存缓存。超过最大条数时按 LRU 简单淘汰。
+
+    失败结果不缓存（需求第十一节）：仅当至少一个接口状态为 "ok" 时才保存。
+    全部 failed/skipped 时不写入缓存，确保用户点击"重新加载"能真实发起新请求，
+    而不是命中上一次的失败缓存。
+    """
+    # 失败结果不缓存：检查是否有任一接口成功
+    has_any_ok = any(
+        isinstance(data.get(k), dict) and data.get(k, {}).get("status") == "ok"
+        for k in ("serviceRecord", "fullInfo", "refundDetail")
+    )
+    if not has_any_ok:
+        logger.info(
+            "退款详情全失败不写入缓存 tenantId=%s accountId=%s orderId=%s refundId=%s",
+            tenant_id, account_id, order_id, refund_id,
+        )
+        return
+
+    key = _detail_cache_key(tenant_id, account_id, order_id, refund_id)
+    async with _refund_detail_cache_guard:
+        # 简单 LRU：超过上限时删除最早的 saved_at
+        if len(_refund_detail_cache) >= REFUND_DETAIL_CACHE_MAX_ENTRIES and key not in _refund_detail_cache:
+            try:
+                oldest_key = min(
+                    _refund_detail_cache.keys(),
+                    key=lambda k: _refund_detail_cache[k].get("saved_at") or datetime.min,
+                )
+                _refund_detail_cache.pop(oldest_key, None)
+            except (ValueError, KeyError):
+                pass
+        now = datetime.now()
+        last_success = data.get("lastSuccessAt")
+        _refund_detail_cache[key] = {
+            "data": data,
+            "saved_at": now,
+            "last_success_at": _parse_datetime(last_success) or now,
+        }
+
+
+async def _invalidate_cached_detail(tenant_id: int, account_id: int, order_id: str, refund_id: str) -> None:
+    """失效缓存（写操作成功后调用）。"""
+    key = _detail_cache_key(tenant_id, account_id, order_id, refund_id)
+    async with _refund_detail_cache_guard:
+        _refund_detail_cache.pop(key, None)
+        # 同时取消进行中的请求（如果有）
+        inflight = _refund_detail_inflight.pop(key, None)
+    if inflight is not None and not inflight.done():
+        try:
+            inflight.cancel()
+        except Exception:
+            pass
+
+
+async def _get_or_create_inflight(
+    tenant_id: int, account_id: int, order_id: str, refund_id: str,
+    factory,
+) -> asyncio.Future:
+    """获取进行中的请求或创建新请求（同一详情并发进入只发一组请求）。
+
+    factory: 同步可调用，返回一个 awaitable（实际发起请求）
+    """
+    key = _detail_cache_key(tenant_id, account_id, order_id, refund_id)
+    async with _refund_detail_cache_guard:
+        existing = _refund_detail_inflight.get(key)
+        if existing is not None and not existing.done():
+            return existing
+        # 创建新 Future 并绑定 factory() 的 awaitable
+        loop = asyncio.get_event_loop()
+        future: asyncio.Future = loop.create_future()
+        _refund_detail_inflight[key] = future
+
+    async def _runner():
+        try:
+            value = await factory()
+            if not future.done():
+                future.set_result(value)
+            return value
+        except Exception as exc:
+            if not future.done():
+                future.set_exception(exc)
+            raise
+        finally:
+            async with _refund_detail_cache_guard:
+                _refund_detail_inflight.pop(key, None)
+
+    asyncio.create_task(_runner())
+    return future
+
+
+# ----- 对外接口 -----
+
+async def _get_refund_summary_from_list_cache(
+    db: AsyncSession, tenant_id: int, account_id: int, refund_id: str
+) -> Optional[dict]:
+    """从退款列表缓存读取当前退款的摘要（用于详情页立即展示）。
+
+    复用 query_local_refunds 的字段映射，但只查询单条。
+    """
+    result = await db.execute(
+        select(XianyuRefund).where(
+            and_(
+                XianyuRefund.tenant_id == tenant_id,
+                XianyuRefund.account_id == account_id,
+                XianyuRefund.external_refund_id == refund_id,
+                XianyuRefund.deleted == 0,
+            )
+        )
+    )
+    record = result.scalar_one_or_none()
+    if record is None:
+        return None
+    # 查询账号信息
+    acc_result = await db.execute(
+        select(XianyuAccount).where(
+            and_(
+                XianyuAccount.tenant_id == tenant_id,
+                XianyuAccount.id == account_id,
+            )
+        )
+    )
+    acc = acc_result.scalar_one_or_none()
+    buttons = []
+    if record.right_buttons_json:
+        try:
+            buttons = json.loads(record.right_buttons_json)
+        except (ValueError, TypeError):
+            buttons = []
+    return {
+        "id": record.id,
+        "accountId": record.account_id,
+        "accountNickname": acc.nickname if acc else None,
+        "externalRefundId": record.external_refund_id,
+        "externalOrderId": record.external_order_id,
+        "externalItemId": record.external_item_id,
+        "itemTitle": record.item_title,
+        "itemPicUrl": record.item_pic_url,
+        "itemInfoLines": record.item_info_lines,
+        "buyNum": record.buy_num,
+        "refundFee": str(record.refund_fee) if record.refund_fee is not None else None,
+        "auctionPrice": str(record.auction_price) if record.auction_price is not None else None,
+        "orderStatus": record.order_status,
+        "orderSimpleRemark": record.order_simple_remark,
+        "refundStatus": record.refund_status,
+        "refundStatusDesc": record.refund_status_desc,
+        "commonRefundStatus": record.common_refund_status,
+        "refundReason": record.refund_reason,
+        "csStatus": record.cs_status,
+        "logisticsCompany": record.logistics_company,
+        "logisticsMailNo": record.logistics_mail_no,
+        "consignTime": record.consign_time.isoformat() if record.consign_time else None,
+        "refundCreateTime": record.refund_create_time.isoformat() if record.refund_create_time else None,
+        "commonCreateTime": record.common_create_time.isoformat() if record.common_create_time else None,
+        "buyerNick": record.buyer_nick,
+        "rightButtons": buttons,
+        "syncStatus": record.sync_status,
+        "lastSyncedTime": record.last_synced_time.isoformat() if record.last_synced_time else None,
+    }
+
+
+async def get_refund_detail(
+    db: AsyncSession, tenant_id: int, account_id: int,
+    order_id: str, refund_id: str,
+) -> dict:
+    """查询退款详情（缓存优先，过期后台刷新）。
+
+    返回结构：
+    {
+        "ok": True,
+        "summary": {...}|null,  # 退款列表缓存摘要
+        "detail": {  # 组合详情
+            "serviceRecord": {...}, "fullInfo": {...}, "refundDetail": {...},
+            "lastSuccessAt": iso|null, "partialFailure": bool,
+        }|null,
+        "cached": bool,  # 是否命中缓存
+        "cacheExpired": bool,  # 缓存是否已过期（命中时才有意义）
+        "backendBackgroundRefreshTriggered": bool,  # 是否触发了后台刷新
+        "error": str|null,
+    }
+    """
+    # 1. 校验：账号归属 + 鱼小铺 + 退款归属
+    is_fish_shop, _auth, err = await verify_fish_shop_account(db, account_id, tenant_id)
+    if not is_fish_shop:
+        return {"ok": False, "error": err or "账号不是鱼小铺"}
+    # 校验退款归属（防止跨账号）
+    refund_result = await db.execute(
+        select(XianyuRefund).where(
+            and_(
+                XianyuRefund.tenant_id == tenant_id,
+                XianyuRefund.account_id == account_id,
+                XianyuRefund.external_refund_id == refund_id,
+                XianyuRefund.deleted == 0,
+            )
+        )
+    )
+    refund_record = refund_result.scalar_one_or_none()
+    if refund_record is None:
+        return {"ok": False, "error": "退款记录不存在或不属于该账号"}
+    # 校验 orderId 与 refundId 关系
+    if refund_record.external_order_id and str(refund_record.external_order_id) != str(order_id):
+        return {"ok": False, "error": "orderId 与退款记录不匹配"}
+
+    # 2. 读取退款列表摘要（用于立即展示）
+    summary = await _get_refund_summary_from_list_cache(db, tenant_id, account_id, refund_id)
+
+    # 3. 读取详情缓存
+    cached = await _get_cached_detail(tenant_id, account_id, order_id, refund_id)
+    cache_key = _detail_cache_key(tenant_id, account_id, order_id, refund_id)
+    # 判断缓存是否过期
+    cache_expired = True
+    async with _refund_detail_cache_guard:
+        entry = _refund_detail_cache.get(cache_key)
+        if entry is not None:
+            saved_at = entry.get("saved_at")
+            if saved_at is not None:
+                age = (datetime.now() - saved_at).total_seconds()
+                cache_expired = age > REFUND_DETAIL_CACHE_TTL_SECONDS
+
+    if cached is not None and not cache_expired:
+        # 缓存有效：直接返回，不重复请求
+        return {
+            "ok": True,
+            "summary": summary,
+            "detail": cached,
+            "cached": True,
+            "cacheExpired": False,
+            "backendBackgroundRefreshTriggered": False,
+            "error": None,
+        }
+
+    # 4. 缓存过期或不存在：先返回旧数据，再后台刷新
+    # 进行中请求去重：同一详情并发进入只发一组请求
+    async def _factory():
+        return await _fetch_refund_detail_combined_internal(
+            db, tenant_id, account_id, order_id, refund_id, apis_to_call=None
+        )
+
+    # 如果有旧缓存，先返回旧数据并触发后台刷新
+    if cached is not None and cache_expired:
+        # 触发后台刷新（不阻塞当前响应）
+        try:
+            asyncio.create_task(_refresh_detail_background(
+                tenant_id, account_id, order_id, refund_id
+            ))
+            background_triggered = True
+        except Exception:
+            background_triggered = False
+        return {
+            "ok": True,
+            "summary": summary,
+            "detail": cached,
+            "cached": True,
+            "cacheExpired": True,
+            "backendBackgroundRefreshTriggered": background_triggered,
+            "error": None,
+        }
+
+    # 5. 无缓存：复用进行中请求或发起新请求（阻塞等待）
+    try:
+        inflight = await _get_or_create_inflight(
+            tenant_id, account_id, order_id, refund_id, _factory
+        )
+        detail = await inflight
+        await _save_cached_detail(tenant_id, account_id, order_id, refund_id, detail)
+        return {
+            "ok": True,
+            "summary": summary,
+            "detail": detail,
+            "cached": False,
+            "cacheExpired": True,
+            "backendBackgroundRefreshTriggered": False,
+            "error": None,
+        }
+    except Exception as exc:
+        logger.warning(
+            "退款详情查询失败 accountId=%s orderId=%s refundId=%s errorType=%s",
+            account_id, order_id, refund_id, type(exc).__name__,
+        )
+        return {
+            "ok": False,
+            "summary": summary,
+            "detail": None,
+            "cached": False,
+            "cacheExpired": True,
+            "backendBackgroundRefreshTriggered": False,
+            "error": f"退款详情查询失败: {type(exc).__name__}",
+        }
+
+
+async def _refresh_detail_background(
+    tenant_id: int, account_id: int, order_id: str, refund_id: str
+) -> None:
+    """后台刷新详情缓存（缓存过期时触发）。"""
+    try:
+        session_factory = _get_async_session()
+        async with session_factory() as db:
+            detail = await _fetch_refund_detail_combined_internal(
+                db, tenant_id, account_id, order_id, refund_id, apis_to_call=None
+            )
+            await _save_cached_detail(tenant_id, account_id, order_id, refund_id, detail)
+    except Exception as exc:
+        logger.warning(
+            "退款详情后台刷新失败 accountId=%s orderId=%s refundId=%s errorType=%s",
+            account_id, order_id, refund_id, type(exc).__name__,
+        )
+
+
+async def refresh_refund_detail(
+    db: AsyncSession, tenant_id: int, account_id: int,
+    order_id: str, refund_id: str,
+) -> dict:
+    """手动刷新全部三个接口（强制刷新）。
+
+    流程：
+    1. 校验权限（账号归属 + 鱼小铺 + 退款归属）
+    2. 失效旧缓存
+    3. 并行调用三个接口
+    4. 保存新缓存
+    5. 返回新数据
+
+    刷新失败时保留旧缓存（需求第十九节第9点）。
+    """
+    # 1. 校验
+    is_fish_shop, _auth, err = await verify_fish_shop_account(db, account_id, tenant_id)
+    if not is_fish_shop:
+        return {"ok": False, "error": err or "账号不是鱼小铺"}
+    refund_result = await db.execute(
+        select(XianyuRefund).where(
+            and_(
+                XianyuRefund.tenant_id == tenant_id,
+                XianyuRefund.account_id == account_id,
+                XianyuRefund.external_refund_id == refund_id,
+                XianyuRefund.deleted == 0,
+            )
+        )
+    )
+    refund_record = refund_result.scalar_one_or_none()
+    if refund_record is None:
+        return {"ok": False, "error": "退款记录不存在或不属于该账号"}
+    if refund_record.external_order_id and str(refund_record.external_order_id) != str(order_id):
+        return {"ok": False, "error": "orderId 与退款记录不匹配"}
+
+    # 2. 失效旧缓存
+    await _invalidate_cached_detail(tenant_id, account_id, order_id, refund_id)
+
+    # 3. 并行调用三个接口（不复用进行中的请求，强制刷新）
+    try:
+        detail = await _fetch_refund_detail_combined_internal(
+            db, tenant_id, account_id, order_id, refund_id, apis_to_call=None
+        )
+    except Exception as exc:
+        logger.warning(
+            "退款详情刷新失败 accountId=%s orderId=%s refundId=%s errorType=%s",
+            account_id, order_id, refund_id, type(exc).__name__,
+        )
+        return {"ok": False, "error": f"刷新失败: {type(exc).__name__}"}
+
+    # 4. 保存新缓存
+    await _save_cached_detail(tenant_id, account_id, order_id, refund_id, detail)
+
+    # 5. 同时刷新摘要（从本地数据库读取最新记录）
+    summary = await _get_refund_summary_from_list_cache(db, tenant_id, account_id, refund_id)
+
+    return {
+        "ok": True,
+        "summary": summary,
+        "detail": detail,
+        "error": None,
+    }
+
+
+async def retry_refund_detail_api(
+    db: AsyncSession, tenant_id: int, account_id: int,
+    order_id: str, refund_id: str, api: str,
+) -> dict:
+    """单独重试某个失败接口（不重新请求成功的接口）。
+
+    api: "service_record" / "full_info" / "refund_detail"
+
+    返回更新后的完整 detail（含其他接口的旧数据 + 重试接口的新数据）。
+    """
+    if api not in ("service_record", "full_info", "refund_detail"):
+        return {"ok": False, "error": "不支持的 api 参数"}
+
+    # 校验
+    is_fish_shop, _auth, err = await verify_fish_shop_account(db, account_id, tenant_id)
+    if not is_fish_shop:
+        return {"ok": False, "error": err or "账号不是鱼小铺"}
+    refund_result = await db.execute(
+        select(XianyuRefund).where(
+            and_(
+                XianyuRefund.tenant_id == tenant_id,
+                XianyuRefund.account_id == account_id,
+                XianyuRefund.external_refund_id == refund_id,
+                XianyuRefund.deleted == 0,
+            )
+        )
+    )
+    refund_record = refund_result.scalar_one_or_none()
+    if refund_record is None:
+        return {"ok": False, "error": "退款记录不存在或不属于该账号"}
+    if refund_record.external_order_id and str(refund_record.external_order_id) != str(order_id):
+        return {"ok": False, "error": "orderId 与退款记录不匹配"}
+
+    # 只调用指定接口
+    try:
+        new_detail = await _fetch_refund_detail_combined_internal(
+            db, tenant_id, account_id, order_id, refund_id,
+            apis_to_call={api},
+        )
+    except Exception as exc:
+        logger.warning(
+            "退款详情单接口重试失败 accountId=%s orderId=%s refundId=%s api=%s errorType=%s",
+            account_id, order_id, refund_id, api, type(exc).__name__,
+        )
+        return {"ok": False, "error": f"重试失败: {type(exc).__name__}"}
+
+    # 合并：保留其他接口的旧数据 + 重试接口的新数据
+    cached = await _get_cached_detail(tenant_id, account_id, order_id, refund_id)
+    if cached is not None:
+        # 合并：用 new_detail 中非 skipped 的字段覆盖 cached
+        merged = dict(cached)
+        api_key_map = {
+            "service_record": "serviceRecord",
+            "full_info": "fullInfo",
+            "refund_detail": "refundDetail",
+        }
+        api_key = api_key_map[api]
+        if new_detail.get(api_key, {}).get("status") != "skipped":
+            merged[api_key] = new_detail[api_key]
+        # 更新 lastSuccessAt（任一接口成功即更新）
+        if new_detail.get("lastSuccessAt"):
+            merged["lastSuccessAt"] = new_detail["lastSuccessAt"]
+        # 重新计算 partialFailure
+        merged["partialFailure"] = any(
+            merged.get(k, {}).get("status") == "failed"
+            for k in ("serviceRecord", "fullInfo", "refundDetail")
+        )
+        await _save_cached_detail(tenant_id, account_id, order_id, refund_id, merged)
+        return {"ok": True, "detail": merged, "error": None}
+
+    # 无旧缓存：直接保存 new_detail（其他接口显示 skipped）
+    await _save_cached_detail(tenant_id, account_id, order_id, refund_id, new_detail)
+    return {"ok": True, "detail": new_detail, "error": None}
+
+
+async def invalidate_refund_detail_cache_after_write(
+    tenant_id: int, account_id: int, order_id: str, refund_id: str
+) -> None:
+    """写操作（如同意退款）成功后失效详情缓存。
+
+    需求第十四节：写操作成功后使当前详情缓存失效并刷新当前退款，不刷新全部账号。
+    """
+    await _invalidate_cached_detail(tenant_id, account_id, order_id, refund_id)
+    # 后台刷新当前退款详情（不阻塞响应）
+    try:
+        asyncio.create_task(_refresh_detail_background(
+            tenant_id, account_id, order_id, refund_id
+        ))
+    except Exception:
+        pass

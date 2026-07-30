@@ -62,9 +62,9 @@ public class StartupSecurityGuard implements ApplicationRunner {
         }
 
         int expiration = parsePositiveInt("JWT_EXPIRE_SECONDS",
-                property("admin.jwt.expire-seconds", "3600"));
-        if (expiration < 300 || expiration > 3_600) {
-            throw new IllegalStateException("JWT_EXPIRE_SECONDS must be between 300 and 3600 in prod/staging");
+                property("admin.jwt.expire-seconds", "86400"));
+        if (expiration < 300 || expiration > 604_800) {
+            throw new IllegalStateException("JWT_EXPIRE_SECONDS must be between 300 and 604800 in prod/staging");
         }
         if (!Boolean.parseBoolean(property("xianyu.media.cookie-secure", "false"))) {
             throw new IllegalStateException("MEDIA_COOKIE_SECURE must be true in prod/staging");

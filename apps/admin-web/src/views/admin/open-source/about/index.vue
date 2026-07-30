@@ -43,7 +43,7 @@
         type="info"
         :closable="false"
         title="建议"
-        description="这页仍保留结构化 JSON 编辑能力；下面新增的联系方式、微信群二维码和赞助码会在保存时自动合并回 communityCards，确保 bridge 数据结构与开源版前台保持一致。"
+        description="这页仍保留结构化 JSON 编辑能力；下面新增的联系方式、微信群二维码、QQ群聊二维码、微信客服二维码和赞助码会在保存时自动合并回 communityCards，确保 bridge 数据结构与开源版前台保持一致。"
       />
     </ElCard>
 
@@ -143,7 +143,7 @@
             <div class="card-head">
               <div>
                 <h3>社区卡片快捷配置</h3>
-                <span>直接维护联系方式、微信群二维码与赞助码，并自动同步到 communityCards</span>
+                <span>直接维护联系方式、微信群二维码、QQ群聊二维码、微信客服二维码与赞助码，并自动同步到 communityCards</span>
               </div>
             </div>
           </template>
@@ -207,7 +207,101 @@
                   </div>
                   <ElInput v-model="form.wechatGroupHint" placeholder="例如：扫码加入微信群" />
                   <span class="field-tip">
-                    保存后会覆盖 communityCards 中匹配“交流群 / 群 / group / wechat”的卡片。
+                    保存后会覆盖 communityCards 中匹配“微信群 / 微信交流群 / wechat”的卡片。
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="field-block field-block-full">
+              <label>QQ群聊二维码</label>
+              <div class="media-editor">
+                <div class="media-preview" :class="{ 'is-empty': !form.qqGroupImageUrl }">
+                  <img
+                    v-if="form.qqGroupImageUrl"
+                    :src="resolveImage(form.qqGroupImageUrl)"
+                    alt="QQ群聊二维码"
+                  />
+                  <Upload v-else class="media-placeholder-icon" />
+                </div>
+                <div class="media-actions">
+                  <div class="media-toolbar">
+                    <ElUpload
+                      accept="image/png,image/jpeg"
+                      :show-file-list="false"
+                      :before-upload="beforeImageUpload"
+                      :http-request="options => handleManagedImageUpload('qqGroup', options)"
+                    >
+                      <ElButton :icon="Upload" :loading="imageUploadingKey === 'qqGroup'">上传二维码</ElButton>
+                    </ElUpload>
+                    <ElButton
+                      link
+                      type="danger"
+                      :disabled="!form.qqGroupImageUrl"
+                      @click="clearManagedImage('qqGroup')"
+                    >
+                      清空图片
+                    </ElButton>
+                  </div>
+                  <div class="media-url-row">
+                    <ElInput
+                      v-model="imageUrlImportMap.qqGroup"
+                      placeholder="https://example.com/qq-group-qrcode.png"
+                    />
+                    <ElButton :loading="imageImportingKey === 'qqGroup'" @click="handleManagedImportFromUrl('qqGroup')">
+                      从 URL 导入
+                    </ElButton>
+                  </div>
+                  <ElInput v-model="form.qqGroupHint" placeholder="例如：扫码加入QQ群" />
+                  <span class="field-tip">
+                    保存后会覆盖 communityCards 中匹配“QQ / qq群”的卡片。
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="field-block field-block-full">
+              <label>微信客服二维码</label>
+              <div class="media-editor">
+                <div class="media-preview" :class="{ 'is-empty': !form.wechatKefuImageUrl }">
+                  <img
+                    v-if="form.wechatKefuImageUrl"
+                    :src="resolveImage(form.wechatKefuImageUrl)"
+                    alt="微信客服二维码"
+                  />
+                  <Upload v-else class="media-placeholder-icon" />
+                </div>
+                <div class="media-actions">
+                  <div class="media-toolbar">
+                    <ElUpload
+                      accept="image/png,image/jpeg"
+                      :show-file-list="false"
+                      :before-upload="beforeImageUpload"
+                      :http-request="options => handleManagedImageUpload('wechatKefu', options)"
+                    >
+                      <ElButton :icon="Upload" :loading="imageUploadingKey === 'wechatKefu'">上传二维码</ElButton>
+                    </ElUpload>
+                    <ElButton
+                      link
+                      type="danger"
+                      :disabled="!form.wechatKefuImageUrl"
+                      @click="clearManagedImage('wechatKefu')"
+                    >
+                      清空图片
+                    </ElButton>
+                  </div>
+                  <div class="media-url-row">
+                    <ElInput
+                      v-model="imageUrlImportMap.wechatKefu"
+                      placeholder="https://example.com/wechat-kefu-qrcode.png"
+                    />
+                    <ElButton :loading="imageImportingKey === 'wechatKefu'" @click="handleManagedImportFromUrl('wechatKefu')">
+                      从 URL 导入
+                    </ElButton>
+                  </div>
+                  <ElInput v-model="form.wechatKefuHint" placeholder="例如：扫码添加微信客服" />
+                  <span class="field-tip">
+                    保存后会覆盖 communityCards 中匹配“微信客服 / 客服二维码”的卡片。
                   </span>
                 </div>
               </div>
@@ -338,6 +432,14 @@
               <strong>{{ form.wechatGroupImageUrl ? '已配置' : '未配置' }}</strong>
             </div>
             <div class="check-row">
+              <span>QQ群聊二维码</span>
+              <strong>{{ form.qqGroupImageUrl ? '已配置' : '未配置' }}</strong>
+            </div>
+            <div class="check-row">
+              <span>微信客服二维码</span>
+              <strong>{{ form.wechatKefuImageUrl ? '已配置' : '未配置' }}</strong>
+            </div>
+            <div class="check-row">
               <span>赞助码</span>
               <strong>{{ form.sponsorImageUrl ? '已配置' : '未配置' }}</strong>
             </div>
@@ -395,6 +497,10 @@ type AboutFormState = {
   contactHint: string
   wechatGroupImageUrl: string
   wechatGroupHint: string
+  qqGroupImageUrl: string
+  qqGroupHint: string
+  wechatKefuImageUrl: string
+  wechatKefuHint: string
   sponsorImageUrl: string
   sponsorHint: string
   logsJson: string
@@ -403,7 +509,7 @@ type AboutFormState = {
   linksJson: string
 }
 
-type ManagedCommunityCardKey = 'group' | 'sponsor'
+type ManagedCommunityCardKey = 'group' | 'qqGroup' | 'wechatKefu' | 'sponsor'
 type ManagedCommunityCardMatchKey = ManagedCommunityCardKey | 'contact'
 
 const loading = ref(false)
@@ -415,6 +521,8 @@ const imageUploadingKey = ref<ManagedCommunityCardKey | null>(null)
 const imageImportingKey = ref<ManagedCommunityCardKey | null>(null)
 const imageUrlImportMap = reactive<Record<ManagedCommunityCardKey, string>>({
   group: '',
+  qqGroup: '',
+  wechatKefu: '',
   sponsor: ''
 })
 
@@ -430,6 +538,10 @@ const form = reactive<AboutFormState>({
   contactHint: '',
   wechatGroupImageUrl: '',
   wechatGroupHint: '',
+  qqGroupImageUrl: '',
+  qqGroupHint: '',
+  wechatKefuImageUrl: '',
+  wechatKefuHint: '',
   sponsorImageUrl: '',
   sponsorHint: '',
   logsJson: '[]',
@@ -460,6 +572,32 @@ const DEFAULT_GROUP_CARD: OpenSourceAboutCommunityCard = {
   actionText: '配置后可扫码',
   actionValue: '请在商业版后台为开源版关于页配置微信群二维码。',
   imageAlt: '微信群二维码'
+}
+
+const DEFAULT_QQ_GROUP_CARD: OpenSourceAboutCommunityCard = {
+  label: 'QQ群',
+  title: 'QQ群聊二维码',
+  desc: '用于版本通知、使用答疑与功能建议收集，方便习惯使用 QQ 的用户加入。',
+  placeholderText: 'QQ',
+  hint: '配置后可扫码',
+  tone: 'violet',
+  actionType: 'toast',
+  actionText: '配置后可扫码',
+  actionValue: '请在商业版后台为开源版关于页配置QQ群聊二维码。',
+  imageAlt: 'QQ群聊二维码'
+}
+
+const DEFAULT_WECHAT_KEFU_CARD: OpenSourceAboutCommunityCard = {
+  label: '微信客服',
+  title: '微信客服二维码',
+  desc: '用于一对一咨询、技术支持与商务合作，扫码后可添加客服微信。',
+  placeholderText: 'KEFU',
+  hint: '配置后可扫码',
+  tone: 'green',
+  actionType: 'toast',
+  actionText: '配置后可扫码',
+  actionValue: '请在商业版后台为开源版关于页配置微信客服二维码。',
+  imageAlt: '微信客服二维码'
 }
 
 const DEFAULT_SPONSOR_CARD: OpenSourceAboutCommunityCard = {
@@ -518,7 +656,14 @@ function findManagedCommunityCard(
   key: ManagedCommunityCardMatchKey
 ) {
   if (key === 'group') {
-    return cards.find(item => matchesCommunityCard(item, ['群', 'group', 'wechat']))
+    // 微信群二维码：收紧关键词避免与 QQ 群匹配冲突（不再使用裸 '群'）
+    return cards.find(item => matchesCommunityCard(item, ['微信群', '微信交流群', 'wechat', '交流群']))
+  }
+  if (key === 'qqGroup') {
+    return cards.find(item => matchesCommunityCard(item, ['qq', 'qq群', 'qq group']))
+  }
+  if (key === 'wechatKefu') {
+    return cards.find(item => matchesCommunityCard(item, ['微信客服', '客服二维码', 'kefu', 'customer service']))
   }
   if (key === 'sponsor') {
     return cards.find(item => matchesCommunityCard(item, ['赞助', 'sponsor']))
@@ -530,6 +675,8 @@ function applyPayload(payload: Partial<OpenSourceAboutContent> = {}) {
   configurationWarning.value = String(payload.configurationWarning || '')
   const communityCards = Array.isArray(payload.communityCards) ? payload.communityCards : []
   const groupCard = findManagedCommunityCard(communityCards, 'group')
+  const qqGroupCard = findManagedCommunityCard(communityCards, 'qqGroup')
+  const wechatKefuCard = findManagedCommunityCard(communityCards, 'wechatKefu')
   const sponsorCard = findManagedCommunityCard(communityCards, 'sponsor')
   const contactCard = findManagedCommunityCard(communityCards, 'contact')
 
@@ -544,9 +691,15 @@ function applyPayload(payload: Partial<OpenSourceAboutContent> = {}) {
   form.contactHint = String(contactCard?.hint || DEFAULT_CONTACT_CARD.hint || '')
   form.wechatGroupImageUrl = String(groupCard?.imageUrl || '')
   form.wechatGroupHint = String(groupCard?.hint || DEFAULT_GROUP_CARD.hint || '')
+  form.qqGroupImageUrl = String(qqGroupCard?.imageUrl || '')
+  form.qqGroupHint = String(qqGroupCard?.hint || DEFAULT_QQ_GROUP_CARD.hint || '')
+  form.wechatKefuImageUrl = String(wechatKefuCard?.imageUrl || '')
+  form.wechatKefuHint = String(wechatKefuCard?.hint || DEFAULT_WECHAT_KEFU_CARD.hint || '')
   form.sponsorImageUrl = String(sponsorCard?.imageUrl || '')
   form.sponsorHint = String(sponsorCard?.hint || DEFAULT_SPONSOR_CARD.hint || '')
   imageUrlImportMap.group = ''
+  imageUrlImportMap.qqGroup = ''
+  imageUrlImportMap.wechatKefu = ''
   imageUrlImportMap.sponsor = ''
   form.logsJson = prettyJson(Array.isArray(payload.logs) ? payload.logs : [])
   form.supportsJson = prettyJson(Array.isArray(payload.supports) ? payload.supports : [])
@@ -583,9 +736,13 @@ function upsertManagedCommunityCard(
 function buildManagedCommunityCards(rawCards: OpenSourceAboutCommunityCard[]) {
   const cards = Array.isArray(rawCards) ? [...rawCards] : []
   const currentGroupCard = findManagedCommunityCard(cards, 'group')
+  const currentQqGroupCard = findManagedCommunityCard(cards, 'qqGroup')
+  const currentWechatKefuCard = findManagedCommunityCard(cards, 'wechatKefu')
   const currentSponsorCard = findManagedCommunityCard(cards, 'sponsor')
   const currentContactCard = findManagedCommunityCard(cards, 'contact')
   const groupImageUrl = form.wechatGroupImageUrl.trim()
+  const qqGroupImageUrl = form.qqGroupImageUrl.trim()
+  const wechatKefuImageUrl = form.wechatKefuImageUrl.trim()
   const sponsorImageUrl = form.sponsorImageUrl.trim()
   const contactValue = form.contactValue.trim()
 
@@ -597,6 +754,26 @@ function buildManagedCommunityCards(rawCards: OpenSourceAboutCommunityCard[]) {
     actionType: 'toast',
     actionText: currentGroupCard?.actionText || DEFAULT_GROUP_CARD.actionText,
     actionValue: groupImageUrl ? '请直接扫码加入微信群。' : DEFAULT_GROUP_CARD.actionValue
+  })
+
+  upsertManagedCommunityCard(cards, 'qqGroup', {
+    ...DEFAULT_QQ_GROUP_CARD,
+    ...currentQqGroupCard,
+    imageUrl: qqGroupImageUrl,
+    hint: form.qqGroupHint.trim() || currentQqGroupCard?.hint || DEFAULT_QQ_GROUP_CARD.hint,
+    actionType: 'toast',
+    actionText: currentQqGroupCard?.actionText || DEFAULT_QQ_GROUP_CARD.actionText,
+    actionValue: qqGroupImageUrl ? '请直接扫码加入QQ群。' : DEFAULT_QQ_GROUP_CARD.actionValue
+  })
+
+  upsertManagedCommunityCard(cards, 'wechatKefu', {
+    ...DEFAULT_WECHAT_KEFU_CARD,
+    ...currentWechatKefuCard,
+    imageUrl: wechatKefuImageUrl,
+    hint: form.wechatKefuHint.trim() || currentWechatKefuCard?.hint || DEFAULT_WECHAT_KEFU_CARD.hint,
+    actionType: 'toast',
+    actionText: currentWechatKefuCard?.actionText || DEFAULT_WECHAT_KEFU_CARD.actionText,
+    actionValue: wechatKefuImageUrl ? '请直接扫码添加微信客服。' : DEFAULT_WECHAT_KEFU_CARD.actionValue
   })
 
   upsertManagedCommunityCard(cards, 'sponsor', {
@@ -643,7 +820,22 @@ function updateManagedImageValue(key: ManagedCommunityCardKey, value: string) {
     form.wechatGroupImageUrl = value
     return
   }
+  if (key === 'qqGroup') {
+    form.qqGroupImageUrl = value
+    return
+  }
+  if (key === 'wechatKefu') {
+    form.wechatKefuImageUrl = value
+    return
+  }
   form.sponsorImageUrl = value
+}
+
+function managedCardKeyLabel(key: ManagedCommunityCardKey) {
+  if (key === 'group') return '微信群二维码'
+  if (key === 'qqGroup') return 'QQ群聊二维码'
+  if (key === 'wechatKefu') return '微信客服二维码'
+  return '赞助码'
 }
 
 function clearManagedImage(key: ManagedCommunityCardKey) {
@@ -667,7 +859,7 @@ async function handleManagedImageUpload(key: ManagedCommunityCardKey, options: U
     const res = await uploadOpenSourceContentImage(file)
     updateManagedImageValue(key, String(res?.url || ''))
     imageUrlImportMap[key] = ''
-    ElMessage.success(key === 'group' ? '微信群二维码上传成功' : '赞助码上传成功')
+    ElMessage.success(`${managedCardKeyLabel(key)}上传成功`)
     options.onSuccess?.(res)
   } catch (error: any) {
     ElMessage.error(error?.message || '图片上传失败')
@@ -693,7 +885,7 @@ async function handleManagedImportFromUrl(key: ManagedCommunityCardKey) {
     const res = await importOpenSourceContentImageFromUrl(sourceUrl)
     updateManagedImageValue(key, String(res?.url || ''))
     imageUrlImportMap[key] = ''
-    ElMessage.success(key === 'group' ? '微信群二维码导入成功' : '赞助码导入成功')
+    ElMessage.success(`${managedCardKeyLabel(key)}导入成功`)
   } catch (error: any) {
     ElMessage.error(error?.message || 'URL 导入失败')
   } finally {

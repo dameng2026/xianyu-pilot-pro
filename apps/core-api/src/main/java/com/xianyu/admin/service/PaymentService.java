@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -55,6 +56,14 @@ public class PaymentService {
      */
     @Autowired(required = false)
     private MemberPromotionService promotionService;
+
+    /**
+     * 增长合伙人服务（可选依赖）：消费成功后触发邀请奖励与现金分成。
+     * 使用 @Lazy 避免循环依赖。
+     */
+    @Autowired
+    @Lazy
+    private GrowthService growthService;
 
     @Value("${payment.sandbox.enabled:false}")
     private boolean sandboxModeEnabled;
@@ -298,10 +307,12 @@ public class PaymentService {
         if (data == null) throw new BizException(400, "支付订单参数不能为空");
         String orderType = normalizeOrderType(required(data, "orderType", "订单类型不能为空"));
         if ("ad".equals(orderType)) throw new BizException(400, "广告订单只能通过广告申请流程创建");
-        String paymentMethod = normalizeChannel(required(data, "paymentMethod", "支付方式不能为空"));
-        Map<String, Object> config = chooseConfig(paymentMethod);
-        long paymentConfigId = storedPositiveLong(first(config, "id"), "支付配置 ID");
-        String providerType = normalizeProvider(text(first(config, "provider_type", "providerType")));
+        // paymentMethod 在免费订单（amountCent=0）时允许为空，待 amountCent 计算后判断
+        Object paymentMethodRaw = first(data, "paymentMethod", "channel");
+        String paymentMethod = (paymentMethodRaw != null && StringUtils.hasText(String.valueOf(paymentMethodRaw))) ? normalizeChannel(String.valueOf(paymentMethodRaw)) : null;
+        Map<String, Object> config = null;
+        long paymentConfigId = 0L;
+        String providerType = "free";
         Long planId = null;
         Long tokenPlanId = null;
         String title;
@@ -375,7 +386,8 @@ public class PaymentService {
                     "SELECT id, title, price_cent, product_type, status FROM mall_product WHERE id=? AND deleted=0 AND status=1",
                     targetId);
             if (product == null) throw new BizException(404, "商品不存在或已下架");
-            amountCent = storedPositiveLong(product.get("price_cent"), "商城商品价格");
+            // 允许价格为 0（免费商品），由 createOrder 末尾自动标记已支付
+            amountCent = storedNonNegativeLong(product.get("price_cent"), "商城商品价格");
             if (amountCent > MAX_PAYMENT_AMOUNT_CENT) throw new BizException(503, "商城商品价格配置超出系统允许范围");
             title = boundedText("货源商城-" + text(product.get("title")), MAX_TITLE_LENGTH);
         } else {
@@ -397,13 +409,38 @@ public class PaymentService {
             if (tokenAmount > MAX_TOKEN_AMOUNT) throw new BizException(503, "Token 套餐数量配置超出系统允许范围");
             title = boundedText("Token充值-" + text(plan.get("plan_name")), MAX_TITLE_LENGTH);
         }
+        // 支付配置：金额 > 0 时必填且查询通道配置；金额 = 0 时跳过（免费商品无需支付通道）
+        // 余额支付：使用 sys_user.balance 扣款，跳过支付网关
+        boolean balancePay = "balance".equals(paymentMethod);
+        if (amountCent > 0) {
+            if (paymentMethod == null) throw new BizException(400, "支付方式不能为空");
+            if (balancePay) {
+                // 余额支付：校验余额是否充足
+                Map<String, Object> user = queryOne("SELECT balance FROM sys_user WHERE id=? AND tenant_id=? FOR UPDATE", userId, tenantId);
+                if (user == null) throw new BizException(404, "用户不存在");
+                long balance = storedNonNegativeLong(user.get("balance"), "用户余额");
+                if (balance < amountCent) {
+                    throw new BizException(400, "可提现余额不足，当前余额 " + (balance / 100.0) + " 元");
+                }
+                providerType = "balance";
+            } else {
+                config = chooseConfig(paymentMethod);
+                paymentConfigId = storedPositiveLong(first(config, "id"), "支付配置 ID");
+                providerType = normalizeProvider(text(first(config, "provider_type", "providerType")));
+            }
+        } else if (paymentMethod == null) {
+            paymentMethod = "free"; // 免费订单占位，避免数据库 NOT NULL 约束失败
+        }
         String orderNo = newOrderNo(orderType);
         LocalDateTime expireAt = LocalDateTime.now().plusMinutes(15);
-        Map<String, Object> payPayload = buildPayPayload(orderNo, title, amountCent, paymentMethod, providerType, config, expireAt);
+        // 免费商品（amountCent=0）或余额支付：跳过支付网关下单，qr_content / pay_url 留空
+        Map<String, Object> payPayload = (amountCent == 0 || balancePay)
+                ? new LinkedHashMap<>()
+                : buildPayPayload(orderNo, title, amountCent, paymentMethod, providerType, config, expireAt);
         requireSingleWrite("创建支付订单失败",
                 "INSERT INTO payment_order(tenant_id, user_id, order_no, order_type, target_type, target_id, plan_id, token_plan_id, title, amount_cent, token_amount, payment_method, provider_type, payment_config_id, status, client_ip, qr_content, pay_url, expire_time, created_time, updated_time, deleted, period_type, " +
                         "activity_id, activity_plan_id, activity_name, original_price_cent, activity_price_cent, discount_cent, is_activity_order, quota_preoccupied, activity_rule_version) " +
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,NOW(),NOW(),0,?,?,?,?,?,?,?,?,?,?,0,0,?)",
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,NOW(),NOW(),0,?,?,?,?,?,?,?,?,0,?)",
                 tenantId, userId, orderNo, orderType, targetType, targetId, planId, tokenPlanId, title, amountCent, tokenAmount, paymentMethod, providerType, paymentConfigId,
                 boundedText(clientIp, 80), payPayload.get("qrContent"), payPayload.get("payUrl"), expireAt, vipPeriodType,
                 activityId, activityPlanId, activityName, originalPriceCent > 0 ? originalPriceCent : null,
@@ -420,6 +457,18 @@ public class PaymentService {
                 jdbcTemplate.update("UPDATE payment_order SET status=2, updated_time=NOW() WHERE order_no=? AND status=0 AND deleted=0", orderNo);
                 throw e;
             }
+        }
+        // 免费商品（amountCent=0）：跳过支付网关，直接发放权益并标记订单为已支付
+        if (amountCent == 0) {
+            log.info("免费商品自动完成订单 orderNo={} orderType={} amountCent={}", orderNo, orderType, amountCent);
+            markPaid(orderNo, "free_purchase", null);
+        } else if (balancePay) {
+            // 余额支付：扣减用户余额并标记订单已支付
+            requireSingleWrite("扣减用户余额失败",
+                    "UPDATE sys_user SET balance=balance-?, updated_time=NOW() WHERE id=? AND tenant_id=? AND balance>=?",
+                    amountCent, userId, tenantId, amountCent);
+            log.info("余额支付自动完成订单 orderNo={} orderType={} amountCent={}", orderNo, orderType, amountCent);
+            markPaid(orderNo, "balance_pay", null);
         }
         return orderDetail(orderNo);
     }
@@ -677,7 +726,28 @@ public class PaymentService {
                 StringUtils.hasText(gatewayTransactionId) ? gatewayTransactionId : null, orderNo);
         // 活动订单：支付成功后确认扣减名额（preoccupied-1, sold+1）。幂等：通过 quota_preoccupied 标志控制。
         confirmActivityQuotaIfPreoccupied(order);
+        // 增长合伙人：消费成功后触发邀请奖励（Token 奖励 + 现金分成）
+        triggerGrowthReward(order, source);
         return orderDetail(orderNo);
+    }
+
+    /**
+     * 增长合伙人奖励触发：消费成功后调用 GrowthService 发放邀请人 Token 奖励与现金分成。
+     * 异常不阻断支付成功（已发放权益），仅记录日志便于人工核对。
+     */
+    private void triggerGrowthReward(Map<String, Object> order, String source) {
+        if (growthService == null) return;
+        try {
+            long userId = storedPositiveLong(order.get("user_id"), "支付用户 ID");
+            long tenantId = storedPositiveLong(order.get("tenant_id"), "支付租户 ID");
+            String orderNo = text(order.get("order_no"));
+            String orderType = text(order.get("order_type"));
+            long amountCent = storedNonNegativeLong(order.get("amount_cent"), "支付金额");
+            String title = text(order.get("title"));
+            growthService.onConsumptionPaid(userId, tenantId, orderNo, orderType, amountCent, title);
+        } catch (Exception e) {
+            log.error("增长合伙人奖励触发失败 orderNo={} errorType={}", text(order.get("order_no")), e.getClass().getSimpleName(), e);
+        }
     }
 
     /**
@@ -1448,7 +1518,8 @@ public class PaymentService {
         String c = channel == null ? "" : channel.trim().toLowerCase(Locale.ROOT);
         if ("wx".equals(c) || "weixin".equals(c)) c = "wechat";
         if ("ali".equals(c)) c = "alipay";
-        if (!"wechat".equals(c) && !"alipay".equals(c)) throw new BizException(400, "非法支付方式");
+        if ("balance".equals(c) || "wallet".equals(c)) c = "balance";
+        if (!"wechat".equals(c) && !"alipay".equals(c) && !"balance".equals(c)) throw new BizException(400, "非法支付方式");
         return c;
     }
 
@@ -1637,12 +1708,25 @@ public class PaymentService {
         try {
             return jdbcTemplate.update(sql, args);
         } catch (DataAccessException e) {
+            // 记录详细错误信息以便定位根因（之前只返回模糊的"请稍后重试"，无法排查）
+            log.error("数据库写入失败 unavailableMessage={} sql={} args={} rootCause={}",
+                    unavailableMessage, sql, java.util.Arrays.toString(args), e.getMessage(), e);
             throw new BizException(503, unavailableMessage + "，请稍后重试");
         }
     }
 
     private void requireSingleWrite(String unavailableMessage, String sql, Object... args) {
-        if (safeUpdate(unavailableMessage, sql, args) != 1) {
+        int affected;
+        try {
+            affected = jdbcTemplate.update(sql, args);
+        } catch (DataAccessException e) {
+            log.error("数据库写入失败(requireSingleWrite) unavailableMessage={} sql={} args={} rootCause={}",
+                    unavailableMessage, sql, java.util.Arrays.toString(args), e.getMessage(), e);
+            throw new BizException(503, unavailableMessage + "，请稍后重试");
+        }
+        if (affected != 1) {
+            log.error("数据库未确认唯一写入 unavailableMessage={} affected={} sql={} args={}",
+                    unavailableMessage, affected, sql, java.util.Arrays.toString(args));
             throw new BizException(503, unavailableMessage + "，数据库未确认唯一写入");
         }
     }

@@ -37,7 +37,7 @@ public class XianyuAccountFeatureService {
         try {
             Map<String, Object> result = defaultAutoRateConfig(accountId);
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                    "SELECT enabled, rate_type AS rateType, text_content AS textContent, api_url AS apiUrl, updated_time AS updatedTime " +
+                    "SELECT enabled, rate_type AS rateType, text_content AS textContent, api_url AS apiUrl, schedule_hour AS scheduleHour, updated_time AS updatedTime " +
                             "FROM xianyu_account_auto_rate_config WHERE tenant_id=? AND account_id=? AND deleted=0 LIMIT 1",
                     tenantId,
                     accountId
@@ -51,6 +51,7 @@ public class XianyuAccountFeatureService {
             result.put("rateType", normalizeRateType(row.get("rateType")));
             result.put("textContent", trimToEmpty(row.get("textContent")));
             result.put("apiUrl", trimToEmpty(row.get("apiUrl")));
+            result.put("scheduleHour", normalizeScheduleHour(row.get("scheduleHour")));
             result.put("updatedTime", row.get("updatedTime"));
             return result;
         } catch (Exception e) {
@@ -65,19 +66,21 @@ public class XianyuAccountFeatureService {
         String rateType = normalizeRateType(body == null ? null : body.get("rateType"));
         String textContent = trimToEmpty(body == null ? null : body.get("textContent"));
         String apiUrl = trimToEmpty(body == null ? null : body.get("apiUrl"));
+        int scheduleHour = normalizeScheduleHour(body == null ? null : body.get("scheduleHour"));
 
         try {
             jdbcTemplate.update(
-                    "INSERT INTO xianyu_account_auto_rate_config(tenant_id, user_id, account_id, enabled, rate_type, text_content, api_url, created_time, updated_time, deleted) " +
-                            "VALUES(?,?,?,?,?,?,?,NOW(),NOW(),0) " +
-                            "ON DUPLICATE KEY UPDATE user_id=VALUES(user_id), enabled=VALUES(enabled), rate_type=VALUES(rate_type), text_content=VALUES(text_content), api_url=VALUES(api_url), updated_time=NOW(), deleted=0",
+                    "INSERT INTO xianyu_account_auto_rate_config(tenant_id, user_id, account_id, enabled, rate_type, text_content, api_url, schedule_hour, created_time, updated_time, deleted) " +
+                            "VALUES(?,?,?,?,?,?,?,?,NOW(),NOW(),0) " +
+                            "ON DUPLICATE KEY UPDATE user_id=VALUES(user_id), enabled=VALUES(enabled), rate_type=VALUES(rate_type), text_content=VALUES(text_content), api_url=VALUES(api_url), schedule_hour=VALUES(schedule_hour), updated_time=NOW(), deleted=0",
                     tenantId,
                     userId,
                     accountId,
                     enabled,
                     rateType,
                     textContent,
-                    apiUrl
+                    apiUrl,
+                    scheduleHour
             );
 
             Map<String, Object> result = defaultAutoRateConfig(accountId);
@@ -85,6 +88,7 @@ public class XianyuAccountFeatureService {
             result.put("rateType", rateType);
             result.put("textContent", textContent);
             result.put("apiUrl", apiUrl);
+            result.put("scheduleHour", scheduleHour);
             result.put("updatedTime", LocalDateTime.now());
             return result;
         } catch (Exception e) {
@@ -235,6 +239,7 @@ public class XianyuAccountFeatureService {
         result.put("rateType", "text");
         result.put("textContent", "");
         result.put("apiUrl", "");
+        result.put("scheduleHour", 9);
         result.put("updatedTime", null);
         return result;
     }
@@ -302,6 +307,30 @@ public class XianyuAccountFeatureService {
     private String normalizeRateType(Object value) {
         String text = trimToEmpty(value).toLowerCase();
         return "api".equals(text) ? "api" : "text";
+    }
+
+    private int normalizeScheduleHour(Object value) {
+        if (value == null) {
+            return 9;
+        }
+        try {
+            int parsed;
+            if (value instanceof Number number) {
+                parsed = number.intValue();
+            } else {
+                String text = String.valueOf(value).trim();
+                if (text.isEmpty()) {
+                    return 9;
+                }
+                parsed = Integer.parseInt(text);
+            }
+            if (parsed < 0 || parsed > 23) {
+                return 9;
+            }
+            return parsed;
+        } catch (NumberFormatException ignore) {
+            return 9;
+        }
     }
 
     private int normalizeMessageExpireTime(Object value) {

@@ -302,7 +302,7 @@ import CardPanel from '../components/CardPanel.vue'
 import AppButton from '../components/AppButton.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Icon from '../components/Icon.vue'
-import { listImageRecords, recoverOpportunityImages } from '../api/opportunity.js'
+import { listImageRecords, recoverOpportunityImages, getImageRecordsStats } from '../api/opportunity.js'
 
 const records = ref([])
 const total = ref(0)
@@ -472,26 +472,19 @@ async function load() {
 async function loadStats() {
   statsError.value = ''
   try {
-    const res = await listImageRecords({ source: 'all', status: '', keyword: '', page: 1, pageSize: 1000 })
-    const data = extractListData(res)
-    const list = data.records
-    const now = new Date()
-    const thisYear = now.getFullYear()
-    const thisMonth = now.getMonth() + 1
-    let success = 0
-    let failed = 0
-    let monthCount = 0
-    for (const r of list) {
-      if (r && r.status === 'success') success++
-      else if (r && r.status === 'failed') failed++
-      if (r && r.created_time) {
-        const d = new Date(String(r.created_time).replace(' ', 'T'))
-        if (!isNaN(d.getTime()) && d.getFullYear() === thisYear && d.getMonth() + 1 === thisMonth) {
-          monthCount++
-        }
-      }
+    // 性能优化：原前端拉取 pageSize=1000 全量记录循环统计，单次返回数 MB 数据耗时 5-10s
+    // 改为后端 SQL COUNT 聚合，3 个标量查询，<50ms
+    const res = await getImageRecordsStats('all')
+    const data = res && res.data
+    if (!data || typeof data !== 'object') {
+      throw new Error('统计响应格式异常')
     }
-    stats.value = { total: list.length, success, failed, thisMonth: monthCount }
+    stats.value = {
+      total: Number(data.total) || 0,
+      success: Number(data.success) || 0,
+      failed: Number(data.failed) || 0,
+      thisMonth: Number(data.thisMonth) || 0
+    }
   } catch (e) {
     stats.value = { total: null, success: null, failed: null, thisMonth: null }
     statsError.value = (e && e.message) || '统计加载失败'

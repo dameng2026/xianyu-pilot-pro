@@ -5,7 +5,7 @@
       <div class="page-title-row">
         <div>
           <h2>功能管理</h2>
-          <p>按账号等级控制前台各功能页面的访问开关。第一列为功能名称，后续列分别为普通用户、VIP、SVP 的独立开关，"全部"为快捷开关：开启时三列全部打开，关闭时三列全部关闭。"维护"列开启后，所有用户进入该页面都会弹窗提示"正在维护升级中"，优先级高于等级开关，常用于功能升级、故障应急等场景。</p>
+          <p>按账号等级控制前台各功能页面的访问开关。第一列为功能名称，后续列分别为普通用户、VIP、SVP 的独立开关，"全部"为快捷开关：开启时三列全部打开，关闭时三列全部关闭。"维护"列开启后，所有用户进入该页面都会弹窗提示"正在维护升级中"，优先级高于等级开关，常用于功能升级、故障应急等场景。"限制模式"列为单选：无限制（默认正常使用）/ 预览模式（可进入页面查看数据、调整配置，但不可执行业务操作如运行/发送）/ 不可进入（直接无法访问该页面）。优先级：维护 &gt; 限制模式=不可进入 &gt; 等级开关 &gt; 限制模式=预览。</p>
         </div>
         <div class="toolbar-actions">
           <ElButton :disabled="configState !== 'ready'" @click="loadConfig">
@@ -92,6 +92,20 @@
                 inactive-text="—"
                 class="maintenance-switch"
               />
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="限制模式" width="130" align="center">
+            <template #default="{ row }">
+              <ElSelect
+                v-model="row.limitMode"
+                size="small"
+                :class="['limit-mode-select', `limit-mode-${row.limitMode || 'none'}`]"
+                popper-class="limit-mode-popper"
+              >
+                <ElOption label="无限制" value="none" />
+                <ElOption label="预览模式" value="preview" />
+                <ElOption label="不可进入" value="blocked" />
+              </ElSelect>
             </template>
           </ElTableColumn>
           <ElTableColumn label="关闭原因" min-width="240">
@@ -188,7 +202,12 @@ async function loadConfig() {
   configError.value = ''
   try {
     const list = await fetchGetFeatureSwitches()
-    features.splice(0, features.length, ...list)
+    // 兜底：确保 limitMode 字段有默认值（后端已返回，但向前兼容旧数据）
+    const normalized = list.map(f => ({
+      ...f,
+      limitMode: (f.limitMode === 'preview' || f.limitMode === 'blocked') ? f.limitMode : 'none'
+    }))
+    features.splice(0, features.length, ...normalized)
     configState.value = 'ready'
   } catch (e: any) {
     configError.value = e?.message || '请求失败，请稍后重试。'
@@ -262,5 +281,28 @@ onMounted(loadConfig)
 }
 .maintenance-switch :deep(.el-switch__label) {
   color: var(--el-color-danger);
+}
+/* 限制模式下拉框：按模式着色，便于管理员快速识别 */
+.limit-mode-select :deep(.el-input__wrapper) {
+  border-radius: 8px;
+}
+.limit-mode-preview :deep(.el-input__wrapper) {
+  background-color: var(--el-color-warning-light-9);
+  box-shadow: 0 0 0 1px var(--el-color-warning-light-5) inset;
+}
+.limit-mode-preview :deep(.el-input__inner) {
+  color: var(--el-color-warning-dark-2);
+  font-weight: 600;
+}
+.limit-mode-blocked :deep(.el-input__wrapper) {
+  background-color: var(--el-color-danger-light-9);
+  box-shadow: 0 0 0 1px var(--el-color-danger-light-5) inset;
+}
+.limit-mode-blocked :deep(.el-input__inner) {
+  color: var(--el-color-danger);
+  font-weight: 600;
+}
+.limit-mode-none :deep(.el-input__inner) {
+  color: var(--el-text-color-secondary);
 }
 </style>

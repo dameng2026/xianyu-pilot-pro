@@ -829,14 +829,19 @@ def call_fish_shop_edit_detail(cookie_str: str, item_id: str) -> dict:
 def _extract_edit_detail_data(result: dict) -> dict:
     """从 editdetail 响应中提取 data 字段（统一为 dict）。
 
-    响应结构：{ret, data: {data: {...}, ...}, ...}
-    实际商品字段在 data.data 中（与发布/编辑响应一致）。
+    支持两种响应结构（实测闲鱼 backend.idleitem 系列接口）：
+    1. 嵌套结构：{ret, data: {data: {商品字段}}} — 旧版/部分接口
+    2. 扁平结构：{ret, data: {商品字段}}         — edit/editdetail 实测结构
+
+    优先返回 data.data（若为非空 dict），否则返回 data 本身。
+    避免空 dict 覆盖 data 本身导致字段全部解析为空。
     """
     data = result.get("data", {})
     if not isinstance(data, dict):
         return {}
     inner = data.get("data", {})
-    if isinstance(inner, dict):
+    # 只有当 inner 是非空 dict 时才返回 inner，避免空 dict 覆盖 data 本身
+    if isinstance(inner, dict) and inner:
         return inner
     return data
 
@@ -1020,6 +1025,21 @@ def _parse_property_image_list(property_image_list: Any) -> List[dict]:
     """解析 propertyImageList（多规格）。
 
     简单商品响应中不包含此字段，返回空列表。
+
+    实测响应结构（edit/editdetail 接口）：
+        [{
+            "major": "false",
+            "property": {
+                "propertyText": "容量",
+                "valueText": "123",
+                ...
+            },
+            "url": "https://img.alicdn.com/..."
+        }]
+
+    兼容两种字段路径：
+    - 扁平路径（旧）：img.propertyText / img.valueText / img.propertyValueImg
+    - 嵌套路径（实测）：img.property.propertyText / img.property.valueText / img.url
     """
     if not isinstance(property_image_list, list):
         return []
@@ -1027,9 +1047,16 @@ def _parse_property_image_list(property_image_list: Any) -> List[dict]:
     for img in property_image_list:
         if not isinstance(img, dict):
             continue
-        prop_text = _safe_str(img.get("propertyText"))
-        val_text = _safe_str(img.get("valueText"))
-        img_url = _safe_str(img.get("propertyValueImg"))
+        # 规格文本：优先嵌套 property.propertyText，回退扁平 propertyText
+        prop_obj = img.get("property")
+        if isinstance(prop_obj, dict):
+            prop_text = _safe_str(prop_obj.get("propertyText"))
+            val_text = _safe_str(prop_obj.get("valueText"))
+        else:
+            prop_text = _safe_str(img.get("propertyText"))
+            val_text = _safe_str(img.get("valueText"))
+        # 图片 URL：优先嵌套 url，回退扁平 propertyValueImg
+        img_url = _safe_str(img.get("url") or img.get("propertyValueImg"))
         if not prop_text or not val_text or not img_url:
             continue
         parsed.append({

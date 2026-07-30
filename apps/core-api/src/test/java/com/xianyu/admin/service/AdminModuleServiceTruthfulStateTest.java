@@ -63,15 +63,15 @@ class AdminModuleServiceTruthfulStateTest {
     @Test
     void unavailableModuleIsRejectedAcrossEveryGenericOperation() {
         assertAll(
-                () -> assertUnavailable(() -> service.meta("licenses")),
-                () -> assertUnavailable(() -> service.detail("licenses", 1)),
-                () -> assertUnavailable(() -> service.save("licenses", Map.of("name", "fake"))),
-                () -> assertUnavailable(() -> service.updateStatus("licenses", 1, "enabled")),
-                () -> assertUnavailable(() -> service.batchUpdateStatus("licenses", List.of(1L), "enabled")),
-                () -> assertUnavailable(() -> service.delete("licenses", 1)),
-                () -> assertUnavailable(() -> service.batchDelete("licenses", List.of(1L))),
-                () -> assertUnavailable(() -> service.stats("licenses")),
-                () -> assertUnavailable(() -> service.exportCsv("licenses", null, null))
+                () -> assertUnavailable(() -> service.meta("notify-channels")),
+                () -> assertUnavailable(() -> service.detail("notify-channels", 1)),
+                () -> assertUnavailable(() -> service.save("notify-channels", Map.of("name", "fake"))),
+                () -> assertUnavailable(() -> service.updateStatus("notify-channels", 1, "enabled")),
+                () -> assertUnavailable(() -> service.batchUpdateStatus("notify-channels", List.of(1L), "enabled")),
+                () -> assertUnavailable(() -> service.delete("notify-channels", 1)),
+                () -> assertUnavailable(() -> service.batchDelete("notify-channels", List.of(1L))),
+                () -> assertUnavailable(() -> service.stats("notify-channels")),
+                () -> assertUnavailable(() -> service.exportCsv("notify-channels", null, null))
         );
         verifyNoInteractions(jdbcTemplate);
     }

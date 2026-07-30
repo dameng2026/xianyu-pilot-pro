@@ -36,6 +36,11 @@ from ....services.rate_service import (
     create_rate,
     list_fish_shop_accounts,
 )
+from ....services.auto_rate_scheduler import (
+    get_scheduler_status as get_auto_rate_scheduler_status,
+    list_auto_rate_logs,
+    run_auto_rate_for_account,
+)
 from ..deps import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -84,16 +89,20 @@ async def trigger_sync(
     """触发评价同步。
 
     body:
-        {"accountId": 123}  同步单个账号
-        {} 或不传             同步全部鱼小铺账号
+        {"accountId": 123}            同步单个账号
+        {} 或不传                       同步全部鱼小铺账号
+        {"forceFull": true}            强制全量同步（忽略缓存，拉取所有页）
+        {"accountId": 123, "forceFull": true}
 
     同步策略（需求第九节、第十节）：
     - 首次同步（无缓存）：完整分页同步
     - 后续快速刷新：仅第一页，发现变化时继续获取剩余页
+    - forceFull=True 时强制完整分页同步
     - 已有同步任务在运行时返回 TASK_ALREADY_RUNNING
     """
     tenant_id = int(current_user.get("tenant_id"))
     account_id = None
+    force_full = False
     if body and isinstance(body, dict):
         account_id = body.get("accountId")
         if account_id is not None:
@@ -101,12 +110,20 @@ async def trigger_sync(
                 account_id = int(account_id)
             except (TypeError, ValueError):
                 return ResultObject.failed("accountId 参数无效", code=400)
+        # forceFull 必须为明确布尔值
+        raw_force_full = body.get("forceFull")
+        if isinstance(raw_force_full, bool):
+            force_full = raw_force_full
+        elif isinstance(raw_force_full, (int, float)):
+            force_full = raw_force_full != 0
+        elif isinstance(raw_force_full, str):
+            force_full = raw_force_full.strip().lower() in ("true", "1", "yes", "y")
 
     try:
         if account_id is not None:
-            result = await sync_rates_for_account(db, account_id, tenant_id)
+            result = await sync_rates_for_account(db, account_id, tenant_id, force_full=force_full)
         else:
-            result = await sync_all_rates(db, tenant_id)
+            result = await sync_all_rates(db, tenant_id, force_full=force_full)
     except Exception as exc:
         logger.exception("触发评价同步失败 tenantId=%s accountId=%s", tenant_id, account_id)
         return ResultObject.failed(f"触发同步失败: {type(exc).__name__}")
@@ -251,3 +268,116 @@ async def list_fish_shop_accounts_endpoint(
     except Exception as exc:
         logger.exception("查询鱼小铺账号列表失败 tenantId=%s", tenant_id)
         return ResultObject.failed(f"查询鱼小铺账号列表失败: {type(exc).__name__}")
+
+
+# ============================================================
+# 自动补评价：执行日志查询 + 手动触发 + 调度器状态
+# ============================================================
+
+@router.get("/auto-rate/logs")
+async def list_auto_rate_logs_endpoint(
+    accountId: Optional[int] = Query(None, description="账号ID，不传则查询全部账号"),
+    page: int = Query(1, ge=1),
+    pageSize: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """查询自动补评价执行日志（分页）。
+
+    返回最近 N 条执行记录，包含 status / totalPending / totalSuccess / totalFailed /
+    totalSkipped / errorMessage / details（每条订单处理结果）等字段。
+    """
+    tenant_id = int(current_user.get("tenant_id"))
+    try:
+        result = await list_auto_rate_logs(
+            db, tenant_id,
+            account_id=accountId,
+            page=page,
+            page_size=pageSize,
+        )
+        return ResultObject.success(result)
+    except Exception as exc:
+        logger.exception("查询自动评价日志失败 tenantId=%s", tenant_id)
+        return ResultObject.failed(f"查询自动评价日志失败: {type(exc).__name__}")
+
+
+@router.get("/auto-rate/scheduler-status")
+async def get_auto_rate_scheduler_status_endpoint(
+    current_user: dict = Depends(get_current_user),
+):
+    """查询自动补评价调度器运行状态（用于诊断调度是否正常）。"""
+    try:
+        return ResultObject.success(get_auto_rate_scheduler_status())
+    except Exception as exc:
+        logger.exception("查询自动评价调度器状态失败")
+        return ResultObject.failed(f"查询调度器状态失败: {type(exc).__name__}")
+
+
+@router.post("/auto-rate/run")
+async def trigger_auto_rate_run_endpoint(
+    body: Optional[dict] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """手动触发单个账号的自动补评价（立即执行一次）。
+
+    body:
+        {"accountId": 123}
+
+    执行前会再次校验：
+    - 该账号已配置自动评价
+    - 该账号已开启自动评价
+    - 账号为鱼小铺账号且 Cookie 有效
+    - 评价内容已配置
+
+    与定时任务共用同一执行路径与兜底策略，执行结果写入 xianyu_auto_rate_log。
+    """
+    tenant_id = int(current_user.get("tenant_id"))
+    if not body or not isinstance(body, dict):
+        return ResultObject.failed("请求参数不能为空", code=400)
+    account_id = body.get("accountId")
+    if account_id is None:
+        return ResultObject.failed("accountId 不能为空", code=400)
+    try:
+        account_id = int(account_id)
+    except (TypeError, ValueError):
+        return ResultObject.failed("accountId 参数无效", code=400)
+
+    try:
+        result = await run_auto_rate_for_account(account_id, tenant_id, trigger_type="manual")
+    except Exception as exc:
+        logger.exception(
+            "手动触发自动评价异常 tenantId=%s accountId=%s", tenant_id, account_id
+        )
+        return ResultObject.failed(f"手动触发自动评价异常: {type(exc).__name__}")
+
+    if not result.get("ok"):
+        err = result.get("error") or "触发失败"
+        # RUN_IN_PROGRESS 视为已触发
+        if err == "RUN_IN_PROGRESS":
+            return ResultObject.success(
+                {"alreadyInProgress": True},
+                message="该账号正在执行自动评价，请稍后查看日志",
+            )
+        return ResultObject.failed(err)
+
+    summary = result.get("summary") or {}
+    status = summary.get("status")
+    if status == "skip":
+        return ResultObject.success(
+            summary,
+            message=f"已跳过：{summary.get('reason', '未知原因')}",
+        )
+    if status == "failed":
+        return ResultObject.failed(
+            summary.get("error") or "自动评价执行失败",
+            data=summary,
+        )
+    # success / partial
+    return ResultObject.success(
+        summary,
+        message=(
+            f"自动评价完成：成功 {summary.get('totalSuccess', 0)} / "
+            f"失败 {summary.get('totalFailed', 0)} / "
+            f"跳过 {summary.get('totalSkipped', 0)}"
+        ),
+    )

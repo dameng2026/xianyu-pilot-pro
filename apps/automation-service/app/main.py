@@ -306,6 +306,31 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log_service_failure(logger, e, operation="start_relist_scheduler")
 
+    # 启动自动补评价调度器
+    # 每小时第 5 分钟检查 schedule_hour 匹配当前小时的账号，对未评价订单提交好评。
+    # 每个账号独立执行，复用 rate_service 的同步与创建评价逻辑，
+    # 执行结果写入 xianyu_auto_rate_log 供前台查询。
+    auto_rate_scheduler_started = False
+    try:
+        from .services.auto_rate_scheduler import start_auto_rate_scheduler, stop_auto_rate_scheduler
+        await start_auto_rate_scheduler()
+        auto_rate_scheduler_started = True
+        logger.info("自动补评价调度器已启动")
+    except Exception as e:
+        log_service_failure(logger, e, operation="start_auto_rate_scheduler")
+
+    # 启动 AI 客服自主学习调度器
+    # 每天 1 次扫描 apps/user-web/src/data/nav.js 文件，将新功能页面录入 ai_cs_knowledge 表
+    # 让小梦客服能"自主学习"前台新功能，无需重启服务即可获取最新功能清单
+    feature_sync_scheduler_started = False
+    try:
+        from .services.ai_cs_feature_sync import start_feature_sync_scheduler, stop_feature_sync_scheduler
+        await start_feature_sync_scheduler()
+        feature_sync_scheduler_started = True
+        logger.info("AI 客服自主学习调度器已启动")
+    except Exception as e:
+        log_service_failure(logger, e, operation="start_feature_sync_scheduler")
+
     yield
 
     storage_reconcile_task.cancel()
@@ -382,6 +407,21 @@ async def lifespan(app: FastAPI):
             await stop_relist_scheduler()
         except Exception:
             logger.warning("关闭售整自动上架调度器失败，继续关闭流程")
+
+    # 停止自动补评价调度器
+    if auto_rate_scheduler_started:
+        try:
+            await stop_auto_rate_scheduler()
+        except Exception:
+            logger.warning("关闭自动补评价调度器失败，继续关闭流程")
+
+    # 停止 AI 客服自主学习调度器
+    if feature_sync_scheduler_started:
+        try:
+            from .services.ai_cs_feature_sync import stop_feature_sync_scheduler
+            await stop_feature_sync_scheduler()
+        except Exception:
+            logger.warning("关闭 AI 客服自主学习调度器失败，继续关闭流程")
 
     # 停止 WebSocket 连接
     if ws_task is not None:

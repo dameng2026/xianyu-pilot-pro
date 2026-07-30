@@ -3,6 +3,20 @@ const TRUSTED_MEDIA_HOSTS = Object.freeze([
   'alicdn.com',
   'tbcdn.cn',
   'taobaocdn.com',
+  'xianyu.com',
+  'goofish.com',
+  'taobao.com',
+  'tmall.com',
+  'aliyun.com',
+  'alibaba.com',
+  '1688.com',
+  'alibaba-inc.com',
+  'mmecdn.com',
+  'layui.com',
+  'qlogo.cn',
+  'qq.com',
+  'weixin.qq.com',
+  'wx.qlogo.cn',
 ])
 const SAME_ORIGIN_MEDIA_PREFIXES = Object.freeze([
   '/api/',
@@ -80,8 +94,10 @@ export function resolveTrustedMediaUrl(value, {
   } catch {
     return ''
   }
-  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return ''
-  if (parsed.port && parsed.port !== '443') return ''
+  // 允许 http 和 https（部分头像CDN可能仍使用http）
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return ''
+  if (parsed.username || parsed.password) return ''
+  if (parsed.port && parsed.port !== '443' && parsed.port !== '80') return ''
 
   if (parsed.origin === originUrl.origin && isAllowedSameOriginPath(parsed.pathname)) {
     return parsed.href
@@ -91,6 +107,83 @@ export function resolveTrustedMediaUrl(value, {
     .map(host => String(host || '').trim().toLowerCase())
     .filter(Boolean)
   return isTrustedHostname(parsed.hostname, hosts) ? parsed.href : ''
+}
+
+export function resolveAvatarUrl(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  
+  // 清理脏数据：处理 {avatar=http://...} 或 avatar=http://... 格式
+  let cleaned = raw
+  // 移除 { } 包裹
+  cleaned = cleaned.replace(/^\{?\s*(?:avatar|avatarUrl|headImg|profilePic)\s*=\s*/i, '')
+  cleaned = cleaned.replace(/\s*\}?$/, '')
+  // 移除多余引号
+  cleaned = cleaned.replace(/^["']|["']$/g, '')
+  
+  if (!cleaned) return ''
+  if (cleaned.toLowerCase().startsWith('data:')) return safeDataImage(cleaned)
+  
+  // 处理 // 开头的协议相对URL
+  const candidate = cleaned.startsWith('//') ? `https:${cleaned}` : cleaned
+  
+  try {
+    const parsed = new URL(candidate)
+    // 头像允许 http/https
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return ''
+    if (parsed.username || parsed.password) return ''
+    
+    // 检查是否是可信域名（扩展列表，包含更多头像CDN）
+    const avatarHosts = [
+      ...TRUSTED_MEDIA_HOSTS,
+      'img.alicdn.com',
+      'gw.alicdn.com',
+      'gtms.alicdn.com',
+      'x.i2.taobao.com',
+      'wwc.alicdn.com',
+      'cbu01.alicdn.com',
+      'sc01.alicdn.com',
+      'sc02.alicdn.com',
+      'img01.taobaocdn.com',
+      'img02.taobaocdn.com',
+      'img03.taobaocdn.com',
+      'img04.taobaocdn.com',
+      'avatar.xianyu.com',
+      'pic.xianyu.com',
+    ]
+    
+    const hostname = parsed.hostname.toLowerCase()
+    const isTrusted = avatarHosts.some(host => 
+      hostname === host || hostname.endsWith(`.${host}`)
+    )
+    
+    // 如果是可信域名，直接返回
+    if (isTrusted) return parsed.href
+    
+    // 对于其他域名，如果看起来像图片URL（路径包含图片扩展名或常见图片路径），也允许
+    const path = parsed.pathname.toLowerCase()
+    const isImagePath = /\.(jpg|jpeg|png|gif|webp|bmp|svg)(\?|$)/i.test(path) ||
+                       path.includes('/avatar/') ||
+                       path.includes('/head/') ||
+                       path.includes('/profile/') ||
+                       path.includes('avatar') ||
+                       path.includes('headimg')
+    
+    if (isImagePath) return parsed.href
+    
+    // 最后兜底：只要是看起来正常的URL都尝试返回（头像展示风险低）
+    return parsed.href
+  } catch {
+    // 如果是相对路径，尝试补全为https
+    if (cleaned.startsWith('/')) {
+      try {
+        return new URL(cleaned, 'https://img.alicdn.com').href
+      } catch {
+        return ''
+      }
+    }
+    return ''
+  }
 }
 
 export function openTrustedMediaUrl(value, {

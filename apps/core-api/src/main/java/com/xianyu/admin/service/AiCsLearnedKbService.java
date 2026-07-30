@@ -282,26 +282,26 @@ public class AiCsLearnedKbService {
     }
 
     /**
-     * V1.47: 列出所有预定义分类及其条目数（前台用户视图，含用户是否启用）。
-     * 返回 [{id, name, code, keywords, entry_count, is_system, user_enabled}, ...]
+     * V1.47/V1.49: 列出所有分类及其条目数（前台用户视图，含用户是否启用，组装为三级树形结构）。
+     * V1.49 改造：返回一级分类（parent_id IS NULL），其下挂二级分类（parent_id 指向一级）。
+     * 仅二级分类有 Q&A，一级分类的统计为合计（所有子分类的总和）。
+     * 返回 [{id, name, code, icon, color, description, keywords, entry_count, is_system,
+     *        sort_order, total_count, bound_count, user_enabled, user_partial, children: [...]}, ...]
      */
     public List<Map<String, Object>> listCategoriesForUser(Long tenantId, Long userId) {
-        // 1. 查所有未删除分类
-        List<Map<String, Object>> categories = jdbc.queryForList(
-            "SELECT id, name, code, keywords, entry_count, is_system, sort_order " +
+        // 1. 查所有未删除分类（含一级和二级）
+        List<Map<String, Object>> all = jdbc.queryForList(
+            "SELECT id, name, code, parent_id, icon, color, description, keywords, " +
+            "entry_count, is_system, sort_order " +
             "FROM ai_cs_kb_category WHERE deleted=0 ORDER BY is_system DESC, sort_order, id"
         );
-        if (categories.isEmpty()) return categories;
+        if (all.isEmpty()) return new ArrayList<>();
 
-        // 2. 查用户已启用的 learned KB 绑定（一次查询，避免 N+1）
-        // 注意：绑定的是具体 KB id，不是分类。用户启用某分类 = 启用该分类下所有 KB
-        // 这里返回分类下"已启用 KB 数 / 总 KB 数"，前端可据此显示"全部启用/部分启用/未启用"
-        List<Long> categoryIds = categories.stream()
+        // 2. 一次查询所有二级分类的总数和已启用绑定数（仅二级分类有 KB）
+        List<Long> allIds = all.stream()
             .map(row -> ((Number) row.get("id")).longValue())
             .collect(java.util.stream.Collectors.toList());
-
-        // 单次查询所有分类的总数和已启用绑定数
-        String inClause = categoryIds.stream().map(String::valueOf)
+        String inClause = allIds.stream().map(String::valueOf)
             .collect(java.util.stream.Collectors.joining(","));
         List<Map<String, Object>> stats = jdbc.queryForList(
             "SELECT c.id AS category_id, c.code AS category_code, " +
@@ -309,7 +309,7 @@ public class AiCsLearnedKbService {
             "COALESCE(SUM(CASE WHEN b.kb_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS bound_count " +
             "FROM ai_cs_kb_category c " +
             "LEFT JOIN ai_cs_learned_kb k ON k.category_id=c.id AND k.deleted=0 " +
-            "  AND k.review_status='approved' AND k.enabled=1 AND k.sensitive_filtered=1 AND k.vector_indexed=1 " +
+            "  AND k.review_status='approved' AND k.enabled=1 AND k.sensitive_filtered=1 " +
             "LEFT JOIN ai_cs_user_kb_binding b ON b.kb_type='learned' AND b.kb_id=k.id " +
             "  AND b.tenant_id=? AND b.user_id=? AND b.deleted=0 AND b.enabled=1 " +
             "WHERE c.id IN (" + inClause + ") AND c.deleted=0 " +
@@ -317,7 +317,7 @@ public class AiCsLearnedKbService {
             tenantId, userId
         );
 
-        // 3. 合并统计信息
+        // 3. 合并统计信息到分类对象
         Map<Long, Map<String, Object>> statsMap = new HashMap<>();
         for (Map<String, Object> row : stats) {
             Number catId = (Number) row.get("category_id");
@@ -325,20 +325,136 @@ public class AiCsLearnedKbService {
                 statsMap.put(catId.longValue(), row);
             }
         }
-
-        for (Map<String, Object> category : categories) {
+        for (Map<String, Object> category : all) {
             Long catId = ((Number) category.get("id")).longValue();
             Map<String, Object> stat = statsMap.get(catId);
             int totalCount = stat != null ? ((Number) stat.get("total_count")).intValue() : 0;
             int boundCount = stat != null ? ((Number) stat.get("bound_count")).intValue() : 0;
             category.put("total_count", totalCount);
             category.put("bound_count", boundCount);
-            // user_enabled: total_count > 0 且 bound_count == total_count 表示全部启用
             category.put("user_enabled", totalCount > 0 && boundCount == totalCount);
             category.put("user_partial", boundCount > 0 && boundCount < totalCount);
         }
 
-        return categories;
+        // 4. 组装层级结构：一级 + 其下二级
+        Map<Long, List<Map<String, Object>>> byParent = new LinkedHashMap<>();
+        List<Map<String, Object>> roots = new ArrayList<>();
+        for (Map<String, Object> row : all) {
+            Object pidObj = row.get("parent_id");
+            if (pidObj == null) {
+                roots.add(row);
+            } else {
+                Long pid = ((Number) pidObj).longValue();
+                byParent.computeIfAbsent(pid, k -> new ArrayList<>()).add(row);
+            }
+        }
+
+        // 5. 计算一级分类的合计统计
+        for (Map<String, Object> root : roots) {
+            Long rid = ((Number) root.get("id")).longValue();
+            List<Map<String, Object>> children = byParent.getOrDefault(rid, new ArrayList<>());
+            root.put("children", children);
+
+            int totalSum = 0, boundSum = 0;
+            for (Map<String, Object> child : children) {
+                totalSum += ((Number) child.get("total_count")).intValue();
+                boundSum += ((Number) child.get("bound_count")).intValue();
+            }
+            root.put("total_count", totalSum);
+            root.put("bound_count", boundSum);
+            root.put("user_enabled", totalSum > 0 && boundSum == totalSum);
+            root.put("user_partial", boundSum > 0 && boundSum < totalSum);
+        }
+
+        return roots;
+    }
+
+    /**
+     * V1.49: 按一级分类 code 列出其下所有二级分类的所有 Q&A（前台用户视图）。
+     */
+    public List<Map<String, Object>> listLearnedKbByParentCategoryCode(String parentCode, String keyword) {
+        StringBuilder sql = new StringBuilder(
+            "SELECT k.id, k.question, LEFT(k.answer, 200) AS answer_preview, k.tags, " +
+            "k.source_summary, k.score, k.source_count, k.conversation_turn_count, " +
+            "c.name AS category_name, c.code AS category_code, " +
+            "p.name AS parent_name, p.code AS parent_code, k.created_time " +
+            "FROM ai_cs_learned_kb k " +
+            "LEFT JOIN ai_cs_kb_category c ON k.category_id=c.id " +
+            "LEFT JOIN ai_cs_kb_category p ON c.parent_id=p.id " +
+            "WHERE k.deleted=0 AND k.review_status='approved' AND k.enabled=1 " +
+            "AND k.sensitive_filtered=1 AND p.code=?"
+        );
+        List<Object> args = new ArrayList<>();
+        args.add(parentCode);
+        if (keyword != null && !keyword.isEmpty()) {
+            sql.append(" AND (k.question LIKE ? OR k.tags LIKE ?)");
+            args.add("%" + keyword + "%");
+            args.add("%" + keyword + "%");
+        }
+        sql.append(" ORDER BY k.source_count DESC, k.score DESC LIMIT 500");
+        return jdbc.queryForList(sql.toString(), args.toArray());
+    }
+
+    /**
+     * V1.49: 一键启用某个一级分类下所有二级分类的所有 Q&A（按大类启用）。
+     */
+    @Transactional
+    public int bindParentCategory(Long tenantId, Long userId, String parentCode) {
+        // 1. 查一级分类 id
+        List<Long> parentIds = jdbc.queryForList(
+            "SELECT id FROM ai_cs_kb_category WHERE code=? AND parent_id IS NULL AND deleted=0",
+            Long.class, parentCode
+        );
+        if (parentIds.isEmpty()) {
+            throw new IllegalArgumentException("一级分类不存在: " + parentCode);
+        }
+        Long parentId = parentIds.get(0);
+
+        // 2. 查该一级下所有二级分类的所有 KB id
+        List<Long> kbIds = jdbc.queryForList(
+            "SELECT k.id FROM ai_cs_learned_kb k " +
+            "JOIN ai_cs_kb_category c ON k.category_id=c.id " +
+            "WHERE c.parent_id=? AND k.deleted=0 AND k.review_status='approved' " +
+            "AND k.enabled=1 AND k.sensitive_filtered=1",
+            Long.class, parentId
+        );
+        if (kbIds.isEmpty()) return 0;
+
+        // 3. 批量 INSERT IGNORE（幂等）
+        List<Object[]> batchArgs = new ArrayList<>(kbIds.size());
+        for (Long kbId : kbIds) {
+            batchArgs.add(new Object[]{tenantId, userId, "learned", kbId});
+        }
+        jdbc.batchUpdate(
+            "INSERT IGNORE INTO ai_cs_user_kb_binding (tenant_id, user_id, kb_type, kb_id, " +
+            "enabled, bound_at, deleted) VALUES (?, ?, ?, ?, 1, NOW(), 0)",
+            batchArgs
+        );
+        return kbIds.size();
+    }
+
+    /**
+     * V1.49: 一键取消启用某个一级分类下所有二级分类的所有 Q&A。
+     */
+    @Transactional
+    public int unbindParentCategory(Long tenantId, Long userId, String parentCode) {
+        // 查该一级下所有 KB id，然后批量软删绑定
+        List<Long> kbIds = jdbc.queryForList(
+            "SELECT k.id FROM ai_cs_learned_kb k " +
+            "JOIN ai_cs_kb_category c ON k.category_id=c.id " +
+            "JOIN ai_cs_kb_category p ON c.parent_id=p.id " +
+            "WHERE p.code=? AND k.deleted=0",
+            Long.class, parentCode
+        );
+        if (kbIds.isEmpty()) return 0;
+
+        String inClause = kbIds.stream().map(String::valueOf)
+            .collect(java.util.stream.Collectors.joining(","));
+        return jdbc.update(
+            "UPDATE ai_cs_user_kb_binding SET deleted=1 " +
+            "WHERE tenant_id=? AND user_id=? AND kb_type='learned' " +
+            "AND kb_id IN (" + inClause + ")"
+        );
     }
 
     /**

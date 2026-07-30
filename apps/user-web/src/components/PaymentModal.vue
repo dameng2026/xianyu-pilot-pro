@@ -279,6 +279,7 @@ import {
   getTokenRechargePlans,
   mockPayOrder
 } from '../api/payment.js'
+import { getGrowthBalance } from '../api/growth.js'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -309,9 +310,26 @@ const pollCount = ref(0)
 let timer = null
 let successTimer = null
 
+// 用户余额（用于余额支付方式展示）
+const userBalanceYuan = ref(0)
+const userBalanceLoaded = ref(false)
+
 const normalizedMethods = computed(() => {
-  if (props.orderType !== 'token') return methods.value
-  return methods.value.filter(method => method.channelType === 'wechat').slice(0, 1)
+  const base = props.orderType === 'token'
+    ? methods.value.filter(method => method.channelType === 'wechat').slice(0, 1)
+    : methods.value
+  // 追加余额支付方式（始终可用，由后端校验余额是否充足）
+  const hasBalance = base.some(method => method.channelType === 'balance')
+  if (!hasBalance && userBalanceLoaded.value) {
+    return [...base, {
+      channelType: 'balance',
+      providerType: 'balance',
+      configName: '余额支付',
+      description: `可用余额 ¥${formatMoney(userBalanceYuan.value)}`,
+      sandbox: 0,
+    }]
+  }
+  return base
 })
 
 const selectedTokenPlan = computed(() => tokenPlans.value.find(item => item.id === selectedTokenPlanId.value))
@@ -588,6 +606,7 @@ function paymentMethodLabel(method) {
   if (isReadableConfigName(method?.configName)) return String(method.configName).trim()
   if (method?.channelType === 'wechat') return '微信支付'
   if (method?.channelType === 'alipay') return '支付宝'
+  if (method?.channelType === 'balance') return '余额支付'
   return '支付方式'
 }
 
@@ -610,12 +629,14 @@ function validateOrderSnapshot(order, expectedOrderNo = '') {
 function paymentMethodDesc(method) {
   if (Number(method.sandbox || 0) === 1) return '沙箱环境支付测试'
   if (method.description) return method.description
+  if (method.channelType === 'balance') return `可用余额 ¥${formatMoney(userBalanceYuan.value)}`
   if (method.providerType === 'yipay') return '易支付通道'
   if (method.providerType === 'official') return '官方接口'
   return '由后台支付配置提供'
 }
 
 function paymentMethodIcon(method) {
+  if (method.channelType === 'balance') return '/xya/payment-modal/shield-mini.svg'
   return method.channelType === 'wechat'
     ? '/xya/payment-modal/wechat-pay.svg'
     : '/xya/payment-modal/shield-mini.svg'

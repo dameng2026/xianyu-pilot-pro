@@ -2,7 +2,7 @@
   <aside class="config-nav">
     <div class="config-nav-head">
       <span>系统设置</span>
-      <p>AI客服配置 / 商品操作 / 关于</p>
+      <p>AI客服配置 / 关于</p>
     </div>
 
     <div class="config-nav-list">

@@ -30,6 +30,14 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(BizException.class)
     public ResponseEntity<Result<Object>> handleBiz(BizException e) {
+        // 记录 BizException 以便线上问题定位（traceId 来自 MDC，由 TraceIdFilter 注入）
+        // 仅在 5xx 错误时记录为 error，4xx 记录为 warn，避免日志噪音
+        String traceId = MDC.get(TraceIdFilter.MDC_KEY);
+        if (e.getCode() >= 500) {
+            log.error("BizException traceId={} code={} msg={}", traceId, e.getCode(), e.getMessage(), e);
+        } else {
+            log.warn("BizException traceId={} code={} msg={}", traceId, e.getCode(), e.getMessage());
+        }
         Result<Object> body = new Result<>(e.getCode(), e.getMessage(), e.getData());
         return ResponseEntity.status(toHttpStatus(e.getCode(), HttpStatus.BAD_REQUEST)).body(body);
     }

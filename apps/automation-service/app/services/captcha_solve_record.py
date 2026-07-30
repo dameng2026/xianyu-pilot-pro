@@ -300,6 +300,287 @@ async def list_solve_records(
         return {"list": [], "total": 0, "page": page, "pageSize": page_size}
 
 
+# ============================================================
+# 滑块求解尝试明细（成功率统计）
+# ============================================================
+
+# 允许的求解方案白名单（避免前端/crawler-service 注入任意字符串）
+_ALLOWED_SOLVE_SCHEMES = {"python_script", "playwright"}
+# 允许的拖动方法白名单
+_ALLOWED_DRAG_METHODS = {"in_container", "out_container", "none"}
+# 允许的速度策略白名单
+_ALLOWED_SPEED_STRATEGIES = {"standard", "medium", "fast", "slow_pause", "random", "none"}
+# 单次 attempt 的 error_message 最大长度（防止超长文本撑大表）
+_ATTEMPT_ERROR_MAX_LEN = 500
+
+
+async def batch_insert_solve_attempts(
+    record_id: int,
+    tenant_id: int,
+    account_id: int,
+    attempts_detail: list,
+) -> int:
+    """批量插入滑块求解每次尝试的明细记录，用于成功率统计。
+
+    幂等设计：同一 record_id 重复调用不会产生重复数据，调用方需保证 record_id 唯一。
+    实际场景：每个 record_id 仅对应一次 try_auto_solve，attempts_detail 由 crawler-service
+    返回一次，因此天然不会重复。
+
+    Args:
+        record_id: 关联的 xianyu_captcha_solve_record.id
+        tenant_id: 租户 ID（冗余便于聚合查询）
+        account_id: 账号 ID（冗余便于聚合查询）
+        attempts_detail: crawler-service sliderSolver 返回的 attemptsDetail 数组，
+            每项含 attemptNo / solveScheme / dragMethod / speedStrategy / success /
+            durationMs / errorMessage
+
+    Returns:
+        成功插入的记录数；异常时返回 0（不影响主流程）
+    """
+    if not record_id or not attempts_detail:
+        return 0
+
+    # 参数白名单清洗 + 构造批量插入数据
+    rows_to_insert: list[dict] = []
+    for idx, item in enumerate(attempts_detail):
+        if not isinstance(item, dict):
+            continue
+        try:
+            attempt_no = int(item.get("attemptNo") or (idx + 1))
+        except (TypeError, ValueError):
+            attempt_no = idx + 1
+        solve_scheme = str(item.get("solveScheme") or "playwright")
+        if solve_scheme not in _ALLOWED_SOLVE_SCHEMES:
+            solve_scheme = "playwright"
+        drag_method = str(item.get("dragMethod") or "none")
+        if drag_method not in _ALLOWED_DRAG_METHODS:
+            drag_method = "none"
+        speed_strategy = str(item.get("speedStrategy") or "none")
+        if speed_strategy not in _ALLOWED_SPEED_STRATEGIES:
+            speed_strategy = "none"
+        try:
+            duration_ms = int(item.get("durationMs") or 0)
+        except (TypeError, ValueError):
+            duration_ms = 0
+        error_msg = str(item.get("errorMessage") or "")[:_ATTEMPT_ERROR_MAX_LEN]
+        rows_to_insert.append({
+            "record_id": record_id,
+            "tenant_id": tenant_id,
+            "account_id": account_id,
+            "attempt_no": attempt_no,
+            "solve_scheme": solve_scheme,
+            "drag_method": drag_method,
+            "speed_strategy": speed_strategy,
+            "success": 1 if item.get("success") else 0,
+            "duration_ms": duration_ms,
+            "error_message": error_msg,
+        })
+
+    if not rows_to_insert:
+        return 0
+
+    try:
+        async with async_session() as db:
+            # 批量 INSERT：单条 SQL 多 VALUES 子句，比逐条 INSERT 快一个数量级
+            # 表已通过 V1.24__create_captcha_solve_attempt.sql 创建
+            values_sql = ", ".join([
+                f"(:rid{i}, :tid{i}, :aid{i}, :ano{i}, :ss{i}, :dm{i}, :sp{i}, :su{i}, :du{i}, :em{i})"
+                for i in range(len(rows_to_insert))
+            ])
+            params: dict = {}
+            for i, row in enumerate(rows_to_insert):
+                params[f"rid{i}"] = row["record_id"]
+                params[f"tid{i}"] = row["tenant_id"]
+                params[f"aid{i}"] = row["account_id"]
+                params[f"ano{i}"] = row["attempt_no"]
+                params[f"ss{i}"] = row["solve_scheme"]
+                params[f"dm{i}"] = row["drag_method"]
+                params[f"sp{i}"] = row["speed_strategy"]
+                params[f"su{i}"] = row["success"]
+                params[f"du{i}"] = row["duration_ms"]
+                params[f"em{i}"] = row["error_message"]
+            await db.execute(
+                text(
+                    "INSERT INTO xianyu_captcha_solve_attempt "
+                    "(record_id, tenant_id, account_id, attempt_no, solve_scheme, "
+                    " drag_method, speed_strategy, success, duration_ms, error_message) "
+                    f"VALUES {values_sql}"
+                ),
+                params,
+            )
+            await db.commit()
+            logger.info(
+                "批量插入滑块求解尝试明细: recordId=%d tenantId=%d accountId=%d count=%d",
+                record_id, tenant_id, account_id, len(rows_to_insert),
+            )
+            return len(rows_to_insert)
+    except Exception as e:
+        # 明细写入失败不影响主求解流程，仅记录 warning
+        log_service_failure(
+            logger, e, operation="batch_insert_solve_attempts",
+            tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
+        )
+        return 0
+
+
+async def get_attempt_stats(
+    tenant_id: int,
+    account_id: int = 0,
+    days: int = 30,
+) -> dict:
+    """查询滑块求解尝试明细的成功率统计聚合数据。
+
+    按求解方案、拖动方法、速度策略、尝试轮次四个维度聚合，
+    返回每个组合的使用次数、成功次数、成功率、平均耗时。
+
+    Args:
+        tenant_id: 租户 ID
+        account_id: 账号 ID（0=不限账号）
+        days: 统计最近 N 天的数据，默认 30
+
+    Returns:
+        {
+            "bySolveScheme": [{scheme, total, success, successRate, avgDurationMs}],
+            "byDragMethod": [{method, total, success, successRate, avgDurationMs}],
+            "bySpeedStrategy": [{strategy, total, success, successRate, avgDurationMs}],
+            "byAttemptNo": [{attemptNo, total, success, successRate, avgDurationMs}],
+            "totalAttempts": int,
+            "totalSuccess": int,
+            "overallSuccessRate": float,
+            "dateRange": {"start": str, "end": str},
+        }
+    """
+    days = max(1, min(int(days), 365))
+    where_clauses = ["tenant_id = :tid", "created_at >= DATE_SUB(NOW(), INTERVAL :days DAY)"]
+    params: dict = {"tid": tenant_id, "days": days}
+    if account_id:
+        where_clauses.append("account_id = :aid")
+        params["aid"] = account_id
+    where_sql = " AND ".join(where_clauses)
+
+    def _agg_by(field: str) -> str:
+        return f"""
+            SELECT {field} AS dim, COUNT(*) AS total, SUM(success) AS success,
+                   ROUND(SUM(success) * 100.0 / GREATEST(COUNT(*), 1), 2) AS success_rate,
+                   ROUND(AVG(duration_ms)) AS avg_duration_ms
+            FROM xianyu_captcha_solve_attempt
+            WHERE {where_sql}
+            GROUP BY {field}
+            ORDER BY total DESC
+        """
+
+    try:
+        async with async_session() as db:
+            by_scheme = (await db.execute(text(_agg_by("solve_scheme")), params)).mappings().all()
+            by_method = (await db.execute(text(_agg_by("drag_method")), params)).mappings().all()
+            by_strategy = (await db.execute(text(_agg_by("speed_strategy")), params)).mappings().all()
+            by_attempt = (await db.execute(text(_agg_by("attempt_no")), params)).mappings().all()
+            total_row = (await db.execute(
+                text(f"SELECT COUNT(*) AS total, SUM(success) AS success FROM xianyu_captcha_solve_attempt WHERE {where_sql}"),
+                params,
+            )).mappings().first()
+
+        total_attempts = int(total_row["total"]) if total_row else 0
+        total_success = int(total_row["success"]) if total_row else 0
+        overall_rate = round(total_success * 100.0 / total_attempts, 2) if total_attempts else 0.0
+
+        return {
+            "bySolveScheme": [
+                {
+                    "scheme": row["dim"],
+                    "total": int(row["total"]),
+                    "success": int(row["success"]),
+                    "successRate": float(row["success_rate"]),
+                    "avgDurationMs": int(row["avg_duration_ms"] or 0),
+                } for row in by_scheme
+            ],
+            "byDragMethod": [
+                {
+                    "method": row["dim"],
+                    "total": int(row["total"]),
+                    "success": int(row["success"]),
+                    "successRate": float(row["success_rate"]),
+                    "avgDurationMs": int(row["avg_duration_ms"] or 0),
+                } for row in by_method
+            ],
+            "bySpeedStrategy": [
+                {
+                    "strategy": row["dim"],
+                    "total": int(row["total"]),
+                    "success": int(row["success"]),
+                    "successRate": float(row["success_rate"]),
+                    "avgDurationMs": int(row["avg_duration_ms"] or 0),
+                } for row in by_strategy
+            ],
+            "byAttemptNo": [
+                {
+                    "attemptNo": int(row["dim"]),
+                    "total": int(row["total"]),
+                    "success": int(row["success"]),
+                    "successRate": float(row["success_rate"]),
+                    "avgDurationMs": int(row["avg_duration_ms"] or 0),
+                } for row in by_attempt
+            ],
+            "totalAttempts": total_attempts,
+            "totalSuccess": total_success,
+            "overallSuccessRate": overall_rate,
+            "days": days,
+            "accountId": account_id,
+        }
+    except Exception as e:
+        log_service_failure(
+            logger, e, operation="get_attempt_stats",
+            tenant_id=tenant_id, level=logging.WARNING,
+        )
+        return {
+            "bySolveScheme": [], "byDragMethod": [], "bySpeedStrategy": [], "byAttemptNo": [],
+            "totalAttempts": 0, "totalSuccess": 0, "overallSuccessRate": 0.0,
+            "days": days, "accountId": account_id,
+        }
+
+
+async def list_record_attempts(record_id: int) -> list:
+    """查询单条求解记录的尝试明细列表（用于前端查看详情）。
+
+    Args:
+        record_id: xianyu_captcha_solve_record.id
+
+    Returns:
+        [{attemptNo, solveScheme, dragMethod, speedStrategy, success, durationMs, errorMessage, createdAt}, ...]
+    """
+    if not record_id:
+        return []
+    try:
+        async with async_session() as db:
+            rows = (await db.execute(
+                text(
+                    "SELECT attempt_no, solve_scheme, drag_method, speed_strategy, "
+                    " success, duration_ms, error_message, created_at "
+                    "FROM xianyu_captcha_solve_attempt WHERE record_id = :rid "
+                    "ORDER BY attempt_no ASC, id ASC"
+                ),
+                {"rid": record_id},
+            )).mappings().all()
+        return [
+            {
+                "attemptNo": int(row["attempt_no"]),
+                "solveScheme": row["solve_scheme"],
+                "dragMethod": row["drag_method"],
+                "speedStrategy": row["speed_strategy"],
+                "success": bool(row["success"]),
+                "durationMs": int(row["duration_ms"] or 0),
+                "errorMessage": row.get("error_message") or "",
+                "createdAt": str(row["created_at"]) if row.get("created_at") else "",
+            } for row in rows
+        ]
+    except Exception as e:
+        log_service_failure(
+            logger, e, operation="list_record_attempts",
+            level=logging.WARNING,
+        )
+        return []
+
+
 async def broadcast_captcha_solve(
     tenant_id: int,
     account_id: int,

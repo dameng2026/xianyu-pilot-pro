@@ -181,6 +181,9 @@ public class BusinessSettingsService {
                 config.put("replyDelaySeconds", 8);
                 config.put("carryContext", true);
                 config.put("pauseOnHumanIntervene", true);
+                // 人工干预自动暂停时长（秒）：卖家手动发消息后，该会话 AI 自动回复暂停的时长，超时后自动恢复
+                // 默认 60 秒，可由用户在前台 AI 客服配置中调整（10-600 秒）；设为 0 表示不暂停
+                config.put("pauseDurationSeconds", 60);
                 config.put("systemPrompt",
                     """
                     你是闲鱼店铺的客服助手，负责接待买家咨询。

@@ -30,12 +30,15 @@ public class EmailSenderService {
     private static final Logger log = LoggerFactory.getLogger(EmailSenderService.class);
 
     private final NotificationConfigService notificationConfigService;
+    private final TencentSesSender tencentSesSender;
 
-    public EmailSenderService(NotificationConfigService notificationConfigService) {
+    public EmailSenderService(NotificationConfigService notificationConfigService,
+                               TencentSesSender tencentSesSender) {
         this.notificationConfigService = notificationConfigService;
+        this.tencentSesSender = tencentSesSender;
     }
 
-    /** 判断后台邮件 SMTP 配置是否完整（可用于动态开关验证码能力）。 */
+    /** 判断后台邮件配置是否完整（可用于动态开关验证码能力）。 */
     public boolean isEmailConfigured() {
         return notificationConfigService.isEmailConfigured();
     }
@@ -43,21 +46,57 @@ public class EmailSenderService {
     /** 发送验证码邮件。 */
     public void sendVerificationCode(String toEmail, String code) {
         Map<String, Object> config = notificationConfigService.getEmailConfigDecrypted();
-        String subject = Objects.toString(config.get("subject"), "【闲鱼助手】验证码通知");
-        String template = Objects.toString(config.get("template"), "");
-        String content = template.isBlank()
-                ? buildDefaultVerificationEmail(code)
-                : template.replace("{code}", code);
+        String provider = Objects.toString(config.get("provider"), "smtp").trim().toLowerCase(Locale.ROOT);
         try {
+            if ("tencent_ses".equals(provider)) {
+                TencentSesSender.SendResult result = tencentSesSender.sendVerificationEmail(config, toEmail, code);
+                if (!result.success()) {
+                    log.error("验证码邮件发送失败(SES): to={}, error={}", maskEmail(toEmail), result.message());
+                    throw new BizException(503, result.message());
+                }
+                return;
+            }
+            // SMTP 默认链路
+            String subject = Objects.toString(config.get("subject"), "【闲鱼助手】验证码通知");
+            String template = Objects.toString(config.get("template"), "");
+            String content = template.isBlank()
+                    ? buildDefaultVerificationEmail(code)
+                    : template.replace("{code}", code);
             sendEmail(config, toEmail, subject, content);
         } catch (BizException e) {
-            // 前台用户不应看到 SMTP 服务器返回的技术细节（如 535 认证失败、帮助链接、trace ID 等），
+            // 前台用户不应看到 SMTP/SES 服务器返回的技术细节（如 535 认证失败、签名错误、trace ID 等），
             // 完整错误记录到后台日志便于管理员排查，对外返回友好提示。
-            // 根据SMTP错误码区分原因，让用户能区分"自己填错邮箱"和"系统配置问题"。
             String rawError = e.getMessage() == null ? "" : e.getMessage();
-            log.error("验证码邮件发送失败: to={}, error={}", maskEmail(toEmail), rawError);
+            log.error("验证码邮件发送失败: to={}, provider={}, error={}", maskEmail(toEmail), provider, rawError);
+            // SES 链路的错误消息已经过 TencentSesSender 归一化，可直接返回；
+            // SMTP 链路继续走 friendlyEmailError 映射。
+            if ("tencent_ses".equals(provider)) {
+                throw e;
+            }
             throw new BizException(503, friendlyEmailError(rawError));
         }
+    }
+
+    /**
+     * 发送 HTML 直发邮件（用于内部代理接口和业务通知）。
+     *
+     * 设计决策（用户要求）：
+     *  - 所有用户级业务通知固定走 SMTP 链路。
+     *  - 腾讯云 SES 仅用于系统级验证码 / 测试邮件（由 sendVerificationCode / sendTestEmail 调用）。
+     *  - 即使后台 provider=tencent_ses，业务通知也降级走 SMTP，避免 SES HTML 直发
+     *    使用已废弃的 Simple 字段而返回 FailedOperation.WithOutPermission。
+     *
+     * 注意：调用方需确保 SMTP 配置完整，否则会抛出 "SMTP 配置不完整" 错误。
+     */
+    public SendEmailOutcome sendHtmlEmail(String toEmail, String subject, String htmlContent, String textContent) {
+        Map<String, Object> config = notificationConfigService.getEmailConfigDecrypted();
+        String provider = Objects.toString(config.get("provider"), "smtp").trim().toLowerCase(Locale.ROOT);
+        if ("tencent_ses".equals(provider)) {
+            log.info("业务通知邮件降级走 SMTP（provider=tencent_ses 但 SES HTML 直发已废弃）: to={}", maskEmail(toEmail));
+        }
+        // 业务通知统一走 SMTP 链路（htmlContent 作为 HTML 部分发送）
+        sendEmail(config, toEmail, subject, htmlContent);
+        return new SendEmailOutcome(true, "", "邮箱发送成功");
     }
 
     /**
@@ -83,14 +122,46 @@ public class EmailSenderService {
                 + "</div>";
     }
 
-    /** 发送测试邮件（后台配置页使用）。 */
-    public void sendTestEmail(String toEmail) {
+    /**
+     * 发送测试邮件（后台配置页使用）。
+     *
+     * SES 模式说明：
+     *  - 腾讯云 SES 的 Simple（HTML 直发）字段已被官方标记为废弃，仅对历史申请了
+     *    "自定义发送权限"的特殊客户开放，普通账户调用会返回 FailedOperation.WithOutPermission。
+     *  - 因此 SES 测试邮件复用已配置的验证码模板（tencentTemplateId）发送，
+     *    携带固定测试标识 "000000" 以区别于真实验证码。
+     *  - 用户收到带有 "000000" 的验证码邮件即说明 SES 配置生效。
+     *
+     * provider 参数说明：
+     *  - 前端传入当前 UI 选择的发送方式，覆盖数据库中保存的 provider。
+     *  - 这解决了"用户在 UI 切换到 SES 但未保存就点测试"或"数据库 provider 与 UI 不一致"时
+     *    测试邮件走错链路的问题。
+     *  - 为空时回退到数据库保存的 provider，保持向后兼容。
+     */
+    public void sendTestEmail(String toEmail, String requestedProvider) {
         Map<String, Object> config = notificationConfigService.getEmailConfigDecrypted();
+        String provider = (requestedProvider != null && !requestedProvider.isBlank())
+                ? requestedProvider.trim().toLowerCase(Locale.ROOT)
+                : Objects.toString(config.get("provider"), "smtp").trim().toLowerCase(Locale.ROOT);
+        if ("tencent_ses".equals(provider)) {
+            TencentSesSender.SendResult result = tencentSesSender.sendVerificationEmail(
+                    config, toEmail, "000000");
+            if (!result.success()) {
+                log.error("测试邮件发送失败(SES): to={}, error={}", maskEmail(toEmail), result.message());
+                throw new BizException(503, result.message());
+            }
+            return;
+        }
+        // SMTP 默认链路：发送 HTML 测试内容
         String subject = "【闲鱼助手】测试邮件";
-        String content = "<p>这是一封测试邮件，用于验证 SMTP 配置是否正确。</p>"
-                + "<p>如果您收到此邮件，说明邮箱配置已生效。</p>";
-        sendEmail(config, toEmail, subject, content);
+        String htmlContent = "<p>这是一封测试邮件，用于验证邮件配置是否正确。</p>"
+                + "<p>如果您收到此邮件，说明邮箱配置已生效。</p>"
+                + "<p>当前发送方式：SMTP（provider=" + provider + "）</p>";
+        sendEmail(config, toEmail, subject, htmlContent);
     }
+
+    /** 发送结果：用于内部代理接口返回结构化结果。 */
+    public record SendEmailOutcome(boolean success, String messageId, String message) {}
 
     /**
      * 将SMTP底层错误信息映射为对前台用户友好的提示。

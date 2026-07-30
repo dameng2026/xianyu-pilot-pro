@@ -62,6 +62,7 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
         ensureAiCsTables();
         ensureRateTables();
         ensureRefundTables();
+        ensureGrowthTables();
         ensureCompatibilityColumns();
         backfillCompatibilityData();
         if (!failures.isEmpty()) {
@@ -728,6 +729,7 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
                     used_count INT DEFAULT 0,
                     remain_count INT DEFAULT 0,
                     available_count INT DEFAULT 0,
+                    sku_property_key VARCHAR(512) NULL,
                     status TINYINT DEFAULT 1,
                     deleted TINYINT DEFAULT 0,
                     created_time DATETIME,
@@ -1767,6 +1769,11 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
                     INDEX idx_cs_session_tenant(tenant_id, created_time)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='AI 客服会话'
                 """, "ai_cs_session");
+        // 兼容旧库：若 ai_cs_session 已存在但缺少 archived 字段，则补列
+        // archived=1 表示已归档（前台历史会话列表不再展示，但后台审计仍可查询）
+        // 用于 enforceSessionRetentionLimit：每用户仅保留最近 30 条未归档会话
+        addColumnIfMissing("ai_cs_session", "archived",
+                "TINYINT NOT NULL DEFAULT 0 COMMENT '是否已归档：0=未归档（前台可见）1=已归档（仅后台可见），用于保留每用户最近30条会话'");
 
         // 2. AI 客服消息表
         createTable("""
@@ -2457,6 +2464,176 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
                 """, "xianyu_refund_account_state");
     }
 
+    /**
+     * 增长合伙人系统表（V1.65）：代理等级配置 / 邀请码 / 推荐关系 / 奖励记录 / 余额 / 提现申请。
+     * 同时为 sys_user 增加 balance（现金余额，分）与 referrer_id（直接推荐人）两列。
+     */
+    private void ensureGrowthTables() {
+        // sys_user 扩展列：balance 现金余额（分） + referrer_id 直接推荐人
+        addColumnIfMissing("sys_user", "balance", "BIGINT NOT NULL DEFAULT 0 COMMENT '现金余额（分），用于增长合伙人提现'");
+        addColumnIfMissing("sys_user", "referrer_id", "BIGINT NULL COMMENT '直接推荐人用户ID'");
+
+        createTable("""
+                CREATE TABLE IF NOT EXISTS growth_global_config (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    token_reward_per_referral BIGINT NOT NULL DEFAULT 100,
+                    min_withdrawal_amount BIGINT NOT NULL DEFAULT 5000,
+                    first_month_only TINYINT NOT NULL DEFAULT 1,
+                    withdraw_enabled TINYINT NOT NULL DEFAULT 1,
+                    updated_by VARCHAR(100),
+                    created_time DATETIME,
+                    updated_time DATETIME
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """, "growth_global_config");
+
+        createTable("""
+                CREATE TABLE IF NOT EXISTS growth_agent_tier_config (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    tier_code VARCHAR(40) NOT NULL,
+                    tier_name VARCHAR(80) NOT NULL,
+                    sort_order INT NOT NULL DEFAULT 0,
+                    min_referrals INT NOT NULL DEFAULT 0,
+                    commission_rate DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+                    token_reward BIGINT NOT NULL DEFAULT 100,
+                    icon VARCHAR(120),
+                    color VARCHAR(20),
+                    badge_url VARCHAR(500),
+                    description VARCHAR(500),
+                    enabled TINYINT NOT NULL DEFAULT 1,
+                    created_time DATETIME,
+                    updated_time DATETIME,
+                    UNIQUE KEY uk_growth_tier_code (tier_code)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """, "growth_agent_tier_config");
+
+        createTable("""
+                CREATE TABLE IF NOT EXISTS growth_invite_code (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    code VARCHAR(64) NOT NULL,
+                    owner_user_id BIGINT NOT NULL,
+                    tenant_id BIGINT NOT NULL,
+                    code_type VARCHAR(20) NOT NULL DEFAULT 'code',
+                    channel VARCHAR(60),
+                    usage_count INT NOT NULL DEFAULT 0,
+                    expires_at DATETIME,
+                    remark VARCHAR(200),
+                    created_time DATETIME,
+                    updated_time DATETIME,
+                    UNIQUE KEY uk_growth_invite_code (code),
+                    INDEX idx_growth_invite_owner (owner_user_id),
+                    INDEX idx_growth_invite_tenant (tenant_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """, "growth_invite_code");
+
+        createTable("""
+                CREATE TABLE IF NOT EXISTS growth_referral_relation (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    inviter_id BIGINT NOT NULL,
+                    invitee_id BIGINT NOT NULL,
+                    invitee_tenant_id BIGINT,
+                    level TINYINT NOT NULL DEFAULT 1,
+                    invite_code VARCHAR(64),
+                    channel VARCHAR(60),
+                    first_consumed_at DATETIME,
+                    first_month_end_at DATETIME,
+                    created_time DATETIME,
+                    UNIQUE KEY uk_growth_referral (inviter_id, invitee_id),
+                    INDEX idx_growth_referral_inviter (inviter_id),
+                    INDEX idx_growth_referral_invitee (invitee_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """, "growth_referral_relation");
+
+        createTable("""
+                CREATE TABLE IF NOT EXISTS growth_reward_record (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    inviter_id BIGINT NOT NULL,
+                    invitee_id BIGINT NOT NULL,
+                    invitee_tenant_id BIGINT,
+                    reward_type VARCHAR(20) NOT NULL,
+                    level TINYINT NOT NULL DEFAULT 1,
+                    source_amount BIGINT NOT NULL DEFAULT 0,
+                    source_order_no VARCHAR(80),
+                    source_product VARCHAR(120),
+                    commission_rate DECIMAL(5,2) DEFAULT 0.00,
+                    token_amount BIGINT DEFAULT 0,
+                    cash_amount BIGINT DEFAULT 0,
+                    status VARCHAR(20) NOT NULL DEFAULT 'settled',
+                    settled_at DATETIME,
+                    created_time DATETIME,
+                    INDEX idx_growth_reward_inviter (inviter_id, created_time),
+                    INDEX idx_growth_reward_invitee (invitee_id),
+                    INDEX idx_growth_reward_order (source_order_no)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """, "growth_reward_record");
+
+        createTable("""
+                CREATE TABLE IF NOT EXISTS growth_user_balance (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    user_id BIGINT NOT NULL,
+                    tenant_id BIGINT NOT NULL,
+                    total_earnings BIGINT NOT NULL DEFAULT 0,
+                    available_balance BIGINT NOT NULL DEFAULT 0,
+                    frozen_balance BIGINT NOT NULL DEFAULT 0,
+                    withdrawn_amount BIGINT NOT NULL DEFAULT 0,
+                    total_token_reward BIGINT NOT NULL DEFAULT 0,
+                    total_referrals INT NOT NULL DEFAULT 0,
+                    valid_referrals INT NOT NULL DEFAULT 0,
+                    tier_code VARCHAR(40) NOT NULL DEFAULT 'normal',
+                    tier_updated_at DATETIME,
+                    created_time DATETIME,
+                    updated_time DATETIME,
+                    UNIQUE KEY uk_growth_balance_user (user_id),
+                    INDEX idx_growth_balance_tenant (tenant_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """, "growth_user_balance");
+
+        createTable("""
+                CREATE TABLE IF NOT EXISTS growth_withdrawal_request (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    user_id BIGINT NOT NULL,
+                    tenant_id BIGINT NOT NULL,
+                    amount BIGINT NOT NULL,
+                    payment_method VARCHAR(20) NOT NULL,
+                    payment_account VARCHAR(500) NOT NULL,
+                    payment_name VARCHAR(100),
+                    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                    reject_reason VARCHAR(500),
+                    reviewed_by VARCHAR(100),
+                    reviewed_at DATETIME,
+                    paid_at DATETIME,
+                    created_time DATETIME,
+                    updated_time DATETIME,
+                    INDEX idx_growth_wd_user (user_id, status, created_time),
+                    INDEX idx_growth_wd_status (status, created_time)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """, "growth_withdrawal_request");
+
+        // 初始化全局配置单行（id=1）
+        try {
+            Long cfgCount = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM growth_global_config WHERE id=1", Long.class);
+            if (cfgCount != null && cfgCount == 0) {
+                jdbcTemplate.update("INSERT INTO growth_global_config(id, token_reward_per_referral, min_withdrawal_amount, first_month_only, withdraw_enabled, created_time, updated_time) VALUES(1,100,5000,1,1,NOW(),NOW())");
+            }
+        } catch (Exception e) {
+            log.warn("初始化 growth_global_config 失败（可忽略）: {}", e.getMessage());
+        }
+
+        // 初始化默认四级代理配置（普通/青铜/黄金/钻石）
+        try {
+            Long tierCount = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM growth_agent_tier_config", Long.class);
+            if (tierCount != null && tierCount == 0) {
+                jdbcTemplate.update("INSERT INTO growth_agent_tier_config(tier_code, tier_name, sort_order, min_referrals, commission_rate, token_reward, icon, color, description, enabled, created_time, updated_time) VALUES('normal','普通代理',1,0,20.00,100,'users','#2378f3','默认等级，有效邀请 0 人',1,NOW(),NOW())");
+                jdbcTemplate.update("INSERT INTO growth_agent_tier_config(tier_code, tier_name, sort_order, min_referrals, commission_rate, token_reward, icon, color, description, enabled, created_time, updated_time) VALUES('bronze','青铜代理',2,10,30.00,100,'shield','#1fa768','有效邀请 10 人自动升级',1,NOW(),NOW())");
+                jdbcTemplate.update("INSERT INTO growth_agent_tier_config(tier_code, tier_name, sort_order, min_referrals, commission_rate, token_reward, icon, color, description, enabled, created_time, updated_time) VALUES('gold','黄金代理',3,50,40.00,100,'crown','#ef8110','有效邀请 50 人自动升级',1,NOW(),NOW())");
+                jdbcTemplate.update("INSERT INTO growth_agent_tier_config(tier_code, tier_name, sort_order, min_referrals, commission_rate, token_reward, icon, color, description, enabled, created_time, updated_time) VALUES('diamond','钻石代理',4,100,50.00,100,'gem','#7150f2','有效邀请 100 人自动升级',1,NOW(),NOW())");
+            }
+        } catch (Exception e) {
+            log.warn("初始化 growth_agent_tier_config 失败（可忽略）: {}", e.getMessage());
+        }
+    }
+
     private void ensureCompatibilityColumns() {
         // billing_plan：V1.26 自定义介绍文本与周期类型 + V1.29 月/季/年三档价格
         addColumnIfMissing("billing_plan", "features_text", "TEXT NULL COMMENT '自定义套餐介绍文本（换行分隔多条权益）'");
@@ -2519,6 +2696,8 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
         addColumnIfMissing("xianyu_account_auto_rate_config", "rate_type", "VARCHAR(30) DEFAULT 'text'");
         addColumnIfMissing("xianyu_account_auto_rate_config", "text_content", "TEXT NULL");
         addColumnIfMissing("xianyu_account_auto_rate_config", "api_url", "TEXT NULL");
+        // 自动评价每天执行时间（0-23，默认 9 点）
+        addColumnIfMissing("xianyu_account_auto_rate_config", "schedule_hour", "INT NOT NULL DEFAULT 9");
         addColumnIfMissing("xianyu_account_auto_rate_config", "created_time", "DATETIME NULL");
         addColumnIfMissing("xianyu_account_auto_rate_config", "updated_time", "DATETIME NULL");
         addColumnIfMissing("xianyu_account_auto_rate_config", "deleted", "TINYINT DEFAULT 0");
@@ -2528,6 +2707,34 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
                 "CREATE INDEX idx_xyaarc_tenant ON xianyu_account_auto_rate_config(tenant_id, deleted)");
         createIndexIfMissing("xianyu_account_auto_rate_config", "idx_xyaarc_account",
                 "CREATE INDEX idx_xyaarc_account ON xianyu_account_auto_rate_config(account_id)");
+        createIndexIfMissing("xianyu_account_auto_rate_config", "idx_xyaarc_enabled_hour",
+                "CREATE INDEX idx_xyaarc_enabled_hour ON xianyu_account_auto_rate_config(enabled, schedule_hour, deleted)");
+
+        // 自动补评价执行日志表（与 V1.25 迁移脚本对齐）
+        createTable("""
+                CREATE TABLE IF NOT EXISTS xianyu_auto_rate_log (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    tenant_id BIGINT NOT NULL,
+                    account_id BIGINT NOT NULL,
+                    run_time DATETIME(6) NOT NULL,
+                    schedule_hour INT NULL,
+                    trigger_type VARCHAR(20) NOT NULL DEFAULT 'scheduled',
+                    status VARCHAR(20) NOT NULL DEFAULT 'success',
+                    total_pending INT NOT NULL DEFAULT 0,
+                    total_success INT NOT NULL DEFAULT 0,
+                    total_failed INT NOT NULL DEFAULT 0,
+                    total_skipped INT NOT NULL DEFAULT 0,
+                    error_message VARCHAR(500) NULL,
+                    details_json TEXT NULL,
+                    duration_seconds FLOAT NOT NULL DEFAULT 0,
+                    deleted TINYINT DEFAULT 0,
+                    created_time DATETIME,
+                    updated_time DATETIME,
+                    INDEX idx_arl_tenant_account_time(tenant_id, account_id, run_time),
+                    INDEX idx_arl_tenant_time(tenant_id, run_time),
+                    INDEX idx_arl_status(tenant_id, status, deleted)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """, "xianyu_auto_rate_log");
         addColumnIfMissing("open_source_ad_application", "site_name", "VARCHAR(120) NULL");
         addColumnIfMissing("open_source_ad_application", "instance_token", "VARCHAR(120) NULL");
         addColumnIfMissing("open_source_ad_application", "application_no", "VARCHAR(40) NULL");
@@ -2675,6 +2882,8 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
         addColumnIfMissing("card_group", "suggested_price", "DECIMAL(10,2) NULL");
         addColumnIfMissing("card_group", "remain_count", "INT DEFAULT 0");
         addColumnIfMissing("card_group", "available_count", "INT DEFAULT 0");
+        // V1.63: 多规格商品自动发货 - card_group 新增 sku_property_key 字段支持 SKU 专属卡密池
+        addColumnIfMissing("card_group", "sku_property_key", "VARCHAR(512) NULL");
         addColumnIfMissing("card_item", "card_content", "TEXT NULL");
         addColumnIfMissing("card_item", "card_key", "TEXT NULL");
         addColumnIfMissing("card_item", "card_value", "TEXT NULL");
@@ -2883,7 +3092,10 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
         executeQuietly("INSERT INTO ai_scene_sell_config(tenant_id, scene_key, scene_name, scene_group, charge_mode, price_unit, enabled, is_metered, show_estimate, sell_tokens_per_call, min_tokens, fallback_exchange_rate, sort_order, remark, created_time, updated_time, deleted) SELECT NULL, 'opportunity_rewrite', 'Opportunity Rewrite', 'rewrite', 'fixed_per_call', 'call', 1, 1, 1, 30, 30, 160, 30, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_sell_config WHERE tenant_id IS NULL AND scene_key='opportunity_rewrite' AND deleted=0)");
         executeQuietly("INSERT INTO ai_scene_sell_config(tenant_id, scene_key, scene_name, scene_group, charge_mode, price_unit, enabled, is_metered, show_estimate, sell_tokens_per_call, min_tokens, fallback_exchange_rate, sort_order, remark, created_time, updated_time, deleted) SELECT NULL, 'workflow_rewrite', 'Workflow Rewrite', 'rewrite', 'fixed_per_call', 'call', 1, 1, 1, 30, 30, 160, 31, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_sell_config WHERE tenant_id IS NULL AND scene_key='workflow_rewrite' AND deleted=0)");
         executeQuietly("INSERT INTO ai_scene_sell_config(tenant_id, scene_key, scene_name, scene_group, charge_mode, price_unit, enabled, is_metered, show_estimate, sell_tokens_per_call, min_tokens, fallback_exchange_rate, sort_order, remark, created_time, updated_time, deleted) SELECT NULL, 'workflow_extract_keywords', 'Workflow Extract Keywords', 'keyword', 'fixed_per_call', 'call', 1, 1, 1, 20, 20, 160, 40, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_sell_config WHERE tenant_id IS NULL AND scene_key='workflow_extract_keywords' AND deleted=0)");
-        executeQuietly("INSERT INTO ai_scene_sell_config(tenant_id, scene_key, scene_name, scene_group, charge_mode, price_unit, enabled, is_metered, show_estimate, sell_tokens_per_reply, min_tokens, fallback_exchange_rate, daily_cap_count, sort_order, remark, created_time, updated_time, deleted) SELECT NULL, 'auto_reply', 'AI Auto Reply', 'reply', 'member_quota_then_fixed', 'reply', 1, 1, 1, 8, 0, 160, 1000, 80, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_sell_config WHERE tenant_id IS NULL AND scene_key='auto_reply' AND deleted=0)");
+        executeQuietly("INSERT INTO ai_scene_sell_config(tenant_id, scene_key, scene_name, scene_group, charge_mode, price_unit, enabled, is_metered, show_estimate, sell_tokens_per_reply, min_tokens, fallback_exchange_rate, daily_cap_count, sort_order, remark, created_time, updated_time, deleted) SELECT NULL, 'auto_reply', 'AI Auto Reply', 'reply', 'fixed_per_call', 'reply', 1, 1, 1, 3, 3, 160, 1000, 80, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_sell_config WHERE tenant_id IS NULL AND scene_key='auto_reply' AND deleted=0)");
+        // 自动回复场景无免费额度（2026-07-30 调整：移除每日免费自动回复额度，仅保留小梦客服系统额度）
+        executeQuietly("UPDATE ai_scene_sell_config SET charge_mode='fixed_per_call', sell_tokens_per_reply=3, min_tokens=3 WHERE scene_key='auto_reply' AND deleted=0");
+        executeQuietly("UPDATE ai_scene_plan_benefit SET free_quota_daily=0, free_quota_monthly=0, override_tokens_per_reply=3 WHERE scene_key='auto_reply' AND deleted=0");
         executeQuietly("INSERT INTO ai_scene_sell_config(tenant_id, scene_key, scene_name, scene_group, charge_mode, price_unit, enabled, is_metered, show_estimate, sell_tokens_per_image, min_tokens, fallback_exchange_rate, sort_order, remark, created_time, updated_time, deleted) SELECT NULL, 'workflow_image', 'Workflow Image', 'image', 'fixed_per_image', 'image', 1, 1, 1, 12, 12, 160, 110, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_sell_config WHERE tenant_id IS NULL AND scene_key='workflow_image' AND deleted=0)");
         executeQuietly("INSERT INTO ai_scene_sell_config(tenant_id, scene_key, scene_name, scene_group, charge_mode, price_unit, enabled, is_metered, show_estimate, sell_tokens_per_image, min_tokens, fallback_exchange_rate, sort_order, remark, created_time, updated_time, deleted) SELECT NULL, 'opportunity_image', 'Opportunity Image', 'image', 'fixed_per_image', 'image', 1, 1, 1, 12, 12, 160, 111, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_sell_config WHERE tenant_id IS NULL AND scene_key='opportunity_image' AND deleted=0)");
         executeQuietly("INSERT INTO ai_scene_sell_config(tenant_id, scene_key, scene_name, scene_group, charge_mode, price_unit, enabled, is_metered, show_estimate, sell_tokens_per_call, min_tokens, fallback_exchange_rate, sort_order, remark, created_time, updated_time, deleted) SELECT NULL, 'workflow_screen', 'Workflow Screen', 'screen', 'fixed_per_call', 'call', 1, 1, 1, 20, 20, 160, 50, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_sell_config WHERE tenant_id IS NULL AND scene_key='workflow_screen' AND deleted=0)");
@@ -2892,9 +3104,9 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
         executeQuietly("INSERT INTO ai_scene_sell_config(tenant_id, scene_key, scene_name, scene_group, charge_mode, price_unit, enabled, is_metered, show_estimate, cost_markup_rate, min_tokens, fallback_exchange_rate, sort_order, remark, created_time, updated_time, deleted) SELECT NULL, 'knowledge_base_extract', 'Knowledge Base Extract', 'knowledge', 'cost_plus_rate', 'file', 1, 1, 0, 2.2000, 50, 160, 70, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_sell_config WHERE tenant_id IS NULL AND scene_key='knowledge_base_extract' AND deleted=0)");
         executeQuietly("INSERT INTO ai_scene_sell_config(tenant_id, scene_key, scene_name, scene_group, charge_mode, price_unit, enabled, is_metered, show_estimate, sell_tokens_per_call, min_tokens, fallback_exchange_rate, daily_cap_count, sort_order, remark, created_time, updated_time, deleted) SELECT NULL, 'delivery_source_match', 'Delivery Source Match', 'screen', 'fixed_per_call', 'call', 1, 1, 1, 20, 20, 160, 30, 120, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_sell_config WHERE tenant_id IS NULL AND scene_key='delivery_source_match' AND deleted=0)");
         executeQuietly("INSERT INTO ai_scene_sell_config(tenant_id, scene_key, scene_name, scene_group, charge_mode, price_unit, enabled, is_metered, show_estimate, sell_tokens_per_call, min_tokens, fallback_exchange_rate, sort_order, remark, created_time, updated_time, deleted) SELECT NULL, 'ai_customer_service_test', 'AI Customer Service Test', 'support', 'fixed_per_call', 'call', 1, 1, 0, 20, 20, 160, 140, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_sell_config WHERE tenant_id IS NULL AND scene_key='ai_customer_service_test' AND deleted=0)");
-        executeQuietly("INSERT INTO ai_scene_plan_benefit(tenant_id, scene_key, plan_code, enabled, free_quota_daily, discount_rate, override_tokens_per_reply, daily_cap_count, remark, created_time, updated_time, deleted) SELECT NULL, 'auto_reply', 'normal', 1, 10, 1.0000, 8, 100, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_plan_benefit WHERE tenant_id IS NULL AND scene_key='auto_reply' AND plan_code='normal' AND deleted=0)");
-        executeQuietly("INSERT INTO ai_scene_plan_benefit(tenant_id, scene_key, plan_code, enabled, free_quota_daily, discount_rate, override_tokens_per_reply, daily_cap_count, remark, created_time, updated_time, deleted) SELECT NULL, 'auto_reply', 'vip', 1, 30, 1.0000, 6, 500, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_plan_benefit WHERE tenant_id IS NULL AND scene_key='auto_reply' AND plan_code='vip' AND deleted=0)");
-        executeQuietly("INSERT INTO ai_scene_plan_benefit(tenant_id, scene_key, plan_code, enabled, free_quota_daily, discount_rate, override_tokens_per_reply, daily_cap_count, remark, created_time, updated_time, deleted) SELECT NULL, 'auto_reply', 'svp', 1, 200, 1.0000, 4, 2000, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_plan_benefit WHERE tenant_id IS NULL AND scene_key='auto_reply' AND plan_code='svp' AND deleted=0)");
+        executeQuietly("INSERT INTO ai_scene_plan_benefit(tenant_id, scene_key, plan_code, enabled, free_quota_daily, discount_rate, override_tokens_per_reply, daily_cap_count, remark, created_time, updated_time, deleted) SELECT NULL, 'auto_reply', 'normal', 1, 0, 1.0000, 3, 100, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_plan_benefit WHERE tenant_id IS NULL AND scene_key='auto_reply' AND plan_code='normal' AND deleted=0)");
+        executeQuietly("INSERT INTO ai_scene_plan_benefit(tenant_id, scene_key, plan_code, enabled, free_quota_daily, discount_rate, override_tokens_per_reply, daily_cap_count, remark, created_time, updated_time, deleted) SELECT NULL, 'auto_reply', 'vip', 1, 0, 1.0000, 3, 500, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_plan_benefit WHERE tenant_id IS NULL AND scene_key='auto_reply' AND plan_code='vip' AND deleted=0)");
+        executeQuietly("INSERT INTO ai_scene_plan_benefit(tenant_id, scene_key, plan_code, enabled, free_quota_daily, discount_rate, override_tokens_per_reply, daily_cap_count, remark, created_time, updated_time, deleted) SELECT NULL, 'auto_reply', 'svp', 1, 0, 1.0000, 3, 2000, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_plan_benefit WHERE tenant_id IS NULL AND scene_key='auto_reply' AND plan_code='svp' AND deleted=0)");
         executeQuietly("INSERT INTO ai_scene_plan_benefit(tenant_id, scene_key, plan_code, enabled, free_quota_daily, discount_rate, override_tokens_per_image, remark, created_time, updated_time, deleted) SELECT NULL, 'workflow_image', 'vip', 1, 0, 1.0000, 10, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_plan_benefit WHERE tenant_id IS NULL AND scene_key='workflow_image' AND plan_code='vip' AND deleted=0)");
         executeQuietly("INSERT INTO ai_scene_plan_benefit(tenant_id, scene_key, plan_code, enabled, free_quota_daily, discount_rate, override_tokens_per_image, remark, created_time, updated_time, deleted) SELECT NULL, 'workflow_image', 'svp', 1, 0, 1.0000, 8, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_plan_benefit WHERE tenant_id IS NULL AND scene_key='workflow_image' AND plan_code='svp' AND deleted=0)");
         executeQuietly("INSERT INTO ai_scene_plan_benefit(tenant_id, scene_key, plan_code, enabled, free_quota_daily, discount_rate, override_tokens_per_image, remark, created_time, updated_time, deleted) SELECT NULL, 'opportunity_image', 'vip', 1, 0, 1.0000, 10, 'schema-seed', NOW(), NOW(), 0 WHERE NOT EXISTS (SELECT 1 FROM ai_scene_plan_benefit WHERE tenant_id IS NULL AND scene_key='opportunity_image' AND plan_code='vip' AND deleted=0)");

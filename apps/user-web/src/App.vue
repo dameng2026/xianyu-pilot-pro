@@ -7,7 +7,7 @@
     </div>
   </div>
 
-  <div v-else-if="authPages.includes(active)" class="auth-page-boundary">
+  <div v-else-if="authPages.includes(getNormalizedKey(active))" class="auth-page-boundary">
     <MaintenanceBanner />
     <div v-if="authNotice" class="auth-boundary-notice" role="alert">{{ authNotice }}</div>
     <component
@@ -79,10 +79,17 @@ import Topbar from './components/Topbar.vue'
 import PageHeader from './components/PageHeader.vue'
 import AppButton from './components/AppButton.vue'
 import ConfirmModal from './components/ConfirmModal.vue'
-import DraftGuardModal from './components/DraftGuardModal.vue'
-import PaymentModal from './components/PaymentModal.vue'
-import AiCsPanel from './components/AiCsPanel.vue'
-import MobileLite from './components/MobileLite.vue'
+// 弹窗与移动端组件懒加载，避免首屏加载不必要代码
+const DraftGuardModal = defineAsyncComponent(() => import('./components/DraftGuardModal.vue'))
+const PaymentModal = defineAsyncComponent(() => import('./components/PaymentModal.vue'))
+const AiCsPanel = defineAsyncComponent(() => import('./components/AiCsPanel.vue'))
+const MobileLite = defineAsyncComponent({
+  loader: () => import('./components/MobileLite.vue'),
+  loadingComponent: { render: () => h('div') },
+  errorComponent: { render: () => h('div') },
+  delay: 200,
+  timeout: 30000
+})
 import MaintenanceBanner from './components/MaintenanceBanner.vue'
 import { pageTitles } from './data/nav.js'
 import { createMediaSession, logout as logoutApi } from './api/auth.js'
@@ -96,6 +103,7 @@ import { playIncomingMessageSound, primeAudioOnFirstGesture } from './utils/noti
 import { warmLiteAccountsList } from './api/accounts.js'
 import { getFeatureSwitchStatus, invalidateFeatureSwitchCache } from './api/feature-switch.js'
 import { globalConfirm } from './composables/confirmState.js'
+import { setBrowseMode, setPreviewMode, clearAllLimitModes } from './composables/featureGuard.js'
 
 const AsyncPageLoading = {
   name: 'AsyncPageLoading',
@@ -119,7 +127,10 @@ const LoginPage = asyncPage(() => import('./pages/LoginPage.vue'))
 const RegisterPage = asyncPage(() => import('./pages/RegisterPage.vue'))
 const ForgotPasswordPage = asyncPage(() => import('./pages/ForgotPasswordPage.vue'))
 const DashboardPage = asyncPage(() => import('./pages/DashboardPage.vue'))
-const SettingsPage = asyncPage(() => import('./pages/SettingsPage.vue'))
+const AiCsSettings = asyncPage(() => import('./pages/settings/AiCsSettings.vue'))
+const KnowledgeBaseSettings = asyncPage(() => import('./pages/settings/KnowledgeBaseSettings.vue'))
+const SyncSettings = asyncPage(() => import('./pages/settings/SyncSettings.vue'))
+const AboutSettings = asyncPage(() => import('./pages/settings/AboutSettings.vue'))
 
 const pageMap = {
   login: LoginPage,
@@ -133,10 +144,16 @@ const pageMap = {
   refunds: asyncPage(() => import('./pages/RefundsPage.vue')),
   rates: asyncPage(() => import('./pages/RatesPage.vue')),
   'product-publish': asyncPage(() => import('./pages/ProductPublishPage.vue')),
+  'goods-data': asyncPage(() => import('./pages/GoodsDataPage.vue')),
   // 鱼小铺专属编辑页：路由形态 fish-shop-edit/{accountId}/{itemId}
   // 由 ProductsPage 商品列表「编辑」按钮进入，仅鱼小铺账号商品可访问
   'fish-shop-edit': asyncPage(() => import('./pages/FishShopEditPage.vue')),
+  // 退款详情页：路由形态 refund-detail/{accountId}/{orderId}/{refundId}
+  // 由 RefundsPage 退款列表「查看详情」按钮进入，仅鱼小铺账号可访问
+  // 不加入左侧菜单、不加入移动端白名单（参考 fish-shop-edit 模式）
+  'refund-detail': asyncPage(() => import('./pages/RefundDetailPage.vue')),
   opportunities: asyncPage(() => import('./pages/OpportunityPage.vue')),
+  'fish-shop-data': asyncPage(() => import('./pages/FishShopDataPage.vue')),
   messages: asyncPage(() => import('./pages/MessagesPage.vue')),
   'message-center': asyncPage(() => import('./pages/MessagesPage.vue')),
   workflow: asyncPage(() => import('./pages/WorkflowPage.vue')),
@@ -157,26 +174,35 @@ const pageMap = {
   'api-slider-solve': asyncPage(() => import('./pages/ApiSliderSolvePage.vue')),
   feedback: asyncPage(() => import('./pages/FeedbackPage.vue')),
   'settings-notify': asyncPage(() => import('./pages/settings/NotifySettings.vue')),
+  'settings-ai-cs': AiCsSettings,
+  'settings-kb': KnowledgeBaseSettings,
+  'settings-sync': SyncSettings,
+  'settings-about': AboutSettings,
   vip: asyncPage(() => import('./pages/VipPage.vue')),
   profile: asyncPage(() => import('./pages/ProfileCenterPage.vue')),
-  'feature-unavailable': asyncPage(() => import('./pages/FeatureUnavailablePage.vue'))
+  'feature-unavailable': asyncPage(() => import('./pages/FeatureUnavailablePage.vue')),
+  // 维护中页面
+  'supply-center': asyncPage(() => import('./pages/FeatureUnavailablePage.vue')),
+  'platform-connect': asyncPage(() => import('./pages/FeatureUnavailablePage.vue')),
+  'growth-partner': asyncPage(() => import('./pages/GrowthPartnerPage.vue')),
+  'invite-poster': asyncPage(() => import('./pages/FeatureUnavailablePage.vue'))
 }
 
 // 数据同步板块仅在本地开发环境显示（VITE_SHOW_DATA_SYNC=true）
-// 商业版（线上生产）不设置此变量，settings-sync 不会进入 settingsKeys
-const settingsKeys = [
+// 商业版（线上生产）不设置此变量，settings-sync 不会进入 allSettingKeys
+const allSettingKeys = [
   'settings-ai-cs',
   'settings-kb',
-  'settings-product',
+  'settings-notify',
   ...(import.meta.env.VITE_SHOW_DATA_SYNC === 'true' ? ['settings-sync'] : []),
   'settings-about'
 ]
 const authPages = ['login', 'register', 'forgot-password']
 const defaultPage = 'dashboard'
 const profileEntryStorageKey = 'xya_profile_initial_tab'
-const pagesWithEmbeddedTitle = new Set(['messages', 'message-center', 'delivery-statement', 'delivery-mall', 'feature-unavailable', 'card-warehouse', 'auto-delivery'])
-// 功能开关检查跳过的页面：登录/注册/忘记密码/占位页/工作台（避免登录后卡死）
-const featureSwitchSkipPages = new Set(['login', 'register', 'forgot-password', 'feature-unavailable', 'dashboard'])
+const pagesWithEmbeddedTitle = new Set(['messages', 'message-center', 'delivery-statement', 'delivery-mall', 'feature-unavailable', 'card-warehouse', 'auto-delivery', 'refund-detail', 'settings-ai-cs', 'settings-kb', 'settings-notify', 'settings-sync', 'settings-about', 'growth-partner'])
+// 功能开关检查跳过的页面：登录/注册/忘记密码/占位页/工作台（避免登录后卡死）/维护中页面
+const featureSwitchSkipPages = new Set(['login', 'register', 'forgot-password', 'feature-unavailable', 'dashboard', 'supply-center', 'platform-connect', 'growth-partner', 'invite-poster'])
 const profileEntryTabs = new Set(['overview', 'security', 'token', 'recharge'])
 const mobileLitePages = new Set([
   'dashboard',
@@ -192,36 +218,50 @@ const mobileLitePages = new Set([
   'workflow',
   'auto-delivery',
   'product-publish',
+  'goods-data',
   'fish-shop-edit',
   'orders',
   'profile',
-  'api-slider-solve'
+  'api-slider-solve',
+  'refund-detail'
 ])
 
+// 剥离 hash 路由中的查询参数（如 register?ref=XXX -> register）
+// active.value 保留原始 raw（含查询参数），但页面判断/组件映射只看 path 部分
+const stripQuery = key => {
+  if (typeof key !== 'string') return key
+  const idx = key.indexOf('?')
+  return idx >= 0 ? key.slice(0, idx) : key
+}
+
 const isKnownPage = key => {
-  if (pageMap[key]) return true
-  if (settingsKeys.includes(key)) return true
-  if (mobileLitePages.has(key)) return true
-  if (typeof key === 'string') {
-    if (key.startsWith('account-detail/')) return true
-    if (key.startsWith('product-detail/')) return true
-    if (key.startsWith('data-detail/')) return true
-    if (key.startsWith('chat-detail/')) return true
-    if (key.startsWith('fish-shop-edit/')) return true
+  const path = stripQuery(key)
+  if (pageMap[path]) return true
+  if (allSettingKeys.includes(path)) return true
+  if (mobileLitePages.has(path)) return true
+  if (typeof path === 'string') {
+    if (path.startsWith('account-detail/')) return true
+    if (path.startsWith('product-detail/')) return true
+    if (path.startsWith('data-detail/')) return true
+    if (path.startsWith('chat-detail/')) return true
+    if (path.startsWith('fish-shop-edit/')) return true
+    if (path.startsWith('refund-detail/')) return true
   }
   return false
 }
 
 const normalizePageKey = key => {
   if (isKnownPage(key)) {
-    if (typeof key === 'string') {
-      if (key.startsWith('account-detail/')) return 'account-detail'
-      if (key.startsWith('product-detail/')) return 'product-detail'
-      if (key.startsWith('data-detail/')) return 'data-detail'
-      if (key.startsWith('chat-detail/')) return 'chat-detail'
-      if (key.startsWith('fish-shop-edit/')) return 'fish-shop-edit'
+    const path = stripQuery(key)
+    if (typeof path === 'string') {
+      if (path.startsWith('account-detail/')) return 'account-detail'
+      if (path.startsWith('product-detail/')) return 'product-detail'
+      if (path.startsWith('data-detail/')) return 'data-detail'
+      if (path.startsWith('chat-detail/')) return 'chat-detail'
+      if (path.startsWith('fish-shop-edit/')) return 'fish-shop-edit'
+      if (path.startsWith('refund-detail/')) return 'refund-detail'
     }
-    return key
+    return path
   }
   return defaultPage
 }
@@ -231,14 +271,16 @@ const getHash = () => {
 }
 const getNormalizedKey = (raw) => {
   if (isKnownPage(raw)) {
-    if (typeof raw === 'string') {
-      if (raw.startsWith('account-detail/')) return 'account-detail'
-      if (raw.startsWith('product-detail/')) return 'product-detail'
-      if (raw.startsWith('data-detail/')) return 'data-detail'
-      if (raw.startsWith('chat-detail/')) return 'chat-detail'
-      if (raw.startsWith('fish-shop-edit/')) return 'fish-shop-edit'
+    const path = stripQuery(raw)
+    if (typeof path === 'string') {
+      if (path.startsWith('account-detail/')) return 'account-detail'
+      if (path.startsWith('product-detail/')) return 'product-detail'
+      if (path.startsWith('data-detail/')) return 'data-detail'
+      if (path.startsWith('chat-detail/')) return 'chat-detail'
+      if (path.startsWith('fish-shop-edit/')) return 'fish-shop-edit'
+      if (path.startsWith('refund-detail/')) return 'refund-detail'
     }
-    return raw
+    return path
   }
   return defaultPage
 }
@@ -363,58 +405,62 @@ async function handleTokenPaid() {
 /**
  * 功能开关检查：判断目标页面是否对当前用户开放。
  * 返回 { allowed: true } 或 { allowed: false, reason, required }。
+ * 当 allowed=true 且 preview=true 时，表示预览模式（可进入但不可执行业务操作）。
  * 失败降级：API 异常时默认放行，避免后端故障锁死所有页面。
  */
 async function checkFeatureSwitch(pageKey) {
-  if (featureSwitchSkipPages.has(pageKey)) return { allowed: true }
-  // 仅对已知页面（pageMap 或 settingsKeys）检查，避免对未知 key 误拦
-  if (!pageMap[pageKey] && !settingsKeys.includes(pageKey)) return { allowed: true }
+  if (featureSwitchSkipPages.has(pageKey)) return { allowed: true, preview: false }
+  // 仅对已知页面（pageMap 或 allSettingKeys）检查，避免对未知 key 误拦
+  if (!pageMap[pageKey] && !allSettingKeys.includes(pageKey)) return { allowed: true, preview: false }
   try {
     const status = await getFeatureSwitchStatus()
-    if (!status || typeof status !== 'object') return { allowed: true }
+    if (!status || typeof status !== 'object') return { allowed: true, preview: false }
     const accessible = status.accessible || {}
     const blocked = status.blocked || {}
-    if (accessible[pageKey] === true) return { allowed: true }
+    const preview = status.preview || {}
+    if (accessible[pageKey] === true) {
+      const previewInfo = preview[pageKey]
+      return {
+        allowed: true,
+        preview: !!previewInfo,
+        reasonText: previewInfo?.reason_text || ''
+      }
+    }
     if (blocked[pageKey]) {
       const info = blocked[pageKey]
       return {
         allowed: false,
+        preview: false,
         reason: info.reason || 'disabled',
         required: info.required_level || '',
         reasonText: info.reason_text || ''
       }
     }
-    return { allowed: true }
+    return { allowed: true, preview: false }
   } catch (e) {
     recordClientError(e, { source: 'feature_switch_check' })
-    return { allowed: true }
+    return { allowed: true, preview: false }
   }
 }
 
 /**
  * 功能被开关拦截时，弹出提示弹窗（不跳转到占位页）。
- * - reason=maintenance：提示"正在维护升级中"（对所有用户生效）
- * - reason=disabled：提示"暂未开放"
- * - reason=level：提示"等级不足"，确认后跳转会员中心升级
+ * - reason=maintenance：提示"正在维护升级中"（对所有用户生效，路由拦截）
+ * - reason=blocked：提示"该功能当前不可访问"（管理员限制不可进入，路由拦截）
+ * - reason=disabled：提示"暂未开放"（路由拦截）
+ * - reason=level：已改为浏览模式（路由放行），由 guardFeatureAction 在页面内拦截写操作
  */
 async function showFeatureBlockedNotice(switchResult) {
   const reason = switchResult.reason || 'disabled'
-  const required = switchResult.required || ''
   if (reason === 'maintenance') {
     await globalConfirm.alert('维护中', switchResult.reasonText || '该页面正在维护升级中，请稍后再试。')
     return
   }
-  if (reason === 'level' && required) {
-    const levelLabel = required === 'svp' ? 'SVP' : required === 'vip' ? 'VIP' : required
-    const confirmed = await globalConfirm.confirm(
-      '等级不足',
-      `该功能需要 ${levelLabel} 等级才能使用，是否前往会员中心升级？`,
-      '立即升级'
-    )
-    if (confirmed) navigate('vip')
-  } else {
-    await globalConfirm.alert('暂未开放', '该功能暂未开放，敬请期待。')
+  if (reason === 'blocked') {
+    await globalConfirm.alert('不可访问', switchResult.reasonText || '该功能当前不可访问。')
+    return
   }
+  await globalConfirm.alert('暂未开放', '该功能暂未开放，敬请期待。')
 }
 
 async function navigate(key) {
@@ -432,11 +478,35 @@ async function navigate(key) {
   // 离开当前页前，交由导航守卫处理草稿询问等逻辑
   const allowed = await runNavigationGuard()
   if (!allowed) return
-  // 功能开关检查：被拦截时弹出提示，不跳转占位页
+  // 功能开关检查
   const switchResult = await checkFeatureSwitch(normalizedKey)
   if (!switchResult.allowed) {
+    // 等级不足：改为浏览模式，放行进入页面，由页面内 guardFeatureAction / request.js 拦截写操作
+    if (switchResult.reason === 'level') {
+      setBrowseMode({
+        featureKey: normalizedKey,
+        requiredLevel: switchResult.required,
+        reasonText: switchResult.reasonText
+      })
+      suppressHashGuard = true
+      location.hash = `#/${requested}`
+      active.value = requested
+      if (authPages.includes(normalizedKey)) authNotice.value = ''
+      return
+    }
+    // 维护中 / 不可进入 / 暂未开放：拦截 + 弹窗，不进入页面
+    clearAllLimitModes()
     await showFeatureBlockedNotice(switchResult)
     return
+  }
+  // 放行：清除所有限制模式（上一页的浏览/预览状态不带到新页面）
+  clearAllLimitModes()
+  // 预览模式：可进入页面查看，但不可执行业务操作（由 guardFeatureAction / request.js 拦截写操作）
+  if (switchResult.preview) {
+    setPreviewMode({
+      featureKey: normalizedKey,
+      reasonText: switchResult.reasonText
+    })
   }
   suppressHashGuard = true
   location.hash = `#/${requested}`
@@ -509,14 +579,36 @@ async function handleGuardedHashNavigation(raw) {
     location.hash = `#/${active.value}`
     return
   }
-  // 功能开关检查：被拦截时弹出提示，不跳转占位页
+  // 功能开关检查
   const switchResult = await checkFeatureSwitch(normalizedKey)
   if (!switchResult.allowed) {
-    // 还原 hash 到当前页，避免地址栏与内容不一致
+    // 等级不足：改为浏览模式，放行进入页面
+    if (switchResult.reason === 'level') {
+      setBrowseMode({
+        featureKey: normalizedKey,
+        requiredLevel: switchResult.required,
+        reasonText: switchResult.reasonText
+      })
+      const previous = active.value
+      active.value = raw
+      if (authPages.includes(normalizedKey) && normalizedKey !== getNormalizedKey(previous)) authNotice.value = ''
+      return
+    }
+    // 维护中 / 不可进入 / 暂未开放：还原 hash 到当前页 + 弹窗
+    clearAllLimitModes()
     suppressHashGuard = true
     location.hash = `#/${active.value}`
     await showFeatureBlockedNotice(switchResult)
     return
+  }
+  // 放行：清除所有限制模式（上一页的浏览/预览状态不带到新页面）
+  clearAllLimitModes()
+  // 预览模式：可进入页面查看，但不可执行业务操作（由 guardFeatureAction / request.js 拦截写操作）
+  if (switchResult.preview) {
+    setPreviewMode({
+      featureKey: normalizedKey,
+      reasonText: switchResult.reasonText
+    })
   }
   const previous = active.value
   active.value = raw
@@ -635,10 +727,14 @@ async function boot() {
     if (getToken()) {
       bootMessage.value = '正在恢复登录会话'
       if (authPages.includes(getNormalizedKey(active.value))) active.value = defaultPage
-      await initializeMediaSession()
+      // 并行化首屏请求：媒体会话、用户信息、SSE 同时发起，避免串行等待
+      const bootPromises = [
+        initializeMediaSession().catch(() => {}),
+        loadCurrentUser()
+      ]
       startSse()
       scheduleWarmups()
-      await loadCurrentUser()
+      await Promise.all(bootPromises)
       if (!location.hash || authPages.includes(getNormalizedKey(getHash()))) navigate(defaultPage)
       return
     }
@@ -648,7 +744,9 @@ async function boot() {
     }
 
     const requested = getHash()
-    if (authPages.includes(requested)) {
+    // 用 getNormalizedKey 剥离查询参数后判断是否是 authPage
+    // 支持 #/register?ref=XXX 这类带参 hash 路由
+    if (authPages.includes(getNormalizedKey(requested))) {
       active.value = requested
       return
     }
@@ -721,6 +819,12 @@ function updateMobileState() {
   isMobile.value = window.matchMedia?.('(max-width: 900px)').matches || /Mobi|Android|iPhone|iPad|iPod/i.test(ua)
 }
 
+// 接收 featureGuard composable 派发的导航请求（浏览模式弹窗点击"立即升级"后跳转会员中心）
+function onNavigateRequest(event) {
+  const target = event?.detail
+  if (typeof target === 'string' && target) navigate(target)
+}
+
 onMounted(() => {
   installClientErrorReporter()
   updateMobileState()
@@ -734,6 +838,8 @@ onMounted(() => {
   window.addEventListener('xya-toast', onGlobalToast)
   // 全局充值弹窗事件监听：Token 余额不足时由 aiTokenGuard 等模块派发，弹出充值 modal
   window.addEventListener('xya-open-payment', onOpenPayment)
+  // 浏览模式等级不足弹窗点击"立即升级"后，由 featureGuard 派发导航请求
+  window.addEventListener('xya-navigate', onNavigateRequest)
   // 初始化滑块求解 SSE 监听
   import('./composables/useCaptchaSolver.js').then(({ useCaptchaSolver }) => {
     useCaptchaSolver().initCaptchaSolverListener()
@@ -753,6 +859,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('xya-sse-event', onSseEventForSound)
   window.removeEventListener('xya-toast', onGlobalToast)
   window.removeEventListener('xya-open-payment', onOpenPayment)
+  window.removeEventListener('xya-navigate', onNavigateRequest)
   window.removeEventListener('xya-open-ai-cs', openAiCs)
   import('./composables/useCaptchaSolver.js').then(({ useCaptchaSolver }) => {
     useCaptchaSolver().destroyCaptchaSolverListener()
@@ -762,7 +869,6 @@ onBeforeUnmount(() => {
 
 const pageComponent = computed(() => {
   const normalized = getNormalizedKey(active.value)
-  if (settingsKeys.includes(normalized)) return SettingsPage
   return pageMap[normalized] || DashboardPage
 })
 const title = computed(() => (pageTitles[getNormalizedKey(active.value)] || pageTitles.dashboard)[0])

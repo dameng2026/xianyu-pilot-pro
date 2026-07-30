@@ -7,10 +7,14 @@
 - dingtalk    钉钉自定义机器人（msgtype:text，可选加签）
 - wechat_work 企业微信群机器人（msgtype:text）
 - pushplus    PushPlus（向 pushplus.plus/send 发 token+title+content）
-- email       邮箱 SMTP（向收件人发送邮件）
+- email       邮箱（支持两种 sendMode）：
+               - smtp         Python 直接通过 smtplib 发送
+               - tencent_ses  调用 Java core-api 内部代理走腾讯云 SES
+                              （设计文档 §7.3，不持有 SecretKey）
 
 设计要点：
-- 直接在 Python 端发送 HTTP/SMTP，低延迟、无需跨服务调用。
+- 直接在 Python 端发送 HTTP/SMTP，低延迟、无需跨服务调用；SES 模式
+  通过 Java 内部代理调用，避免在 Python 侧暴露云凭据。
 - 读取 user_notification_setting.config_json，按渠道类型格式化消息体。
 - 发送结果写入 notification_delivery_log 表，便于审计与排错。
 - 所有异常被捕获并记录日志，绝不影响主业务流程。
@@ -33,6 +37,7 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.config import settings
 from ..core.database import async_session
 from ..core.cookie_crypto import decrypt_cookie_if_needed
 from ..core.outbound_network import (
@@ -44,6 +49,17 @@ from ..core.outbound_network import (
 from .ws_delivery_handler import extract_goods_id_from_url, extract_order_id_from_url
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# 腾讯云 SES 内部代理配置（设计文档 §7）
+# ============================================================
+# Java core-api 内部邮件代理路由前缀，与 InternalEmailProxyController @RequestMapping 对齐
+_INTERNAL_SES_PROXY_PATH = "/open-api/internal/notification/email/tencent-ses"
+# 内部代理调用超时时间（秒）；SES SDK 调用通常 1-3 秒，留 15 秒余量
+_INTERNAL_SES_PROXY_TIMEOUT_SECONDS = 15
+# 内部代理响应体最大字节数，防止异常响应耗尽内存
+_MAX_INTERNAL_SES_RESPONSE_BYTES = 64 * 1024
 
 
 # ============================================================
@@ -281,6 +297,11 @@ def _is_channel_ready(channel: dict) -> bool:
     if ctype == "pushplus":
         return bool(str(channel.get("receiver") or "").strip())
     if ctype == "email":
+        # SES 模式只需要 receiver（云凭据由 Java 全局配置持有，设计文档 §5）
+        send_mode = str(channel.get("sendMode") or "smtp").strip().lower()
+        if send_mode == "tencent_ses":
+            return bool(str(channel.get("receiver") or "").strip())
+        # SMTP 模式沿用原有字段完整性校验
         return all(str(channel.get(k) or "").strip() for k in ("smtpHost", "smtpUser", "smtpPass", "receiver"))
     return False
 
@@ -517,13 +538,125 @@ async def _send_pushplus(channel: dict, title: str, rendered: str, timeout_secon
 
 
 async def _send_email(channel: dict, title: str, rendered: str, timeout_seconds: int) -> dict:
+    """邮件渠道分发：根据 channel.sendMode 路由到 SMTP 或腾讯云 SES。
+
+    - sendMode=smtp（默认）：Python 直接通过 smtplib 发送，沿用原有链路
+    - sendMode=tencent_ses：调用 Java core-api 内部代理
+      POST /open-api/internal/notification/email/tencent-ses
+      （设计文档 §7.3）：
+        * 不在 Python 侧持有 SecretKey
+        * 失败、重试、投递日志由本分发器统一处理
+        * 内部代理只接受收件人、主题、HTML、纯文本
+    """
+    send_mode = str(channel.get("sendMode") or "smtp").strip().lower()
+    if send_mode == "tencent_ses":
+        return await _send_email_via_tencent_ses(channel, title, rendered, timeout_seconds)
+    return await _send_email_via_smtp(channel, title, rendered, timeout_seconds)
+
+
+async def _send_email_via_tencent_ses(channel: dict, title: str, rendered: str, timeout_seconds: int) -> dict:
+    """通过 Java core-api 内部代理走腾讯云 SES 发送业务通知。
+
+    设计文档 §7.3：Python 不直接调用腾讯云 SDK，不读取 sys_config.email_config。
+    请求体只包含收件人、主题、HTML 和纯文本正文，不传任何云凭据字段。
+    """
+    to_email = str(channel.get("receiver") or "").strip()
+    started = time.time()
+    if not to_email:
+        return _err_result(int((time.time() - started) * 1000))
+
+    base_url = (settings.core_api_base_url or "").rstrip("/")
+    if not base_url:
+        logger.warning("SES 代理调用失败: core_api_base_url 未配置")
+        return _err_result(int((time.time() - started) * 1000))
+
+    # 构造 HTML 正文：业务通知模板渲染结果是纯文本，简单包裹成 HTML 段落
+    # 避免 SES 直发纯文本被收件方反垃圾系统误判（设计文档 §6.2）
+    safe_rendered = (rendered or "").replace("<", "&lt;").replace(">", "&gt;")
+    html_content = (
+        "<div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif;"
+        "max-width:560px;margin:0 auto;padding:24px;color:#333;white-space:pre-wrap;\">"
+        + safe_rendered
+        + "</div>"
+    )
+    text_content = rendered or ""
+
+    payload = {
+        "toEmail": to_email,
+        "subject": title or "闲鱼助手通知",
+        "htmlContent": html_content,
+        "textContent": text_content,
+    }
+    headers = {"Content-Type": "application/json"}
+    internal_token = settings.effective_internal_api_token
+    if internal_token:
+        headers["X-Internal-Token"] = internal_token
+
+    request_url = f"{base_url}{_INTERNAL_SES_PROXY_PATH}"
+    timeout = min(max(int(timeout_seconds or 10), 3), _INTERNAL_SES_PROXY_TIMEOUT_SECONDS)
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            response_bytes = bytearray()
+            async with client.stream("POST", request_url, json=payload, headers=headers) as resp:
+                # 5xx / 429 视为临时不可用，由 _err_result 兜底；不重试避免重复发送
+                if resp.status_code >= 500 or resp.status_code == 429:
+                    logger.warning(
+                        "SES 代理上游临时不可用: status=%s to=%s",
+                        resp.status_code, _mask_email(to_email),
+                    )
+                    return _err_result(int((time.time() - started) * 1000))
+                async for chunk in resp.aiter_bytes():
+                    if len(response_bytes) + len(chunk) > _MAX_INTERNAL_SES_RESPONSE_BYTES:
+                        await resp.aclose()
+                        logger.warning("SES 代理响应体过大，截断")
+                        return _err_result(int((time.time() - started) * 1000))
+                    response_bytes.extend(chunk)
+
+        cost_ms = int((time.time() - started) * 1000)
+        # 拆包 Java Result {code, msg, data}（设计文档 §17.3）
+        try:
+            data = json.loads(bytes(response_bytes))
+        except (UnicodeDecodeError, TypeError, ValueError):
+            logger.warning("SES 代理响应非 JSON: to=%s", _mask_email(to_email))
+            return _err_result(cost_ms)
+
+        code = str(data.get("code") if isinstance(data, dict) else "").strip()
+        result_data = data.get("data") if isinstance(data, dict) else None
+        success = code in {"0", "200"} and isinstance(result_data, dict) and bool(result_data.get("success"))
+        message = ""
+        if isinstance(result_data, dict):
+            message = str(result_data.get("message") or "").strip()
+        if success:
+            return {
+                "success": True, "status_code": 200, "cost_ms": cost_ms,
+                "message": "腾讯云 SES 发送成功", "request_body": "", "response_body": "",
+            }
+        friendly_msg = message or "腾讯云 SES 发送失败"
+        logger.warning("SES 代理返回失败: to=%s msg=%s", _mask_email(to_email), friendly_msg)
+        return {
+            "success": False, "status_code": 200, "cost_ms": cost_ms,
+            "message": friendly_msg[:500], "request_body": "", "response_body": "",
+        }
+    except (httpx.TimeoutException, httpx.TransportError) as exc:
+        logger.warning("SES 代理网络异常: to=%s errorType=%s", _mask_email(to_email), type(exc).__name__)
+        return _err_result(int((time.time() - started) * 1000))
+    except Exception as exc:
+        logger.warning("SES 代理未预期异常: to=%s errorType=%s", _mask_email(to_email), type(exc).__name__)
+        return _err_result(int((time.time() - started) * 1000))
+
+
+async def _send_email_via_smtp(channel: dict, title: str, rendered: str, timeout_seconds: int) -> dict:
     smtp_host = str(channel.get("smtpHost") or "").strip()
     smtp_port = int(channel.get("smtpPort") or 465)
     smtp_user = str(channel.get("smtpUser") or "").strip()
     smtp_pass = str(channel.get("smtpPass") or "").strip()
     from_email = str(channel.get("fromEmail") or "").strip() or smtp_user
     to_email = str(channel.get("receiver") or "").strip()
-    body_log = f"to={to_email}&subject={title}&body={rendered}"
     started = time.time()
     try:
         smtp_host, smtp_port = await notification_outbound_policy.validate_smtp(smtp_host, smtp_port)
@@ -552,6 +685,16 @@ async def _send_email(channel: dict, title: str, rendered: str, timeout_seconds:
     except Exception as e:
         logger.warning("SMTP delivery failed errorType=%s", type(e).__name__)
         return _err_result(int((time.time() - started) * 1000))
+
+
+def _mask_email(email: str) -> str:
+    """脱敏收件人邮箱，用于日志记录。"""
+    if not email or len(email) < 5:
+        return "***"
+    at = email.find("@")
+    if at < 1:
+        return "***"
+    return email[:min(2, at)] + "***" + email[at:]
 
 
 async def _bounded_http_request(

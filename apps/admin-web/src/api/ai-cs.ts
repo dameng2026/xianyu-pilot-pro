@@ -32,6 +32,7 @@ export interface AiCsSessionRow {
   sessionId?: number | string
   sessionToken?: string
   userId?: number
+  username?: string
   tenantId?: number
   status?: string
   messageCount?: number
@@ -53,6 +54,7 @@ export interface AiCsMessageRow {
   id: number
   sessionId?: number
   userId?: number
+  username?: string
   role?: string
   content?: string
   tokensCharged?: number
@@ -145,6 +147,18 @@ export function pageAiCsSessions(params: AiCsSessionQuery = {}) {
 export function pageAiCsMessages(params: AiCsMessageQuery = {}) {
   return request.get<any>({ url: '/ai-cs/messages/page', params })
     .then(value => requirePagePayload<AiCsMessageRow>(value, '消息审计'))
+}
+
+// 获取指定会话的全部消息（按时间正序，完整内容）。
+// 供后台"对话气泡视图"使用：一次性加载完整对话流，不分页。
+export function listSessionAiCsMessages(sessionId: number | string) {
+  return request.get<any>({ url: `/ai-cs/messages/session/${sessionId}` })
+    .then(value => {
+      // 后端返回 Result<List<Map>>，http 拦截器通常已解包 data 字段
+      if (Array.isArray(value)) return value as AiCsMessageRow[]
+      if (value && Array.isArray((value as any).data)) return (value as any).data as AiCsMessageRow[]
+      return [] as AiCsMessageRow[]
+    })
 }
 
 export function pageAiCsToolCalls(params: AiCsToolCallQuery = {}) {

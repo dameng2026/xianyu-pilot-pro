@@ -32,7 +32,9 @@ from app.services.rate_service import (
     QUERY_TYPE_ORDER,
     RATE_CREATE_API,
     RATE_FEEDBACK_MAX_LENGTH,
+    RATE_LEVEL_BAD,
     RATE_LEVEL_GOOD,
+    RATE_LEVEL_NEUTRAL,
     RATE_LIST_API,
     SINGLE_ACCOUNT_CACHE_TTL_SECONDS,
     SUPPORTED_CATEGORIES,
@@ -57,12 +59,17 @@ def _build_sample_rate_item(
     has_seller_rate: bool = False,
     seller_rate_str: str = "true",
     buyer_rate_str: str = "false",
+    seller_rate_value: str = "1",
+    buyer_rate_value: str = "1",
+    buyer_feedback: str = "不错",
     order_id: int = 3313120441127005861,
     item_id: int = 1234567890123456789,
 ) -> dict:
     """构造符合需求第五节响应结构的样本评价记录。
 
     seller_rate_str / buyer_rate_str 用于验证字符串布尔值解析。
+    seller_rate_value / buyer_rate_value 用于验证不同评价等级（"1"/"-1"/"0"）。
+    buyer_feedback 用于构造买家占位记录（如"ta在交易成功后未做出评价内容"）。
     """
     rate_list = []
     if has_seller_rate:
@@ -72,18 +79,18 @@ def _build_sample_rate_item(
             "illegal": "false",
             "main": "卖家已评价",
             "pictCdnUrlList": [],
-            "rate": "1",
+            "rate": seller_rate_value,
             "rateId": "rate-001",
             "raterHeadImg": "//img.alicdn.com/seller.png",
             "seller": seller_rate_str,
         })
     rate_list.append({
-        "feedBack": "不错",
+        "feedBack": buyer_feedback,
         "gmtCreate": "2026-07-27 10:00:00",
         "illegal": "false",
         "main": "买家评价",
         "pictCdnUrlList": ["//img.alicdn.com/buyer1.jpg"],
-        "rate": "1",
+        "rate": buyer_rate_value,
         "rateId": "rate-002",
         "raterHeadImg": "//img.alicdn.com/buyer.png",
         "seller": buyer_rate_str,
@@ -309,19 +316,50 @@ def test_mask_mail_no_preserves_head_tail():
 
 
 # ============================================================
-# 评价等级白名单（需求第十七节、第二十八节）
+# 评价等级映射与白名单（需求第一节、第二节、第三节、第五节、第十八节）
 # ============================================================
 
-def test_confirmed_rate_levels_only_contains_good():
-    """已确认的可提交等级仅包含好评（rate=1）。
+def test_confirmed_rate_levels_contains_all_three():
+    """已确认的可提交等级包含好评(1)、中评(-1)、差评(0)。
 
-    中评、差评未经真实接口样本确认，不得在白名单中。
+    需求第一节、第二节、第三节已通过真实接口样本确认：
+    - 好评 rate=1
+    - 中评 rate=-1（真实请求样本：data.module.success=true，successOrderIds 包含 orderId）
+    - 差评 rate=0（真实请求样本：data.module.success=true，successOrderIds 包含 orderId）
     """
     assert RATE_LEVEL_GOOD == 1
-    assert CONFIRMED_RATE_LEVELS == frozenset({1})
-    # 明确禁止 0、-1 进入白名单
-    assert 0 not in CONFIRMED_RATE_LEVELS
-    assert -1 not in CONFIRMED_RATE_LEVELS
+    assert RATE_LEVEL_NEUTRAL == -1
+    assert RATE_LEVEL_BAD == 0
+    assert CONFIRMED_RATE_LEVELS == frozenset({1, -1, 0})
+    # 三个等级均在白名单中
+    assert 1 in CONFIRMED_RATE_LEVELS
+    assert -1 in CONFIRMED_RATE_LEVELS
+    assert 0 in CONFIRMED_RATE_LEVELS
+    # 不得交换中评和差评的数值
+    assert RATE_LEVEL_NEUTRAL != 0
+    assert RATE_LEVEL_BAD != -1
+
+
+def test_rate_zero_is_valid_bad_review():
+    """差评 rate=0 是合法业务值，不得因真假判断被拦截（需求第六节）。
+
+    0 不可被当作：未选择 / 空值 / undefined / 无效评价 / 未映射。
+    """
+    assert RATE_LEVEL_BAD == 0
+    assert 0 in CONFIRMED_RATE_LEVELS
+    # 0 是合法值，bool(0) 为 False 但 0 仍是有效评价等级
+    assert bool(RATE_LEVEL_BAD) is False  # Python 中 bool(0) is False
+    # 但 0 仍在白名单中，不应被 if not rate 拦截
+    assert RATE_LEVEL_BAD in CONFIRMED_RATE_LEVELS
+
+
+def test_rate_negative_one_is_valid_neutral_review():
+    """中评 rate=-1 是合法业务值，不得被当作非法值（需求第六节）。
+
+    -1 不可被当作：未选择 / 非法 / 未映射。
+    """
+    assert RATE_LEVEL_NEUTRAL == -1
+    assert -1 in CONFIRMED_RATE_LEVELS
 
 
 def test_rate_feedback_max_length_is_reasonable():
@@ -503,5 +541,561 @@ def test_sync_intervals_are_configurable():
 
 
 def test_supported_categories_match_local_filter():
-    """本地筛选分类应与需求第十二节一致：all / pending / done。"""
-    assert set(SUPPORTED_CATEGORIES) == {"all", "pending", "done"}
+    """本地筛选分类应包含状态筛选与等级筛选（需求第十二节）。
+
+    - 状态：all / pending / done
+    - 等级：good / neutral / bad（仅匹配 seller=true 的卖家评价）
+    """
+    assert set(SUPPORTED_CATEGORIES) == {"all", "pending", "done", "good", "neutral", "bad"}
+
+
+# ============================================================
+# 卖家评价等级识别（需求第八节、第十节、第十八节）
+# ============================================================
+
+def test_seller_rate_negative_one_is_neutral():
+    """seller=true 且 rate=-1 应识别为卖家中评（需求第一节、第十节）。
+
+    不得把 seller=true 的 rate=-1 当作差评或未映射。
+    """
+    raw = _build_sample_rate_item(
+        has_seller_rate=True,
+        seller_rate_str="true",
+        seller_rate_value="-1",
+    )
+    result = _extract_rate_fields(raw, account_id=1, tenant_id=1)
+    assert result is not None
+    assert result["has_seller_rate"] == 1
+    assert result["seller_rate_level"] == "-1"
+    assert result["seller_rate_content"] == "很棒"
+
+
+def test_seller_rate_zero_is_bad():
+    """seller=true 且 rate=0 应识别为卖家差评（需求第一节、第十节）。
+
+    0 是合法业务值，不得因真假判断被当成空值或未选择（需求第六节）。
+    """
+    raw = _build_sample_rate_item(
+        has_seller_rate=True,
+        seller_rate_str="true",
+        seller_rate_value="0",
+    )
+    result = _extract_rate_fields(raw, account_id=1, tenant_id=1)
+    assert result is not None
+    assert result["has_seller_rate"] == 1
+    assert result["seller_rate_level"] == "0"
+    assert result["seller_rate_content"] == "很棒"
+
+
+def test_seller_rate_one_is_good():
+    """seller=true 且 rate=1 应识别为卖家好评（需求第一节、第十节）。"""
+    raw = _build_sample_rate_item(
+        has_seller_rate=True,
+        seller_rate_str="true",
+        seller_rate_value="1",
+    )
+    result = _extract_rate_fields(raw, account_id=1, tenant_id=1)
+    assert result is not None
+    assert result["has_seller_rate"] == 1
+    assert result["seller_rate_level"] == "1"
+
+
+def test_seller_rate_supports_integer_value():
+    """seller 评价等级也兼容整数形式（1/-1/0 而非字符串，需求第七节）。"""
+    raw = _build_sample_rate_item(
+        has_seller_rate=True,
+        seller_rate_str="true",
+        seller_rate_value=-1,  # 整数而非字符串
+    )
+    result = _extract_rate_fields(raw, account_id=1, tenant_id=1)
+    assert result is not None
+    assert result["has_seller_rate"] == 1
+    assert result["seller_rate_level"] == "-1"
+
+
+# ============================================================
+# 买家占位记录与中评冲突（需求第八节、第十一节、第十八节）
+# ============================================================
+
+def test_buyer_placeholder_rate_negative_one_not_seller_rate():
+    """seller=false、rate=-1、feedback='ta在交易成功后未做出评价内容' 不得当作卖家评价（需求第八节）。
+
+    关键约束：
+    - 不得因 rate=-1 就把卖家状态显示为中评
+    - 不得把订单标记为卖家已评价
+    - 不得计入卖家中评统计
+    """
+    raw = _build_sample_rate_item(
+        has_seller_rate=False,
+        buyer_rate_str="false",
+        buyer_rate_value="-1",
+        buyer_feedback="ta在交易成功后未做出评价内容",
+    )
+    result = _extract_rate_fields(raw, account_id=1, tenant_id=1)
+    assert result is not None
+    # 不得标记为卖家已评价
+    assert result["has_seller_rate"] == 0
+    # 卖家评价字段应为空
+    assert result["seller_rate_content"] is None
+    assert result["seller_rate_level"] is None
+    # 买家评价字段应有占位内容
+    assert result["buyer_rate_content"] == "ta在交易成功后未做出评价内容"
+    assert result["buyer_rate_level"] == "-1"
+    # 仍可评价
+    assert result["rate_reviewable"] == 1
+
+
+def test_buyer_placeholder_does_not_affect_seller_status():
+    """即使买家侧 rate=-1 存在占位记录，卖家状态仍由 seller=true 记录决定（需求第八节）。
+
+    构造同时包含：
+    - seller=false, rate=-1, feedback='ta在交易成功后未做出评价内容'（买家占位）
+    - seller=true, rate=1（卖家好评）
+    验证卖家等级只取 seller=true 记录。
+    """
+    raw = _build_sample_rate_item(
+        has_seller_rate=True,
+        seller_rate_str="true",
+        seller_rate_value="1",
+        buyer_rate_str="false",
+        buyer_rate_value="-1",
+        buyer_feedback="ta在交易成功后未做出评价内容",
+    )
+    result = _extract_rate_fields(raw, account_id=1, tenant_id=1)
+    assert result is not None
+    # 卖家评价取 seller=true 记录
+    assert result["has_seller_rate"] == 1
+    assert result["seller_rate_level"] == "1"  # 卖家好评，而非 -1
+    assert result["seller_rate_content"] == "很棒"
+    # 买家评价取 seller=false 记录
+    assert result["buyer_rate_level"] == "-1"
+    assert "未做出评价" in result["buyer_rate_content"]
+
+
+def test_multiple_rate_records_do_not_overwrite():
+    """同一订单同时存在买家与卖家评价时不应互相覆盖（需求第十八节）。"""
+    raw = _build_sample_rate_item(
+        has_seller_rate=True,
+        seller_rate_str="true",
+        seller_rate_value="-1",  # 卖家中评
+        buyer_rate_str="false",
+        buyer_rate_value="0",  # 买家差评
+        buyer_feedback="买家差评内容",
+    )
+    result = _extract_rate_fields(raw, account_id=1, tenant_id=1)
+    assert result is not None
+    # 卖家与买家各自独立
+    assert result["seller_rate_level"] == "-1"
+    assert result["buyer_rate_level"] == "0"
+    assert result["seller_rate_content"] == "很棒"
+    assert result["buyer_rate_content"] == "买家差评内容"
+    assert result["has_seller_rate"] == 1
+
+
+# ============================================================
+# 创建评价成功判断（中评 / 差评，需求第二节、第三节、第十五节、第十八节）
+# ============================================================
+
+def test_judge_create_rate_success_for_neutral():
+    """中评 rate=-1 提交成功响应应判定为成功（需求第二节、第十五节）。
+
+    真实请求依据：
+    - ret 包含 SUCCESS
+    - data.module.success 为 true
+    - failOrderInfos 为空
+    - successOrderIds 包含目标订单ID
+    """
+    api_result = {
+        "success": True,
+        "data": {
+            "module": {
+                "success": "true",
+                "successOrderIds": ["3313120441127005861"],
+                "failOrderInfos": [],
+            }
+        },
+    }
+    ok, msg, _ = judge_create_rate_success(api_result, "3313120441127005861")
+    assert ok is True
+    assert "成功" in msg
+
+
+def test_judge_create_rate_success_for_bad():
+    """差评 rate=0 提交成功响应应判定为成功（需求第三节、第十五节）。
+
+    真实请求依据：
+    - ret 包含 SUCCESS
+    - data.module.success 为 true
+    - failOrderInfos 为空
+    - successOrderIds 包含目标订单ID
+    不得因 rate=0 提前拒绝。
+    """
+    api_result = {
+        "success": True,
+        "data": {
+            "module": {
+                "success": "true",
+                "successOrderIds": ["3313120441127005861"],
+                "failOrderInfos": [],
+            }
+        },
+    }
+    ok, msg, _ = judge_create_rate_success(api_result, "3313120441127005861")
+    assert ok is True
+    assert "成功" in msg
+
+
+def test_judge_create_rate_success_for_neutral_with_integer_success():
+    """中评成功响应中 module.success 为布尔 true 时也应判定成功。"""
+    api_result = {
+        "success": True,
+        "data": {
+            "module": {
+                "success": True,  # 布尔而非字符串
+                "successOrderIds": ["order-neutral"],
+                "failOrderInfos": [],
+            }
+        },
+    }
+    ok, _, _ = judge_create_rate_success(api_result, "order-neutral")
+    assert ok is True
+
+
+def test_judge_create_rate_failure_does_not_change_local_level():
+    """中评/差评提交失败时不应改变本地等级（需求第十八节）。
+
+    此测试验证 judge_create_rate_success 在失败时返回 False，
+    上层 create_rate 会据此保留本地状态（不标记为已评价）。
+    """
+    # module.success=false 表示提交失败
+    api_result = {
+        "success": True,
+        "data": {
+            "module": {
+                "success": "false",
+                "successOrderIds": [],
+                "failOrderInfos": [
+                    {"orderId": "3313120441127005861", "failReason": "订单已评价"}
+                ],
+            }
+        },
+    }
+    ok, msg, _ = judge_create_rate_success(api_result, "3313120441127005861")
+    assert ok is False
+    # 失败原因应包含具体信息
+    assert "已评价" in msg or "失败" in msg
+
+
+# ============================================================
+# 创建评价等级校验（需求第五节、第六节）
+# ============================================================
+
+def test_invalid_rate_values_not_in_confirmed_levels():
+    """非法评价值不应通过白名单校验（需求第五节）。
+
+    允许的创建评价值只能是 1、-1、0。
+    """
+    invalid_values = [2, -2, 3, -3, 100, -100]
+    for v in invalid_values:
+        assert v not in CONFIRMED_RATE_LEVELS, f"{v} 不应在白名单中"
+
+
+def test_create_rate_rejects_invalid_level_early():
+    """create_rate 应在数据库访问前拒绝非法评价等级（需求第五节、第六节）。
+
+    通过 asyncio.run 调用，传入 None 作为 db（因非法等级会提前返回，
+    不会触及数据库访问）。
+    """
+    import asyncio
+
+    async def _run():
+        # 非法等级 2 应被拒绝（不触及 db）
+        result = await rate_service.create_rate(
+            db=None, account_id=1, order_id="order-1",
+            rate=2, feedback="测试", anonymous=False, tenant_id=1,
+        )
+        return result
+
+    result = asyncio.run(_run())
+    assert result["ok"] is False
+    assert "不合法" in result["error"] or "仅支持" in result["error"]
+
+
+def test_create_rate_accepts_all_three_levels_early_validation(monkeypatch):
+    """create_rate 对 1/-1/0 均通过等级校验（需求第五节、第六节）。
+
+    使用 monkeypatch 替换 verify_fish_shop_account，使其返回"非鱼小铺账号"，
+    这样函数会在等级校验之后、数据库访问之前被拦截，从而能区分
+    "等级校验失败"与"数据库访问失败"。
+    """
+    import asyncio
+
+    async def _fake_verify(db, account_id, tenant_id):
+        # 返回 (is_fish_shop=False, auth=None, err_msg) 以阻断后续 db 访问
+        return False, None, "测试桩：账号不是鱼小铺"
+
+    monkeypatch.setattr(rate_service, "verify_fish_shop_account", _fake_verify)
+
+    async def _run(rate):
+        result = await rate_service.create_rate(
+            db=None, account_id=1, order_id="order-1",
+            rate=rate, feedback="测试", anonymous=False, tenant_id=1,
+        )
+        return result
+
+    for rate in [1, -1, 0]:
+        result = asyncio.run(_run(rate))
+        # 应该被鱼小铺校验拦截，而不是被等级校验拦截
+        assert result["ok"] is False
+        assert "不合法" not in result["error"], f"rate={rate} 不应被等级校验拒绝"
+        assert "仅支持" not in result["error"], f"rate={rate} 不应被等级校验拒绝"
+        assert "鱼小铺" in result["error"], f"rate={rate} 应被鱼小铺校验拦截"
+
+
+# ============================================================
+# 提交参数构造（需求第五节）
+# ============================================================
+
+def test_call_create_rate_builds_correct_payload_for_good():
+    """好评提交参数应为 rate=1（需求第五节）。
+
+    构造请求体（需求第二节确认）：
+        {
+          "tradeIdList": ["orderId"],
+          "imageUrls": [],
+          "rate": 1,
+          "feedback": "...",
+          "anonymous": false
+        }
+    不得使用字符串标签（如 "good"）直接提交。
+    """
+    captured = {}
+
+    def _fake_post(account_id, cookie_str, api, data_str, timeout):
+        import json as _json
+        captured["api"] = api
+        captured["data"] = _json.loads(data_str)
+        return {"success": True, "data": {"module": {"success": "true"}}}
+
+    monkeypatch_target = "app.services.rate_service._post_mtop_with_token_retry"
+    import app.services.rate_service as _svc
+
+    original = _svc._post_mtop_with_token_retry
+    _svc._post_mtop_with_token_retry = _fake_post
+    original_get_auth = _svc._get_account_auth
+    original_decrypt = _svc._decrypt_value
+    _svc._get_account_auth = lambda aid: {"encrypted_cookie": "enc"}
+    _svc._decrypt_value = lambda v: "cookie-str"
+    try:
+        result = rate_service.call_create_rate(
+            account_id=1, order_id="order-1", rate=1,
+            feedback="好评内容", anonymous=False,
+        )
+    finally:
+        _svc._post_mtop_with_token_retry = original
+        _svc._get_account_auth = original_get_auth
+        _svc._decrypt_value = original_decrypt
+
+    assert result["success"] is True
+    assert captured["api"] == RATE_CREATE_API
+    assert captured["data"]["rate"] == 1
+    assert captured["data"]["rate"] != "good"
+    assert captured["data"]["tradeIdList"] == ["order-1"]
+    assert captured["data"]["imageUrls"] == []
+    assert captured["data"]["feedback"] == "好评内容"
+    assert captured["data"]["anonymous"] is False
+
+
+def test_call_create_rate_builds_correct_payload_for_neutral():
+    """中评提交参数应为 rate=-1（需求第二节、第五节）。
+
+    真实请求依据（需求第二节）：
+        {
+          "tradeIdList": ["目标订单ID"],
+          "imageUrls": [],
+          "rate": -1,
+          "feedback": "用户输入的评价内容",
+          "anonymous": false
+        }
+    不得使用 "normal" 等字符串标签直接提交。
+    """
+    captured = {}
+
+    def _fake_post(account_id, cookie_str, api, data_str, timeout):
+        import json as _json
+        captured["data"] = _json.loads(data_str)
+        return {"success": True, "data": {"module": {"success": "true"}}}
+
+    import app.services.rate_service as _svc
+    original = _svc._post_mtop_with_token_retry
+    original_get_auth = _svc._get_account_auth
+    original_decrypt = _svc._decrypt_value
+    _svc._post_mtop_with_token_retry = _fake_post
+    _svc._get_account_auth = lambda aid: {"encrypted_cookie": "enc"}
+    _svc._decrypt_value = lambda v: "cookie-str"
+    try:
+        result = rate_service.call_create_rate(
+            account_id=1, order_id="order-neutral", rate=-1,
+            feedback="中评内容", anonymous=False,
+        )
+    finally:
+        _svc._post_mtop_with_token_retry = original
+        _svc._get_account_auth = original_get_auth
+        _svc._decrypt_value = original_decrypt
+
+    assert result["success"] is True
+    assert captured["data"]["rate"] == -1
+    assert captured["data"]["rate"] != "normal"
+    assert captured["data"]["tradeIdList"] == ["order-neutral"]
+
+
+def test_call_create_rate_builds_correct_payload_for_bad():
+    """差评提交参数应为 rate=0（需求第三节、第五节）。
+
+    真实请求依据（需求第三节）：
+        {
+          "tradeIdList": ["目标订单ID"],
+          "imageUrls": [],
+          "rate": 0,
+          "feedback": "用户输入的评价内容",
+          "anonymous": false
+        }
+    不得使用 "bad" 等字符串标签直接提交。
+    不得因 rate=0 被替换为 null/未选择。
+    """
+    captured = {}
+
+    def _fake_post(account_id, cookie_str, api, data_str, timeout):
+        import json as _json
+        captured["data"] = _json.loads(data_str)
+        return {"success": True, "data": {"module": {"success": "true"}}}
+
+    import app.services.rate_service as _svc
+    original = _svc._post_mtop_with_token_retry
+    original_get_auth = _svc._get_account_auth
+    original_decrypt = _svc._decrypt_value
+    _svc._post_mtop_with_token_retry = _fake_post
+    _svc._get_account_auth = lambda aid: {"encrypted_cookie": "enc"}
+    _svc._decrypt_value = lambda v: "cookie-str"
+    try:
+        result = rate_service.call_create_rate(
+            account_id=1, order_id="order-bad", rate=0,
+            feedback="差评内容", anonymous=False,
+        )
+    finally:
+        _svc._post_mtop_with_token_retry = original
+        _svc._get_account_auth = original_get_auth
+        _svc._decrypt_value = original_decrypt
+
+    assert result["success"] is True
+    # 关键：rate=0 必须原样出现在请求体中，不能被替换为 null/未选择
+    assert captured["data"]["rate"] == 0
+    assert captured["data"]["rate"] is not None
+    assert captured["data"]["rate"] != "bad"
+    assert captured["data"]["tradeIdList"] == ["order-bad"]
+
+
+def test_call_create_rate_preserves_anonymous_flag():
+    """anonymous 字段必须使用真实布尔值（需求第五节）。"""
+    captured = {}
+
+    def _fake_post(account_id, cookie_str, api, data_str, timeout):
+        import json as _json
+        captured["data"] = _json.loads(data_str)
+        return {"success": True, "data": {"module": {"success": "true"}}}
+
+    import app.services.rate_service as _svc
+    original = _svc._post_mtop_with_token_retry
+    original_get_auth = _svc._get_account_auth
+    original_decrypt = _svc._decrypt_value
+    _svc._post_mtop_with_token_retry = _fake_post
+    _svc._get_account_auth = lambda aid: {"encrypted_cookie": "enc"}
+    _svc._decrypt_value = lambda v: "cookie-str"
+    try:
+        # 匿名
+        rate_service.call_create_rate(
+            account_id=1, order_id="o1", rate=1,
+            feedback="x", anonymous=True,
+        )
+        anon_true = captured["data"]["anonymous"]
+        # 不匿名
+        rate_service.call_create_rate(
+            account_id=1, order_id="o1", rate=1,
+            feedback="x", anonymous=False,
+        )
+        anon_false = captured["data"]["anonymous"]
+    finally:
+        _svc._post_mtop_with_token_retry = original
+        _svc._get_account_auth = original_get_auth
+        _svc._decrypt_value = original_decrypt
+
+    assert anon_true is True
+    assert anon_false is False
+
+
+# ============================================================
+# 数据库存储类型验证（需求第十六节）
+# ============================================================
+
+def test_seller_rate_level_stored_as_string():
+    """seller_rate_level 字段存储为字符串，可无损保存 1/-1/0（需求第十六节）。
+
+    通过 _extract_rate_fields 提取后，seller_rate_level 始终是字符串：
+    - rate=1  → "1"
+    - rate=-1 → "-1"
+    - rate=0  → "0"
+
+    不得将 0 转换为空、-1 转换为未映射、rate 保存为布尔值。
+    """
+    # 好评
+    raw_good = _build_sample_rate_item(
+        has_seller_rate=True, seller_rate_str="true", seller_rate_value="1"
+    )
+    result_good = _extract_rate_fields(raw_good, account_id=1, tenant_id=1)
+    assert result_good["seller_rate_level"] == "1"
+    assert isinstance(result_good["seller_rate_level"], str)
+
+    # 中评
+    raw_neutral = _build_sample_rate_item(
+        has_seller_rate=True, seller_rate_str="true", seller_rate_value="-1"
+    )
+    result_neutral = _extract_rate_fields(raw_neutral, account_id=1, tenant_id=1)
+    assert result_neutral["seller_rate_level"] == "-1"
+    assert isinstance(result_neutral["seller_rate_level"], str)
+
+    # 差评
+    raw_bad = _build_sample_rate_item(
+        has_seller_rate=True, seller_rate_str="true", seller_rate_value="0"
+    )
+    result_bad = _extract_rate_fields(raw_bad, account_id=1, tenant_id=1)
+    assert result_bad["seller_rate_level"] == "0"
+    assert isinstance(result_bad["seller_rate_level"], str)
+    # 关键：0 不得被转换为 None/空
+    assert result_bad["seller_rate_level"] is not None
+    assert result_bad["seller_rate_level"] != ""
+
+
+def test_seller_rate_level_preserves_integer_input():
+    """整数形式的 rate 也能正确转为字符串存储（需求第七节、第十六节）。"""
+    # 整数 1
+    raw = _build_sample_rate_item(
+        has_seller_rate=True, seller_rate_str="true", seller_rate_value=1
+    )
+    result = _extract_rate_fields(raw, account_id=1, tenant_id=1)
+    assert result["seller_rate_level"] == "1"
+
+    # 整数 -1
+    raw = _build_sample_rate_item(
+        has_seller_rate=True, seller_rate_str="true", seller_rate_value=-1
+    )
+    result = _extract_rate_fields(raw, account_id=1, tenant_id=1)
+    assert result["seller_rate_level"] == "-1"
+
+    # 整数 0
+    raw = _build_sample_rate_item(
+        has_seller_rate=True, seller_rate_str="true", seller_rate_value=0
+    )
+    result = _extract_rate_fields(raw, account_id=1, tenant_id=1)
+    assert result["seller_rate_level"] == "0"
+    # 关键：0 不得丢失
+    assert result["seller_rate_level"] is not None

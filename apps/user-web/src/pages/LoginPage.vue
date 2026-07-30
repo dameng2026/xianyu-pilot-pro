@@ -308,10 +308,23 @@
         </div>
       </template>
 
+      <label class="mobile-auth-agreement">
+        <input v-model="agreed" type="checkbox" :disabled="!legalDocumentsAvailable" />
+        <span>
+          我已阅读并同意
+          <button type="button" class="mobile-auth-text-link" :disabled="!legalConfig.termsUrl" @click="openDoc('用户协议')">《用户协议》</button>
+          和
+          <button type="button" class="mobile-auth-text-link" :disabled="!legalConfig.privacyUrl" @click="openDoc('隐私政策')">《隐私政策》</button>
+        </span>
+      </label>
+      <p v-if="!legalDocumentsAvailable" class="mobile-auth-legal-unavailable" role="status">
+        用户协议或隐私政策链接未配置，当前无法完成登录。
+      </p>
+
       <button
         class="mobile-auth-primary-button"
         type="submit"
-        :disabled="loading || authCapabilityLoading"
+        :disabled="loading || authCapabilityLoading || !legalDocumentsAvailable"
       >
         {{ loading ? '登录中...' : '立即登录' }}
       </button>
@@ -336,6 +349,8 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { login, sendEmailCode } from '../api/auth.js'
 import AuthIcon from '../components/auth/AuthIcon.vue'
 import AuthCaptcha from '../components/auth/AuthCaptcha.vue'
+// 懒加载登录页专属样式，避免首屏加载
+import('../auth-pages.css')
 import AuthShell from '../components/auth/AuthShell.vue'
 import MobileAuthShell from '../components/auth/MobileAuthShell.vue'
 import MobileCaptcha from '../components/auth/MobileCaptcha.vue'
@@ -361,8 +376,8 @@ const activeLoginCapability = computed(() => tab.value === 'email'
   : passwordLoginCapability.value)
 
 const tab = ref('password')
-const username = ref('')
-const password = ref('')
+const username = ref(import.meta.env.DEV ? 'admin' : '')
+const password = ref(import.meta.env.DEV ? '123456' : '')
 const email = ref('')
 const emailCode = ref('')
 const showPwd = ref(false)

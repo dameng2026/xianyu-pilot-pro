@@ -30,6 +30,9 @@ public final class XianyuApiUtils {
             .connectTimeout(Duration.ofSeconds(10))
             .build();
 
+    /** 闲鱼 API 请求超时：避免 hang 住导致线程无限阻塞 */
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(15);
+
     private static final String APP_KEY = "34839810";
     private static final String H5_API_BASE = "https://h5api.m.goofish.com/h5";
     private static final String PAGE_HEAD_API = "mtop.idle.web.user.page.head";
@@ -102,7 +105,7 @@ public final class XianyuApiUtils {
 
             String formBody = "data=" + URLEncoder.encode(dataJson, StandardCharsets.UTF_8);
 
-            HttpRequest request = HttpRequest.newBuilder()
+            HttpRequest request = HttpRequest.newBuilder().timeout(REQUEST_TIMEOUT)
                     .uri(URI.create(url))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .header("User-Agent", UA)
@@ -187,7 +190,7 @@ public final class XianyuApiUtils {
 
             String formBody = "data=" + URLEncoder.encode(dataJson, StandardCharsets.UTF_8);
 
-            HttpRequest request = HttpRequest.newBuilder()
+            HttpRequest request = HttpRequest.newBuilder().timeout(REQUEST_TIMEOUT)
                     .uri(URI.create(url))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .header("User-Agent", UA)
@@ -303,7 +306,7 @@ public final class XianyuApiUtils {
 
         try {
             // Step 1: GET 获取初始 Cookie
-            HttpRequest getReq = HttpRequest.newBuilder()
+            HttpRequest getReq = HttpRequest.newBuilder().timeout(REQUEST_TIMEOUT)
                     .uri(URI.create(postUrl))
                     .header("User-Agent", UA)
                     .GET()
@@ -318,7 +321,7 @@ public final class XianyuApiUtils {
                     + "&v=1.0&type=originaljson&dataType=json&timeout=20000"
                     + "&api=" + REFRESH_API + "&data=" + URLEncoder.encode(dataStr, StandardCharsets.UTF_8);
 
-            HttpRequest postReq1 = HttpRequest.newBuilder()
+            HttpRequest postReq1 = HttpRequest.newBuilder().timeout(REQUEST_TIMEOUT)
                     .uri(URI.create(postUrl))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .header("User-Agent", UA)
@@ -349,7 +352,7 @@ public final class XianyuApiUtils {
                     + "&v=1.0&type=originaljson&dataType=json&timeout=20000"
                     + "&api=" + REFRESH_API + "&data=" + URLEncoder.encode(dataStr, StandardCharsets.UTF_8);
 
-            HttpRequest postReq2 = HttpRequest.newBuilder()
+            HttpRequest postReq2 = HttpRequest.newBuilder().timeout(REQUEST_TIMEOUT)
                     .uri(URI.create(postUrl))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .header("User-Agent", UA)

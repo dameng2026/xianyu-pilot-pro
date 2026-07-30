@@ -369,6 +369,8 @@ public class OpenSourceContentService {
 
         result.put("communityCards", List.of(
                 communityCard("交流群", "微信交流群", "用于版本通知、使用答疑、投放交流与功能建议收集。", "GROUP", "待后台配置微信群二维码", "blue", "toast", "配置后可扫码", "请在商业版后台配置交流群二维码"),
+                communityCard("QQ群", "QQ群聊二维码", "用于版本通知、使用答疑与功能建议收集。", "QQ", "待后台配置QQ群聊二维码", "violet", "toast", "配置后可扫码", "请在商业版后台配置QQ群聊二维码"),
+                communityCard("微信客服", "微信客服二维码", "用于一对一咨询、技术支持与商务合作。", "KEFU", "待后台配置微信客服二维码", "green", "toast", "配置后可扫码", "请在商业版后台配置微信客服二维码"),
                 communityCard("赞助支持", "项目赞助码", "用于支持项目维护、桥接联调与后续版本更新。", "SPONSOR", "待后台配置赞助二维码", "orange", "toast", "配置后可扫码", "请在商业版后台配置赞助二维码"),
                 contactCard()
         ));

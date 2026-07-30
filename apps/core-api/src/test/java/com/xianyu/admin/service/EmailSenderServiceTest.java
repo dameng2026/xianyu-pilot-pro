@@ -18,8 +18,11 @@ class EmailSenderServiceTest {
     @Mock
     NotificationConfigService notificationConfigService;
 
+    @Mock
+    TencentSesSender tencentSesSender;
+
     private EmailSenderService service() {
-        return new EmailSenderService(notificationConfigService);
+        return new EmailSenderService(notificationConfigService, tencentSesSender);
     }
 
     @Test

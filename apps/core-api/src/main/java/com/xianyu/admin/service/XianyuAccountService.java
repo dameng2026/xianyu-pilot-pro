@@ -819,6 +819,29 @@ public class XianyuAccountService {
         return detail(tenantId, accountId);
     }
 
+    /**
+     * 获取账号当前 Cookie 明文（供前台"编辑 Cookie"弹窗回填展示，便于复制或微调）。
+     * 仅返回当前账号所属租户的 Cookie，未配置时返回 cookie=null。
+     */
+    public Map<String, Object> getCurrentCookie(Long tenantId, Long accountId) {
+        requireAccount(tenantId, accountId);
+        XianyuAccountAuth auth = authMapper.findByAccountId(tenantId, accountId);
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("accountId", accountId);
+        String cookie = null;
+        if (auth != null && auth.getEncryptedCookie() != null && !auth.getEncryptedCookie().isBlank()) {
+            try {
+                cookie = cookieCryptoService.decryptIfNeeded(auth.getEncryptedCookie());
+            } catch (Exception e) {
+                log.warn("解密账号 Cookie 失败: accountId={}, err={}", accountId, e.getMessage());
+                cookie = null;
+            }
+        }
+        result.put("cookie", cookie);
+        result.put("hasCookie", cookie != null && !cookie.isBlank());
+        return result;
+    }
+
     public Map<String, Object> getLoginCredentialConfig(Long tenantId, Long accountId) {
         requireAccount(tenantId, accountId);
         XianyuAccountAuth auth = authMapper.findByAccountId(tenantId, accountId);

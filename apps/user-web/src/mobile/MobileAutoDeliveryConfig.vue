@@ -571,7 +571,7 @@ onMounted(() => {
   color: var(--m-color-text-inverse);
   border: none;
   padding: var(--m-space-2) var(--m-space-5);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   font-size: var(--m-font-size-body-sm);
   font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
@@ -579,11 +579,11 @@ onMounted(() => {
 
 .m-adc-goods {
   background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-lg);
+  border-radius: var(--m-radius-xl);
   padding: var(--m-space-3);
   display: flex;
   gap: var(--m-space-3);
-  border: 1px solid var(--m-color-border-light);
+  box-shadow: var(--m-shadow-xs);
   margin-bottom: var(--m-space-3);
 }
 .m-adc-goods-img-wrap {
@@ -709,14 +709,14 @@ onMounted(() => {
 .m-adc-tab.active {
   background: var(--m-color-bg-card);
   color: var(--m-color-primary);
-  box-shadow: var(--m-shadow-card);
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-adc-form {
   background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-lg);
+  border-radius: var(--m-radius-xl);
   padding: var(--m-space-1) var(--m-space-3);
-  border: 1px solid var(--m-color-border-light);
+  box-shadow: var(--m-shadow-xs);
   margin-bottom: var(--m-space-3);
 }
 .m-adc-row {
@@ -747,7 +747,7 @@ onMounted(() => {
   width: 100%;
   height: 42px;
   border: 1px solid var(--m-color-border);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   padding: 0 var(--m-space-3);
   font-size: var(--m-font-size-body);
   color: var(--m-color-text-primary);
@@ -762,7 +762,7 @@ onMounted(() => {
 .m-adc-textarea {
   width: 100%;
   border: 1px solid var(--m-color-border);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   padding: var(--m-space-2) var(--m-space-3);
   font-size: var(--m-font-size-body);
   color: var(--m-color-text-primary);
@@ -797,7 +797,7 @@ onMounted(() => {
 .m-adc-seg-btn.active {
   background: var(--m-color-bg-card);
   color: var(--m-color-primary);
-  box-shadow: var(--m-shadow-card);
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-adc-switch {
@@ -823,7 +823,7 @@ onMounted(() => {
   height: 20px;
   border-radius: var(--m-radius-circle);
   background: var(--m-color-bg-card);
-  box-shadow: var(--m-shadow-card);
+  box-shadow: var(--m-shadow-xs);
   transition: transform 0.2s;
 }
 .m-adc-switch-on .m-adc-switch-knob {
@@ -862,7 +862,7 @@ onMounted(() => {
   border: none;
   color: var(--m-color-primary);
   padding: var(--m-space-1) var(--m-space-3);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   font-size: var(--m-font-size-caption);
   font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
@@ -878,7 +878,7 @@ onMounted(() => {
   padding: var(--m-space-1) 0 var(--m-space-4);
   position: sticky;
   bottom: 0;
-  background: linear-gradient(180deg, rgba(245, 246, 247, 0) 0%, var(--m-color-bg-page) 30%);
+  background: var(--m-color-bg-page);
   padding-top: var(--m-space-3);
   margin-top: -10px;
 }
@@ -889,7 +889,7 @@ onMounted(() => {
   justify-content: center;
   gap: var(--m-space-1);
   border: none;
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   font-size: var(--m-font-size-body);
   font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
@@ -901,7 +901,7 @@ onMounted(() => {
 .m-adc-btn-primary {
   background: var(--m-color-primary);
   color: var(--m-color-text-inverse);
-  box-shadow: var(--m-shadow-fab);
+  box-shadow: var(--m-shadow-xs);
 }
 .m-adc-btn-primary:disabled {
   opacity: 0.5;
@@ -910,7 +910,7 @@ onMounted(() => {
 .m-adc-btn-outline {
   background: var(--m-color-bg-card);
   color: var(--m-color-text-secondary);
-  border: 1px solid var(--m-color-border);
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-adc-safe-bottom {
@@ -1001,9 +1001,9 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: var(--m-space-3);
-  border: 1px solid var(--m-color-border-light);
   background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
+  box-shadow: var(--m-shadow-xs);
   margin-bottom: var(--m-space-2);
   cursor: pointer;
   text-align: left;

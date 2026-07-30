@@ -5,6 +5,7 @@ import com.xianyu.admin.common.Result;
 import com.xianyu.admin.security.TenantContext;
 import com.xianyu.admin.security.UserContext;
 import com.xianyu.admin.service.SystemConfigService;
+import com.xianyu.admin.service.NotificationConfigService;
 import com.xianyu.admin.service.OutboundNotificationPolicy;
 import com.xianyu.admin.service.CookieCryptoService;
 import org.junit.jupiter.api.AfterEach;
@@ -37,6 +38,9 @@ class UserUtilityControllerTest {
     private SystemConfigService systemConfigService;
 
     @Mock
+    private NotificationConfigService notificationConfigService;
+
+    @Mock
     private JdbcTemplate jdbcTemplate;
 
     @Mock
@@ -48,6 +52,7 @@ class UserUtilityControllerTest {
     void setUp() {
         controller = new UserUtilityController(
                 systemConfigService,
+                notificationConfigService,
                 jdbcTemplate,
                 outboundNotificationPolicy,
                 new CookieCryptoService("test-notification-secret-longer-than-thirty-two-characters")

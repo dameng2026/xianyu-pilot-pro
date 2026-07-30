@@ -17,6 +17,7 @@ from .routes import fish_shop as fish_shop_module
 from .routes import refunds as refunds_module
 from .routes import rates as rates_module
 from .routes import kb_learning as kb_learning_module
+from .routes import fish_shop_data as fish_shop_data_module
 
 from fastapi import APIRouter
 
@@ -69,3 +70,4 @@ api_router.include_router(fish_shop_module.router, tags=["fishShop"])
 api_router.include_router(refunds_module.router, tags=["refunds"])
 api_router.include_router(rates_module.router, tags=["rates"])
 api_router.include_router(kb_learning_module.router, tags=["kbLearning"])
+api_router.include_router(fish_shop_data_module.router, tags=["fishShopData"])

@@ -24,7 +24,7 @@ import java.util.Set;
 @Order(4)
 public class AdminRbacFilter extends OncePerRequestFilter {
     private static final Set<String> SENSITIVE_MODULES = Set.of(
-            "users", "plans", "licenses", "model-config-general", "model-config-chat",
+            "users", "plans", "model-config-general", "model-config-chat",
             "model-config-image", "model-config-image-2", "model-config-image-3",
             "model-config-image-prompts", "notify-channels", "system-settings",
             "xianyu-accounts"
@@ -69,7 +69,8 @@ public class AdminRbacFilter extends OncePerRequestFilter {
                 || hasPathPrefix(path, "/admin-api/admin/users")
                 || hasPathPrefix(path, "/admin-api/admin/tenants")
                 || hasPathPrefix(path, "/admin-api/promotion")
-                || hasPathPrefix(path, "/admin-api/learned-kb")) {
+                || hasPathPrefix(path, "/admin-api/learned-kb")
+                || hasPathPrefix(path, "/admin-api/growth")) {
             return true;
         }
         if (!path.startsWith(MODULE_PREFIX)) {

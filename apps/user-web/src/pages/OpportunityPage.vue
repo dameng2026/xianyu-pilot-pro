@@ -2033,7 +2033,8 @@ function collectDraftState() {
 }
 
 /** 将当前状态保存为草稿（限 MAX_DRAFTS 个） */
-function saveDraft() {
+async function saveDraft() {
+  if (!await guardFeatureAction()) return
   if (!selectedItem.value) return // 未选择商品时不保存
   const draft = { id: Date.now(), ...collectDraftState() }
   let list

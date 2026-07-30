@@ -1,80 +1,52 @@
 <template>
   <div class="data-page">
-    <div class="data-hero">
-      <div class="hero-glow glow-blue"></div>
-      <div class="hero-glow glow-purple"></div>
-      <div class="hero-glow glow-accent"></div>
-      <div class="hero-header">
-        <div class="hero-title-group">
-          <div class="hero-badge">
-            <span class="hero-dot"></span>
-            <span>实时数据</span>
-          </div>
-          <h2>数据面板</h2>
-          <p>{{ scopeLabel }} · {{ dateLabel }} · 更新于 {{ updatedAt }}</p>
-        </div>
-        <div class="hero-controls">
-          <div class="control-item">
-            <label>账号</label>
-            <select
-              v-model="accountId"
-              class="hero-select"
-              :disabled="accountsLoading"
-            >
-              <option value="all">全部账号</option>
-              <option v-for="acc in accounts" :key="acc.id" :value="acc.id">
-                {{ formatAccountLabel(acc) }}
-              </option>
-            </select>
-          </div>
-          <div class="control-item">
-            <label>日期</label>
-            <input v-model="date" class="hero-input" type="date">
-          </div>
-          <button class="refresh-btn" :disabled="loading" @click="load">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" :class="{ 'spin': loading }">
-              <path d="M21 12a9 9 0 11-6.219-8.56"/><polyline points="21 3 21 9 15 9"/>
-            </svg>
-            {{ loading ? '加载中' : '刷新' }}
-          </button>
-        </div>
+    <div class="page-title-section">
+      <div class="header-badge">
+        <span class="header-dot"></span>
+        <span>实时数据</span>
       </div>
+      <h1 class="page-title">数据面板</h1>
+      <p class="page-subtitle">
+        <span class="meta-val">{{ scopeLabel }}</span>
+        <span class="meta-sep">·</span>
+        <span class="meta-key">数据日期</span>
+        <span class="meta-val">{{ dateLabel }}</span>
+        <span class="meta-sep">·</span>
+        <span class="meta-key">更新于</span>
+        <span class="meta-val">{{ updatedAt }}</span>
+      </p>
     </div>
 
-    <div v-if="summaryError || trendError" class="error-banner">
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-      {{ summaryError || trendError }}
-    </div>
-
-    <div class="metrics-strip">
-      <div v-for="(m, i) in metrics" :key="m.key" class="metric-card" :style="{ '--delay': i * 60 + 'ms', '--accent': m.color }">
-        <div class="metric-icon-wrap">
-          <div class="metric-icon-bg"></div>
-          <Icon :name="m.icon" class="metric-icon" />
-        </div>
-        <div class="metric-body">
-          <span class="metric-label">{{ m.title }}</span>
-          <strong class="metric-value" :class="{ 'metric-loading': m.value === null }">{{ m.display }}</strong>
-          <span class="metric-sub">{{ m.sub }}</span>
-        </div>
-        <div class="metric-spark" v-if="m.spark && m.spark.length > 1">
-          <svg viewBox="0 0 100 36" preserveAspectRatio="none" class="spark-svg">
-            <polyline :points="m.sparkPoints" fill="none" :stroke="m.color" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            <polygon :points="m.sparkFillPoints" :fill="m.color" opacity="0.12"/>
-          </svg>
-        </div>
+    <div class="filter-card">
+      <div class="filter-info">
+        <span class="filter-block-name">数据面板</span>
+        <span class="filter-sep">·</span>
+        <span class="filter-label">账号</span>
+        <span class="filter-value">{{ scopeLabel }}</span>
+        <span class="filter-sep">·</span>
+        <span class="filter-label">更新于</span>
+        <span class="filter-value">{{ updatedAt }}</span>
       </div>
-    </div>
-
-    <div class="chart-row chart-row-main">
-      <CardPanel class="chart-panel trend-panel" body-padding="0">
-        <template #title>
-          <div class="panel-title-row">
-            <span class="panel-title-text">业务趋势</span>
-            <span class="panel-title-desc">近 {{ trendDays }} 天多维度走势</span>
-          </div>
-        </template>
-        <template #action>
+      <div class="filter-controls">
+        <div class="control-item">
+          <label>账号</label>
+          <select
+            v-model="accountId"
+            class="form-select"
+            :disabled="accountsLoading"
+          >
+            <option value="all">全部账号</option>
+            <option v-for="acc in accounts" :key="acc.id" :value="acc.id">
+              {{ formatAccountLabel(acc) }}
+            </option>
+          </select>
+        </div>
+        <div class="control-item">
+          <label>日期</label>
+          <input v-model="date" class="form-input" type="date">
+        </div>
+        <div class="control-item">
+          <label>趋势范围</label>
           <div class="range-pills">
             <button
               v-for="opt in trendRangeOptions"
@@ -86,131 +58,262 @@
               {{ opt.label }}
             </button>
           </div>
-        </template>
-        <div v-if="trendAvailable" ref="trendChartEl" class="echart-box trend-box"></div>
-        <EmptyState v-else icon="⚠" title="趋势不可用" :description="trendError || '正在加载趋势数据'" />
-      </CardPanel>
-    </div>
-
-    <div class="chart-row chart-row-three">
-      <CardPanel class="chart-panel" body-padding="0">
-        <template #title>
-          <div class="panel-title-row">
-            <span class="panel-title-text">发货分布</span>
-          </div>
-        </template>
-        <div v-if="summaryAvailable && totalDelivery > 0" ref="deliveryPieEl" class="echart-box pie-box"></div>
-        <EmptyState v-else icon="⚠" title="暂无数据" :description="summaryError || '暂无发货数据'" />
-      </CardPanel>
-      <CardPanel class="chart-panel" body-padding="0">
-        <template #title>
-          <div class="panel-title-row">
-            <span class="panel-title-text">核心指标对比</span>
-          </div>
-        </template>
-        <div v-if="summaryAvailable" ref="replyBarEl" class="echart-box bar-box"></div>
-        <EmptyState v-else icon="⚠" title="暂无数据" :description="summaryError || '正在加载汇总数据'" />
-      </CardPanel>
-      <CardPanel class="chart-panel overview-panel">
-        <template #title>
-          <div class="panel-title-row">
-            <span class="panel-title-text">运营概览</span>
-          </div>
-        </template>
-        <div v-if="summaryAvailable" class="overview-grid">
-          <div v-for="item in overviewItems" :key="item.label" class="overview-item">
-            <div class="overview-label">{{ item.label }}</div>
-            <div class="overview-value" :style="{ color: item.color }">{{ item.value }}</div>
-            <div class="overview-bar"><div class="overview-bar-fill" :style="{ width: item.pct + '%', background: item.color }"></div></div>
-          </div>
         </div>
-        <EmptyState v-else icon="⚠" title="暂无数据" :description="summaryError || '正在加载汇总数据'" />
-      </CardPanel>
-    </div>
-
-    <CardPanel class="table-panel" body-padding="0">
-      <template #title>
-        <div class="panel-title-row">
-          <span class="panel-title-text">趋势明细</span>
-          <span class="panel-title-desc">按日展示各项业务指标</span>
-        </div>
-      </template>
-      <template #action>
-        <button v-if="trendAvailable" type="button" class="export-btn" @click="exportTrendCsv">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          导出 CSV
+        <button class="refresh-btn" :disabled="loading" @click="load">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" :class="{ 'spin': loading }">
+            <path d="M21 12a9 9 0 11-6.219-8.56"/><polyline points="21 3 21 9 15 9"/>
+          </svg>
+          {{ loading ? '加载中' : '刷新' }}
         </button>
-      </template>
-      <div v-if="trendAvailable" class="table-wrap">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>日期</th>
-              <th>订单数</th>
-              <th>消息数</th>
-              <th>发货合计</th>
-              <th>发货成功</th>
-              <th>发货失败</th>
-              <th>AI 回复</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(row, idx) in trendRows" :key="row.date" :class="{ 'row-alt': idx % 2 === 1 }">
-              <td class="td-date">{{ row.date }}</td>
-              <td class="td-num"><span class="num-pill num-blue">{{ row.orderCount }}</span></td>
-              <td class="td-num"><span class="num-pill num-cyan">{{ row.messageCount }}</span></td>
-              <td class="td-num">{{ row.deliveryTotal }}</td>
-              <td class="td-num"><span v-if="row.deliverySuccess > 0" class="num-dot dot-green"></span>{{ row.deliverySuccess }}</td>
-              <td class="td-num"><span v-if="row.deliveryFail > 0" class="num-dot dot-red"></span>{{ row.deliveryFail }}</td>
-              <td class="td-num"><span v-if="row.aiReply > 0" class="num-pill num-purple">{{ row.aiReply }}</span><span v-else class="num-muted">0</span></td>
-            </tr>
-          </tbody>
-        </table>
       </div>
-      <EmptyState v-else icon="⚠" title="趋势明细不可用" :description="trendError || '正在加载趋势数据'" />
-    </CardPanel>
-
-    <div class="bottom-grid">
-      <CardPanel class="chart-panel events-panel" body-padding="0">
-        <template #title>
-          <div class="panel-title-row">
-            <span class="panel-title-text">最新实时事件</span>
-            <span class="live-dot" :class="sseStatus"><span class="live-pulse"></span>{{ sseStatus === 'connected' ? '实时连接' : '连接离线' }}</span>
-          </div>
-        </template>
-        <div v-if="logs.length > 0" class="event-list">
-          <div v-for="(n, idx) in logs" :key="n.t + n.time + idx" class="event-item">
-            <div class="event-dot"></div>
-            <div class="event-content">
-              <b>{{ n.t }}</b>
-              <p>{{ n.d }}</p>
-            </div>
-            <span class="event-time">{{ n.time }}</span>
-          </div>
-        </div>
-        <EmptyState
-          v-else
-          icon="📡"
-          :title="sseStatus === 'connected' ? '暂无实时事件' : '实时事件流暂时不可用'"
-          :description="sseStatus === 'connected' ? '订单、发货、AI 回复等实时事件会在这里显示。' : '当前未确认实时连接可用，请以各业务列表中的服务端数据为准。'"
-        />
-      </CardPanel>
-
-      <CardPanel class="chart-panel quick-panel" body-padding="0">
-        <template #title>
-          <div class="panel-title-row">
-            <span class="panel-title-text">快捷操作</span>
-          </div>
-        </template>
-        <div class="quick-grid">
-          <div v-for="q in quick" :key="q.key" class="quick-card" @click="$emit('navigate', q.key)">
-            <div class="quick-ico">{{ q.icon }}</div>
-            <span>{{ q.label }}</span>
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" class="quick-arrow"><polyline points="9 18 15 12 9 6"/></svg>
-          </div>
-        </div>
-      </CardPanel>
     </div>
+
+    <div v-if="summaryError || trendError" class="error-banner">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      {{ summaryError || trendError }}
+      <button v-if="!loading" type="button" class="retry-link" @click="load">重试</button>
+    </div>
+
+    <div v-if="loading && !summaryAvailable" class="skeleton-wrap">
+      <div class="skeleton-top-row">
+        <div class="skeleton-kpi-grid">
+          <div v-for="i in 4" :key="i" class="skeleton-card">
+            <div class="sk-icon"></div>
+            <div class="sk-body">
+              <div class="sk-line sm"></div>
+              <div class="sk-line lg"></div>
+              <div class="sk-line sm"></div>
+            </div>
+          </div>
+        </div>
+        <div class="skeleton-chart">
+          <div class="sk-line lg"></div>
+          <div class="sk-chart-body"></div>
+        </div>
+      </div>
+    </div>
+
+    <template v-else>
+      <div class="top-row">
+        <div class="kpi-grid">
+          <div
+            v-for="(kpi, idx) in heroKpis"
+            :key="kpi.key"
+            class="kpi-card"
+            :style="{ '--kpi-color': kpi.color, '--kpi-delay': idx * 80 + 'ms' }"
+          >
+            <div class="kpi-icon" :style="{ background: kpi.color + '14', color: kpi.color }">{{ kpi.icon }}</div>
+            <div class="kpi-body">
+              <span class="kpi-label">{{ kpi.label }}</span>
+              <div class="kpi-value-row">
+                <strong class="kpi-value">{{ kpi.display }}</strong>
+              </div>
+              <span class="kpi-sub">{{ kpi.sub }}</span>
+            </div>
+          </div>
+        </div>
+        <CardPanel class="trend-panel" body-padding="0">
+          <template #title>
+            <div class="panel-title-row">
+              <span class="panel-title-text">业务趋势</span>
+              <span class="panel-title-desc">近 {{ trendDays }} 天多维度走势</span>
+            </div>
+          </template>
+          <template #action>
+            <div class="range-pills">
+              <button
+                v-for="opt in trendRangeOptions"
+                :key="opt.value"
+                type="button"
+                :class="['range-pill', { active: trendDays === opt.value }]"
+                @click="switchTrendRange(opt.value)"
+              >
+                {{ opt.label }}
+              </button>
+            </div>
+          </template>
+          <div v-if="trendAvailable" ref="trendChartEl" class="echart-box trend-box"></div>
+          <EmptyState v-else icon="⚠" title="趋势不可用" :description="trendError || '正在加载趋势数据'" />
+        </CardPanel>
+      </div>
+
+      <div v-if="insights.length > 0" class="insights-panel">
+        <div class="insights-head">
+          <div class="insights-title">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z" />
+              <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z" />
+            </svg>
+            <span>智能洞察</span>
+            <span class="insights-tag">AI</span>
+          </div>
+          <span class="insights-sub">基于当前数据自动生成</span>
+        </div>
+        <div class="insights-grid">
+          <div
+            v-for="(insight, idx) in insights"
+            :key="idx"
+            class="insight-card"
+            :style="{ '--insight-color': insight.color, '--insight-delay': idx * 70 + 'ms' }"
+          >
+            <div class="insight-icon-wrap">
+              <div class="insight-icon-bg"></div>
+              <span class="insight-icon">{{ insight.icon }}</span>
+            </div>
+            <div class="insight-body">
+              <strong class="insight-title">{{ insight.title }}</strong>
+              <p class="insight-desc">{{ insight.desc }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="metrics-section">
+        <div class="metrics-strip">
+          <div v-for="(m, i) in secondaryMetrics" :key="m.key" class="metric-card" :style="{ '--delay': i * 60 + 'ms', '--accent': m.color }">
+            <div class="metric-icon-wrap">
+              <div class="metric-icon-bg"></div>
+              <Icon :name="m.icon" class="metric-icon" />
+            </div>
+            <div class="metric-body">
+              <span class="metric-label">{{ m.title }}</span>
+              <strong class="metric-value" :class="{ 'metric-loading': m.value === null }">{{ m.display }}</strong>
+              <span class="metric-sub-text">{{ m.sub }}</span>
+            </div>
+            <div class="metric-spark" v-if="m.spark && m.spark.length > 1">
+              <svg viewBox="0 0 100 36" preserveAspectRatio="none" class="spark-svg">
+                <polyline :points="m.sparkPoints" fill="none" :stroke="m.color" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <polygon :points="m.sparkFillPoints" :fill="m.color" opacity="0.12"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chart-row chart-row-three">
+        <CardPanel class="chart-panel" body-padding="0">
+          <template #title>
+            <div class="panel-title-row">
+              <span class="panel-title-text">发货分布</span>
+            </div>
+          </template>
+          <div v-if="summaryAvailable && totalDelivery > 0" ref="deliveryPieEl" class="echart-box pie-box"></div>
+          <EmptyState v-else icon="⚠" title="暂无数据" :description="summaryError || '暂无发货数据'" />
+        </CardPanel>
+        <CardPanel class="chart-panel" body-padding="0">
+          <template #title>
+            <div class="panel-title-row">
+              <span class="panel-title-text">核心指标对比</span>
+            </div>
+          </template>
+          <div v-if="summaryAvailable" ref="replyBarEl" class="echart-box bar-box"></div>
+          <EmptyState v-else icon="⚠" title="暂无数据" :description="summaryError || '正在加载汇总数据'" />
+        </CardPanel>
+        <CardPanel class="chart-panel overview-panel">
+          <template #title>
+            <div class="panel-title-row">
+              <span class="panel-title-text">运营概览</span>
+            </div>
+          </template>
+          <div v-if="summaryAvailable" class="overview-grid">
+            <div v-for="item in overviewItems" :key="item.label" class="overview-item">
+              <div class="overview-label">{{ item.label }}</div>
+              <div class="overview-value" :style="{ color: item.color }">{{ item.value }}</div>
+              <div class="overview-bar"><div class="overview-bar-fill" :style="{ width: item.pct + '%', background: item.color }"></div></div>
+            </div>
+          </div>
+          <EmptyState v-else icon="⚠" title="暂无数据" :description="summaryError || '正在加载汇总数据'" />
+        </CardPanel>
+      </div>
+
+      <CardPanel class="table-panel" body-padding="0">
+        <template #title>
+          <div class="panel-title-row">
+            <span class="panel-title-text">趋势明细</span>
+            <span class="panel-title-desc">按日展示各项业务指标</span>
+          </div>
+        </template>
+        <template #action>
+          <button v-if="trendAvailable" type="button" class="export-btn" @click="exportTrendCsv">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            导出 CSV
+          </button>
+        </template>
+        <div v-if="trendAvailable" class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>订单数</th>
+                <th>消息数</th>
+                <th>发货合计</th>
+                <th>发货成功</th>
+                <th>发货失败</th>
+                <th>AI 回复</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, idx) in trendRows" :key="row.date" :class="{ 'row-alt': idx % 2 === 1 }">
+                <td class="td-date">{{ row.date }}</td>
+                <td class="td-num"><span class="num-pill num-blue">{{ row.orderCount }}</span></td>
+                <td class="td-num"><span class="num-pill num-cyan">{{ row.messageCount }}</span></td>
+                <td class="td-num">{{ row.deliveryTotal }}</td>
+                <td class="td-num"><span v-if="row.deliverySuccess > 0" class="num-dot dot-green"></span>{{ row.deliverySuccess }}</td>
+                <td class="td-num"><span v-if="row.deliveryFail > 0" class="num-dot dot-red"></span>{{ row.deliveryFail }}</td>
+                <td class="td-num"><span v-if="row.aiReply > 0" class="num-pill num-purple">{{ row.aiReply }}</span><span v-else class="num-muted">0</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <EmptyState v-else icon="⚠" title="趋势明细不可用" :description="trendError || '正在加载趋势数据'" />
+      </CardPanel>
+
+      <div class="bottom-grid">
+        <CardPanel class="chart-panel events-panel" body-padding="0">
+          <template #title>
+            <div class="panel-title-row">
+              <span class="panel-title-text">最新实时事件</span>
+              <span class="live-dot" :class="sseStatus"><span class="live-pulse"></span>{{ sseStatus === 'connected' ? '实时连接' : '连接离线' }}</span>
+            </div>
+          </template>
+          <div v-if="logs.length > 0" class="event-list">
+            <div v-for="(n, idx) in logs" :key="n.t + n.time + idx" class="event-item">
+              <div class="event-dot"></div>
+              <div class="event-content">
+                <b>{{ n.t }}</b>
+                <p>{{ n.d }}</p>
+              </div>
+              <span class="event-time">{{ n.time }}</span>
+            </div>
+          </div>
+          <EmptyState
+            v-else
+            icon="📡"
+            :title="sseStatus === 'connected' ? '暂无实时事件' : '实时事件流暂时不可用'"
+            :description="sseStatus === 'connected' ? '订单、发货、AI 回复等实时事件会在这里显示。' : '当前未确认实时连接可用，请以各业务列表中的服务端数据为准。'"
+          />
+        </CardPanel>
+
+        <CardPanel class="chart-panel quick-panel" body-padding="0">
+          <template #title>
+            <div class="panel-title-row">
+              <span class="panel-title-text">快捷操作</span>
+            </div>
+          </template>
+          <div class="quick-grid">
+            <div v-for="q in quick" :key="q.key" class="quick-card" @click="$emit('navigate', q.key)">
+              <div class="quick-ico">{{ q.icon }}</div>
+              <span>{{ q.label }}</span>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" class="quick-arrow"><polyline points="9 18 15 12 9 6"/></svg>
+            </div>
+          </div>
+        </CardPanel>
+      </div>
+
+      <div class="page-footer">
+        {{ scopeLabel }} · {{ dateLabel }} · 数据更新于 {{ updatedAt }}
+      </div>
+    </template>
   </div>
 </template>
 
@@ -347,7 +450,7 @@ function buildSparkline(series) {
   return { points: pts.join(' '), fillPoints: fillPts }
 }
 
-const metrics = computed(() => {
+const allMetrics = computed(() => {
   const s = stats.value
   const t = trend.value
   const orderSpark = t.orderCount?.length > 1 ? buildSparkline(t.orderCount) : null
@@ -355,15 +458,126 @@ const metrics = computed(() => {
   const replySpark = t.aiReplyCount?.length > 1 ? buildSparkline(t.aiReplyCount) : null
   const msgSpark = t.messageCount?.length > 1 ? buildSparkline(t.messageCount) : null
   return [
-    { key: 'orders', title: '今日订单', value: metricVal(s.todayOrderCount ?? s.orderCount), display: metricDisplay(s.todayOrderCount ?? s.orderCount), sub: '今日新增订单', icon: 'product', color: C.primary, spark: t.orderCount, sparkPoints: orderSpark?.points, sparkFillPoints: orderSpark?.fillPoints },
-    { key: 'success', title: '发货成功', value: metricVal(s.deliverySuccessCount), display: metricDisplay(s.deliverySuccessCount), sub: `成功率 ${successRate.value}%`, icon: 'record', color: C.green, spark: t.deliverySuccess, sparkPoints: successSpark?.points, sparkFillPoints: successSpark?.fillPoints },
-    { key: 'fail', title: '发货失败', value: metricVal(s.deliveryFailCount), display: metricDisplay(s.deliveryFailCount), sub: '需处理', icon: 'task', color: C.red, spark: t.deliveryFail, sparkPoints: buildSparkline(t.deliveryFail)?.points, sparkFillPoints: buildSparkline(t.deliveryFail)?.fillPoints },
-    { key: 'pending', title: '待发货', value: metricVal(s.pendingDeliveryCount), display: metricDisplay(s.pendingDeliveryCount), sub: '排队中', icon: 'task', color: C.orange, spark: null },
-    { key: 'reply', title: 'AI 回复', value: metricVal(s.autoReplyCount ?? s.aiReplyCount), display: metricDisplay(s.autoReplyCount ?? s.aiReplyCount), sub: '今日命中次数', icon: 'chat', color: C.purple, spark: t.aiReplyCount, sparkPoints: replySpark?.points, sparkFillPoints: replySpark?.fillPoints },
-    { key: 'ws', title: 'WS 在线率', value: s.wsOnlineRate, display: summaryAvailable.value ? `${Math.round(s.wsOnlineRate ?? 0)}%` : '—', sub: 'WebSocket 状态', icon: 'data', color: C.cyan, spark: null },
-    { key: 'sales', title: '今日销售额', value: s.todaySalesAmount, display: `¥${formatAmount(s.todaySalesAmount)}`, sub: '订单金额合计', icon: 'data', color: C.pink, spark: null },
-    { key: 'goods', title: '商品总数', value: s.goodsCount, display: metricDisplay(s.goodsCount), sub: `在售 ${metricDisplay(s.sellingGoodsCount)} · 已售 ${metricDisplay(s.totalSoldCount)}`, icon: 'product', color: C.slate, spark: null },
+    { key: 'orders', title: '今日订单', value: metricVal(s.todayOrderCount ?? s.orderCount), display: metricDisplay(s.todayOrderCount ?? s.orderCount), sub: '今日新增订单', icon: 'product', color: C.primary, spark: t.orderCount, sparkPoints: orderSpark?.points, sparkFillPoints: orderSpark?.fillPoints, heroIcon: '#' },
+    { key: 'success', title: '发货成功', value: metricVal(s.deliverySuccessCount), display: metricDisplay(s.deliverySuccessCount), sub: `成功率 ${successRate.value}%`, icon: 'record', color: C.green, spark: t.deliverySuccess, sparkPoints: successSpark?.points, sparkFillPoints: successSpark?.fillPoints, heroIcon: '✓' },
+    { key: 'fail', title: '发货失败', value: metricVal(s.deliveryFailCount), display: metricDisplay(s.deliveryFailCount), sub: '需处理', icon: 'task', color: C.red, spark: t.deliveryFail, sparkPoints: buildSparkline(t.deliveryFail)?.points, sparkFillPoints: buildSparkline(t.deliveryFail)?.fillPoints, heroIcon: '!' },
+    { key: 'pending', title: '待发货', value: metricVal(s.pendingDeliveryCount), display: metricDisplay(s.pendingDeliveryCount), sub: '排队中', icon: 'task', color: C.orange, spark: null, heroIcon: '⏳' },
+    { key: 'reply', title: 'AI 回复', value: metricVal(s.autoReplyCount ?? s.aiReplyCount), display: metricDisplay(s.autoReplyCount ?? s.aiReplyCount), sub: '今日命中次数', icon: 'chat', color: C.purple, spark: t.aiReplyCount, sparkPoints: replySpark?.points, sparkFillPoints: replySpark?.fillPoints, heroIcon: '🤖' },
+    { key: 'ws', title: 'WS 在线率', value: s.wsOnlineRate, display: summaryAvailable.value ? `${Math.round(s.wsOnlineRate ?? 0)}%` : '—', sub: 'WebSocket 状态', icon: 'data', color: C.cyan, spark: null, heroIcon: '◉' },
+    { key: 'sales', title: '今日销售额', value: s.todaySalesAmount, display: `¥${formatAmount(s.todaySalesAmount)}`, sub: '订单金额合计', icon: 'data', color: C.pink, spark: null, heroIcon: '¥' },
+    { key: 'goods', title: '商品总数', value: s.goodsCount, display: metricDisplay(s.goodsCount), sub: `在售 ${metricDisplay(s.sellingGoodsCount)} · 已售 ${metricDisplay(s.totalSoldCount)}`, icon: 'product', color: C.slate, spark: null, heroIcon: '📦' },
   ]
+})
+
+const heroKpis = computed(() => {
+  const m = allMetrics.value
+  const heroKeys = ['orders', 'success', 'sales', 'reply']
+  return heroKeys.map(key => {
+    const item = m.find(x => x.key === key)
+    return item ? {
+      key: item.key,
+      label: item.title,
+      display: item.display,
+      sub: item.sub,
+      color: item.color,
+      icon: item.heroIcon,
+    } : null
+  }).filter(Boolean)
+})
+
+const secondaryMetrics = computed(() => {
+  const m = allMetrics.value
+  const heroKeys = ['orders', 'success', 'sales', 'reply']
+  return m.filter(x => !heroKeys.includes(x.key))
+})
+
+const insights = computed(() => {
+  if (!summaryAvailable.value) return []
+  const s = stats.value
+  const t = trend.value
+  const list = []
+
+  const todayOrders = Number(s.todayOrderCount ?? s.orderCount) || 0
+  const todaySuccess = Number(s.deliverySuccessCount) || 0
+  const todayFail = Number(s.deliveryFailCount) || 0
+  const todayReply = Number(s.autoReplyCount ?? s.aiReplyCount) || 0
+  const onlineRate = Math.round(s.wsOnlineRate ?? 0)
+
+  if (successRate.value >= 95 && todaySuccess > 0) {
+    list.push({
+      type: 'good',
+      icon: '✓',
+      title: `发货成功率 ${successRate.value}%`,
+      desc: '发货表现优秀，自动化流程运行稳定',
+      color: C.green,
+    })
+  } else if (successRate.value < 80 && todayFail > 0) {
+    list.push({
+      type: 'warn',
+      icon: '!',
+      title: `发货成功率 ${successRate.value}% 偏低`,
+      desc: '建议检查卡密库存与自动发货配置',
+      color: C.red,
+    })
+  }
+
+  if (todayOrders > 0) {
+    const replyRatio = todayReply > 0 ? Math.round(todayReply / (todayOrders + todayReply) * 100) : 0
+    if (replyRatio >= 50) {
+      list.push({
+        type: 'info',
+        icon: '🤖',
+        title: `AI 回复覆盖率 ${replyRatio}%`,
+        desc: '智能客服高效承接买家咨询，节省人工成本',
+        color: C.purple,
+      })
+    }
+  }
+
+  if (onlineRate < 80 && summaryAvailable.value) {
+    list.push({
+      type: 'warn',
+      icon: '◉',
+      title: `WS 在线率 ${onlineRate}%`,
+      desc: '连接状态不稳定，可能影响实时消息接收',
+      color: C.orange,
+    })
+  } else if (onlineRate >= 95) {
+    list.push({
+      type: 'good',
+      icon: '◉',
+      title: `WS 在线率 ${onlineRate}%`,
+      desc: '实时连接稳定，消息接收顺畅',
+      color: C.cyan,
+    })
+  }
+
+  if (t.orderCount && t.orderCount.length >= 3) {
+    const recent3 = t.orderCount.slice(-3)
+    const avg = recent3.reduce((a, b) => a + b, 0) / recent3.length
+    const first = t.orderCount[0]
+    if (avg > first * 1.2 && first > 0) {
+      list.push({
+        type: 'up',
+        icon: '↑',
+        title: '近期订单呈上升趋势',
+        desc: '近 3 天平均订单量高于期初，建议关注库存',
+        color: C.primary,
+      })
+    }
+  }
+
+  if (todayFail > 0) {
+    list.push({
+      type: 'warn',
+      icon: '⚠',
+      title: `${todayFail} 单发货失败待处理`,
+      desc: '请及时检查失败原因并手动补发',
+      color: C.red,
+    })
+  }
+
+  return list.slice(0, 4)
 })
 
 const overviewItems = computed(() => {
@@ -525,7 +739,7 @@ function renderTrendChart() {
     legend: {
       data: ['订单数', '发货成功', '发货失败', 'AI回复', '消息数'],
       top: 8, right: 20,
-      textStyle: { color: '#72809a', fontSize: 12, fontWeight: 500 },
+      textStyle: { color: '#667085', fontSize: 12, fontWeight: 500 },
       itemWidth: 18, itemHeight: 4, itemGap: 20,
       icon: 'roundRect',
       itemBorderRadius: 2,
@@ -677,8 +891,8 @@ function renderDeliveryPie() {
         position: 'center', 
         formatter: () => `{total|${sc + fc + pc}}\n{label|总发货}`, 
         rich: { 
-          total: { fontSize: 30, fontWeight: 800, color: '#15213d', lineHeight: 40, textShadowColor: 'rgba(13,107,255,0.08)', textShadowBlur: 8 }, 
-          label: { fontSize: 12, color: '#72809a', lineHeight: 20, fontWeight: 500 } 
+          total: { fontSize: 30, fontWeight: 700, color: '#172033', lineHeight: 40 }, 
+          label: { fontSize: 12, color: '#667085', lineHeight: 20, fontWeight: 500 } 
         } 
       },
       emphasis: { 
@@ -757,7 +971,7 @@ function renderReplyBar() {
       formatter: (params) => {
         const d = barData[params[0].dataIndex]
         return `<div style="font-weight:600;margin-bottom:4px;">${d.icon} ${params[0].name}</div>
-                <div style="font-size:16px;font-weight:800;color:${d.color};">${params[0].value}</div>`
+                <div style="font-size:16px;font-weight:700;color:${d.color};">${params[0].value}</div>`
       }, 
       ...tooltipStyle 
     },
@@ -765,7 +979,7 @@ function renderReplyBar() {
     xAxis: {
       type: 'category', data: barData.map(d => d.name),
       axisLine: { show: false }, axisTick: { show: false },
-      axisLabel: { color: '#72809a', fontSize: 12, margin: 12, fontWeight: 500 },
+      axisLabel: { color: '#667085', fontSize: 12, margin: 12, fontWeight: 500 },
     },
     yAxis: {
       type: 'value', show: false, max: Math.max(maxVal * 1.35, 5),
@@ -788,8 +1002,8 @@ function renderReplyBar() {
       label: { 
         show: true, 
         position: 'top', 
-        color: '#15213d', 
-        fontWeight: 800, 
+        color: '#172033', 
+        fontWeight: 700, 
         fontSize: 18,
         distance: 8,
         formatter: '{c}' 
@@ -860,258 +1074,480 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .data-page {
+  padding: 20px 24px 48px;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding-bottom: 32px;
+  background: #f5f7fb;
+  min-height: 100%;
 }
 
-/* ===== Hero Section ===== */
-.data-hero {
-  position: relative;
-  background: linear-gradient(135deg, #0f1b3d 0%, #162d6b 40%, #0d2152 100%);
-  border-radius: 16px;
-  padding: 24px 28px 22px;
-  overflow: hidden;
-  color: #fff;
-  box-shadow: 0 8px 32px rgba(13, 107, 255, 0.15);
-}
-
-.data-hero::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-}
-
-.hero-glow {
-  position: absolute;
-  border-radius: 50%;
-  pointer-events: none;
-  will-change: transform, opacity;
-}
-.glow-blue {
-  width: 320px; height: 320px;
-  background: radial-gradient(circle, rgba(13,107,255,0.5) 0%, transparent 70%);
-  top: -120px; right: -60px;
-  animation: glow-float 8s ease-in-out infinite;
-}
-.glow-purple {
-  width: 240px; height: 240px;
-  background: radial-gradient(circle, rgba(49,134,255,0.35) 0%, transparent 70%);
-  bottom: -100px; left: 20%;
-  animation: glow-float 10s ease-in-out infinite reverse;
-  animation-delay: -3s;
-}
-.glow-accent {
-  width: 180px; height: 180px;
-  background: radial-gradient(circle, rgba(22,183,255,0.25) 0%, transparent 70%);
-  top: 40%; left: -40px;
-  animation: glow-float 12s ease-in-out infinite;
-  animation-delay: -6s;
-}
-
-@keyframes glow-float {
-  0%, 100% { opacity: 0.6; transform: translate(0, 0) scale(1); }
-  33% { opacity: 0.8; transform: translate(8px, -8px) scale(1.05); }
-  66% { opacity: 0.5; transform: translate(-6px, 6px) scale(0.98); }
-}
-
-.hero-header {
-  position: relative;
-  z-index: 1;
+.page-title-section {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 18px;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 4px;
 }
-
-.hero-badge {
+.header-badge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: rgba(255,255,255,0.1);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255,255,255,0.12);
+  background: #eef5ff;
+  border: 1px solid #dbe7f5;
   border-radius: 999px;
-  padding: 5px 14px;
+  padding: 4px 12px;
   font-size: 12px;
-  color: rgba(255,255,255,0.85);
-  margin-bottom: 14px;
+  color: #1677ff;
+  width: fit-content;
   font-weight: 500;
 }
-.hero-dot {
-  width: 7px; height: 7px;
+.header-dot {
+  width: 6px; height: 6px;
   border-radius: 50%;
-  background: #16bf78;
-  box-shadow: 0 0 10px rgba(22,191,120,0.6);
+  background: #12b76a;
+  box-shadow: 0 0 6px rgba(18, 183, 106, 0.5);
   animation: pulse-dot 2s ease-in-out infinite;
 }
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.5; transform: scale(0.85); }
 }
-
-.hero-title-group h2 {
-  font-size: 26px;
-  font-weight: 800;
+.page-title {
   margin: 0;
-  letter-spacing: -0.8px;
-  background: linear-gradient(135deg, #fff 0%, rgba(255,255,255,0.8) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  font-size: 24px;
+  font-weight: 600;
+  color: #172033;
+  letter-spacing: -0.4px;
+  line-height: 1.2;
 }
-.hero-title-group p {
-  margin: 6px 0 0;
+.page-subtitle {
+  margin: 0;
   font-size: 13px;
-  color: rgba(255,255,255,0.55);
+  color: #667085;
   font-weight: 400;
-}
-
-.hero-controls {
   display: flex;
-  align-items: flex-end;
-  gap: 10px;
+  align-items: center;
+  gap: 6px;
   flex-wrap: wrap;
 }
+.meta-key { color: #98a2b3; }
+.meta-val { color: #475467; font-weight: 500; }
+.meta-sep { color: #cbd5e1; margin: 0 2px; }
 
-.control-item {
+.filter-card {
   display: flex;
-  flex-direction: column;
-  gap: 5px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 16px 18px;
+  background: #fff;
+  border: 1px solid #e7ecf3;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(16, 24, 40, 0.04);
 }
+.filter-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: #475467;
+  min-width: 0;
+}
+.filter-block-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #172033;
+}
+.filter-sep { color: #cbd5e1; margin: 0 2px; }
+.filter-label { color: #98a2b3; font-size: 12px; }
+.filter-value { color: #475467; font-weight: 500; font-size: 13px; }
+
+.filter-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.control-item { display: flex; flex-direction: column; gap: 5px; }
 .control-item label {
   font-size: 11px;
-  color: rgba(255,255,255,0.45);
+  color: #98a2b3;
   text-transform: uppercase;
-  letter-spacing: 0.8px;
-  font-weight: 500;
+  letter-spacing: 0.6px;
+  font-weight: 600;
 }
 
-.hero-select,
-.hero-input {
-  background: rgba(255,255,255,0.07);
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 10px;
-  padding: 9px 14px;
-  color: #fff;
+.form-select, .form-input {
+  background: #fff;
+  border: 1px solid #e8edf5;
+  border-radius: 8px;
+  padding: 0 12px;
+  color: #1d2939;
   font-size: 13px;
   min-width: 150px;
+  height: 36px;
   outline: none;
-  transition: all 0.25s ease;
+  transition: all 0.2s ease;
   cursor: pointer;
   font-weight: 500;
 }
-.hero-select option {
-  background: #162d6b;
-  color: #fff;
+.form-input { cursor: default; }
+.form-select option { background: #fff; color: #1d2939; }
+.form-select:hover, .form-input:hover { border-color: #cbd5e1; }
+.form-select:focus, .form-input:focus {
+  border-color: #1677ff;
+  box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.12);
 }
-.hero-select:hover, .hero-input:hover {
-  border-color: rgba(255,255,255,0.25);
-  background: rgba(255,255,255,0.12);
-}
-.hero-select:focus, .hero-input:focus {
-  border-color: rgba(49,134,255,0.6);
-  background: rgba(255,255,255,0.1);
-  box-shadow: 0 0 0 3px rgba(13,107,255,0.2);
-}
-.hero-input { cursor: default; }
-.hero-input::-webkit-calendar-picker-indicator {
-  filter: invert(1) opacity(0.6);
+.form-select:disabled { opacity: 0.5; cursor: not-allowed; }
+.form-input::-webkit-calendar-picker-indicator {
   cursor: pointer;
+  opacity: 0.6;
 }
+
+.range-pills {
+  display: inline-flex;
+  gap: 2px;
+  background: #f5f7fb;
+  border: 1px solid #e8edf5;
+  border-radius: 8px;
+  padding: 3px;
+  height: 36px;
+  align-items: center;
+}
+.range-pill {
+  border: none;
+  background: transparent;
+  color: #667085;
+  border-radius: 6px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  height: 28px;
+  line-height: 28px;
+}
+.range-pill:hover { color: #1d2939; }
+.range-pill.active {
+  background: #1677ff;
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(22, 119, 255, 0.25);
+}
+.range-pill:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .refresh-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 7px;
-  background: linear-gradient(135deg, #0d6bff 0%, #3186ff 100%);
+  background: #1677ff;
   color: #fff;
   border: none;
-  border-radius: 10px;
-  padding: 10px 20px;
+  border-radius: 8px;
+  padding: 0 16px;
+  height: 36px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.25s ease;
+  transition: all 0.2s ease;
   white-space: nowrap;
-  box-shadow: 0 4px 14px rgba(13,107,255,0.35);
 }
-.refresh-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(13,107,255,0.45);
-}
-.refresh-btn:active:not(:disabled) {
-  transform: translateY(0);
-}
+.refresh-btn:hover:not(:disabled) { background: #4096ff; }
+.refresh-btn:active:not(:disabled) { background: #0958d9; }
 .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ===== Error Banner ===== */
 .error-banner {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: linear-gradient(135deg, #fef2f2 0%, #fff5f5 100%);
-  border: 1px solid #fecaca;
-  color: #dc2626;
-  border-radius: 12px;
-  padding: 12px 18px;
+  padding: 11px 16px;
+  background: #fef3f2;
+  border: 1px solid #fda29b;
+  border-radius: 10px;
+  color: #b42318;
   font-size: 13px;
   font-weight: 500;
 }
+.retry-link {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: #1677ff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}
 
-/* ===== Metrics Strip ===== */
+.skeleton-wrap { display: flex; flex-direction: column; gap: 16px; }
+.skeleton-top-row {
+  display: grid;
+  grid-template-columns: 5fr 7fr;
+  gap: 16px;
+}
+.skeleton-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+.skeleton-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  background: #fff;
+  border: 1px solid #e7ecf3;
+  border-radius: 12px;
+}
+.sk-icon {
+  width: 38px; height: 38px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, #eef2f7 25%, #f5f7fa 50%, #eef2f7 75%);
+  background-size: 200% 100%;
+  animation: sk-shimmer 1.4s ease-in-out infinite;
+}
+.sk-body { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.sk-line {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #eef2f7 25%, #f5f7fa 50%, #eef2f7 75%);
+  background-size: 200% 100%;
+  animation: sk-shimmer 1.4s ease-in-out infinite;
+}
+.sk-line.sm { width: 60%; }
+.sk-line.lg { width: 80%; height: 16px; }
+@keyframes sk-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.skeleton-chart {
+  padding: 18px 20px;
+  background: #fff;
+  border: 1px solid #e7ecf3;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.skeleton-chart .sk-line.lg { width: 30%; margin-bottom: 0; }
+.sk-chart-body {
+  height: 300px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, #f5f7fa 25%, #eef2f7 50%, #f5f7fa 75%);
+  background-size: 200% 100%;
+  animation: sk-shimmer 1.4s ease-in-out infinite;
+}
+
+.top-row {
+  display: grid;
+  grid-template-columns: 5fr 7fr;
+  gap: 16px;
+  align-items: stretch;
+}
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+.kpi-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 20px;
+  background: #fff;
+  border: 1px solid #e7ecf3;
+  border-radius: 12px;
+  transition: all 0.25s ease;
+  box-shadow: 0 2px 8px rgba(16, 24, 40, 0.04);
+  animation: kpi-in 0.5s cubic-bezier(0.4,0,0.2,1) both;
+  animation-delay: var(--kpi-delay, 0ms);
+}
+@keyframes kpi-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.kpi-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px rgba(16, 24, 40, 0.06);
+}
+.kpi-icon {
+  width: 38px; height: 38px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  font-size: 18px;
+  font-weight: 700;
+}
+.kpi-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.kpi-label {
+  font-size: 13px;
+  color: #667085;
+  font-weight: 500;
+}
+.kpi-value-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.kpi-value {
+  font-size: 28px;
+  font-weight: 600;
+  color: #172033;
+  line-height: 1.1;
+  letter-spacing: -0.5px;
+  font-variant-numeric: tabular-nums;
+}
+.kpi-sub {
+  font-size: 11px;
+  color: #98a2b3;
+  font-weight: 500;
+}
+
+.insights-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px;
+  background: #fff;
+  border: 1px solid #e7ecf3;
+  border-radius: 14px;
+  box-shadow: 0 2px 8px rgba(16, 24, 40, 0.04);
+}
+.insights-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.insights-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #172033;
+}
+.insights-title svg { color: #1677ff; }
+.insights-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  background: #1677ff;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 6px;
+  letter-spacing: 0.5px;
+}
+.insights-sub {
+  font-size: 12px;
+  color: #98a2b3;
+  font-weight: 500;
+}
+.insights-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.insight-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  background: #fafbfc;
+  border: 1px solid #eef1f6;
+  border-radius: 10px;
+  transition: all 0.25s ease;
+  animation: insight-in 0.4s cubic-bezier(0.4,0,0.2,1) both;
+  animation-delay: var(--insight-delay, 0ms);
+}
+@keyframes insight-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.insight-card:hover {
+  border-color: var(--insight-color);
+  background: #fff;
+}
+.insight-icon-wrap {
+  position: relative;
+  width: 32px; height: 32px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.insight-icon-bg {
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  background: var(--insight-color);
+  opacity: 0.12;
+}
+.insight-icon {
+  position: relative;
+  z-index: 1;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--insight-color);
+  line-height: 1;
+}
+.insight-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.insight-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #172033;
+  line-height: 1.35;
+}
+.insight-desc {
+  margin: 0;
+  font-size: 12px;
+  color: #667085;
+  line-height: 1.5;
+}
+
+.metrics-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 .metrics-strip {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 12px;
 }
-
 .metric-card {
   position: relative;
-  background: #fff;
-  border: 1px solid var(--line, #e7edf7);
-  border-radius: 14px;
-  padding: 16px 18px;
   display: flex;
   align-items: center;
-  gap: 14px;
-  transition: all 0.3s cubic-bezier(0.4,0,0.2,1);
+  gap: 12px;
+  padding: 16px 18px;
+  background: #fff;
+  border: 1px solid #e7ecf3;
+  border-radius: 12px;
   overflow: hidden;
-  animation: card-in 0.6s cubic-bezier(0.4,0,0.2,1) both;
+  transition: all 0.25s ease;
+  animation: card-in 0.5s cubic-bezier(0.4,0,0.2,1) both;
   animation-delay: var(--delay, 0ms);
-  box-shadow: 0 1px 2px rgba(31, 53, 94, .04), 0 4px 12px rgba(31, 53, 94, .04);
-  will-change: transform;
+  box-shadow: 0 2px 8px rgba(16, 24, 40, 0.04);
+  min-height: 90px;
 }
 @keyframes card-in {
-  from { opacity: 0; transform: translateY(16px) scale(0.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .metric-card:hover {
-  border-color: rgba(13,107,255,0.2);
-  box-shadow: 0 8px 24px rgba(31, 53, 94, .08);
-  transform: translateY(-3px);
+  border-color: rgba(22, 119, 255, 0.3);
+  box-shadow: 0 4px 12px rgba(16, 24, 40, 0.06);
 }
-.metric-card::after {
-  content: '';
-  position: absolute;
-  top: 0; left: 0;
-  width: 4px;
-  height: 0;
-  background: var(--accent);
-  border-radius: 0 4px 4px 0;
-  transition: height 0.3s cubic-bezier(0.4,0,0.2,1);
-}
-.metric-card:hover::after { height: 100%; }
-
 .metric-icon-wrap {
   position: relative;
-  width: 44px; height: 44px;
+  width: 40px; height: 40px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -1120,65 +1556,45 @@ onBeforeUnmount(() => {
 .metric-icon-bg {
   position: absolute;
   inset: 0;
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--accent);
   opacity: 0.1;
-  transition: all 0.3s;
-}
-.metric-card:hover .metric-icon-bg { 
-  opacity: 0.15; 
-  transform: scale(1.08);
 }
 .metric-icon {
-  width: 22px; height: 22px;
+  width: 20px; height: 20px;
   color: var(--accent);
   position: relative;
   z-index: 1;
 }
-
-.metric-body {
-  flex: 1;
-  min-width: 0;
-}
+.metric-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .metric-label {
-  display: block;
-  font-size: 12px;
-  color: var(--muted, #72809a);
-  margin-bottom: 4px;
+  font-size: 13px;
+  color: #667085;
   font-weight: 500;
 }
 .metric-value {
-  display: block;
-  font-size: 22px;
-  font-weight: 800;
-  color: var(--text, #15213d);
+  font-size: 24px;
+  font-weight: 600;
+  color: #172033;
   line-height: 1.15;
-  letter-spacing: -0.6px;
+  letter-spacing: -0.5px;
   font-variant-numeric: tabular-nums;
 }
 .metric-loading { color: #cbd5e1; }
-.metric-sub {
-  display: block;
+.metric-sub-text {
   font-size: 11px;
-  color: var(--muted, #72809a);
-  margin-top: 4px;
+  color: #98a2b3;
   font-weight: 500;
 }
-
 .metric-spark {
-  position: absolute;
-  right: 8px;
-  bottom: 6px;
+  flex-shrink: 0;
   width: 70px;
   height: 32px;
-  opacity: 0.5;
+  margin-left: auto;
+  opacity: 0.6;
 }
-.spark-svg {
-  width: 100%;
-  height: 100%;
-}
+.spark-svg { width: 100%; height: 100%; display: block; }
 
-/* ===== Chart Rows ===== */
 .chart-row { display: flex; gap: 14px; }
 .chart-row-main { flex-direction: column; }
 .chart-row-three { display: grid; grid-template-columns: 1fr 1fr 1.2fr; gap: 14px; }
@@ -1186,64 +1602,30 @@ onBeforeUnmount(() => {
 .chart-panel,
 .table-panel,
 .events-panel,
-.quick-panel {
+.quick-panel,
+.trend-panel {
   border-radius: 14px !important;
-  border: 1px solid var(--line, #e7edf7) !important;
-  box-shadow: 0 1px 2px rgba(31, 53, 94, .04), 0 6px 16px rgba(31, 53, 94, .05) !important;
+  border: 1px solid #e7ecf3 !important;
+  box-shadow: 0 2px 8px rgba(16, 24, 40, 0.04) !important;
   overflow: hidden;
   transition: all 0.3s ease !important;
 }
 .chart-panel:hover,
-.table-panel:hover {
-  box-shadow: 0 1px 2px rgba(31, 53, 94, .04), 0 10px 28px rgba(31, 53, 94, .08) !important;
+.table-panel:hover,
+.trend-panel:hover {
+  box-shadow: 0 4px 12px rgba(16, 24, 40, 0.06) !important;
 }
 
-.panel-title-row {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-}
-.panel-title-text {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text, #15213d);
-}
-.panel-title-desc {
-  font-size: 12px;
-  color: var(--muted, #72809a);
-  font-weight: 500;
-}
+.trend-panel { min-height: 360px; }
 
-.range-pills {
-  display: inline-flex;
-  gap: 2px;
-  background: #f4f7fc;
-  border-radius: 9px;
-  padding: 3px;
-}
-.range-pill {
-  border: none;
-  background: transparent;
-  color: var(--muted, #72809a);
-  border-radius: 7px;
-  padding: 6px 14px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.range-pill:hover { color: var(--text, #15213d); }
-.range-pill.active {
-  background: #fff;
-  color: var(--primary, #0d6bff);
-  box-shadow: 0 1px 3px rgba(13,107,255,0.1);
-}
+.panel-title-row { display: flex; flex-direction: column; gap: 2px; }
+.panel-title-text { font-size: 15px; font-weight: 600; color: #172033; }
+.panel-title-desc { font-size: 12px; color: #98a2b3; font-weight: 500; }
 
 .echart-box { width: 100%; }
 .trend-box { height: 320px; margin: 0 -4px; }
 .pie-box, .bar-box { height: 240px; margin: 0 -4px; }
 
-/* ===== Overview Panel ===== */
 .overview-grid {
   display: flex;
   flex-direction: column;
@@ -1257,7 +1639,7 @@ onBeforeUnmount(() => {
 }
 .overview-label {
   font-size: 12px;
-  color: var(--muted, #72809a);
+  color: #667085;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1265,9 +1647,9 @@ onBeforeUnmount(() => {
 }
 .overview-value {
   font-size: 20px;
-  font-weight: 800;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: var(--text, #15213d);
+  color: #172033;
 }
 .overview-bar {
   height: 6px;
@@ -1281,7 +1663,6 @@ onBeforeUnmount(() => {
   transition: width 0.8s cubic-bezier(0.4,0,0.2,1);
 }
 
-/* ===== Data Table ===== */
 .table-wrap {
   overflow-x: auto;
   margin: 0 -18px -18px;
@@ -1294,18 +1675,18 @@ onBeforeUnmount(() => {
   text-align: left;
   padding: 14px 18px;
   font-size: 11px;
-  font-weight: 700;
-  color: var(--muted, #72809a);
+  font-weight: 600;
+  color: #667085;
   text-transform: uppercase;
   letter-spacing: 0.6px;
   background: #f8fafe;
-  border-bottom: 1px solid var(--line, #e7edf7);
+  border-bottom: 1px solid #e7ecf3;
   white-space: nowrap;
 }
 .data-table tbody td {
   padding: 13px 18px;
   font-size: 13px;
-  color: var(--text, #15213d);
+  color: #172033;
   border-bottom: 1px solid #f4f7fc;
   font-variant-numeric: tabular-nums;
   font-weight: 500;
@@ -1317,8 +1698,8 @@ onBeforeUnmount(() => {
 .data-table tbody tr.row-alt:hover { background: #f4f7fc; }
 
 .td-date {
-  font-weight: 700;
-  color: var(--text, #15213d);
+  font-weight: 600;
+  color: #172033;
   font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
   font-size: 12px;
 }
@@ -1332,7 +1713,7 @@ onBeforeUnmount(() => {
   padding: 3px 10px;
   border-radius: 999px;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   text-align: center;
 }
 .num-blue { background: #eef4ff; color: #0d6bff; }
@@ -1353,10 +1734,10 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border: 1px solid var(--line, #e7edf7);
+  border: 1px solid #e7ecf3;
   background: #fff;
-  color: var(--muted, #72809a);
-  border-radius: 9px;
+  color: #667085;
+  border-radius: 8px;
   padding: 7px 14px;
   font-size: 12px;
   font-weight: 600;
@@ -1364,19 +1745,17 @@ onBeforeUnmount(() => {
   transition: all 0.2s;
 }
 .export-btn:hover {
-  border-color: var(--primary, #0d6bff);
-  color: var(--primary, #0d6bff);
+  border-color: #1677ff;
+  color: #1677ff;
   background: #f0f5ff;
 }
 
-/* ===== Bottom Grid ===== */
 .bottom-grid {
   display: grid;
   grid-template-columns: 1.4fr 1fr;
   gap: 14px;
 }
 
-/* Events */
 .live-dot {
   display: inline-flex;
   align-items: center;
@@ -1412,10 +1791,10 @@ onBeforeUnmount(() => {
 .event-dot {
   width: 8px; height: 8px;
   border-radius: 50%;
-  background: var(--primary, #0d6bff);
+  background: #1677ff;
   margin-top: 5px;
   flex-shrink: 0;
-  box-shadow: 0 0 0 3px rgba(13,107,255,0.12);
+  box-shadow: 0 0 0 3px rgba(22,119,255,0.12);
   position: relative;
 }
 .event-dot::after {
@@ -1423,7 +1802,7 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: -4px;
   border-radius: 50%;
-  border: 2px solid var(--primary, #0d6bff);
+  border: 2px solid #1677ff;
   opacity: 0;
   animation: event-pulse 2s ease-out infinite;
 }
@@ -1434,14 +1813,14 @@ onBeforeUnmount(() => {
 .event-content { flex: 1; min-width: 0; }
 .event-content b {
   font-size: 13px;
-  color: var(--text, #15213d);
+  color: #172033;
   display: block;
-  font-weight: 700;
+  font-weight: 600;
 }
 .event-content p {
   margin: 3px 0 0;
   font-size: 12px;
-  color: var(--muted, #72809a);
+  color: #667085;
   line-height: 1.55;
 }
 .event-time {
@@ -1453,7 +1832,6 @@ onBeforeUnmount(() => {
   font-weight: 500;
 }
 
-/* Quick Actions */
 .quick-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1471,11 +1849,11 @@ onBeforeUnmount(() => {
   transition: all 0.22s ease;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text, #15213d);
+  color: #172033;
 }
 .quick-card:hover {
   background: #eef4ff;
-  color: var(--primary, #0d6bff);
+  color: #1677ff;
   transform: translateX(3px);
 }
 .quick-ico {
@@ -1491,7 +1869,7 @@ onBeforeUnmount(() => {
   transition: all 0.22s ease;
 }
 .quick-card:hover .quick-ico {
-  box-shadow: 0 3px 10px rgba(13,107,255,0.15);
+  box-shadow: 0 3px 10px rgba(22,119,255,0.15);
   transform: scale(1.05);
 }
 .quick-card span { flex: 1; }
@@ -1500,51 +1878,73 @@ onBeforeUnmount(() => {
   transition: all 0.22s ease;
 }
 .quick-card:hover .quick-arrow {
-  color: var(--primary, #0d6bff);
+  color: #1677ff;
   transform: translateX(3px);
 }
 
-/* ===== Reduced Motion Support ===== */
+.page-footer {
+  font-size: 12px;
+  color: #98a2b3;
+  text-align: center;
+  padding: 16px 0 4px;
+  font-weight: 400;
+  letter-spacing: 0.2px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
-  .hero-dot { animation: none; }
+  .header-dot { animation: none; }
   .live-dot.connected .live-pulse { animation: none; }
   .spin { animation: none; }
-  .glow-blue, .glow-purple, .glow-accent { animation: none; }
   .event-dot::after { display: none; }
-  .metric-card { animation: none; }
+  .kpi-card, .metric-card, .insight-card { animation: none; }
 }
 
-/* ===== Responsive ===== */
+@media (max-width: 1439px) {
+  .top-row { grid-template-columns: 1fr 1fr; }
+  .kpi-value { font-size: 26px; }
+}
 @media (max-width: 1200px) {
-  .metrics-strip { grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .top-row { grid-template-columns: 1fr; }
+  .skeleton-top-row { grid-template-columns: 1fr; }
+  .metrics-strip { grid-template-columns: repeat(3, 1fr); }
   .chart-row-three { grid-template-columns: 1fr 1fr; }
   .chart-row-three .overview-panel { grid-column: 1 / -1; }
   .bottom-grid { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 900px) {
-  .data-hero { padding: 20px; border-radius: 14px; }
-  .hero-title-group h2 { font-size: 22px; }
-  .metrics-strip { grid-template-columns: repeat(2, 1fr); gap: 10px; }
-  .metric-card { padding: 14px; border-radius: 12px; }
-  .metric-value { font-size: 20px; }
+  .metrics-strip { grid-template-columns: repeat(2, 1fr); }
+  .insights-grid { grid-template-columns: repeat(2, 1fr); }
   .chart-row-three { grid-template-columns: 1fr; }
   .bottom-grid { grid-template-columns: 1fr; }
   .trend-box { height: 260px; }
   .pie-box, .bar-box { height: 220px; }
 }
+@media (max-width: 768px) {
+  .data-page { padding: 12px; }
+  .filter-card { padding: 14px 16px; flex-direction: column; align-items: stretch; }
+  .filter-controls { flex-direction: column; align-items: stretch; gap: 10px; }
+  .form-select, .form-input { min-width: 0; width: 100%; }
+  .range-pills { width: 100%; justify-content: space-between; }
+  .range-pill { flex: 1; }
+  .refresh-btn { width: 100%; justify-content: center; }
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .kpi-value { font-size: 22px; }
+}
 @media (max-width: 600px) {
   .data-page { gap: 12px; }
   .metrics-strip { grid-template-columns: 1fr 1fr; gap: 8px; }
-  .hero-controls { width: 100%; }
-  .control-item { flex: 1; min-width: 0; }
-  .hero-select, .hero-input { min-width: 0; width: 100%; }
-  .quick-grid { grid-template-columns: 1fr; }
   .metric-spark { display: none; }
-  .refresh-btn { width: 100%; justify-content: center; }
+  .quick-grid { grid-template-columns: 1fr; }
+  .skeleton-kpi-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 480px) {
+  .kpi-grid { grid-template-columns: 1fr; }
+  .insights-grid { grid-template-columns: 1fr; }
+  .metrics-strip { grid-template-columns: 1fr; }
 }
 </style>

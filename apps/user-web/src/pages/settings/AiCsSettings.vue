@@ -68,6 +68,11 @@
                 <span class="aics-switch-knob" />
               </button>
             </div>
+            <div v-if="form.pauseOnHumanIntervene" class="aics-row">
+              <label>人工干预暂停时长（秒）</label>
+              <input v-model.number="form.pauseDurationSeconds" type="number" min="10" max="600" class="aics-input" />
+              <p class="aics-hint">人工接管会话后，AI 自动暂停该会话回复的时长，超时后自动恢复（10-600 秒，默认 60 秒）</p>
+            </div>
           </div>
         </CardPanel>
 
@@ -154,7 +159,7 @@
             <div class="aics-row">
               <div class="aics-label-row">
                 <label>聊天规则（优先于默认规则）</label>
-                <span class="aics-kb-count">自定义 {{ form.chatRules.length }} 条 · 默认 {{ form.defaultChatRules.length }} 条</span>
+                <span class="aics-kb-count">自定义规则 {{ form.chatRules.length }} 条 · 基础规则 {{ form.defaultChatRules.length }} 条</span>
               </div>
               <div class="aics-entry-list">
                 <div v-for="(item, index) in form.chatRules" :key="`rule-${index}`" class="aics-entry-card">
@@ -166,21 +171,25 @@
                 </div>
                 <div v-if="!form.chatRules.length" class="aics-empty-tip">暂未添加自定义聊天规则，下方系统默认规则将自动生效。</div>
               </div>
-              <button type="button" class="aics-upload-btn" @click="addChatRule">新增聊天规则</button>
+              <button type="button" class="aics-upload-btn" @click="addChatRule">新增自定义聊天规则</button>
 
-              <!-- 系统默认聊天规则（只读展示） -->
-              <div v-if="form.defaultChatRules.length" class="aics-default-section">
+              <!-- 系统默认聊天规则（可编辑） -->
+              <div class="aics-default-section">
                 <div class="aics-default-head">
-                  <span class="aics-default-badge">系统默认</span>
-                  <span class="aics-default-title">默认聊天规则（只读，自定义规则优先）</span>
+                  <span class="aics-default-badge">基础规则</span>
+                  <span class="aics-default-title">默认聊天规则（自定义规则优先于默认规则）</span>
                 </div>
-                <details v-for="(item, index) in form.defaultChatRules" :key="`dcr-${index}`" class="aics-default-card">
-                  <summary>
-                    <strong>{{ item.name || `默认规则 ${index + 1}` }}</strong>
-                    <span class="aics-default-meta">{{ (item.content || '').length }} 字</span>
-                  </summary>
-                  <pre class="aics-default-pre">{{ item.content || '（空）' }}</pre>
-                </details>
+                <div class="aics-entry-list">
+                  <div v-for="(item, index) in form.defaultChatRules" :key="`dcr-${index}`" class="aics-entry-card">
+                    <div class="aics-entry-head">
+                      <input v-model="item.name" class="aics-input" placeholder="规则名称" />
+                      <button type="button" class="aics-entry-remove" @click="removeDefaultChatRule(index)">删除</button>
+                    </div>
+                    <textarea v-model="item.content" class="aics-input aics-textarea" rows="4" placeholder="例如：只能回答商品本身，不要主动延展售后承诺"></textarea>
+                  </div>
+                  <div v-if="!form.defaultChatRules.length" class="aics-empty-tip">暂无默认聊天规则。</div>
+                </div>
+                <button type="button" class="aics-upload-btn" @click="addDefaultChatRule">新增默认聊天规则</button>
               </div>
             </div>
           </div>
@@ -219,39 +228,6 @@
               <label>每日最大回复数</label>
               <input v-model.number="form.maxDailyReplies" type="number" min="1" max="10000" class="aics-input" />
               <p class="aics-hint">超出后自动转人工，避免 AI 滥用消耗额度</p>
-            </div>
-          </div>
-        </CardPanel>
-
-        <!-- 计费与额度 -->
-        <CardPanel title="计费与每日额度" desc="配置用户每日免费条数与超额扣费规则" style="margin-top:16px">
-          <div class="aics-form">
-            <div class="aics-row">
-              <label>用户每日免费额度（条）</label>
-              <input v-model.number="billing.dailyFreeQuota" type="number" min="0" max="1000" class="aics-input" />
-              <p class="aics-hint">每个用户每天可免费与客服沟通的消息条数；超出后按下方规则扣费。设为 0 表示无免费额度。</p>
-            </div>
-            <div class="aics-row">
-              <label>每条消息扣费 Token 数</label>
-              <input v-model.number="billing.perMessageTokens" type="number" min="1" max="100" class="aics-input" />
-              <p class="aics-hint">超出免费额度后，每条客服回复扣减的 Token 数（默认 3）。</p>
-            </div>
-            <div class="aics-row">
-              <label>上下文消息上限（条）</label>
-              <input v-model.number="billing.maxContextMessages" type="number" min="10" max="200" class="aics-input" />
-              <p class="aics-hint">超出后提示用户新建会话或压缩上下文（压缩不扣费）。</p>
-            </div>
-            <div class="aics-row aics-row-toggle">
-              <div>
-                <strong>启用计费</strong>
-                <p>关闭后所有客服消息均不扣费（仅限调试用途）</p>
-              </div>
-              <button type="button" :class="['aics-switch', { on: billing.enabled }]" @click="billing.enabled = !billing.enabled">
-                <span class="aics-switch-knob" />
-              </button>
-            </div>
-            <div class="aics-billing-actions">
-              <button type="button" class="aics-save-btn" :disabled="billingSaving" @click="saveBilling">{{ billingSaving ? '保存中...' : '保存额度配置' }}</button>
             </div>
           </div>
         </CardPanel>
@@ -325,7 +301,6 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import CardPanel from '../../components/CardPanel.vue'
 import { getBusinessSettings, saveBusinessSettings, testAiCustomerService, getAiCsDefaults, uploadKnowledgeBase } from '../../api/businessSettings.js'
-import { getCsConfig, saveCsBillingConfig } from '../../api/aiCs.js'
 import { ensureAiTokenBalance } from '../../utils/aiTokenGuard.js'
 import { confirmAction } from '../../utils/confirmAction.js'
 import { createRequestGate } from '../../utils/requestLifecycle.js'
@@ -344,15 +319,6 @@ const loadGate = createRequestGate()
 const kbFileInputRef = ref(null)
 const kbUploading = ref(false)
 
-// 计费与额度配置（存储于 ai_cs_billing_config，与上方业务设置独立保存）
-const billing = reactive({
-  dailyFreeQuota: 10,
-  perMessageTokens: 3,
-  maxContextMessages: 50,
-  enabled: true
-})
-const billingSaving = ref(false)
-
 const form = reactive({
   enabled: false,
   mode: 'hybrid',
@@ -365,6 +331,7 @@ const form = reactive({
   replyDelaySeconds: 8,
   carryContext: true,
   pauseOnHumanIntervene: true,
+  pauseDurationSeconds: 60,
   systemPrompt: '',
   welcomeMessage: '',
   knowledgeBase: '',
@@ -423,7 +390,7 @@ function normalizeEntries(raw, fallbackText = '', prefix = '内容') {
 function assertAiCsConfig(data) {
   const booleanFields = ['enabled', 'workHours24', 'carryContext', 'pauseOnHumanIntervene', 'safeMode']
   const stringFields = ['workStart', 'workEnd', 'persona', 'systemPrompt', 'welcomeMessage', 'knowledgeBase', 'blacklistKeywords', 'handoffKeywords']
-  const numberFields = ['replyDelaySeconds', 'transferThreshold', 'sessionTimeoutMinutes', 'maxDailyReplies']
+  const numberFields = ['replyDelaySeconds', 'transferThreshold', 'sessionTimeoutMinutes', 'maxDailyReplies', 'pauseDurationSeconds']
   const listFields = ['knowledgeBases', 'defaultKnowledgeBases', 'chatRules', 'defaultChatRules']
   if (booleanFields.some(field => typeof data[field] !== 'boolean')
     || stringFields.some(field => typeof data[field] !== 'string')
@@ -453,10 +420,9 @@ async function load() {
   loadError.value = ''
   settingsAvailable.value = false
   try {
-    const [configResult, defaultsResult, billingResult] = await Promise.allSettled([
+    const [configResult, defaultsResult] = await Promise.allSettled([
       getBusinessSettings('ai-customer-service'),
-      getAiCsDefaults(),
-      getCsConfig()
+      getAiCsDefaults()
     ])
     if (!loadGate.isCurrent(requestGeneration)) return
     if (configResult.status === 'rejected') throw configResult.reason
@@ -479,48 +445,12 @@ async function load() {
     form.defaultKnowledgeBases = normalizeEntries(data.defaultKnowledgeBases, '', '默认知识库')
     form.chatRules = normalizeEntries(data.chatRules, '', '规则')
     form.defaultChatRules = normalizeEntries(data.defaultChatRules, '', '默认规则')
-    // 计费配置：getCsConfig 返回 { code, msg, data: { dailyFreeQuota, perMessageTokens, ... } }
-    if (billingResult.status === 'fulfilled') {
-      const bd = billingResult.value?.data
-      if (bd && typeof bd === 'object') {
-        if (Number.isFinite(Number(bd.dailyFreeQuota))) billing.dailyFreeQuota = Number(bd.dailyFreeQuota)
-        if (Number.isFinite(Number(bd.perMessageTokens))) billing.perMessageTokens = Number(bd.perMessageTokens)
-        if (Number.isFinite(Number(bd.maxContextMessages))) billing.maxContextMessages = Number(bd.maxContextMessages)
-        if (typeof bd.enabled === 'boolean') billing.enabled = bd.enabled
-      }
-    }
     settingsAvailable.value = true
   } catch {
     if (!loadGate.isCurrent(requestGeneration)) return
     loadError.value = '请检查网络连接后重试；在配置成功加载前不会应用或覆盖任何设置。'
   } finally {
     if (loadGate.isCurrent(requestGeneration)) loading.value = false
-  }
-}
-
-async function saveBilling() {
-  if (billingSaving.value) return
-  billingSaving.value = true
-  try {
-    const payload = {
-      dailyFreeQuota: Math.max(0, Math.min(1000, Number(billing.dailyFreeQuota) || 0)),
-      perMessageTokens: Math.max(1, Math.min(100, Number(billing.perMessageTokens) || 3)),
-      maxContextMessages: Math.max(10, Math.min(200, Number(billing.maxContextMessages) || 50)),
-      enabled: !!billing.enabled
-    }
-    const res = await saveCsBillingConfig(payload)
-    const bd = res?.data
-    if (bd && typeof bd === 'object') {
-      if (Number.isFinite(Number(bd.dailyFreeQuota))) billing.dailyFreeQuota = Number(bd.dailyFreeQuota)
-      if (Number.isFinite(Number(bd.perMessageTokens))) billing.perMessageTokens = Number(bd.perMessageTokens)
-      if (Number.isFinite(Number(bd.maxContextMessages))) billing.maxContextMessages = Number(bd.maxContextMessages)
-      if (typeof bd.enabled === 'boolean') billing.enabled = bd.enabled
-    }
-    showToast('额度配置已保存')
-  } catch (e) {
-    showToast('额度配置保存失败：' + (e.message || '网络错误'), true)
-  } finally {
-    billingSaving.value = false
   }
 }
 
@@ -532,6 +462,7 @@ async function save() {
       ...form,
       knowledgeBases: form.knowledgeBases.filter(item => item?.content?.trim()),
       chatRules: form.chatRules.filter(item => item?.content?.trim()),
+      defaultChatRules: form.defaultChatRules.filter(item => item?.content?.trim()),
       knowledgeBase: form.knowledgeBases
         .map(item => item?.content?.trim())
         .filter(Boolean)
@@ -641,6 +572,14 @@ function removeChatRule(index) {
   form.chatRules.splice(index, 1)
 }
 
+function addDefaultChatRule() {
+  form.defaultChatRules.push({ name: `默认规则${form.defaultChatRules.length + 1}`, content: '', source: 'manual' })
+}
+
+function removeDefaultChatRule(index) {
+  form.defaultChatRules.splice(index, 1)
+}
+
 async function restoreDefault(field) {
   if (!['systemPrompt', 'welcomeMessage'].includes(field)) return
   const label = field === 'systemPrompt' ? '系统提示词' : '欢迎语'
@@ -738,7 +677,6 @@ onBeforeUnmount(() => {
 .aics-switch.on .aics-switch-knob { left: 22px; }
 
 .aics-actions { display: flex; gap: 12px; margin-top: 16px; }
-.aics-billing-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
 .aics-save-btn, .aics-test-btn {
   padding: 10px 20px; border-radius: 12px; border: 0; cursor: pointer;
   font-size: 13px; font-weight: 700; transition: all .2s;

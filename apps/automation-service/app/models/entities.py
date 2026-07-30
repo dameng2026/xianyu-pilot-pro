@@ -268,6 +268,11 @@ class CardItem(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     group_id = Column(BigInteger, nullable=False)
     tenant_id = Column(BigInteger, nullable=False)
+    # card_content 是前端展示的核心字段，与 Java SchemaCompatibilityRunner 第2898行逻辑对齐：
+    # - 有 card_value 时格式为 "card_key----card_value"
+    # - 无 card_value 时直接等于 card_key
+    # Python 端在写入时必须同步填充 card_content，否则前端卡密列表展示为空
+    card_content = Column(Text, nullable=True)
     card_key = Column(Text, nullable=False)
     card_value = Column(Text, nullable=True)
     extra_info = Column(Text, nullable=True)
@@ -1088,6 +1093,48 @@ class XianyuRateAccountState(Base):
     is_syncing = Column(SmallInteger, nullable=False, default=0, comment="1=同步中（任务去重）")
     sync_started_time = Column(DateTime, nullable=True)
     last_full_sync_time = Column(DateTime, nullable=True, comment="最后一次完整同步时间")
+    deleted = Column(SmallInteger, default=0)
+    created_time = Column(DateTime, default=func.now())
+    updated_time = Column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class XianyuAccountAutoRateConfig(Base):
+    """账号级自动评价配置（与 Java XianyuAccountFeatureService 对齐）。
+
+    每个账号一条记录：是否启用、评价方式（text/api）、评价内容、执行时间等。
+    """
+    __tablename__ = "xianyu_account_auto_rate_config"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id = Column(BigInteger, nullable=False)
+    user_id = Column(BigInteger, nullable=True)
+    account_id = Column(BigInteger, nullable=False)
+    enabled = Column(SmallInteger, nullable=False, default=0, comment="1=启用 0=关闭")
+    rate_type = Column(String(30), nullable=False, default="text", comment="text=固定文本 api=外部API")
+    text_content = Column(Text, nullable=True, comment="固定文本评价内容 / API 兜底文本")
+    api_url = Column(Text, nullable=True, comment="外部 API 地址")
+    schedule_hour = Column(Integer, nullable=False, default=9, comment="每天执行时间（0-23）")
+    deleted = Column(SmallInteger, default=0)
+    created_time = Column(DateTime, default=func.now())
+    updated_time = Column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class XianyuAutoRateLog(Base):
+    """自动补评价执行日志。每次定时任务或手动触发后写入一条记录。"""
+    __tablename__ = "xianyu_auto_rate_log"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id = Column(BigInteger, nullable=False)
+    account_id = Column(BigInteger, nullable=False)
+    run_time = Column(DateTime, nullable=False, comment="本次执行时间")
+    schedule_hour = Column(Integer, nullable=True, comment="配置的执行时间（0-23），手动触发时为 NULL")
+    trigger_type = Column(String(20), nullable=False, default="scheduled", comment="scheduled=定时 manual=手动")
+    status = Column(String(20), nullable=False, default="success", comment="success/skip/failed/partial")
+    total_pending = Column(Integer, nullable=False, default=0)
+    total_success = Column(Integer, nullable=False, default=0)
+    total_failed = Column(Integer, nullable=False, default=0)
+    total_skipped = Column(Integer, nullable=False, default=0)
+    error_message = Column(String(500), nullable=True)
+    details_json = Column(Text, nullable=True, comment="明细 JSON（每条订单处理结果）")
+    duration_seconds = Column(Float, nullable=False, default=0)
     deleted = Column(SmallInteger, default=0)
     created_time = Column(DateTime, default=func.now())
     updated_time = Column(DateTime, default=func.now(), onupdate=func.now())

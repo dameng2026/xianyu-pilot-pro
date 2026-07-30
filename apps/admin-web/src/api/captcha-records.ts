@@ -1,5 +1,5 @@
 import request from '@/utils/http'
-import { requirePagePayload, requireRecordPayload } from '@/utils/api-payload'
+import { requireListPayload, requirePagePayload, requireRecordPayload } from '@/utils/api-payload'
 
 /** 滑块求解记录查询参数 */
 export interface CaptchaRecordQuery {
@@ -96,6 +96,63 @@ export interface CaptchaStatsQuery {
 export function getCaptchaSolveStats(params: CaptchaStatsQuery = {}) {
   return request.get<any>({ url: '/admin/captcha-records/stats', params })
     .then(value => requireRecordPayload<Record<string, any>>(value, '滑块求解统计') as CaptchaSolveStats)
+}
+
+// ==================== 尝试明细成功率统计 ====================
+
+/** 通用维度统计行（求解方案 / 拖动方法 / 速度策略 共用） */
+export interface CaptchaAttemptDimensionStat {
+  dim: string // 维度值（如 'playwright' / 'in_container' / 'standard'）
+  total: number // 总次数
+  success: number // 成功次数
+  successRate: number // 成功率 0~100
+  avgDurationMs: number // 平均耗时（毫秒）
+}
+
+/** 按尝试轮次聚合的统计行 */
+export interface CaptchaAttemptNoStat {
+  attemptNo: number // 尝试轮次编号（1-5）
+  total: number
+  success: number
+  successRate: number // 0~100
+  avgDurationMs: number
+}
+
+/** 尝试明细成功率统计返回结构 */
+export interface CaptchaAttemptStats {
+  bySolveScheme: CaptchaAttemptDimensionStat[] // 按求解方案聚合
+  byDragMethod: CaptchaAttemptDimensionStat[] // 按拖动方法聚合
+  bySpeedStrategy: CaptchaAttemptDimensionStat[] // 按速度策略聚合
+  byAttemptNo: CaptchaAttemptNoStat[] // 按尝试轮次聚合
+  totalAttempts: number // 总尝试次数
+  totalSuccess: number // 总成功次数
+  overallSuccessRate: number // 整体成功率 0~100
+  days: number // 统计天数（0=全量）
+  accountId: number // 账号 ID（0=不限账号）
+}
+
+/** 单次尝试明细行 */
+export interface CaptchaAttemptDetail {
+  attemptNo: number
+  solveScheme: string
+  dragMethod: string
+  speedStrategy: string
+  success: boolean
+  durationMs: number
+  errorMessage?: string
+  createdAt?: string
+}
+
+/** 获取尝试明细成功率统计（按方案/方法/策略/轮次四维聚合） */
+export function getCaptchaAttemptStats(params: CaptchaStatsQuery = {}) {
+  return request.get<any>({ url: '/admin/captcha-records/attempt-stats', params })
+    .then(value => requireRecordPayload<Record<string, any>>(value, '尝试明细统计') as CaptchaAttemptStats)
+}
+
+/** 查询单条求解记录的每次尝试明细列表 */
+export function getCaptchaRecordAttempts(recordId: number | string) {
+  return request.get<any>({ url: `/admin/captcha-records/${recordId}/attempts` })
+    .then(value => requireListPayload<CaptchaAttemptDetail>(value, '求解尝试明细'))
 }
 
 /** 队列实时状态 */

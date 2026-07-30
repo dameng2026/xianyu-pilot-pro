@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import viteCompression from 'vite-plugin-compression'
 import pkg from './package.json'
 
 // Build metadata must be supplied by the release pipeline. Falling back to an
@@ -11,7 +12,17 @@ if (buildDate && Number.isNaN(Date.parse(buildDate))) {
 }
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    // 构建时预压缩 .gz 文件，配合 nginx `gzip_static on` 实现零 CPU 在线压缩开销
+    // 与 admin-web/vite.config.ts 配置保持一致
+    viteCompression({
+      algorithm: 'gzip',
+      ext: '.gz',
+      threshold: 10240,
+      deleteOriginFile: false,
+    }),
+  ],
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
     __APP_BUILD_DATE__: JSON.stringify(buildDate)
@@ -36,8 +47,8 @@ export default defineConfig({
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined
           if (id.includes('echarts') || id.includes('zrender')) return 'vendor-echarts'
-          if (id.includes('vue') || id.includes('pinia') || id.includes('vue-router')) return 'vendor-vue'
-          if (id.includes('axios') || id.includes('crypto-js') || id.includes('qrcode') || id.includes('file-saver')) return 'vendor-utils'
+          if (id.includes('vue')) return 'vendor-vue'
+          if (id.includes('axios')) return 'vendor-utils'
           return 'vendor'
         },
         minify: {

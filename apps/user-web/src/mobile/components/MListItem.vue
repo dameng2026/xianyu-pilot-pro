@@ -49,7 +49,7 @@ defineEmits(['click'])
   flex-shrink: 0;
   width: 36px;
   height: 36px;
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   background: var(--m-color-bg-subtle);
   display: flex;
   align-items: center;

@@ -152,6 +152,29 @@
               <button type="button" class="pc-btn pc-btn-primary pc-stat-btn" @click="paymentVisible = true">充值</button>
             </article>
 
+            <article class="pc-stat-card pc-stat-card-balance">
+              <div class="pc-stat-head">
+                <div class="pc-stat-ico pc-stat-ico-cyan">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
+                    <rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.6"/>
+                    <line x1="2" y1="10" x2="22" y2="10" stroke="currentColor" stroke-width="1.6"/>
+                    <circle cx="17" cy="15" r="1.2" fill="currentColor"/>
+                  </svg>
+                </div>
+                <span class="pc-stat-label">可提现余额</span>
+              </div>
+              <div class="pc-stat-value">
+                <strong>¥{{ formatMoneyYuan(growthBalance.availableBalance) }}</strong>
+              </div>
+              <div class="pc-stat-sub">
+                <span class="pc-stat-yuan">代理等级：{{ growthBalance.tierName || '普通代理' }} · 累计收益 ¥{{ formatMoneyYuan(growthBalance.totalEarnings) }}</span>
+              </div>
+              <div class="pc-stat-actions">
+                <button type="button" class="pc-btn pc-btn-primary pc-stat-btn" :disabled="!growthCanWithdraw" @click="openGrowthWithdraw">提现</button>
+                <button type="button" class="pc-btn pc-btn-outline pc-stat-btn" @click="emit('navigate', 'growth-partner')">查看详情</button>
+              </div>
+            </article>
+
             <article class="pc-stat-card">
               <div class="pc-stat-head">
                 <div class="pc-stat-ico pc-stat-ico-green">
@@ -326,7 +349,7 @@
                 @click="loadMemberComparison"
               >{{ memberComparisonLoading ? '加载中…' : '刷新' }}</button>
             </div>
-            <p class="pc-compare-desc">数据来源：后台「系统运维 → 功能管理」配置。✓ 表示该等级可用，— 表示该等级不可用。</p>
+            <p class="pc-compare-desc">数据来源：后台「系统运维 → 功能管理」配置。✓ 表示该等级可用，— 表示该等级不可用。限制模式由管理员配置，影响所有等级用户的访问权限。</p>
             <div class="pc-compare-table-wrap">
               <EmptyState
                 v-if="memberComparisonError"
@@ -362,12 +385,13 @@
                         <span class="pc-svip-badge">你的等级</span>
                       </div>
                     </th>
+                    <th class="pc-th-limit">限制模式</th>
                   </tr>
                 </thead>
                 <tbody>
                   <template v-for="(group, gIdx) in memberCompareData" :key="'g'+gIdx">
                     <tr class="pc-group-row">
-                      <td colspan="4">
+                      <td colspan="5">
                         <span class="pc-feature-ico" aria-hidden="true">{{ group.icon }}</span>
                         <span class="pc-group-label">{{ group.category }}</span>
                         <span class="pc-group-count">{{ group.items.length }} 项</span>
@@ -392,6 +416,9 @@
                           <svg viewBox="0 0 16 16" width="18" height="18"><circle cx="8" cy="8" r="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#d97706" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
                         </span>
                         <span v-else class="pc-dash">—</span>
+                      </td>
+                      <td class="pc-td-limit">
+                        <span class="pc-limit-badge" :class="`pc-limit-${item.limitModeClass || 'none'}`">{{ item.limitMode }}</span>
                       </td>
                     </tr>
                   </template>
@@ -1148,6 +1175,59 @@
       @close="paymentVisible = false"
       @paid="handleTokenPaid"
     />
+
+    <!-- 提现弹窗 -->
+    <div v-if="growthWithdrawVisible" class="pc-withdraw-mask" @click.self="closeGrowthWithdraw">
+      <div class="pc-withdraw-dialog">
+        <div class="pc-withdraw-head">
+          <h3>申请提现</h3>
+          <button class="pc-withdraw-close" @click="closeGrowthWithdraw">×</button>
+        </div>
+        <div class="pc-withdraw-body">
+          <div class="pc-withdraw-info">
+            <div>
+              <small>可提现余额</small>
+              <b>¥{{ formatMoneyYuan(growthBalance.availableBalance) }}</b>
+            </div>
+            <div>
+              <small>最低提现</small>
+              <b>¥{{ growthMinWithdrawalYuan }}</b>
+            </div>
+          </div>
+          <div class="pc-form-row">
+            <label>提现金额（元）<em class="pc-required">*</em></label>
+            <input v-model.number="growthWithdrawForm.amount" type="number" :min="growthMinWithdrawalYuan" :max="growthAvailableYuan" step="0.01" placeholder="请输入提现金额" />
+            <small v-if="growthWithdrawForm.amount && growthWithdrawForm.amount < growthMinWithdrawalYuan" class="pc-form-error">最低提现金额为 ¥{{ growthMinWithdrawalYuan }}</small>
+          </div>
+          <div class="pc-form-row">
+            <label>收款方式<em class="pc-required">*</em></label>
+            <select v-model="growthWithdrawForm.paymentMethod">
+              <option value="wechat_qr">微信收款码</option>
+              <option value="alipay_qr">支付宝收款码</option>
+              <option value="alipay_account">支付宝收款账号</option>
+              <option value="bank_card">银行卡号</option>
+            </select>
+          </div>
+          <div class="pc-form-row">
+            <label>{{ growthAccountLabel }}<em class="pc-required">*</em></label>
+            <input v-model="growthWithdrawForm.paymentAccount" :placeholder="growthAccountPlaceholder" />
+          </div>
+          <div class="pc-form-row">
+            <label>收款人姓名</label>
+            <input v-model="growthWithdrawForm.paymentName" placeholder="选填，便于核对" />
+          </div>
+          <div v-if="growthWithdrawForm.paymentMethod === 'wechat_qr' || growthWithdrawForm.paymentMethod === 'alipay_qr'" class="pc-form-tip">
+            请在收款账户中填写收款码图片 URL，或联系客服上传二维码。
+          </div>
+        </div>
+        <div class="pc-withdraw-foot">
+          <button class="pc-btn pc-btn-outline" @click="closeGrowthWithdraw">取消</button>
+          <button class="pc-btn pc-btn-primary" :disabled="growthSubmitting || !growthCanSubmit" @click="submitGrowthWithdraw">
+            {{ growthSubmitting ? '提交中...' : '提交申请' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1171,6 +1251,7 @@ import {
 } from '../api/profile.js'
 import { useAuthCapabilities } from '../utils/useAuthCapabilities.js'
 import { globalConfirm } from '../composables/confirmState.js'
+import { getGrowthDashboard, requestWithdrawal as requestGrowthWithdrawal } from '../api/growth.js'
 import { getFeatureSwitchStatus, getFeatureSwitchComparison } from '../api/feature-switch.js'
 import { getTokenRechargePlans } from '../api/payment.js'
 import { APP_VERSION } from '../utils/appMeta.js'
@@ -1212,6 +1293,115 @@ const overviewLoadError = ref('')
 const notice = reactive({ text: '', type: 'info' })
 const paymentVisible = ref(false)
 const tokenPlans = ref([])
+
+// ===== 增长合伙人余额卡片 =====
+const growthBalance = reactive({
+  availableBalance: 0,
+  totalEarnings: 0,
+  totalReferrals: 0,
+  validReferrals: 0,
+  totalTokenReward: 0,
+  withdrawnAmount: 0,
+  frozenBalance: 0,
+  tierCode: 'normal',
+  tierName: '',
+  minWithdrawalAmount: 5000,
+  tokenRewardPerReferral: 100,
+})
+const growthWithdrawVisible = ref(false)
+const growthSubmitting = ref(false)
+const growthWithdrawForm = reactive({
+  amount: '',
+  paymentMethod: 'wechat_qr',
+  paymentAccount: '',
+  paymentName: '',
+})
+const growthMinWithdrawalYuan = computed(() => Number(growthBalance.minWithdrawalAmount || 5000) / 100)
+const growthAvailableYuan = computed(() => Number(growthBalance.availableBalance || 0) / 100)
+const growthCanWithdraw = computed(() => growthAvailableYuan.value >= growthMinWithdrawalYuan.value)
+const growthAccountLabel = computed(() => {
+  const map = {
+    wechat_qr: '微信收款码 URL',
+    alipay_qr: '支付宝收款码 URL',
+    alipay_account: '支付宝账号',
+    bank_card: '银行卡号',
+  }
+  return map[growthWithdrawForm.paymentMethod] || '收款账户'
+})
+const growthAccountPlaceholder = computed(() => {
+  const map = {
+    wechat_qr: '请输入微信收款码图片 URL',
+    alipay_qr: '请输入支付宝收款码图片 URL',
+    alipay_account: '请输入支付宝账号（邮箱或手机号）',
+    bank_card: '请输入银行卡号',
+  }
+  return map[growthWithdrawForm.paymentMethod] || '请输入收款账户信息'
+})
+const growthCanSubmit = computed(() => {
+  const amt = Number(growthWithdrawForm.amount) || 0
+  return amt >= growthMinWithdrawalYuan.value && amt <= growthAvailableYuan.value && !!growthWithdrawForm.paymentAccount
+})
+
+async function loadGrowthBalance() {
+  try {
+    const d = await getGrowthDashboard()
+    if (!d) return
+    Object.assign(growthBalance, {
+      availableBalance: d.availableBalance ?? 0,
+      totalEarnings: d.totalEarnings ?? 0,
+      totalReferrals: d.totalReferrals ?? 0,
+      validReferrals: d.validReferrals ?? 0,
+      totalTokenReward: d.totalTokenReward ?? 0,
+      withdrawnAmount: d.withdrawnAmount ?? 0,
+      frozenBalance: d.frozenBalance ?? 0,
+      tierCode: d.tierCode || 'normal',
+      tierName: d.tierConfig?.tier_name || '',
+      minWithdrawalAmount: d.minWithdrawalAmount ?? 5000,
+      tokenRewardPerReferral: d.tokenRewardPerReferral ?? 100,
+    })
+  } catch (e) {
+    console.warn('[ProfileCenter] loadGrowthBalance failed', e)
+  }
+}
+
+function formatMoneyYuan(cent) {
+  if (cent == null) return '0.00'
+  return (Number(cent) / 100).toFixed(2)
+}
+
+function openGrowthWithdraw() {
+  growthWithdrawForm.amount = ''
+  growthWithdrawForm.paymentMethod = 'wechat_qr'
+  growthWithdrawForm.paymentAccount = ''
+  growthWithdrawForm.paymentName = ''
+  growthWithdrawVisible.value = true
+}
+function closeGrowthWithdraw() {
+  growthWithdrawVisible.value = false
+}
+async function submitGrowthWithdraw() {
+  if (!growthCanSubmit.value) return
+  growthSubmitting.value = true
+  try {
+    const yuan = Number(growthWithdrawForm.amount)
+    const cent = Math.round(yuan * 100)
+    await requestGrowthWithdrawal({
+      amount: cent,
+      paymentMethod: growthWithdrawForm.paymentMethod,
+      paymentAccount: growthWithdrawForm.paymentAccount,
+      paymentName: growthWithdrawForm.paymentName,
+    })
+    notice.text = '提现申请已提交，请等待审核'
+    notice.type = 'success'
+    closeGrowthWithdraw()
+    await loadGrowthBalance()
+  } catch (e) {
+    notice.text = '提现失败：' + (e?.message || '未知错误')
+    notice.type = 'error'
+  } finally {
+    growthSubmitting.value = false
+  }
+}
 async function loadTokenPlans() {
   // 加载后台配置的 Token 充值套餐
   try {
@@ -1505,7 +1695,9 @@ const memberCompareData = computed(() => {
         name: f.title || f.key,
         normal: boolToMark(f.normal),
         vip: boolToMark(f.vip),
-        svip: boolToMark(f.svp)
+        svip: boolToMark(f.svp),
+        limitMode: limitModeLabel(f.limitMode),
+        limitModeClass: limitModeClassKey(f.limitMode)
       }))
     })
   }
@@ -1514,6 +1706,21 @@ const memberCompareData = computed(() => {
 
 function boolToMark(value) {
   return value === true || value === 'true' || value === 1 || value === '1' ? '✓' : '—'
+}
+
+/** 限制模式 → 展示文案（与后台功能管理配置一致，单选互斥） */
+function limitModeLabel(mode) {
+  const m = String(mode || 'none').toLowerCase()
+  if (m === 'preview') return '预览模式'
+  if (m === 'blocked') return '不可进入'
+  return '无限制'
+}
+
+/** 限制模式 → CSS 类名后缀（none/preview/blocked） */
+function limitModeClassKey(mode) {
+  const m = String(mode || 'none').toLowerCase()
+  if (m === 'preview' || m === 'blocked') return m
+  return 'none'
 }
 
 async function loadMemberComparison() {
@@ -2365,6 +2572,7 @@ onMounted(() => {
   loadOverview().then(() => {
     initOverviewCharts()
   })
+  loadGrowthBalance()
   // 概览页需要 tokenStats（余额/今日/本月）与 7 日趋势数据来渲染统计卡片与图表
   // loadTokenLedger(1, 1) 仅用于获取 stats（取 1 条记录最小化开销）
   loadTokenLedger(1, 1).then(() => {
@@ -5193,7 +5401,7 @@ watch(activeTab, async (tab) => {
 
 .pc-stats-row {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -5269,6 +5477,136 @@ watch(activeTab, async (tab) => {
 .pc-stat-ico-gold {
   background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
   color: #fff;
+}
+
+.pc-stat-ico-cyan {
+  background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
+  color: #fff;
+}
+
+.pc-stat-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.pc-stat-actions .pc-stat-btn { flex: 1; }
+.pc-stat-card-balance {
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border-color: #bae6fd;
+}
+
+/* 提现弹窗 */
+.pc-withdraw-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 31, 60, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.pc-withdraw-dialog {
+  background: #fff;
+  border-radius: 12px;
+  width: 480px;
+  max-width: 92vw;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(15, 31, 60, 0.3);
+}
+.pc-withdraw-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  border-bottom: 1px solid #eef2f8;
+}
+.pc-withdraw-head h3 { margin: 0; font-size: 16px; font-weight: 700; color: #10203a; }
+.pc-withdraw-close {
+  background: transparent;
+  border: 0;
+  font-size: 24px;
+  color: #8b98ac;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.pc-withdraw-close:hover { color: #53617a; }
+.pc-withdraw-body {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+.pc-withdraw-foot {
+  padding: 14px 20px;
+  border-top: 1px solid #eef2f8;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.pc-withdraw-info {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.pc-withdraw-info > div {
+  background: #f7faff;
+  border-radius: 8px;
+  padding: 10px;
+  text-align: center;
+}
+.pc-withdraw-info small {
+  display: block;
+  color: #8996aa;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.pc-withdraw-info b {
+  font-size: 18px;
+  color: #10203a;
+  font-weight: 700;
+}
+.pc-form-row { margin-bottom: 14px; }
+.pc-form-row label {
+  display: block;
+  font-size: 12px;
+  color: #53617a;
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+.pc-required { color: #fb5b5b; margin-left: 2px; }
+.pc-form-row input,
+.pc-form-row select {
+  width: 100%;
+  height: 38px;
+  border: 1px solid #dfe7f3;
+  border-radius: 8px;
+  padding: 0 12px;
+  font-size: 13px;
+  color: #18243b;
+  background: #fff;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.pc-form-row input:focus,
+.pc-form-row select:focus { border-color: #2d78f6; }
+.pc-form-error {
+  display: block;
+  color: #fb5b5b;
+  font-size: 11px;
+  margin-top: 4px;
+}
+.pc-form-tip {
+  font-size: 11px;
+  color: #8b98ac;
+  margin-top: -8px;
+  margin-bottom: 14px;
+  background: #fff8e6;
+  padding: 8px 10px;
+  border-radius: 6px;
 }
 
 .pc-stat-label {
@@ -5640,25 +5978,66 @@ watch(activeTab, async (tab) => {
 }
 
 .pc-th-feature {
-  width: 46%;
+  width: 34%;
 }
 
 .pc-th-normal {
-  width: 18%;
+  width: 15%;
   color: #94a3b8 !important;
   font-weight: 600;
 }
 
 .pc-th-vip {
-  width: 18%;
+  width: 15%;
   color: #2563eb !important;
 }
 
 .pc-th-svip {
-  width: 18%;
+  width: 15%;
   background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%) !important;
   color: #92400e !important;
   position: relative;
+}
+
+.pc-th-limit {
+  width: 21%;
+  color: #6f7e97 !important;
+  font-weight: 600;
+}
+
+.pc-td-limit {
+  text-align: center;
+}
+
+/* 限制模式徽章（无限制/预览模式/不可进入） */
+.pc-limit-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.pc-limit-none {
+  background: #f1f5f9;
+  color: #64748b;
+  border-color: #e2e8f0;
+}
+
+.pc-limit-preview {
+  background: #fffbeb;
+  color: #b45309;
+  border-color: #fde68a;
+}
+
+.pc-limit-blocked {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: #fecaca;
 }
 
 .pc-th-svip::after {

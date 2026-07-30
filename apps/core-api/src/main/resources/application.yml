@@ -58,17 +58,26 @@ spring:
     username: root
     password: 123456
     hikari:
-      minimum-idle: 2
-      maximum-pool-size: 20
+      minimum-idle: 20
+      maximum-pool-size: 50
       # connection-timeout here is HikariCP's wait-for-connection timeout
       # (NOT Tomcat's; see server.tomcat.connection-timeout above).
-      connection-timeout: 10000
+      # 原 10000ms：连接池耗尽时请求会卡 10s 才失败，导致 Tomcat 线程被占用
+      # 改为 3000ms：快速失败，前端立即收到 503 而非长时间等待
+      # 注意：summary() 并行化最多并发 5 个查询/请求，50 连接池可支持 10 个并发用户无等待
+      connection-timeout: 3000
       max-lifetime: 1800000
       # Reclaim idle connections before MySQL wait_timeout closes them.
       idle-timeout: 600000
       # Log a warning when a connection is held longer than 30s; helps spot
       # long transactions that hold connections while doing HTTP calls.
       leak-detection-threshold: 30000
+      # 连接活跃性校验：借出连接前发 SELECT 1，避免拿到已被 MySQL wait_timeout 关闭的连接
+      # 原 HikariCP 默认只校验空闲连接，连接池中的"看似活跃"连接可能已被 MySQL 单方面关闭
+      connection-test-query: "SELECT 1"
+      validation-timeout: 1000
+      # 连接池指标暴露给 Prometheus（通过 /actuator/metrics）
+      pool-name: HikariCP-core
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -142,7 +151,7 @@ admin:
     enabled: ${ADMIN_SEED_ENABLED:false}
   jwt:
     secret: ${ADMIN_JWT_SECRET:please-change-this-admin-jwt-secret-at-least-32-chars}
-    expire-seconds: ${JWT_EXPIRE_SECONDS:3600}
+    expire-seconds: ${JWT_EXPIRE_SECONDS:86400}
     issuer: ${JWT_ISSUER:xianyu-core-api}
     audience: ${JWT_AUDIENCE:xianyu-user-api}
   cors:

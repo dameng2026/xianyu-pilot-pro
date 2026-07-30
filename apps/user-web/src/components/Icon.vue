@@ -27,6 +27,8 @@ import { computed } from 'vue'
 const props = defineProps({ name: { type: String, default: 'circle' } })
 const asset = (path) => `/xya/${path}`
 const pngIcons = {
+  // 一级分类导航图标
+  overview: asset('sidebar_icons/sidebar_icons_008.png'),
   dashboard: asset('sidebar_icons/sidebar_icons_008.png'),
   data: asset('sidebar_icons/sidebar_icons_004.png'),
   board: asset('sidebar_icons/sidebar_icons_002.png'),
@@ -38,7 +40,11 @@ const pngIcons = {
   opportunity: asset('metric_icons/metric_icons_010.png'),
   message: asset('sidebar_icons/sidebar_icons_011.png'),
   chat: asset('sidebar_icons/sidebar_icons_022.png'),
+  delivery: asset('sidebar_icons/sidebar_icons_025.png'),
+  distribution: asset('sidebar_icons/sidebar_icons_028.png'),
   workflow: asset('workflow_assets/workflow_assets_001.png'),
+  marketing: asset('metric_icons/metric_icons_010.png'),
+  system: asset('brand/brand_011.png'),
   task: asset('sidebar_icons/sidebar_icons_020.png'),
   draft: asset('sidebar_icons/sidebar_icons_013.png'),
   imageRecord: asset('sidebar_icons/sidebar_icons_014.png'),

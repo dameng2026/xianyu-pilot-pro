@@ -52,16 +52,23 @@ SOLVE_DEDUP_COOLDOWN_SEC = 60
 
 # service_unavailable 冷却时间（秒）：hasLogin 服务不可用失败后，
 # WS token_refresh 触发的自动求解在此冷却期内不再重复入队，避免高频循环
-SERVICE_UNAVAILABLE_COOLDOWN_SEC = 600  # 10 分钟
+SERVICE_UNAVAILABLE_COOLDOWN_SEC = 60
 
 # 最大重试次数（按失败原因分类）
 # 注意：service_unavailable 已移除重试机制（原 2 次）
 # 原因：hasLogin 接口风控返回 HAS_LOGIN_UNCONFIRMED 时，立即重试只会加剧风控，
 # 且 WS 会自然重连触发新的求解，无需队列内重试。
 # 失败后仅更新原记录为 precheck_rejected/fail，不创建新记录，不重新入队。
+#
+# 2026-07-29 新增 browser_crashed：浏览器崩溃/启动失败可重试 1 次
+# 原因：浏览器崩溃是临时性资源问题（Page crashed / OOM / 进程竞争），
+# 重试一次可能就成功（下次启动浏览器时资源已释放）。
+# 仅重试 1 次（而非 slider_fail 的 3 次）避免记录数爆炸。
+# 配合 captcha_backoff.py 的 skip_backoff=True，不累加指数退避。
 MAX_RETRY_BY_REASON = {
     "slider_fail": 3,          # 滑块通过失败，可重试
     "timeout": 1,              # 超时，重试 1 次
+    "browser_crashed": 1,      # 浏览器崩溃/启动失败，重试 1 次（临时性错误）
 }
 
 # 不可重试的失败原因（需人工介入或服务恢复后由 WS 自然重连触发）
@@ -333,6 +340,35 @@ class CaptchaQueueManager:
                     account_id, remaining,
                 )
                 return (None, 0, 0)
+
+        # === 0.5 指数退避冷却检查（自动触发场景，避免记录爆炸） ===
+        # 关键修复：之前在指数退避冷却期间，WS 每次重连都触发 enqueue_solve 入队，
+        # worker 取出后又被 assert_auto_solve_allowed 拦截，标记为 precheck_rejected，
+        # 创建一条失败记录。30秒间隔的WS重连一天可产生数百条无意义的失败记录，
+        # 严重拉低成功率统计并污染数据库。
+        # 自动触发场景（token_refresh/ws_health_check/ws_connect）在冷却期内直接跳过入队，
+        # 不创建记录，不占用 worker 资源。
+        # 手动触发场景（manual/manual_retry）跳过此检查，确保用户主动求解不被拦截。
+        if trigger_scene not in ("manual", "manual_retry"):
+            try:
+                # 函数内 import 避免循环依赖
+                from .captcha_backoff import get_backoff_status
+                backoff_st = await get_backoff_status(account_id, tenant_id)
+                if not backoff_st.get("allowed", True):
+                    remaining = int(backoff_st.get("remainingSec", 0))
+                    fail_count = int(backoff_st.get("failCount", 0))
+                    logger.info(
+                        "滑块求解入队跳过：指数退避冷却中 accountId=%d scene=%s "
+                        "剩余 %d 秒 failCount=%d",
+                        account_id, trigger_scene, remaining, fail_count,
+                    )
+                    return (None, 0, 0)
+            except Exception as e:
+                # 退避检查失败时降级为放行（fail-open），不影响正常流程
+                log_service_failure(
+                    logger, e, operation="backoff_check_enqueue",
+                    tenant_id=tenant_id, account_id=account_id, level=logging.DEBUG,
+                )
 
         # === 1. 排除表检查（所有场景，硬阻断，静默跳过不创建记录） ===
         # 3 天未登录前台用户的闲鱼账号已被定时扫描录入排除表，直接拒绝入队

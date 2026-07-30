@@ -21,6 +21,13 @@ public class OutboundNotificationPolicy {
     private static final Set<String> DINGTALK_HOSTS = Set.of("oapi.dingtalk.com");
     private static final Set<String> WECHAT_WORK_HOSTS = Set.of("qyapi.weixin.qq.com");
 
+    /**
+     * 腾讯云 SES API 固定域名白名单（设计文档 §10.1）。
+     * SDK 内部 endpoint 在 {@link TencentSesSender} 中固定为 ses.tencentcloudapi.com，
+     * 此处仅作为审计 hook，预留扩展点（如未来需要按地域校验）。
+     */
+    private static final Set<String> TENCENT_SES_API_HOSTS = Set.of("ses.tencentcloudapi.com");
+
     private final Set<String> genericWebhookHosts;
     private final Set<String> smtpHosts;
     private final HostResolver resolver;
@@ -85,6 +92,27 @@ public class OutboundNotificationPolicy {
             throw new IllegalArgumentException("SMTP 主机未列入管理员白名单");
         }
         validateResolvedPublicAddresses(host);
+    }
+
+    /**
+     * 腾讯云 SES API 调用出站策略校验（设计文档 §10.1）。
+     *
+     * SDK 内部已固定 endpoint 为 ses.tencentcloudapi.com 且强制 HTTPS，
+     * 此方法仅作为审计 hook：当 SES 调用发生时记录一次校验通过，
+     * 便于未来在出现新的地域域名时统一在这里扩展。
+     *
+     * 当前实现：固定允许 ses.tencentcloudapi.com，不允许用户自定义。
+     * 如果未来需要按 region 解析实际 endpoint，应在此方法内补充域名解析与白名单匹配。
+     */
+    public void validateSesApiCall() {
+        // 固定白名单：腾讯云 SES 全球统一 endpoint
+        // 如果未来腾讯云按地域拆分 endpoint，需要在这里扩展
+        // 当前实现：固定允许 ses.tencentcloudapi.com，不做 DNS 解析（SDK 内部已处理）
+        String sesHost = "ses.tencentcloudapi.com";
+        if (!TENCENT_SES_API_HOSTS.contains(sesHost)) {
+            throw new IllegalArgumentException("腾讯云 SES API 域名不在允许范围内");
+        }
+        // SDK 内部已强制 HTTPS，此处不做额外校验
     }
 
     private URI parseHttpsUri(String rawUrl) {

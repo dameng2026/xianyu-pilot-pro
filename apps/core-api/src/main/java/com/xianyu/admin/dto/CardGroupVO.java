@@ -23,6 +23,7 @@ public class CardGroupVO {
     private Integer invalidCount;
     private Integer errorCount;
     private Integer status;
+    private String skuPropertyKey;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -58,4 +59,6 @@ public class CardGroupVO {
     public void setErrorCount(Integer errorCount) { this.errorCount = errorCount; }
     public Integer getStatus() { return status; }
     public void setStatus(Integer status) { this.status = status; }
+    public String getSkuPropertyKey() { return skuPropertyKey; }
+    public void setSkuPropertyKey(String skuPropertyKey) { this.skuPropertyKey = skuPropertyKey; }
 }

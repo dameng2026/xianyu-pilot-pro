@@ -54,6 +54,9 @@ public class CardGroupDTO {
     @Max(value = 1, message = "状态值不正确")
     private Integer status;
 
+    @Size(max = 512, message = "SKU规格键不能超过512个字符")
+    private String skuPropertyKey;
+
     public String getGroupName() { return groupName; }
     public void setGroupName(String groupName) { this.groupName = trimToNull(groupName); }
     public String getDescription() { return description; }
@@ -80,6 +83,9 @@ public class CardGroupDTO {
     public void setRemainCount(Integer remainCount) { this.remainCount = remainCount; }
     public Integer getStatus() { return status; }
     public void setStatus(Integer status) { this.status = status; }
+
+    public String getSkuPropertyKey() { return skuPropertyKey; }
+    public void setSkuPropertyKey(String skuPropertyKey) { this.skuPropertyKey = trimToNull(skuPropertyKey); }
 
     private static String trimToNull(String value) {
         if (value == null) return null;

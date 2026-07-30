@@ -8,7 +8,9 @@ import paramiko
 CONFIG_PATH = ".deploy.prod.json"
 
 CHANGED_FILES = [
-    "apps/automation-service/app/services/xianyu_goods_sync.py",
+    "apps/automation-service/app/services/captcha_backoff.py",
+    "apps/automation-service/app/services/captcha_queue.py",
+    "apps/automation-service/app/services/captcha_solver.py",
 ]
 
 # Containers that share the automation-service image

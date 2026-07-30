@@ -3,13 +3,23 @@
   <div class="email-config-page">
     <div class="page-header">
       <h3 class="page-title">邮箱接口配置</h3>
-      <p class="page-desc">配置 SMTP 发件参数；保存后即可用于登录、注册、找回密码的邮箱验证码发送</p>
+      <p class="page-desc">支持 SMTP 与腾讯云 SES 两种发送方式；保存后即可用于登录、注册、找回密码的邮箱验证码发送</p>
     </div>
 
     <ElAlert
-      v-if="!form.passwordConfigured"
+      v-if="form.provider === 'smtp' && !form.passwordConfigured"
       title="SMTP 凭据未配置"
       description="尚未配置 SMTP 用户名/密码，验证码邮件无法发送。请填写完整并保存后再启用相关认证能力。"
+      type="warning"
+      show-icon
+      :closable="false"
+      class="capability-alert"
+    />
+
+    <ElAlert
+      v-if="form.provider === 'tencent_ses' && !form.tencentConfigured"
+      title="腾讯云 SES 凭据未配置"
+      description="尚未完整配置腾讯云 SES（SecretId/SecretKey/Region/发件地址/模板 ID），验证码邮件无法发送。请填写完整并保存后再启用相关认证能力。"
       type="warning"
       show-icon
       :closable="false"
@@ -130,7 +140,7 @@
     />
 
     <div v-show="configState === 'ready'" class="config-card art-card-sm">
-      <h4 class="card-title">SMTP服务器设置</h4>
+      <h4 class="card-title">发送方式</h4>
       <ElForm
         :model="form"
         :rules="rules"
@@ -139,9 +149,33 @@
         label-position="right"
         class="config-form"
       >
-        <!-- 邮件服务商 -->
-        <ElFormItem label="邮件服务商" prop="provider">
-          <ElSelect v-model="form.provider" placeholder="请选择邮件服务商" style="width: 100%; max-width: 400px" @change="onProviderChange">
+        <!-- 发送方式切换 -->
+        <ElFormItem label="发送方式" prop="provider">
+          <ElRadioGroup v-model="form.provider" @change="onSendModeChange">
+            <ElRadio label="smtp">SMTP（自建邮箱）</ElRadio>
+            <ElRadio label="tencent_ses">腾讯云 SES</ElRadio>
+          </ElRadioGroup>
+          <div class="form-tip">
+            SMTP 适合已有邮箱服务的场景；腾讯云 SES 适合需要事务性邮件高送达率的场景
+          </div>
+          <ElAlert
+            v-if="providerMismatch"
+            title="发送方式已切换但尚未保存"
+            description="当前选择的发送方式与数据库保存的配置不一致。点击「保存配置」后才会生效；测试邮件会按当前 UI 选择的发送方式发送。"
+            type="warning"
+            show-icon
+            :closable="false"
+            class="mt-2"
+          />
+        </ElFormItem>
+
+        <!-- SMTP 模式字段 -->
+        <template v-if="form.provider === 'smtp'">
+          <h4 class="card-title mt-4">SMTP 服务器设置</h4>
+
+        <!-- 邮件服务商（仅用于自动填充 SMTP 默认值，不保存到后端） -->
+        <ElFormItem label="邮件服务商" prop="smtpProvider">
+          <ElSelect v-model="form.smtpProvider" placeholder="请选择邮件服务商" style="width: 100%; max-width: 400px" @change="onProviderChange">
             <ElOption label="自定义SMTP" value="custom" />
             <ElOption label="QQ 个人邮箱" value="qq" />
             <ElOption label="腾讯企业邮箱" value="qq_enterprise" />
@@ -226,15 +260,7 @@
           </div>
         </ElFormItem>
 
-        <!-- 邮件模板 -->
-        <ElFormItem label="邮件主题" prop="subject">
-          <ElInput
-            v-model="form.subject"
-            placeholder="如：【闲鱼助手】验证码通知"
-            style="width: 100%; max-width: 500px"
-          />
-        </ElFormItem>
-
+        <!-- SMTP 邮件模板（仅 SMTP 模式使用） -->
         <ElFormItem label="邮件模板" prop="template">
           <ElInput
             v-model="form.template"
@@ -243,7 +269,105 @@
             placeholder="请输入HTML邮件模板内容，使用 {code} 作为验证码占位符"
             style="width: 100%; max-width: 600px"
           />
-          <div class="form-tip">支持HTML格式，{code} 将替换为实际验证码</div>
+          <div class="form-tip">支持HTML格式，{code} 将替换为实际验证码；腾讯云 SES 模式下不使用此模板</div>
+        </ElFormItem>
+        </template>
+
+        <!-- 腾讯云 SES 模式字段 -->
+        <template v-if="form.provider === 'tencent_ses'">
+          <h4 class="card-title mt-4">腾讯云 SES 配置</h4>
+
+          <ElAlert
+            type="info"
+            :closable="false"
+            :show-icon="true"
+            class="ses-tip-alert"
+            title="腾讯云 SES 配置说明"
+          >
+            <ul class="guide-ul">
+              <li>发件地址必须已在腾讯云 SES 控制台验证。</li>
+              <li>验证码模板 ID 必须是审核通过的模板。</li>
+              <li>模板变量必须包含 <code>code</code>（用于验证码替换）。</li>
+              <li>SecretKey 只在保存时提交，读取时不会显示明文。</li>
+              <li>地域仅支持 <code>ap-hongkong</code> 和 <code>ap-guangzhou</code>。</li>
+            </ul>
+          </ElAlert>
+
+          <ElFormItem label="SecretId" prop="tencentSecretId">
+            <ElInput
+              v-model="form.tencentSecretId"
+              :placeholder="form.tencentSecretKeyConfigured ? '已配置（留空保持不变，或输入新值覆盖）' : '请输入腾讯云 SecretId'"
+              style="width: 100%; max-width: 500px"
+            />
+            <div class="form-tip">
+              腾讯云账户 API 密钥中的 SecretId；
+              <span v-if="form.tencentSecretIdMasked" class="hl">当前已配置：{{ form.tencentSecretIdMasked }}</span>
+            </div>
+          </ElFormItem>
+
+          <ElFormItem label="SecretKey" prop="tencentSecretKey">
+            <ElInput
+              v-model="form.tencentSecretKey"
+              :placeholder="form.tencentSecretKeyConfigured ? '已安全配置，留空表示保持不变' : '请输入腾讯云 SecretKey'"
+              :disabled="form.clearTencentSecretKey"
+              show-password
+              style="width: 100%; max-width: 500px"
+            />
+            <div class="form-tip">
+              腾讯云账户 API 密钥中的 SecretKey；保存后将以密文存储，读取时不返回明文
+            </div>
+            <div v-if="form.tencentSecretKeyConfigured" class="secret-state">
+              <ElTag type="success" effect="plain" size="small">SecretKey 已配置</ElTag>
+              <ElCheckbox v-model="form.clearTencentSecretKey">保存时清除已保存 SecretKey</ElCheckbox>
+            </div>
+          </ElFormItem>
+
+          <ElFormItem label="地域" prop="tencentRegion">
+            <ElSelect v-model="form.tencentRegion" placeholder="请选择地域" style="width: 100%; max-width: 400px">
+              <ElOption label="香港（ap-hongkong）" value="ap-hongkong" />
+              <ElOption label="广州（ap-guangzhou）" value="ap-guangzhou" />
+            </ElSelect>
+            <div class="form-tip">腾讯云 SES 全球服务地域，默认香港</div>
+          </ElFormItem>
+
+          <ElFormItem label="发件地址" prop="tencentFromEmailAddress">
+            <ElInput
+              v-model="form.tencentFromEmailAddress"
+              placeholder="如：noreply@yourdomain.com"
+              style="width: 100%; max-width: 500px"
+            />
+            <div class="form-tip">
+              必须为腾讯云 SES 控制台已验证的发件地址
+            </div>
+          </ElFormItem>
+
+          <ElFormItem label="模板 ID" prop="tencentTemplateId">
+            <ElInputNumber
+              v-model="form.tencentTemplateId"
+              :min="0"
+              :step="1"
+              style="width: 100%; max-width: 300px"
+              placeholder="腾讯云 SES 验证码模板 ID"
+            />
+            <div class="form-tip">
+              腾讯云 SES 控制台已审核通过的验证码模板 ID（正整数）；模板变量必须包含 <code>code</code>
+            </div>
+          </ElFormItem>
+        </template>
+
+        <!-- 通用业务字段 -->
+        <h4 class="card-title mt-4">验证码业务设置</h4>
+
+        <!-- 邮件主题 -->
+        <ElFormItem label="邮件主题" prop="subject">
+          <ElInput
+            v-model="form.subject"
+            placeholder="如：【闲鱼助手】验证码通知"
+            style="width: 100%; max-width: 500px"
+          />
+          <div class="form-tip">
+            SMTP 模式下作为邮件主题；腾讯云 SES 模式下作为模板发送的 Subject
+          </div>
         </ElFormItem>
 
         <!-- 验证码设置 -->
@@ -273,7 +397,7 @@
             <ElButton
               v-ripple
               :loading="testing"
-              :disabled="configState !== 'ready' || !form.passwordConfigured"
+              :disabled="configState !== 'ready' || !canTestEmail"
               @click="openTestDialog"
             >
               发送测试邮件
@@ -363,9 +487,13 @@ const testForm = reactive({ email: '' })
 const configState = ref<'loading' | 'ready' | 'error'>('loading')
 const configError = ref('')
 let loadedSnapshot: EmailConfigData | null = null
+// 数据库中保存的 provider（用于检测 UI 与已保存配置是否一致）
+const savedProvider = ref<string>('smtp')
 
 const form = reactive<EmailConfigData>({
-  provider: 'custom',
+  provider: 'smtp',
+  // SMTP 字段
+  smtpProvider: 'custom',
   smtpHost: 'smtp.qq.com',
   smtpPort: 465,
   encryption: 'ssl',
@@ -375,6 +503,17 @@ const form = reactive<EmailConfigData>({
   password: '',
   passwordConfigured: false,
   clearPassword: false,
+  // 腾讯云 SES 字段
+  tencentSecretId: '',
+  tencentSecretIdMasked: '',
+  tencentSecretKey: '',
+  tencentSecretKeyConfigured: false,
+  clearTencentSecretKey: false,
+  tencentRegion: 'ap-hongkong',
+  tencentFromEmailAddress: '',
+  tencentTemplateId: 0,
+  tencentConfigured: false,
+  // 验证码业务字段
   subject: '【闲鱼助手】验证码通知',
   template: `<!DOCTYPE html>
 <html>
@@ -403,11 +542,35 @@ const previewContent = computed(() => {
 })
 const safePreviewContent = computed(() => sanitizeHtml(previewContent.value))
 
+// 是否允许发送测试邮件：根据当前 provider 判断配置完整性
+const canTestEmail = computed(() => {
+  if (form.provider === 'tencent_ses') {
+    return form.tencentConfigured === true
+  }
+  // SMTP 模式：需要密码已配置
+  return form.passwordConfigured === true
+})
+
+// UI 选择的 provider 与数据库保存的 provider 是否不一致
+const providerMismatch = computed(() => {
+  return configState.value === 'ready' && form.provider !== savedProvider.value
+})
+
+// 发送方式切换时清空错误状态
+function onSendModeChange(_value: string) {
+  formRef.value?.clearValidate()
+}
+
 function validatePassword(
   _rule: FormItemRule,
   value: unknown,
   callback: (error?: Error) => void
 ) {
+  // 仅在 SMTP 模式下校验
+  if (form.provider !== 'smtp') {
+    callback()
+    return
+  }
   const hasReplacementPassword = typeof value === 'string' && value.trim().length > 0
   if (form.passwordConfigured || form.clearPassword || hasReplacementPassword) {
     callback()
@@ -416,13 +579,97 @@ function validatePassword(
   callback(new Error('请输入密码/授权码'))
 }
 
+function validateTencentSecretKey(
+  _rule: FormItemRule,
+  value: unknown,
+  callback: (error?: Error) => void
+) {
+  // 仅在 SES 模式下校验
+  if (form.provider !== 'tencent_ses') {
+    callback()
+    return
+  }
+  const hasReplacement = typeof value === 'string' && value.trim().length > 0
+  if (form.tencentSecretKeyConfigured || form.clearTencentSecretKey || hasReplacement) {
+    callback()
+    return
+  }
+  callback(new Error('请输入腾讯云 SecretKey'))
+}
+
+function validateTencentSecretId(
+  _rule: FormItemRule,
+  value: unknown,
+  callback: (error?: Error) => void
+) {
+  if (form.provider !== 'tencent_ses') {
+    callback()
+    return
+  }
+  const v = typeof value === 'string' ? value.trim() : ''
+  // 留空时若已有配置则允许（保留旧值）
+  if (v === '' && form.tencentSecretIdMasked) {
+    callback()
+    return
+  }
+  // 提交脱敏占位符时允许（视为保留旧值）
+  if (v !== '' && /^\*{4,}$/.test(v)) {
+    callback()
+    return
+  }
+  if (v === '') {
+    callback(new Error('请输入腾讯云 SecretId'))
+    return
+  }
+  callback()
+}
+
+function validateTencentFromEmail(
+  _rule: FormItemRule,
+  value: unknown,
+  callback: (error?: Error) => void
+) {
+  if (form.provider !== 'tencent_ses') {
+    callback()
+    return
+  }
+  const v = typeof value === 'string' ? value.trim() : ''
+  if (!v) {
+    callback(new Error('请输入腾讯云 SES 发件地址'))
+    return
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
+    callback(new Error('发件地址邮箱格式不正确'))
+    return
+  }
+  callback()
+}
+
+function validateTencentTemplateId(
+  _rule: FormItemRule,
+  value: unknown,
+  callback: (error?: Error) => void
+) {
+  if (form.provider !== 'tencent_ses') {
+    callback()
+    return
+  }
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isInteger(num) || num <= 0) {
+    callback(new Error('模板 ID 必须为正整数'))
+    return
+  }
+  callback()
+}
+
 function readableError(error: unknown, fallback: string) {
   if (isHttpError(error)) return error.displayMessage
   return error instanceof Error && error.message ? error.message : fallback
 }
 
 const rules: FormRules = {
-  provider: [{ required: true, message: '请选择邮件服务商', trigger: 'change' }],
+  provider: [{ required: true, message: '请选择发送方式', trigger: 'change' }],
+  smtpProvider: [{ required: false }],
   smtpHost: [{ required: true, message: '请输入SMTP服务器地址', trigger: 'blur' }],
   smtpPort: [{ required: true, message: '请输入SMTP端口', trigger: 'blur' }],
   fromEmail: [
@@ -432,6 +679,11 @@ const rules: FormRules = {
   fromName: [{ required: true, message: '请输入发件人名称', trigger: 'blur' }],
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ validator: validatePassword, trigger: 'blur' }],
+  tencentSecretId: [{ validator: validateTencentSecretId, trigger: 'blur' }],
+  tencentSecretKey: [{ validator: validateTencentSecretKey, trigger: 'blur' }],
+  tencentRegion: [{ required: true, message: '请选择地域', trigger: 'change' }],
+  tencentFromEmailAddress: [{ validator: validateTencentFromEmail, trigger: 'blur' }],
+  tencentTemplateId: [{ validator: validateTencentTemplateId, trigger: 'blur' }],
   subject: [{ required: true, message: '请输入邮件主题', trigger: 'blur' }],
   template: [{ required: true, message: '请输入邮件模板', trigger: 'blur' }]
 }
@@ -444,10 +696,28 @@ async function loadConfig() {
     const response = await fetchGetEmailConfig()
     if (!response || typeof response !== 'object') throw new Error('服务未返回有效邮件配置')
     Object.assign(form, response)
+    // 兼容旧数据：如果 provider 不是 smtp/tencent_ses，视为 SMTP 模式并保存原值为 smtpProvider
+    if (form.provider !== 'smtp' && form.provider !== 'tencent_ses') {
+      form.smtpProvider = form.provider
+      form.provider = 'smtp'
+    } else if (!form.smtpProvider) {
+      form.smtpProvider = 'custom'
+    }
+    // 清空敏感字段，使用 Configured 标记表示已配置状态
     form.password = ''
     form.passwordConfigured = response.passwordConfigured === true
     form.clearPassword = false
+    form.tencentSecretKey = ''
+    form.tencentSecretKeyConfigured = response.tencentSecretKeyConfigured === true
+    form.clearTencentSecretKey = false
+    // SecretId 后端返回脱敏值，已通过 Object.assign 写入 tencentSecretId 和 tencentSecretIdMasked
+    if (!form.tencentRegion) form.tencentRegion = 'ap-hongkong'
+    if (typeof form.tencentTemplateId !== 'number' || form.tencentTemplateId < 0) {
+      form.tencentTemplateId = 0
+    }
     loadedSnapshot = { ...form }
+    // 记录数据库中保存的 provider，用于检测 UI 切换后是否需要重新保存
+    savedProvider.value = form.provider
     configState.value = 'ready'
   } catch (error) {
     loadedSnapshot = null
@@ -499,8 +769,8 @@ async function handleSendTest() {
   }
   testing.value = true
   try {
-    await fetchTestEmail(email)
-    ElMessage.success('测试邮件已发送，请前往收件邮箱查收')
+    await fetchTestEmail(email, form.provider)
+    ElMessage.success('测试邮件已发送，请前往收件箱查收')
     testDialogVisible.value = false
   } catch (error) {
     ElMessage.error(readableError(error, '测试邮件发送失败'))
@@ -559,6 +829,27 @@ onMounted(() => {
   margin: 0 0 20px;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.mt-4 {
+  margin-top: 24px;
+}
+
+.mt-2 {
+  margin-top: 12px;
+}
+
+.ses-tip-alert {
+  margin-bottom: 16px;
+}
+
+.ses-tip-alert :deep(code) {
+  background: var(--el-fill-color-light);
+  color: var(--el-color-danger);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: 'Cascadia Mono', Consolas, Monaco, monospace;
+  font-size: 12px;
 }
 
 .config-form {

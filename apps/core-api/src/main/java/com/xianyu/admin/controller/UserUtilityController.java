@@ -10,6 +10,7 @@ import com.xianyu.admin.common.Result;
 import com.xianyu.admin.security.TenantContext;
 import com.xianyu.admin.security.UserContext;
 import com.xianyu.admin.service.SystemConfigService;
+import com.xianyu.admin.service.NotificationConfigService;
 import com.xianyu.admin.service.OutboundNotificationPolicy;
 import com.xianyu.admin.service.CookieCryptoService;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -40,6 +41,7 @@ public class UserUtilityController {
     private static final Logger logger = LoggerFactory.getLogger(UserUtilityController.class);
     private static final String NOTIFY_MODULE_KEY = "user-notification-settings";
     private final SystemConfigService systemConfigService;
+    private final NotificationConfigService notificationConfigService;
     private final JdbcTemplate jdbcTemplate;
     private final OutboundNotificationPolicy outboundNotificationPolicy;
     private final CookieCryptoService sensitiveValueCrypto;
@@ -50,10 +52,12 @@ public class UserUtilityController {
             .build();
 
     public UserUtilityController(SystemConfigService systemConfigService,
+                                 NotificationConfigService notificationConfigService,
                                  JdbcTemplate jdbcTemplate,
                                  OutboundNotificationPolicy outboundNotificationPolicy,
                                  CookieCryptoService sensitiveValueCrypto) {
         this.systemConfigService = systemConfigService;
+        this.notificationConfigService = notificationConfigService;
         this.jdbcTemplate = jdbcTemplate;
         this.outboundNotificationPolicy = outboundNotificationPolicy;
         this.sensitiveValueCrypto = sensitiveValueCrypto;
@@ -95,6 +99,38 @@ public class UserUtilityController {
             return Result.ok(publicNotificationSettings(settings));
         } catch (Exception e) {
             throw unavailable("通知设置", e);
+        }
+    }
+
+    /**
+     * 用户级通知页面查询平台腾讯云 SES 是否可用。
+     *
+     * 设计文档 §9：用户级通知页面需要显示「平台腾讯云 SES 可用 / 暂不可用」，
+     * 但不暴露 SecretId / SecretKey / TemplateID 等凭据字段。
+     *
+     * 返回结构：
+     *   tencentSesAvailable  boolean  平台是否已完整配置腾讯云 SES
+     *   provider             string   平台当前邮件发送方式（smtp / tencent_ses）
+     *   smtpEnabled          boolean  SMTP 模式是否可用（用于在 SES 不可用时降级提示）
+     */
+    @GetMapping("/notification-settings/email-capabilities")
+    public Result<Map<String, Object>> emailCapabilities() {
+        try {
+            Map<String, Object> caps = new LinkedHashMap<>();
+            caps.put("tencentSesAvailable", notificationConfigService.isTencentSesAvailable());
+            caps.put("smtpEnabled", notificationConfigService.isEmailConfigured());
+            // 仅返回 provider 字符串，不返回任何凭据
+            Map<String, Object> emailConfig = notificationConfigService.getEmailConfigDecrypted();
+            String provider = String.valueOf(emailConfig.getOrDefault("provider", "smtp")).trim().toLowerCase(java.util.Locale.ROOT);
+            caps.put("provider", "tencent_ses".equals(provider) ? "tencent_ses" : "smtp");
+            return Result.ok(caps);
+        } catch (Exception e) {
+            // 出错时按 SES 不可用降级返回，避免阻塞用户加载通知设置
+            Map<String, Object> caps = new LinkedHashMap<>();
+            caps.put("tencentSesAvailable", false);
+            caps.put("smtpEnabled", false);
+            caps.put("provider", "smtp");
+            return Result.ok(caps);
         }
     }
 

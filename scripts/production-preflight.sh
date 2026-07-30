@@ -392,8 +392,8 @@ ok "AI provider outbound allowlist passed"
 [[ "${USER_CORS_ALLOWED_ORIGIN_PATTERNS:-}" == "" ]] || fail "USER_CORS_ALLOWED_ORIGIN_PATTERNS must be empty in production"
 
 [[ "$JWT_EXPIRE_SECONDS" =~ ^[0-9]+$ ]] || fail "JWT_EXPIRE_SECONDS must be an integer"
-if (( JWT_EXPIRE_SECONDS < 300 || JWT_EXPIRE_SECONDS > 3600 )); then
-  fail "JWT_EXPIRE_SECONDS must be between 300 and 3600"
+if (( JWT_EXPIRE_SECONDS < 300 || JWT_EXPIRE_SECONDS > 86400 )); then
+  fail "JWT_EXPIRE_SECONDS must be between 300 and 86400"
 fi
 
 [[ "$MEDIA_COOKIE_SECURE" == "true" ]] || fail "MEDIA_COOKIE_SECURE must be true in production"

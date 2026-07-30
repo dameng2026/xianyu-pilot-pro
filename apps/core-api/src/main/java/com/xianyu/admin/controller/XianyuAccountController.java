@@ -106,6 +106,15 @@ public class XianyuAccountController {
     }
 
     /**
+     * 获取账号当前 Cookie 明文，供前台"编辑 Cookie"弹窗回填展示（可复制或微调）。
+     */
+    @GetMapping("/{id}/cookie")
+    public Result<Map<String, Object>> getCurrentCookie(@PathVariable Long id) {
+        Long tenantId = TenantContext.getCurrentTenantId();
+        return Result.ok(accountService.getCurrentCookie(tenantId, id));
+    }
+
+    /**
      * 删除账号（软删除）
      */
     @DeleteMapping("/{id}")

@@ -265,12 +265,11 @@ onMounted(() => {
 .m-ledger-filters {
   display: flex;
   background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-xl);
   padding: var(--m-space-1);
   margin-bottom: var(--m-space-3);
   gap: var(--m-space-1);
-  box-shadow: var(--m-shadow-card);
-  border: 1px solid var(--m-color-border-light);
+  box-shadow: var(--m-shadow-xs);
   overflow-x: auto;
 }
 .m-ledger-filter {
@@ -281,7 +280,7 @@ onMounted(() => {
   font-size: var(--m-font-size-body-sm);
   font-weight: var(--m-font-weight-semibold);
   padding: var(--m-space-2) var(--m-space-3);
-  border-radius: var(--m-radius-sm);
+  border-radius: var(--m-radius-lg);
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.15s;
@@ -290,7 +289,7 @@ onMounted(() => {
 .m-ledger-filter.active {
   background: var(--m-color-primary);
   color: var(--m-color-text-inverse);
-  box-shadow: var(--m-shadow-fab);
+  box-shadow: var(--m-shadow-xs);
 }
 
 /* === 加载中 === */
@@ -319,10 +318,9 @@ onMounted(() => {
 }
 .m-ledger-item {
   background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-lg);
+  border-radius: var(--m-radius-xl);
   padding: var(--m-space-3) var(--m-space-4);
-  box-shadow: var(--m-shadow-card);
-  border: 1px solid var(--m-color-border-light);
+  box-shadow: var(--m-shadow-xs);
   display: flex;
   flex-direction: column;
   gap: var(--m-space-2);
@@ -393,7 +391,7 @@ onMounted(() => {
   font-size: var(--m-font-size-caption);
   color: var(--m-color-text-tertiary);
   background: var(--m-color-bg-subtle);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   padding: var(--m-space-2);
   line-height: var(--m-line-height-base);
   overflow-wrap: anywhere;
@@ -425,8 +423,8 @@ onMounted(() => {
 .m-ledger-page-btn {
   width: 36px;
   height: 36px;
-  border-radius: var(--m-radius-circle);
-  border: 1px solid var(--m-color-border);
+  border-radius: var(--m-radius-lg);
+  border: none;
   background: var(--m-color-bg-card);
   color: var(--m-color-text-primary);
   display: flex;
@@ -434,11 +432,13 @@ onMounted(() => {
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
+  box-shadow: var(--m-shadow-xs);
 }
 .m-ledger-page-btn:disabled {
   color: var(--m-color-text-disabled);
   background: var(--m-color-bg-subtle);
   cursor: not-allowed;
+  box-shadow: none;
 }
 .m-ledger-page-btn:not(:disabled):active { background: var(--m-color-bg-hover); }
 .m-ledger-page-info {

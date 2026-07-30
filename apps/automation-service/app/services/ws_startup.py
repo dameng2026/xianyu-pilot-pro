@@ -25,10 +25,16 @@ _ai_auto_reply_batch_lock = asyncio.Lock()
 _ai_auto_reply_batches: dict[str, dict[str, Any]] = {}
 _ai_auto_reply_tasks: dict[str, asyncio.Task] = {}
 
-# 付款兜底节流：同一 account_id+pnmId 在此窗口内只触发一次付款兜底，
+# 付款兜底节流：同一 account_id+sid+xyGoodsId 在此窗口内只触发一次付款兜底，
 # 防止闲鱼 WS 对同一笔付款推送的多条卡片更新消息全部触发重复发货。
-# 60 秒足以覆盖一次付款连发的全部消息，避免 78 次重复触发的灾难。
-PAYMENT_FALLBACK_THROTTLE_SECONDS = 60.0
+#
+# 2026-07-29 事故级 Bug 修复：
+# 原节流 key 用 account_id+pnmId（60 秒），但闲鱼对不同推送可能用不同 pnmId，
+# 导致节流失效。且 60 秒太短，闲鱼每分钟都在推送付款消息（因订单同步失败，
+# confirm_shipment 无法调用，闲鱼平台不知道已发货而持续推送）。
+# 现改为按 account_id+sid+xyGoodsId 节流（同一会话+商品），窗口扩展到 600 秒，
+# 配合 _has_existing_realtime_delivery 的 72 小时去重窗口，彻底阻断重复发货。
+PAYMENT_FALLBACK_THROTTLE_SECONDS = 600.0
 _payment_fallback_last_run: dict[str, float] = {}
 
 
@@ -50,6 +56,12 @@ def _should_trigger_ai_auto_reply(msg: dict, seller_external_uid: str = "") -> t
     - 显式校验 senderUserId 不等于卖家自己（防止 IM 回环消息 direction 被误判为 IN）
     - 当 seller_external_uid 已知且 senderUserId 等于卖家自己时，强制返回 False
       （这是自问自答的最后一道闸门，不依赖 validate_parsed_message 的 direction 修正）
+
+    修复（2026-07-30）：放宽 partial_buyer_text 判定，不再强制要求 s_id 存在。
+    背景：线上 tenant 121 的 81% 文本消息因协议变体导致 sender_user_id 和 s_id 同时缺失，
+    原 logic 要求 bool(sid) 为 True 才视为 partial_buyer_text，否则被判为 system_message 跳过。
+    修复后：文本消息只要有 msgContent 且不属于系统提醒码，即允许进入 AI 回复流程，
+    由 _infer_missing_session_info 和 process_incoming_message 做后续兜底处理。
     """
     direction = str(msg.get("direction") or "IN").upper()
     content_type = msg.get("contentType", 1)
@@ -67,7 +79,6 @@ def _should_trigger_ai_auto_reply(msg: dict, seller_external_uid: str = "") -> t
         content_type_int == 1
         and not sender_user_id
         and bool(msg_content)
-        and bool(sid)
         and reminder_content not in system_reminder_codes
     )
     is_system_message = (
@@ -360,26 +371,80 @@ async def on_message_callback(tenant_id: int, account_id: int, msg: dict) -> Non
     if saved_message_id is None:
         # 消息已存在（去重命中）。但对于付款消息（contentType=26 且含"等待你发货"），
         # 仍需触发自动发货作为兜底，避免因去重逻辑或 pnm_id 复用导致付款通知被跳过。
-        # 但必须节流：闲鱼 WS 对同一笔付款会推送多条卡片更新消息（pnmId 相同），
-        # 若每条都触发兜底会导致同一订单重复发货（实测 78 次重复触发）。
-        # 节流策略：同一 account_id+pnmId 在 60 秒内只触发一次兜底。
+        #
+        # 2026-07-29 事故级 Bug 修复（三层防护）：
+        # 1. 节流 key 改为 account_id+sid+xyGoodsId（同一会话+商品），而非 pnmId（消息级）
+        #    原因：闲鱼对不同推送可能用不同 pnmId，导致节流失效
+        # 2. 节流窗口从 60 秒扩展到 600 秒（10 分钟）
+        #    原因：闲鱼对未确认发货的订单每分钟推送付款消息，60 秒节流不够
+        # 3. 新增前置去重检查：触发兜底前先查 delivery_record 是否已有记录
+        #    原因：订单同步失败时 order_id 为空，confirm_shipment 无法调用，
+        #    闲鱼持续推送付款消息。即使节流通过，也不应重复发货。
         try:
             from .ws_delivery_handler import is_payment_message
             if is_payment_message(msg):
-                pnm_id = str(msg.get("pnmId") or "")
-                throttle_key = f"{account_id}:{pnm_id}"
+                sid = str(msg.get("sId") or "")
+                xy_goods_id = str(msg.get("xyGoodsId") or "")
+                # 节流 key 按 会话+商品 维度（归一化 sid 去掉 @goofish 后缀）
+                normalized_sid = sid.replace("@goofish", "")
+                throttle_key = f"{account_id}:{normalized_sid}:{xy_goods_id}"
                 now = time.monotonic()
                 last_run = _payment_fallback_last_run.get(throttle_key, 0.0)
                 if now - last_run < PAYMENT_FALLBACK_THROTTLE_SECONDS:
                     logger.debug(
-                        "付款兜底节流跳过 accountId=%d pnmId=%s 距上次触发 %.1fs（防止重复发货）",
-                        account_id, pnm_id, now - last_run,
+                        "付款兜底节流跳过 accountId=%d sid=%s xyGoodsId=%s 距上次触发 %.1fs（防止重复发货）",
+                        account_id, sid, xy_goods_id, now - last_run,
                     )
                     return
+
+                # 前置去重检查：触发兜底前先查 delivery_record 是否已有记录
+                # 这是双保险，不依赖下游 _has_existing_realtime_delivery 的去重窗口
+                # 场景：订单同步失败 → order_id 为空 → confirm_shipment 跳过 →
+                #       闲鱼持续推送付款消息 → 72 小时内已有 delivery_record → 直接跳过
+                if sid and xy_goods_id:
+                    try:
+                        async with async_session() as precheck_db:
+                            from .ws_delivery_handler import DELIVERY_TIMING_AFTER_PAYMENT
+                            existing = (await precheck_db.execute(
+                                text("""
+                                    SELECT id, status
+                                    FROM delivery_record
+                                    WHERE tenant_id = :tenant_id
+                                      AND account_id = :account_id
+                                      AND deleted = 0
+                                      AND (delivery_timing = :delivery_timing OR delivery_timing IS NULL)
+                                      AND REPLACE(JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.sid')), '@goofish', '') = REPLACE(:sid, '@goofish', '')
+                                      AND JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.xyGoodsId')) = :xy_goods_id
+                                      AND created_time >= DATE_SUB(NOW(), INTERVAL 72 HOUR)
+                                    ORDER BY id DESC
+                                    LIMIT 1
+                                """),
+                                {
+                                    "tenant_id": tenant_id,
+                                    "account_id": account_id,
+                                    "delivery_timing": DELIVERY_TIMING_AFTER_PAYMENT,
+                                    "sid": sid,
+                                    "xy_goods_id": xy_goods_id,
+                                }
+                            )).mappings().first()
+                            if existing:
+                                logger.info(
+                                    "付款兜底前置去重命中，跳过发货 accountId=%d sid=%s xyGoodsId=%s existingId=%s existingStatus=%s",
+                                    account_id, sid, xy_goods_id, existing.get("id"), existing.get("status"),
+                                )
+                                # 仍更新节流时间，避免短时间内重复查询
+                                _payment_fallback_last_run[throttle_key] = now
+                                return
+                    except Exception as precheck_err:
+                        logger.warning(
+                            "付款兜底前置去重检查异常，继续触发兜底 accountId=%d error=%s",
+                            account_id, precheck_err,
+                        )
+
                 _payment_fallback_last_run[throttle_key] = now
                 logger.info(
-                    "消息已存在但为付款消息，仍触发自动发货兜底: accountId=%d sId=%s pnmId=%s",
-                    account_id, msg.get("sId", ""), msg.get("pnmId", ""),
+                    "消息已存在但为付款消息，仍触发自动发货兜底: accountId=%d sId=%s xyGoodsId=%s pnmId=%s",
+                    account_id, sid, xy_goods_id, msg.get("pnmId", ""),
                 )
                 asyncio.create_task(_run_delivery_after_message_saved(tenant_id, account_id, dict(msg)))
         except Exception:
@@ -596,7 +661,13 @@ async def _infer_missing_session_info(
 
     背景：轻量级内容消息格式 {"1":101,"3":{...}} 不携带 sId/senderUserId，
     导致无法触发 AI 自动回复。同一账号在短时间内收到的消息通常属于同一会话，
-    因此从最近 5 分钟内有 sId 的消息推断会话信息是可靠的。
+    因此从最近 30 分钟内有 sId 的消息推断会话信息是可靠的。
+
+    修复（2026-07-30）：推断窗口从 5 分钟扩展到 30 分钟。
+    背景：线上 tenant 121 的 WS 消息解析变体导致大量文本消息缺失 sId/sender，
+    5 分钟窗口内可能没有任何带 sId 的消息作为推断源，导致推断失败。
+    扩展到 30 分钟可显著提高推断成功率，同时仍保持时效性。
+    新增：当消息表推断失败时，回退到 xianyu_conversation 表按最近更新会话推断。
     """
     sid = str(msg.get("sId") or "").strip()
     sender_user_id = str(msg.get("senderUserId") or "").strip()
@@ -617,7 +688,7 @@ async def _infer_missing_session_info(
 
     try:
         async with async_session() as db:
-            # 查询最近 5 分钟内有 sId 的消息（不限 direction）。
+            # 查询最近 30 分钟内有 sId 的消息（不限 direction）。
             # 自问自答防护：优先买家真实消息（direction=0 AND is_auto_reply=0），
             # 其次买家其他消息（direction=0），最后卖家消息（direction=1）。
             # 避免自动回复入库的 OUT 消息（is_auto_reply=1）被选为推断源，
@@ -631,7 +702,7 @@ async def _infer_missing_session_info(
                   AND deleted = 0
                   AND content_type = 1
                   AND s_id IS NOT NULL AND s_id != ''
-                  AND created_time >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+                  AND created_time >= DATE_SUB(NOW(), INTERVAL 30 MINUTE)
                 ORDER BY
                     CASE
                         WHEN direction = 0 AND is_auto_reply = 0 THEN 0
@@ -644,6 +715,44 @@ async def _infer_missing_session_info(
                 "tenant_id": tenant_id,
                 "account_id": account_id,
             })).mappings().first()
+
+            # 回退：消息表推断失败时，从 xianyu_conversation 表按最近更新会话推断
+            if not row:
+                conv_row = (await db.execute(text("""
+                    SELECT external_buyer_id, peer_external_uid, goods_id, goods_title
+                    FROM xianyu_conversation
+                    WHERE tenant_id = :tenant_id
+                      AND account_id = :account_id
+                      AND deleted = 0
+                      AND external_buyer_id IS NOT NULL AND external_buyer_id != ''
+                      AND external_buyer_id NOT LIKE '%.PNM'
+                      AND updated_time >= DATE_SUB(NOW(), INTERVAL 30 MINUTE)
+                    ORDER BY updated_time DESC, id DESC
+                    LIMIT 1
+                """), {
+                    "tenant_id": tenant_id,
+                    "account_id": account_id,
+                })).mappings().first()
+                if conv_row:
+                    inferred_buyer = str(conv_row.get("external_buyer_id") or "").strip()
+                    inferred_peer = str(conv_row.get("peer_external_uid") or "").strip()
+                    inferred_goods_id = str(conv_row.get("goods_id") or "").strip()
+                    if not sid and inferred_buyer:
+                        msg["sId"] = inferred_buyer
+                    if not sender_user_id and inferred_buyer:
+                        msg["senderUserId"] = inferred_buyer
+                    if not msg.get("peerExternalUid") and inferred_peer:
+                        msg["peerExternalUid"] = inferred_peer
+                    if not msg.get("xyGoodsId") and inferred_goods_id:
+                        msg["xyGoodsId"] = inferred_goods_id
+                    logger.info(
+                        "从会话表推断会话信息: tenantId=%d accountId=%d buyer=%s goodsId=%s contentLen=%d",
+                        tenant_id, account_id,
+                        inferred_buyer[:20] if inferred_buyer else "(空)",
+                        inferred_goods_id[:20] if inferred_goods_id else "(空)",
+                        len(msg_content),
+                    )
+                    return
 
             if not row:
                 return
@@ -663,6 +772,10 @@ async def _infer_missing_session_info(
 
             # 如果 sender 是卖家自己（OUT 消息同步回来），买家 ID 从 peer_external_uid 获取
             effective_buyer = inferred_peer if sender_is_seller else inferred_sender
+
+            # 过滤 PNM 格式的 sender（不是真实用户 ID）
+            if effective_buyer and effective_buyer.endswith(".PNM"):
+                effective_buyer = ""
 
             # 自问自答防护：如果推断源是自动回复入库的 OUT 消息（is_auto_reply=1），
             # 不推断 senderUserId（保持为空，由 _should_trigger_ai_auto_reply 的 partial_buyer_text 逻辑处理）。

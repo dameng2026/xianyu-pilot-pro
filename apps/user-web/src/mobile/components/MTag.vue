@@ -8,9 +8,9 @@
 import { computed } from 'vue'
 
 const props = defineProps({
-  type: { type: String, default: 'neutral' }, // success/warning/danger/info/neutral/outline
-  size: { type: String, default: 'md' }, // sm/md
-  count: { type: Boolean, default: false } // 数字徽标
+  type: { type: String, default: 'neutral' },
+  size: { type: String, default: 'md' },
+  count: { type: Boolean, default: false }
 })
 
 const tagClass = computed(() => [
@@ -25,31 +25,88 @@ const tagClass = computed(() => [
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 2px var(--m-space-2);
-  border-radius: var(--m-radius-pill);
-  font-weight: var(--m-font-weight-medium);
-  line-height: 1.4;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 7px;
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1;
 }
 
-.m-tag--sm { font-size: var(--m-font-size-tiny); height: 20px; }
-.m-tag--md { font-size: var(--m-font-size-caption); height: 24px; }
+.m-tag--sm { 
+  height: 20px; 
+  font-size: 11px;
+  padding: 0 7px;
+}
+.m-tag--md { 
+  height: 24px; 
+  font-size: 12px;
+}
 
-/* 类型 */
-.m-tag--success { background: var(--m-color-success-bg); color: var(--m-color-success-text); }
-.m-tag--warning { background: var(--m-color-warning-bg); color: var(--m-color-warning-text); }
-.m-tag--danger { background: var(--m-color-danger-bg); color: var(--m-color-danger-text); }
-.m-tag--info { background: var(--m-color-info-bg); color: var(--m-color-info-text); }
-.m-tag--neutral { background: var(--m-color-bg-subtle); color: var(--m-color-text-secondary); }
-.m-tag--outline { background: transparent; color: var(--m-color-text-secondary); border: 1px solid var(--m-color-border); }
+/* PC版Badge配色 */
+.m-tag--success { 
+  background: #eafaf3; 
+  color: #0e9f6e; 
+}
+.m-tag--warning { 
+  background: #fff5e6; 
+  color: #d97706; 
+}
+.m-tag--danger { 
+  background: #fff0f1; 
+  color: #ef4444; 
+}
+.m-tag--info { 
+  background: #edf5ff; 
+  color: #0d6bff; 
+}
+.m-tag--blue {
+  background: #edf5ff;
+  color: #0d6bff;
+}
+.m-tag--orange {
+  background: #fff5e6;
+  color: #d97706;
+}
+.m-tag--red {
+  background: #fff0f1;
+  color: #ef4444;
+}
+.m-tag--green {
+  background: #eafaf3;
+  color: #0e9f6e;
+}
+.m-tag--purple {
+  background: #f3e8ff;
+  color: #7c3aed;
+}
+.m-tag--neutral { 
+  background: #f1f4f8; 
+  color: #718096; 
+}
+.m-tag--gray {
+  background: #f1f4f8;
+  color: #718096;
+}
+.m-tag--yellow {
+  background: #fef9c3;
+  color: #ca8a04;
+}
+.m-tag--outline { 
+  background: transparent; 
+  color: #72809a; 
+  border: 1px solid #e7edf7; 
+}
 
 /* 数字徽标 */
 .m-tag--count {
-  background: var(--m-color-danger);
-  color: var(--m-color-text-inverse);
+  background: #ff5b61;
+  color: #fff;
   min-width: 20px;
   height: 20px;
   padding: 0 6px;
-  font-size: var(--m-font-size-tiny);
-  font-weight: var(--m-font-weight-bold);
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 10px;
 }
 </style>

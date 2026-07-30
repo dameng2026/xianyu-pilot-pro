@@ -183,6 +183,14 @@ export function updateAccountCookie(accountId, cookie, extracted) {
   })
 }
 
+/**
+ * 获取账号当前 Cookie 明文（用于"编辑 Cookie"弹窗回填展示，便于复制或微调）
+ * 返回 { accountId, cookie, hasCookie }
+ */
+export function getAccountCookie(accountId) {
+  return request({ url: `/xianyu/accounts/${accountId}/cookie`, method: 'get' })
+}
+
 export function deleteAccount(id) {
   return request({ url: `/xianyu/accounts/${id}`, method: 'delete' }).then(result => {
     invalidateAccountCache()

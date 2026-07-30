@@ -5684,9 +5684,12 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
     # 业务规则：
     #   1. 检测到人工发送消息（OUT 且 is_auto_reply=0）后，会话自动暂停 AI 回复
     #   2. 买家发送"开启自动回复"指令 → 自动恢复（仅当未被用户手动关闭）
-    #   3. 距上次人工回复 > 1 分钟，买家发新消息时自动恢复
+    #   3. 距上次人工回复 > 暂停时长（默认 60 秒，可配置），买家发新消息时自动恢复
     #   4. 用户在网站手动点击按钮关闭时，禁止自动恢复，仅允许用户手动开启
     #   5. 此检查在 AI 规则匹配之前生效，会话暂停时直接跳过 AI 回复
+    # 暂停时长从 ai-customer-service 配置的 pauseDurationSeconds 读取（默认 60 秒）
+    pause_duration_seconds = await _resolve_ai_cs_pause_duration_seconds(db, tenant_id, account_id)
+    pause_duration_ms = pause_duration_seconds * 1000
     conv_state_row = (await db.execute(text("""
         SELECT auto_reply_paused, auto_reply_manual_disabled, last_manual_reply_at
         FROM xianyu_conversation
@@ -5760,22 +5763,22 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
             )
         else:
             elapsed_ms = now_ms - int(conv_last_manual_at)
-            if elapsed_ms >= 60_000:
-                # 自动恢复（1分钟超时）
+            if elapsed_ms >= pause_duration_ms:
+                # 自动恢复（超过配置的暂停时长）
                 await db.execute(text("""
                     UPDATE xianyu_conversation
                     SET auto_reply_paused = 0, last_manual_reply_at = NULL, updated_time = NOW()
                     WHERE id = :conversation_id
                 """), {"conversation_id": conversation_db_id})
                 logger.info(
-                    "[AUTO_REPLY] 距上次人工回复 %dms >= 60s，自动恢复 AI 回复 tenantId=%d accountId=%d convId=%d",
-                    elapsed_ms, tenant_id, account_id, conversation_db_id
+                    "[AUTO_REPLY] 距上次人工回复 %dms >= %ds，自动恢复 AI 回复 tenantId=%d accountId=%d convId=%d",
+                    elapsed_ms, pause_duration_seconds, tenant_id, account_id, conversation_db_id
                 )
             else:
-                # 1分钟内，保持暂停
+                # 暂停时长内，保持暂停
                 logger.info(
-                    "[AUTO_REPLY] 人工干预暂停中（%dms < 60s），跳过 AI 回复 tenantId=%d accountId=%d convId=%d",
-                    elapsed_ms, tenant_id, account_id, conversation_db_id
+                    "[AUTO_REPLY] 人工干预暂停中（%dms < %ds），跳过 AI 回复 tenantId=%d accountId=%d convId=%d",
+                    elapsed_ms, pause_duration_seconds, tenant_id, account_id, conversation_db_id
                 )
                 await db.commit()
                 return {
@@ -5791,8 +5794,8 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
     #   1. 图片消息发送路径（/sendImageMessage）未调用暂停逻辑
     #   2. IM 回环异步任务可能丢失（asyncio.create_task）
     #   3. 会话匹配失败时静默跳过
-    # 此处直接查询该会话最近一条 OUT 消息（非 AI 自动回复），若距当前 < 60 秒，视为人工干预中，跳过 AI 回复。
-    # 仅在 conv_paused == 0 时触发，作为状态字段机制的兜底；不替换现有 60 秒自动恢复逻辑。
+    # 此处直接查询该会话最近一条 OUT 消息（非 AI 自动回复），若距当前 < 暂停时长（默认 60 秒），视为人工干预中，跳过 AI 回复。
+    # 仅在 conv_paused == 0 时触发，作为状态字段机制的兜底；不替换现有暂停时长自动恢复逻辑。
     if conv_paused == 0 and conv_manual_disabled == 0:
         last_manual_msg = (await db.execute(text("""
             SELECT message_time
@@ -5815,7 +5818,7 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
                 last_manual_ms = int(last_manual_msg["message_time"])
                 now_ms_val = int(time.time() * 1000)
                 manual_elapsed_ms = now_ms_val - last_manual_ms
-                if 0 <= manual_elapsed_ms < 60_000:
+                if 0 <= manual_elapsed_ms < pause_duration_ms:
                     # 同步设置 auto_reply_paused 状态字段，让后续逻辑能正确感知并广播 SSE
                     await db.execute(text("""
                         UPDATE xianyu_conversation
@@ -5826,8 +5829,8 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
                         "last_manual_at": last_manual_ms,
                     })
                     logger.info(
-                        "[AUTO_REPLY] 兜底判定：上一条消息为卖家发送（%dms < 60s），暂停 AI 回复 tenantId=%d accountId=%d convId=%d",
-                        manual_elapsed_ms, tenant_id, account_id, conversation_db_id
+                        "[AUTO_REPLY] 兜底判定：上一条消息为卖家发送（%dms < %ds），暂停 AI 回复 tenantId=%d accountId=%d convId=%d",
+                        manual_elapsed_ms, pause_duration_seconds, tenant_id, account_id, conversation_db_id
                     )
                     await db.commit()
                     return {
@@ -6074,6 +6077,63 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
             await db.commit()
             return {"ok": False, "errorCode": "AI_MODEL_UNAVAILABLE", "matched": True, "conversationId": conversation_db_id,
                     "messageId": trigger_message_id, "message": "AI 对话模型暂不可用，请稍后重试"}
+
+        # === AI 回复生成后、发送前二次检查人工干预暂停状态 ===
+        # 背景：AI 模型生成回复需要数秒，期间卖家可能从其他客户端（移动 APP / PC 闲鱼）介入会话。
+        # 若不二次检查，已生成的回复仍会被发出，与人工回复"撞车"形成自问自答。
+        # 此处复用 rule.pause_duration_seconds（AI 客服场景）或回退查询配置（显式规则场景）。
+        # 仅检查"人工干预暂停"（auto_reply_manual_disabled=0），用户手动关闭的会话不在此处拦截
+        # （已在 5683 行状态检查中拦截，此处只兜底"AI 生成期间新增的人工干预"）。
+        pause_secs_for_recheck = _safe_int(rule.get("pause_duration_seconds"), 0)
+        if pause_secs_for_recheck <= 0:
+            # 显式规则场景无 pause_duration_seconds 字段，回退查询配置
+            pause_secs_for_recheck = await _resolve_ai_cs_pause_duration_seconds(db, tenant_id, account_id)
+        pause_ms_for_recheck = pause_secs_for_recheck * 1000
+        conv_state_recheck = (await db.execute(text("""
+            SELECT auto_reply_paused, auto_reply_manual_disabled, last_manual_reply_at
+            FROM xianyu_conversation
+            WHERE id = :conversation_id
+        """), {"conversation_id": conversation_db_id})).mappings().first()
+        if conv_state_recheck:
+            recheck_paused = int(conv_state_recheck.get("auto_reply_paused") or 0)
+            recheck_manual_disabled = int(conv_state_recheck.get("auto_reply_manual_disabled") or 0)
+            recheck_last_manual_at = conv_state_recheck.get("last_manual_reply_at")
+            if recheck_paused == 1 and recheck_manual_disabled == 0 and recheck_last_manual_at:
+                recheck_now_ms = int(time.time() * 1000)
+                recheck_elapsed_ms = recheck_now_ms - int(recheck_last_manual_at)
+                if 0 <= recheck_elapsed_ms < pause_ms_for_recheck:
+                    # AI 生成期间卖家已介入，放弃发送已生成的回复（不计费、不入消息库）
+                    logger.info(
+                        "[AUTO_REPLY] AI 回复生成后二次检查：人工干预暂停中（%dms < %ds），放弃发送 tenantId=%d accountId=%d convId=%d",
+                        recheck_elapsed_ms, pause_secs_for_recheck, tenant_id, account_id, conversation_db_id
+                    )
+                    await db.execute(text("""
+                        INSERT INTO auto_reply_log(
+                            tenant_id, account_id, conversation_id, rule_id, trigger_message, reply_content,
+                            hit_type, status, fail_reason, action, safety_reasons, deleted, created_time, updated_time
+                        ) VALUES(:tenant_id, :account_id, :conversation_id, :rule_id, :trigger_message, :reply_content,
+                            :hit_type, 0, '人工干预暂停，AI 回复放弃发送', 'manual', '人工干预暂停', 0, NOW(), NOW())
+                    """), {
+                        "tenant_id": tenant_id,
+                        "account_id": account_id,
+                        "conversation_id": conversation_db_id,
+                        "rule_id": rule.get("id"),
+                        "trigger_message": content,
+                        "reply_content": reply_content[:500] if reply_content else "",
+                        "hit_type": rule.get("match_type") or "keyword",
+                    })
+                    await db.commit()
+                    return {
+                        "ok": True,
+                        "matched": True,
+                        "autoSent": False,
+                        "conversationId": conversation_db_id,
+                        "messageId": trigger_message_id,
+                        "platformMessageId": platform_message_id,
+                        "ruleId": rule.get("id"),
+                        "replyContent": reply_content,
+                        "message": "AI 回复生成后检测到人工干预，已放弃发送",
+                    }
 
         # === 暂存计费上下文：发送成功后才扣费 ===
         # 关键约束：但凡存在发送失败的行为，都禁止进行 token 扣费。
@@ -6598,6 +6658,79 @@ def _build_goods_context_text(goods: Optional[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+async def _fallback_db_search_learned_kb(
+    db: AsyncSession,
+    kb_ids: list[int],
+    query: str,
+    top_k: int = 3,
+) -> list[dict[str, Any]]:
+    """DB 关键词兜底检索学习知识库。
+
+    当 RAG 向量检索不可用（embedding 服务未配置或失败）时使用。
+    策略：
+    1. 优先按 question 字段 LIKE 全词匹配（最相关）
+    2. 命中不足 top_k 时，补充按 question 分词 LIKE 匹配
+    3. 仍不足时，按 score 降序返回前 top_k 条（兜底保证有内容注入）
+
+    Args:
+        db: 数据库会话
+        kb_ids: 用户启用的 learned KB id 列表
+        query: 买家消息内容
+        top_k: 返回前 K 条
+
+    Returns:
+        [{question, answer, category, score, kb_id, similarity, weighted}, ...]
+    """
+    if not kb_ids or not query or not query.strip():
+        return []
+    try:
+        # 1. 优先 question LIKE 全词匹配
+        # 注意：kb_ids 已经在调用前确认非空，使用 IN 子句查询
+        kb_ids_set = [int(kb) for kb in kb_ids]
+        rows = (await db.execute(text(
+            "SELECT id, question, answer, tags, score FROM ai_cs_learned_kb "
+            "WHERE id IN :ids AND deleted=0 AND review_status='approved' "
+            "AND enabled=1 AND sensitive_filtered=1 "
+            "AND (question LIKE :q OR tags LIKE :q) "
+            "ORDER BY score DESC LIMIT :limit"
+        ).bindparams(
+            sqlalchemy.bindparam("ids", expanding=True),
+        ), {"ids": kb_ids_set, "q": f"%{query.strip()[:200]}%", "limit": top_k})).mappings().all()
+
+        # 2. 命中不足时，按 score 降序兜底返回
+        if len(rows) < top_k:
+            existing_ids = {r["id"] for r in rows}
+            extra_rows = (await db.execute(text(
+                "SELECT id, question, answer, tags, score FROM ai_cs_learned_kb "
+                "WHERE id IN :ids AND deleted=0 AND review_status='approved' "
+                "AND enabled=1 AND sensitive_filtered=1 "
+                "ORDER BY score DESC LIMIT :limit"
+            ).bindparams(
+                sqlalchemy.bindparam("ids", expanding=True),
+            ), {"ids": kb_ids_set, "limit": top_k})).mappings().all()
+            for r in extra_rows:
+                if r["id"] not in existing_ids:
+                    rows.append(r)
+                    if len(rows) >= top_k:
+                        break
+
+        return [
+            {
+                "question": r["question"] or "",
+                "answer": r["answer"] or "",
+                "category": "",
+                "score": float(r["score"] or 50),
+                "kb_id": r["id"],
+                "similarity": 0.5,  # DB 检索无相似度，给固定中位值
+                "weighted": 0.5,    # 与 similarity 一致，避免影响排序
+            }
+            for r in rows[:top_k]
+        ]
+    except Exception as exc:
+        logger.warning("[AI_CS] db fallback search failed errorType=%s", type(exc).__name__)
+        return []
+
+
 def _build_ai_cs_system_prompt(
     cfg: dict[str, Any],
     goods: Optional[dict[str, Any]],
@@ -6611,16 +6744,19 @@ def _build_ai_cs_system_prompt(
 ) -> str:
     """构造 AI 客服系统提示词。
 
-    严格遵守用户配置的自定义提示词（cfg.systemPrompt），仅在末尾追加：
-    1. 当前商品信息（上下文，必须提供给 AI）
-    2. 用户知识库 / 用户聊天规则 / 默认知识库 / 默认聊天规则（用户主动配置的内容）
-    3. 后台配置的敏感词限制（仅用于限制 AI 回复不要出现违规内容）
+    V1.49 调整 prompt 注入顺序（用户要求）：
+    回复优先级：系统提示 → 回复规则 → 知识库 → 敏感词限制。
+    1. 用户自定义系统提示（systemPrompt）：角色定位、语气、品牌风格
+    2. 当前商品信息：上下文必备
+    3. 回复规则（chat_rules）：用户优先 + 默认补充，定义"该说什么、不该说什么"
+    4. 知识库（按优先级）：用户私有知识库 > 用户启用知识库 > 学习知识库 > 默认知识库
+    5. 敏感词限制：最后兜底，禁止出现违规内容
 
     不再预设角色、语气、库存红线等硬编码提示词，避免覆盖用户自定义语气。
     """
     parts: list[Any] = []
 
-    # 1) 用户自定义提示词（最优先，严格遵守）
+    # 1) 用户自定义系统提示词（最优先，严格遵守）
     custom_prompt = _text(cfg.get("systemPrompt")).strip()
     if custom_prompt:
         parts.append(custom_prompt)
@@ -6630,22 +6766,63 @@ def _build_ai_cs_system_prompt(
     parts.append("【当前商品信息】")
     parts.append(_build_goods_context_text(goods))
 
-    # 3) 用户主动配置的知识库与聊天规则
-    if user_knowledge_bases:
-        parts.extend(["", "【用户知识库（优先）】", _join_ai_cs_entry_contents(user_knowledge_bases)])
-    if user_chat_rules:
-        parts.extend(["", "【用户聊天规则（优先）】", _join_ai_cs_entry_contents(user_chat_rules)])
-    if default_knowledge_bases:
-        parts.extend(["", "【默认知识库（补充）】", _join_ai_cs_entry_contents(default_knowledge_bases)])
-    if default_chat_rules:
-        parts.extend(["", "【默认聊天规则（补充）】", _join_ai_cs_entry_contents(default_chat_rules)])
+    # 3) 回复规则（用户优先 → 默认补充）
+    # 注入顺序调整：先规则后知识库，AI 回复时优先按规则约束
+    has_user_rules = bool(user_chat_rules)
+    has_default_rules = bool(default_chat_rules)
+    if has_user_rules or has_default_rules:
+        parts.extend(["", "【回复规则（必须严格遵守，优先级高于知识库）】"])
+        parts.append("当买家提问时，请按以下规则约束回复口径。规则中的内容必须严格遵守，")
+        parts.append("若规则与知识库内容冲突，以规则为准。")
+        if has_user_rules:
+            parts.append("")
+            parts.append("--- 用户回复规则（优先） ---")
+            parts.append(_join_ai_cs_entry_contents(user_chat_rules))
+        if has_default_rules:
+            parts.append("")
+            parts.append("--- 默认回复规则（补充） ---")
+            parts.append(_join_ai_cs_entry_contents(default_chat_rules))
 
-    # 5) 用户启用的学习知识库（RAG 检索结果）
-    # 注：answer 字段是 MEDIUMTEXT，可能极长。这里限制单条 800 字、总 4000 字，避免 prompt 爆炸。
+    # 4) 知识库（按优先级：用户私有 → 用户启用 → 学习 → 默认）
     MAX_KB_PER_ITEM_CHARS = 800
     MAX_KB_TOTAL_CHARS = 4000
+    has_any_kb = (
+        user_private_kb_hits
+        or user_knowledge_bases
+        or learned_kb_hits
+        or default_knowledge_bases
+    )
+    if has_any_kb:
+        parts.extend(["", "【知识库（参考素材，用于辅助回复）】"])
+        parts.append("以下知识库条目作为回复参考素材。若与上方回复规则冲突，以规则为准。")
+
+    # 4.1 用户的私有知识库（最高优先级）
+    if user_private_kb_hits:
+        parts.append("")
+        parts.append("--- 我的私有知识库（最高优先级） ---")
+        total_user_kb_chars = 0
+        for hit in user_private_kb_hits:
+            title = str(hit.get('title', ''))[:100]
+            content = str(hit.get('content', ''))[:MAX_KB_PER_ITEM_CHARS]
+            snippet = f"{'### ' + title + chr(10) if title else ''}{content}"
+            if total_user_kb_chars + len(snippet) > MAX_KB_TOTAL_CHARS:
+                parts.append("（更多知识库条目已截断）")
+                break
+            parts.append(snippet)
+            parts.append("")
+            total_user_kb_chars += len(snippet)
+
+    # 4.2 用户主动配置的知识库
+    if user_knowledge_bases:
+        parts.append("")
+        parts.append("--- 用户启用知识库（高优先级） ---")
+        parts.append(_join_ai_cs_entry_contents(user_knowledge_bases))
+
+    # 4.3 学习知识库（RAG 检索结果，按买家问题匹配）
+    # 注：answer 字段是 MEDIUMTEXT，可能极长。这里限制单条 800 字、总 4000 字，避免 prompt 爆炸。
     if learned_kb_hits:
-        parts.extend(["", "【学习知识库（用户启用）】"])
+        parts.append("")
+        parts.append("--- 学习知识库（按问题匹配，含分类标签） ---")
         total_kb_chars = 0
         for hit in learned_kb_hits:
             q = str(hit.get('question', ''))[:200]
@@ -6662,22 +6839,13 @@ def _build_ai_cs_system_prompt(
             parts.append("")
             total_kb_chars += len(snippet)
 
-    # 6) 用户的私有知识库（RAG 检索结果）
-    if user_private_kb_hits:
-        parts.extend(["", "【我的知识库】"])
-        total_user_kb_chars = 0
-        for hit in user_private_kb_hits:
-            title = str(hit.get('title', ''))[:100]
-            content = str(hit.get('content', ''))[:MAX_KB_PER_ITEM_CHARS]
-            snippet = f"{'### ' + title + chr(10) if title else ''}{content}"
-            if total_user_kb_chars + len(snippet) > MAX_KB_TOTAL_CHARS:
-                parts.append("（更多知识库条目已截断）")
-                break
-            parts.append(snippet)
-            parts.append("")
-            total_user_kb_chars += len(snippet)
+    # 4.4 默认知识库（兜底补充）
+    if default_knowledge_bases:
+        parts.append("")
+        parts.append("--- 默认知识库（补充） ---")
+        parts.append(_join_ai_cs_entry_contents(default_knowledge_bases))
 
-    # 4) 后台配置的敏感词限制（仅用于限制 AI 回复不要出现违规内容）
+    # 5) 后台配置的敏感词限制（最后兜底）
     if sensitive_words:
         parts.extend(["", "【回复禁用词】以下词汇不得出现在你的回复中：", "、".join(sensitive_words)])
 
@@ -6748,6 +6916,65 @@ async def _enqueue_pending_auto_reply_billing(
         )
     except Exception as enqueue_exc:
         _log_runtime_failure("enqueue_pending_auto_reply_billing", enqueue_exc)
+
+
+async def _resolve_ai_cs_pause_duration_seconds(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+) -> int:
+    """读取 ai-customer-service 配置中的人工干预暂停时长（秒）。
+
+    用于会话级自动回复状态检查（process_incoming_message 5683 行附近的 60_000 硬编码替换）。
+    该检查在 rule 匹配之前生效，无法从 rule 读取，故独立查询。
+
+    Returns:
+        int: 暂停时长（秒）。
+             - pauseOnHumanIntervene=false → 返回 0（表示不暂停，调用方据此跳过暂停逻辑）
+             - pauseOnHumanIntervene=true（默认）→ 返回 pauseDurationSeconds（默认 60，0 或负数视为 60）
+             - 配置缺失/异常 → 返回 60（保守默认，避免暂停失效导致 AI 与人工"撞车"）
+    """
+    default_seconds = 60
+    try:
+        user_id = _safe_int((await db.execute(text("""
+            SELECT user_id FROM xianyu_account
+            WHERE tenant_id = :tenant_id AND id = :account_id AND deleted = 0
+            LIMIT 1
+        """), {"tenant_id": tenant_id, "account_id": account_id})).scalar())
+        if not user_id:
+            return default_seconds
+        cfg_row = (await db.execute(text("""
+            SELECT config_json FROM user_business_setting
+            WHERE tenant_id = :tenant_id AND user_id = :user_id
+              AND setting_key = 'ai-customer-service' AND deleted = 0
+            LIMIT 1
+        """), {"tenant_id": tenant_id, "user_id": user_id})).mappings().first()
+        if not cfg_row:
+            # fallback 到租户级任意用户配置
+            cfg_row = (await db.execute(text("""
+                SELECT config_json FROM user_business_setting
+                WHERE tenant_id = :tenant_id
+                  AND setting_key = 'ai-customer-service' AND deleted = 0
+                ORDER BY updated_time DESC, id DESC
+                LIMIT 1
+            """), {"tenant_id": tenant_id})).mappings().first()
+        if not cfg_row or not cfg_row["config_json"]:
+            return default_seconds
+        cfg = json.loads(cfg_row["config_json"])
+        # pauseOnHumanIntervene 开关：默认 true；显式 false 时返回 0（不暂停）
+        if cfg.get("pauseOnHumanIntervene") in (False, "false", "False", 0, "0"):
+            return 0
+        val = _safe_int(cfg.get("pauseDurationSeconds"), default_seconds)
+        # 0 或负数视为默认 60（避免暂停逻辑失效导致 AI 与人工"撞车"）
+        if val <= 0:
+            return default_seconds
+        return val
+    except Exception as exc:
+        logger.warning(
+            "[AUTO_REPLY] 读取 pauseDurationSeconds 失败，回退默认 60s tenantId=%d accountId=%d errorType=%s",
+            tenant_id, account_id, type(exc).__name__,
+        )
+        return default_seconds
 
 
 async def _build_ai_customer_service_rule(
@@ -6922,9 +7149,19 @@ async def _build_ai_customer_service_rule(
 
             from app.services.rag_service import search_with_filter
             if learned_ids:
-                learned_kb_hits = await search_with_filter(
-                    query=content, kb_ids=learned_ids, top_k=3
-                )
+                try:
+                    learned_kb_hits = await search_with_filter(
+                        query=content, kb_ids=learned_ids, top_k=3
+                    )
+                except Exception as exc:
+                    logger.warning("[AI_CS] vector search failed, fallback to DB search errorType=%s", type(exc).__name__)
+                    learned_kb_hits = []
+                # 向量检索失败或返回空时，回退到 DB 关键词 LIKE 检索
+                # 兜底场景：线上未配置 embedding 模型，所有条目 vector_indexed=0
+                if not learned_kb_hits:
+                    learned_kb_hits = await _fallback_db_search_learned_kb(
+                        db, learned_ids, content, top_k=3
+                    )
             if user_kb_ids:
                 user_kb_rows = await db.execute(text(
                     "SELECT title, content FROM ai_cs_user_kb "
@@ -6954,6 +7191,11 @@ async def _build_ai_customer_service_rule(
     handoff_keywords = _text(cfg.get("handoffKeywords"))
     safe_mode_raw = cfg.get("safeMode")
     safe_mode = 1 if safe_mode_raw in (True, "true", "True", 1, "1") else 0
+    # 人工干预暂停时长（秒）：pauseOnHumanIntervene=false 时为 0（不暂停），
+    # 否则取 pauseDurationSeconds（默认 60，0 或负数视为 60）
+    _pause_enabled = cfg.get("pauseOnHumanIntervene") not in (False, "false", "False", 0, "0")
+    _pause_secs_cfg = _safe_int(cfg.get("pauseDurationSeconds"), 60)
+    pause_duration_seconds_val = (_pause_secs_cfg if _pause_secs_cfg > 0 else 60) if _pause_enabled else 0
 
     return {
         "id": None,
@@ -6975,6 +7217,9 @@ async def _build_ai_customer_service_rule(
         "default_knowledge_bases": default_knowledge_bases,
         "chat_rules": user_chat_rules,
         "default_chat_rules": default_chat_rules,
+        # 人工干预自动暂停时长（秒），用于 AI 回复生成后的二次检查
+        # 0 表示不暂停（pauseOnHumanIntervene=false）；正数表示暂停时长
+        "pause_duration_seconds": pause_duration_seconds_val,
     }
 
 

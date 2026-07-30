@@ -402,11 +402,11 @@ async function handleSubmit() {
   width: 100%;
   max-width: 500px;
   background: var(--m-color-bg-page);
-  border-radius: var(--m-radius-2xl) var(--m-radius-2xl) 0 0;
+  border-radius: var(--m-radius-xl) var(--m-radius-xl) 0 0;
   max-height: 90vh;
   display: flex;
   flex-direction: column;
-  box-shadow: var(--m-shadow-elevated);
+  box-shadow: var(--m-shadow-xs);
 }
 .m-ship-slide-enter-active,
 .m-ship-slide-leave-active {
@@ -506,10 +506,10 @@ async function handleSubmit() {
 
 .m-ship-field {
   background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-lg);
+  border-radius: var(--m-radius-xl);
   padding: var(--m-space-3) var(--m-space-4);
   margin-bottom: var(--m-space-2);
-  box-shadow: var(--m-shadow-card);
+  box-shadow: var(--m-shadow-xs);
 }
 .m-ship-label {
   display: block;

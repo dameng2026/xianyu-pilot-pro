@@ -173,7 +173,24 @@
             </section>
 
             <section v-if="selectedChannel.type === 'email'" class="notify-config-section">
-              <h4>SMTP 配置</h4>
+              <h4>邮件发送方式</h4>
+              <div class="notify-form-grid one">
+                <label class="notify-field">
+                  <span>发送方式</span>
+                  <input type="text" value="SMTP（业务通知固定走 SMTP）" disabled />
+                </label>
+              </div>
+              <div class="notify-tips">
+                <p>
+                  <strong>业务通知使用 SMTP：</strong>
+                  本渠道的业务通知邮件统一通过 SMTP 发送，需自行填写下方 SMTP 服务器、端口、登录账号与授权码。凭据加密存储，仅用于本渠道发件。
+                </p>
+                <p style="margin-top: 6px; color: #888; font-size: 12px;">
+                  说明：腾讯云 SES 仅用于系统级验证码 / 测试邮件发送，由后台「邮件配置」统一管控，不参与用户级业务通知。
+                </p>
+              </div>
+
+              <h4 class="mt-4">SMTP 配置</h4>
               <div class="notify-form-grid two">
                 <label class="notify-field">
                   <span>SMTP Host</span>
@@ -691,7 +708,8 @@ import {
   getNotificationSettings,
   getNotifications,
   saveNotificationSettings,
-  testNotification
+  testNotification,
+  getEmailCapabilities
 } from '../../api/notification.js'
 import { dateTime, recordsOf } from '../../utils/apiData.js'
 
@@ -749,10 +767,10 @@ const CHANNEL_LIBRARY = [
   {
     key: 'email',
     type: 'email',
-    name: '邮件 SMTP',
+    name: '邮件通知',
     icon: 'notifyEmail',
     accent: 'purple',
-    description: '适合管理周报、汇总报表与慢时效提醒。'
+    description: '支持 SMTP 自建邮箱与腾讯云 SES 两种发送方式，适合管理周报、汇总报表与慢时效提醒。'
   }
 ]
 
@@ -1060,6 +1078,9 @@ const success = ref('')
 const saving = ref(false)
 const testing = ref(false)
 const loading = ref(false)
+// 平台邮件发送能力（设计文档 §9）
+// { tencentSesAvailable: boolean, smtpEnabled: boolean, provider: 'smtp' | 'tencent_ses' }
+const emailCapabilities = ref({ tencentSesAvailable: false, smtpEnabled: false, provider: 'smtp' })
 
 const selectedChannel = computed(() =>
   channels.value.find(channel => channel.key === selectedKey.value) || channels.value[0] || null
@@ -1269,6 +1290,9 @@ function createChannelSeed(meta, overrides = {}) {
     smtpPassConfigured: false,
     smtpPassLast4: '',
     fromEmail: '',
+    // 邮件发送方式：smtp（Python 直接发送） / tencent_ses（经 Java 内部代理走腾讯云 SES）
+    // 设计文档 §9：用户只能选择平台已开通的发送方式
+    sendMode: 'smtp',
     // 飞书自建应用专属字段
     appId: '',
     verificationToken: '',
@@ -1342,6 +1366,9 @@ function normalizeChannelRecord(item, meta) {
     secretLast4: String(item.secretLast4 || ''),
     smtpPassConfigured: toBool(item.smtpPassConfigured, false),
     smtpPassLast4: String(item.smtpPassLast4 || ''),
+    // 邮件发送方式：业务通知统一强制 SMTP（SES 仅用于系统级验证码，不参与用户级业务通知）
+    // 即使历史配置中存在 sendMode=tencent_ses，也强制重置为 smtp，确保业务通知走 SMTP 链路
+    sendMode: 'smtp',
     // 飞书自建应用专属字段
     appId: String(item.appId || item.app_id || ''),
     verificationToken: String(item.verificationToken || item.verification_token || ''),
@@ -1408,6 +1435,7 @@ function toNumber(value, fallback = 0) {
 function isChannelConfigured(channel) {
   if (!channel) return false
   if (channel.type === 'email') {
+    // 业务通知固定走 SMTP，需校验 SMTP 全字段
     return Boolean(channel.smtpHost && channel.smtpUser && (channel.smtpPass || channel.smtpPassConfigured) && channel.receiver)
   }
   if (channel.type === 'pushplus') {
@@ -1430,7 +1458,10 @@ function channelStatusText(channel) {
 
 function renderConnectionTarget(channel) {
   if (!channel) return '通知中心'
-  if (channel.type === 'email') return channel.smtpHost || 'SMTP'
+  if (channel.type === 'email') {
+    // 业务通知固定走 SMTP
+    return channel.smtpHost || 'SMTP'
+  }
   if (channel.type === 'pushplus') return maskValue(channel.receiver, 6, 4) || '短信网关'
   if (channel.type === 'feishu_app') return channel.appId ? `AppID: ${channel.appId.slice(0, 12)}...` : '飞书自建应用'
   return channel.key === 'webhook' ? 'workflow-notify.prod' : (extractHost(channel.webhookUrl) || channel.name)
@@ -1539,6 +1570,8 @@ function serializeChannels() {
     smtpPass: channel.smtpPass || '',
     smtpPassConfigured: !!channel.smtpPassConfigured,
     fromEmail: channel.fromEmail || '',
+    // 业务通知固定走 SMTP，强制 sendMode=smtp（即使前端逻辑绕过也兜底）
+    sendMode: 'smtp',
     appId: channel.appId || '',
     verificationToken: channel.verificationToken || '',
     verificationTokenConfigured: !!channel.verificationTokenConfigured,
@@ -1573,9 +1606,10 @@ async function load(showErrorNotice = false) {
     error.value = err.message || '通知设置加载失败，保存和测试已禁用'
   }
 
-  const [noticeRes, logRes] = await Promise.allSettled([
+  const [noticeRes, logRes, capsRes] = await Promise.allSettled([
     getNotifications({ current: 1, size: 6 }),
-    getNotificationDeliveryLogs({ current: 1, size: 6 })
+    getNotificationDeliveryLogs({ current: 1, size: 6 }),
+    getEmailCapabilities()
   ])
 
   if (noticeRes.status === 'fulfilled') {
@@ -1594,6 +1628,20 @@ async function load(showErrorNotice = false) {
     deliveryLogsLoadError.value = true
   }
 
+  // 加载平台邮件发送能力（设计文档 §9）：查询平台 SES/SMTP 能力状态。
+  // 说明：业务通知固定走 SMTP，SES 仅用于系统级验证码（由后台统一管控），
+  // 此能力查询保留用于诊断展示，不再控制 sendMode 选项（已移除 SES 选项）。
+  if (capsRes.status === 'fulfilled') {
+    const caps = capsRes.value?.data || {}
+    emailCapabilities.value = {
+      tencentSesAvailable: !!caps.tencentSesAvailable,
+      smtpEnabled: !!caps.smtpEnabled,
+      provider: caps.provider === 'tencent_ses' ? 'tencent_ses' : 'smtp'
+    }
+  } else {
+    emailCapabilities.value = { tencentSesAvailable: false, smtpEnabled: false, provider: 'smtp' }
+  }
+
   loading.value = false
 }
 
@@ -1605,6 +1653,7 @@ async function save() {
     error.value = `${invalidEnabledChannel.name} 已启用但连接配置不完整；请补全安全地址或先停用该渠道。`
     return
   }
+  // 业务通知固定走 SMTP，无需校验腾讯云 SES 可用性（SES 仅用于系统级验证码，由后台统一管控）
   saving.value = true
   try {
     await saveNotificationSettings({
@@ -2318,8 +2367,17 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.notify-form-grid.one {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .notify-form-grid.three {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* 邮件配置区域标题间距 */
+.notify-config-section .mt-4 {
+  margin-top: 16px;
 }
 
 .notify-field {

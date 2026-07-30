@@ -15,8 +15,8 @@
 import { computed } from 'vue'
 
 const props = defineProps({
-  type: { type: String, default: 'secondary' }, // primary/secondary/outline/danger/text/pill
-  size: { type: String, default: 'md' }, // sm/md/lg
+  type: { type: String, default: 'secondary' },
+  size: { type: String, default: 'md' },
   disabled: { type: Boolean, default: false },
   loading: { type: Boolean, default: false }
 })
@@ -39,67 +39,139 @@ function handleClick(e) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--m-space-2);
-  border: none;
+  gap: 8px;
+  border: 1px solid #e7edf7;
   cursor: pointer;
   font-family: inherit;
-  transition: all 0.15s;
+  transition: all 0.15s ease;
   white-space: nowrap;
+  background: #fff;
+  color: #365071;
+  font-weight: 600;
+  box-shadow: 0 2px 6px rgba(31, 53, 94, .03);
 }
 
 /* 尺寸 */
-.m-btn--sm { height: 32px; padding: 0 var(--m-space-3); font-size: var(--m-font-size-body-sm); font-weight: var(--m-font-weight-medium); }
-.m-btn--md { height: 40px; padding: 0 var(--m-space-4); font-size: var(--m-font-size-body); font-weight: var(--m-font-weight-medium); }
-.m-btn--lg { height: 44px; padding: 0 var(--m-space-5); font-size: var(--m-font-size-h3); font-weight: var(--m-font-weight-semibold); }
+.m-btn--sm { 
+  height: 32px; 
+  padding: 0 12px; 
+  font-size: 13px; 
+  border-radius: 7px;
+}
+.m-btn--md { 
+  height: 40px; 
+  padding: 0 16px; 
+  font-size: 14px; 
+  border-radius: 8px;
+}
+.m-btn--lg { 
+  height: 44px; 
+  padding: 0 20px; 
+  font-size: 15px; 
+  border-radius: 8px;
+  font-weight: 700;
+}
 
-/* 类型 */
+/* 主按钮 - PC版蓝渐变+阴影 */
 .m-btn--primary {
-  background: var(--m-color-primary);
-  color: var(--m-color-text-inverse);
-  border-radius: var(--m-radius-md);
+  background: linear-gradient(90deg, #0865f4, #147dff);
+  border-color: #0865f4;
+  color: #fff;
+  box-shadow: 0 9px 18px rgba(13, 107, 255, .20);
 }
-.m-btn--primary:active { background: var(--m-color-primary-active); transform: scale(0.98); }
+.m-btn--primary:active { 
+  transform: scale(0.96);
+  opacity: 0.9;
+}
 
+/* 次要按钮 - 白底边框 */
 .m-btn--secondary {
-  background: var(--m-color-bg-subtle);
-  color: var(--m-color-text-primary);
-  border-radius: var(--m-radius-md);
+  background: #fff;
+  color: #365071;
+  border-color: #e7edf7;
 }
-.m-btn--secondary:active { transform: scale(0.98); }
+.m-btn--secondary:active { 
+  background: #f8fbff;
+  transform: scale(0.98);
+}
 
+/* 边框按钮 */
 .m-btn--outline {
   background: transparent;
-  color: var(--m-color-text-primary);
-  border: 1px solid var(--m-color-border);
-  border-radius: var(--m-radius-md);
+  color: #365071;
+  border-color: #e7edf7;
+  box-shadow: none;
 }
-.m-btn--outline:active { background: var(--m-color-bg-hover); transform: scale(0.98); }
+.m-btn--outline:active { 
+  background: #f0f5ff; 
+  transform: scale(0.98);
+}
 
+/* 危险按钮 */
 .m-btn--danger {
-  background: var(--m-color-danger);
-  color: var(--m-color-text-inverse);
-  border-radius: var(--m-radius-md);
+  background: #fff8f8;
+  color: #ef4444;
+  border-color: #ffd6d6;
+  box-shadow: none;
 }
-.m-btn--danger:active { transform: scale(0.98); }
+.m-btn--danger:active { 
+  background: #fff0f1;
+  transform: scale(0.98);
+}
 
+/* 警告按钮 */
+.m-btn--warn {
+  background: #fff8ea;
+  color: #d97706;
+  border-color: #ffe1b0;
+  box-shadow: none;
+}
+.m-btn--warn:active {
+  background: #fff5e6;
+  transform: scale(0.98);
+}
+
+/* 成功按钮 */
+.m-btn--success {
+  background: #ecfff6;
+  color: #0e9f6e;
+  border-color: #c7f3df;
+  box-shadow: none;
+}
+.m-btn--success:active {
+  background: #e9fbf3;
+  transform: scale(0.98);
+}
+
+/* 文字按钮 */
 .m-btn--text {
   background: transparent;
-  color: var(--m-color-primary);
-  padding: 0 var(--m-space-2);
+  color: #0d6bff;
+  border: none;
+  padding: 0 8px;
+  box-shadow: none;
 }
-.m-btn--text:active { opacity: 0.7; }
+.m-btn--text:active { 
+  opacity: 0.7; 
+}
 
+/* 药丸按钮 */
 .m-btn--pill {
-  background: var(--m-color-primary);
-  color: var(--m-color-text-inverse);
-  border-radius: var(--m-radius-pill);
+  background: linear-gradient(90deg, #0865f4, #147dff);
+  color: #fff;
+  border-radius: 999px;
+  border-color: #0865f4;
+  box-shadow: 0 9px 18px rgba(13, 107, 255, .20);
 }
-.m-btn--pill:active { transform: scale(0.98); }
+.m-btn--pill:active { 
+  transform: scale(0.96);
+}
 
 /* 状态 */
 .m-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  transform: none !important;
 }
 
 .m-btn-loading {

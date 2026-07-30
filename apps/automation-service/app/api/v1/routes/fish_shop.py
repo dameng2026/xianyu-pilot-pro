@@ -327,7 +327,7 @@ async def publish_fish_shop_item(
             return ResultObject.failed(validation_error)
 
         # 4) 类目推荐（复用现有能力）
-        publisher = XianyuItemPublisher(cookie_str, is_fish_shop=True)
+        publisher = XianyuItemPublisher(cookie_str, tenant_id)
         recommend_result = await _sync_category_recommend(publisher, title, description, image_urls)
         if recommend_result.get("recommended"):
             category_info = recommend_result
@@ -469,7 +469,7 @@ async def edit_fish_shop_item(
             return ResultObject.failed(validation_error)
 
         # 4) 类目推荐
-        publisher = XianyuItemPublisher(cookie_str, is_fish_shop=True)
+        publisher = XianyuItemPublisher(cookie_str, tenant_id)
         recommend_result = await _sync_category_recommend(publisher, title, description, image_urls)
         if recommend_result.get("recommended"):
             category_info = recommend_result

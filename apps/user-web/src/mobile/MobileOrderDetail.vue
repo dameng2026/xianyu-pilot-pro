@@ -714,7 +714,7 @@ onMounted(() => {
   height: 40px;
   padding: 0 var(--m-space-5);
   border: none;
-  border-radius: var(--m-radius-pill);
+  border-radius: var(--m-radius-lg);
   background: var(--m-color-primary);
   color: var(--m-color-text-inverse);
   font-size: var(--m-font-size-body);
@@ -760,15 +760,13 @@ onMounted(() => {
 /* === 详情卡片 === */
 .m-detail-card {
   background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-lg);
+  border-radius: var(--m-radius-xl);
   padding: var(--m-space-4);
   margin-bottom: var(--m-space-3);
-  box-shadow: var(--m-shadow-card);
-  border: 1px solid var(--m-color-border-light);
+  box-shadow: var(--m-shadow-xs);
 }
 .m-status-card {
   background: var(--m-color-bg-card);
-  border-color: var(--m-color-info-border);
 }
 
 .m-card-title-row {
@@ -850,7 +848,7 @@ onMounted(() => {
   border: none;
   background: var(--m-color-bg-subtle);
   color: var(--m-color-text-secondary);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -996,8 +994,7 @@ onMounted(() => {
 }
 .m-delivery-content-box {
   background: var(--m-color-bg-subtle);
-  border: 1px solid var(--m-color-border-light);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   padding: var(--m-space-2) var(--m-space-3);
   font-size: var(--m-font-size-body-sm);
   color: var(--m-color-text-primary);
@@ -1010,10 +1007,10 @@ onMounted(() => {
   margin-top: var(--m-space-3);
   width: 100%;
   height: 40px;
-  border: 1px solid var(--m-color-info-border);
-  background: var(--m-color-info-bg);
+  border: none;
+  background: var(--m-color-primary-bg);
   color: var(--m-color-primary);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   font-size: var(--m-font-size-body-sm);
   font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
@@ -1030,7 +1027,7 @@ onMounted(() => {
   font-size: var(--m-font-size-body-sm);
   color: var(--m-color-text-primary);
   background: var(--m-color-bg-subtle);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   padding: var(--m-space-2) var(--m-space-3);
   line-height: var(--m-line-height-base);
   white-space: pre-wrap;
@@ -1040,10 +1037,10 @@ onMounted(() => {
   margin-top: var(--m-space-2);
   height: 32px;
   padding: 0 var(--m-space-3);
-  border: 1px solid var(--m-color-border);
-  background: var(--m-color-bg-card);
+  border: none;
+  background: var(--m-color-bg-subtle);
   color: var(--m-color-text-secondary);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   font-size: var(--m-font-size-caption);
   font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
@@ -1140,8 +1137,8 @@ onMounted(() => {
   flex: 1;
   min-width: 100px;
   height: 44px;
-  border: 1px solid var(--m-color-border);
-  border-radius: var(--m-radius-md);
+  border: none;
+  border-radius: var(--m-radius-lg);
   background: var(--m-color-bg-card);
   color: var(--m-color-text-secondary);
   font-size: var(--m-font-size-body-sm);
@@ -1153,6 +1150,7 @@ onMounted(() => {
   gap: var(--m-space-1);
   transition: all 0.15s;
   padding: 0 var(--m-space-2);
+  box-shadow: var(--m-shadow-xs);
 }
 .m-action-btn:active:not(:disabled) {
   transform: scale(0.97);
@@ -1164,7 +1162,7 @@ onMounted(() => {
 .m-action-primary {
   background: var(--m-color-primary);
   color: var(--m-color-text-inverse);
-  border: none;
+  box-shadow: none;
 }
 
 .m-spin {
@@ -1202,6 +1200,7 @@ onMounted(() => {
   max-height: 80vh;
   display: flex;
   flex-direction: column;
+  box-shadow: var(--m-shadow-lg);
 }
 .m-remark-slide-enter-active,
 .m-remark-slide-leave-active {
@@ -1257,7 +1256,7 @@ onMounted(() => {
   align-items: center;
   gap: var(--m-space-2);
   padding: var(--m-space-2) var(--m-space-3);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   font-size: var(--m-font-size-caption);
   margin-bottom: var(--m-space-3);
   background: var(--m-color-danger-bg);
@@ -1267,7 +1266,7 @@ onMounted(() => {
 .m-remark-textarea {
   width: 100%;
   min-height: 120px;
-  border: 1px solid var(--m-color-border);
+  border: none;
   border-radius: var(--m-radius-lg);
   padding: var(--m-space-3);
   font-size: var(--m-font-size-body);
@@ -1278,13 +1277,13 @@ onMounted(() => {
   box-sizing: border-box;
   font-family: inherit;
   line-height: var(--m-line-height-base);
+  box-shadow: var(--m-shadow-xs);
 }
 .m-remark-textarea::placeholder {
   color: var(--m-color-text-placeholder);
 }
 .m-remark-textarea:focus {
-  border-color: var(--m-color-primary);
-  box-shadow: 0 0 0 3px var(--m-color-primary-bg);
+  box-shadow: 0 0 0 2px var(--m-color-primary-bg);
 }
 .m-remark-textarea:disabled {
   background: var(--m-color-bg-subtle);
@@ -1310,7 +1309,7 @@ onMounted(() => {
   flex: 1;
   height: 44px;
   border: none;
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   font-size: var(--m-font-size-body);
   font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
@@ -1323,7 +1322,7 @@ onMounted(() => {
 .m-remark-btn-cancel {
   background: var(--m-color-bg-card);
   color: var(--m-color-text-secondary);
-  border: 1px solid var(--m-color-border);
+  box-shadow: var(--m-shadow-xs);
 }
 .m-remark-btn-submit {
   flex: 2;

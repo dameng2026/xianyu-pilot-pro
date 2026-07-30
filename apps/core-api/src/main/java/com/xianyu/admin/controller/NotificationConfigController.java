@@ -63,9 +63,9 @@ public class NotificationConfigController {
 
     @PostMapping("/email-config/test")
     public Result<Void> testEmail(@RequestBody @Validated TestEmailReq req) {
-        emailSenderService.sendTestEmail(req.email());
+        emailSenderService.sendTestEmail(req.email(), req.provider());
         return Result.ok(null);
     }
 
-    public record TestEmailReq(@NotBlank String email) {}
+    public record TestEmailReq(@NotBlank String email, String provider) {}
 }

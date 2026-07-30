@@ -96,10 +96,23 @@ const canvasRef = ref(null)
 // 根据视口宽高和 card 实际高度计算 scale，确保 canvas 完全可见且 card 不被裁剪
 // - 测量 card 的实际高度，动态调整 canvas 高度
 // - 取宽度和高度方向较小的 scale，保证 canvas 完全可见
+// - 使用 layout viewport（document.documentElement.clientWidth/clientHeight）而非 visual
+//   viewport（window.innerWidth/innerHeight），避免移动端键盘弹出时 visual viewport 缩小
+//   导致 scale 减小、页面被缩成一团并出现大片空白
 function fitCanvas() {
   const stage = stageRef.value
   const canvas = canvasRef.value
   if (!stage) return
+
+  // 键盘弹出保护：当 visual viewport 明显小于 layout viewport 时（典型为软键盘弹出），
+  // 跳过本次重算，保持原有 scale，避免页面被缩小。
+  if (typeof window !== 'undefined' && window.visualViewport
+          && document.documentElement) {
+    const layoutH = document.documentElement.clientHeight
+    if (layoutH > 0 && window.visualViewport.height < layoutH - 80) {
+      return
+    }
+  }
 
   // 1. 测量 card 的实际高度，动态调整 canvas 高度
   //    不同页面（login/register/forgot-password）的 card 内容不同，高度不同
@@ -117,9 +130,10 @@ function fitCanvas() {
     canvas.style.height = canvasHeight + 'px'
   }
 
-  // 2. 计算 scale
-  const rawVw = typeof window !== 'undefined' ? window.innerWidth : DESIGN_WIDTH
-  const rawVh = typeof window !== 'undefined' ? window.innerHeight : DESIGN_HEIGHT
+  // 2. 计算 scale，使用 layout viewport 尺寸（键盘弹出时不变）
+  const docEl = typeof document !== 'undefined' ? document.documentElement : null
+  const rawVw = docEl ? docEl.clientWidth : DESIGN_WIDTH
+  const rawVh = docEl ? docEl.clientHeight : DESIGN_HEIGHT
   const vw = rawVw > 0 ? rawVw : DESIGN_WIDTH
   const vh = rawVh > 0 ? rawVh : DESIGN_HEIGHT
 

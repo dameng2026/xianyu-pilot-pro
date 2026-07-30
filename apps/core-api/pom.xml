@@ -118,6 +118,19 @@
             <artifactId>imageio-webp</artifactId>
             <version>${twelvemonkeys-imageio.version}</version>
         </dependency>
+        <!-- 腾讯云 SES SDK：用于管理员验证码邮件和用户级业务通知邮件的腾讯云 SES 接入。
+             版本固定为 3.1.1506（Maven 中央仓库实际可用版本），升级需单独验证 SDK API 兼容性。 -->
+        <dependency>
+            <groupId>com.tencentcloudapi</groupId>
+            <artifactId>tencentcloud-sdk-java-ses</artifactId>
+            <version>3.1.1506</version>
+        </dependency>
+        <!-- Thumbnailator：用于图片生成记录页面缩略图快速生成 -->
+        <dependency>
+            <groupId>net.coobird</groupId>
+            <artifactId>thumbnailator</artifactId>
+            <version>0.4.20</version>
+        </dependency>
     </dependencies>
     <build>
         <plugins>

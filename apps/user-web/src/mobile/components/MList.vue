@@ -13,8 +13,9 @@ defineProps({
 <style scoped>
 .m-list {
   background: var(--m-color-bg-card);
-  border: 1px solid var(--m-color-border);
-  border-radius: var(--m-radius-lg);
+  border: none;
+  border-radius: var(--m-radius-xl);
   overflow: hidden;
+  box-shadow: var(--m-shadow-xs);
 }
 </style>

@@ -291,6 +291,8 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { register, sendEmailCode } from '../api/auth.js'
 import AuthIcon from '../components/auth/AuthIcon.vue'
 import AuthCaptcha from '../components/auth/AuthCaptcha.vue'
+// 懒加载登录页专属样式，避免首屏加载
+import('../auth-pages.css')
 import AuthShell from '../components/auth/AuthShell.vue'
 import MobileAuthShell from '../components/auth/MobileAuthShell.vue'
 import MobileCaptcha from '../components/auth/MobileCaptcha.vue'
@@ -541,6 +543,14 @@ onMounted(() => {
   refreshAuthCapabilities()
   updateMobileDetection()
   window.addEventListener('resize', updateMobileDetection, { passive: true })
+  // 从 URL 参数自动填充邀请码（支持 hash 路由 ?invite=XXX 和 ?ref=XXX）
+  // hash 路由格式: http://host/#/register?ref=CODE
+  // 普通路由格式: http://host/register?ref=CODE
+  const hash = window.location.hash || ''
+  const hashQuery = hash.includes('?') ? hash.substring(hash.indexOf('?')) : ''
+  const params = new URLSearchParams(window.location.search || hashQuery)
+  const inviteFromUrl = params.get('invite') || params.get('ref') || params.get('code')
+  if (inviteFromUrl) form.inviteCode = inviteFromUrl.toUpperCase().trim()
 })
 
 onUnmounted(() => {

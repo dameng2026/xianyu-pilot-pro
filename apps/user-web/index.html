@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <link rel="icon" type="image/png" href="/xya/brand/brand_002.png" />
     <title>XianYuPilo Pro 闲鱼助手</title>
+    <!-- 预连接后端 API，减少首次请求的 DNS+TLS 握手时间 -->
+    <link rel="preconnect" href="/api" />
+    <link rel="dns-prefetch" href="/api" />
+    <!-- 内联 critical CSS，避免白屏等待 entry CSS 下载 -->
+    <style>
+      body{margin:0;background:#f6f9ff;font-family:system-ui,-apple-system,sans-serif}
+      .boot-screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#3b82f6}
+    </style>
   </head>
   <body>
     <div id="app"></div>

@@ -29,6 +29,7 @@ export function getRates(params) {
  * 触发评价同步。
  * @param {Object} [data]
  * @param {number} [data.accountId] 同步单个账号；不传则同步全部鱼小铺账号
+ * @param {boolean} [data.forceFull] 是否强制全量同步（忽略缓存，拉取所有页）
  */
 export function syncRates(data) {
   return request({
@@ -97,5 +98,48 @@ export function getRateFishShopAccounts() {
   return request({
     url: '/rates/fish-shop-accounts',
     method: 'get'
+  })
+}
+
+// ============================================================
+// 自动补评价：执行日志查询 + 调度器状态 + 手动触发
+// ============================================================
+
+/**
+ * 查询自动补评价执行日志（分页）。
+ * @param {Object} params
+ * @param {number} [params.accountId] 账号ID，不传则查询全部账号
+ * @param {number} [params.page] 页码，从1开始
+ * @param {number} [params.pageSize] 每页数量，最大100
+ */
+export function getAutoRateLogs(params) {
+  return request({
+    url: '/rates/auto-rate/logs',
+    method: 'get',
+    params
+  })
+}
+
+/**
+ * 查询自动补评价调度器运行状态（用于诊断调度是否正常）。
+ */
+export function getAutoRateSchedulerStatus() {
+  return request({
+    url: '/rates/auto-rate/scheduler-status',
+    method: 'get'
+  })
+}
+
+/**
+ * 手动触发单个账号的自动补评价（立即执行一次）。
+ * 后端会校验：账号已配置/已开启自动评价、为鱼小铺账号、Cookie 有效、评价内容已配置。
+ * @param {Object} data
+ * @param {number} data.accountId 闲鱼账号ID
+ */
+export function triggerAutoRateRun(data) {
+  return request({
+    url: '/rates/auto-rate/run',
+    method: 'post',
+    data: data || {}
   })
 }

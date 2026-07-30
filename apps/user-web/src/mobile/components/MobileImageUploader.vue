@@ -260,13 +260,13 @@ defineExpose({ resetQueue })
   max-width: 100%;
   max-height: 90vh;
   background: var(--m-color-bg-elevated);
-  border-top-left-radius: var(--m-radius-2xl);
-  border-top-right-radius: var(--m-radius-2xl);
+  border-top-left-radius: var(--m-radius-xl);
+  border-top-right-radius: var(--m-radius-xl);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   padding-bottom: env(safe-area-inset-bottom);
-  box-shadow: var(--m-shadow-elevated);
+  box-shadow: var(--m-shadow-xs);
 }
 .m-uploader-header {
   display: flex;
@@ -298,7 +298,7 @@ defineExpose({ resetQueue })
   min-width: 76px;
   height: var(--m-space-8);
   padding: 0 var(--m-space-3);
-  border-radius: var(--m-radius-xl);
+  border-radius: var(--m-radius-lg);
   border: none;
   background: var(--m-color-primary);
   color: var(--m-color-text-inverse);

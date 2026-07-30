@@ -49,6 +49,20 @@ public class FeatureSwitchService {
     /** 等级从低到高排序，用于查找"第一个开启的更高级别" */
     private static final List<String> LEVELS_ASC = List.of("normal", "vip", "svp");
 
+    // ===================== 限制模式常量 =====================
+    /** 限制模式：无限制（默认，正常使用） */
+    public static final String LIMIT_MODE_NONE = "none";
+    /** 限制模式：预览模式（可进入页面查看，但不可执行业务操作/发送业务请求） */
+    public static final String LIMIT_MODE_PREVIEW = "preview";
+    /** 限制模式：不可进入（直接无法访问该页面） */
+    public static final String LIMIT_MODE_BLOCKED = "blocked";
+    /** 支持的限制模式集合（单选，互斥） */
+    private static final Set<String> VALID_LIMIT_MODES = Set.of(LIMIT_MODE_NONE, LIMIT_MODE_PREVIEW, LIMIT_MODE_BLOCKED);
+    /** 预览模式默认提示文案 */
+    private static final String DEFAULT_PREVIEW_MESSAGE = "该功能当前为预览模式，可查看内容但不可执行业务操作";
+    /** 不可进入模式默认提示文案 */
+    private static final String DEFAULT_BLOCKED_MESSAGE = "该功能当前不可访问";
+
     /** 默认功能开关清单：每个功能三个等级全部开启 */
     private static final List<Map<String, Object>> DEFAULT_FEATURES = buildDefaultFeatures();
 
@@ -76,6 +90,12 @@ public class FeatureSwitchService {
         list.add(feature("product-publish", "商品发布", "account", true, true, true));
         // 鱼小铺专属编辑页：由商品列表「编辑」按钮进入，仅鱼小铺账号商品可访问
         list.add(feature("fish-shop-edit", "鱼小铺编辑", "account", true, true, true));
+        // 数据分析（账号维度子页面）
+        list.add(feature("goods-data", "商品数据分析", "account", true, true, true));
+        list.add(feature("fish-shop-data", "鱼小铺数据分析", "account", true, true, true));
+        // 商品改价、评价管理-自动评价
+        list.add(feature("product-price-edit", "商品改价", "account", true, true, true));
+        list.add(feature("auto-rate", "评价管理-自动评价", "account", true, true, true));
         // 消息与商机：商机发掘仅 VIP 及以上可用
         list.add(feature("messages", "消息中心", "message", true, true, true));
         list.add(feature("message-center", "会话收件箱", "message", true, true, true));
@@ -110,7 +130,7 @@ public class FeatureSwitchService {
         list.add(feature("feedback", "反馈建议", "system", true, true, true));
         list.add(feature("settings-notify", "通知设置", "system", true, true, true));
         list.add(feature("settings-ai-cs", "AI客服配置", "system", true, true, true));
-        list.add(feature("settings-product", "商品操作", "system", true, true, true));
+        list.add(feature("learning-kb", "学习知识库", "system", true, true, true));
         list.add(feature("settings-about", "关于", "system", true, true, true));
         list.add(feature("user-manual", "使用手册", "system", true, true, true));
         list.add(feature("profile", "系统设置", "system", true, true, true));
@@ -134,6 +154,7 @@ public class FeatureSwitchService {
         m.put("vip", vip);
         m.put("svp", svp);
         m.put("maintenance", false);  // 维护开关：默认关闭，开启后所有用户进入该页面均弹窗拦截
+        m.put("limitMode", LIMIT_MODE_NONE);  // 限制模式：默认无限制（none/preview/blocked 单选）
         return m;
     }
 
@@ -176,6 +197,10 @@ public class FeatureSwitchService {
                 if (override.containsKey("maintenance")) {
                     merged.put("maintenance", boolOr(override.get("maintenance"), false));
                 }
+                // 限制模式：所有功能均支持，合并存储覆盖值
+                if (override.containsKey("limitMode")) {
+                    merged.put("limitMode", normalizeLimitMode(override.get("limitMode")));
+                }
                 // 仅 REASON_SUPPORTED_KEYS 中的功能保留 reason 字段
                 if (REASON_SUPPORTED_KEYS.contains(key) && override.containsKey("reason")) {
                     merged.put("reason", sanitizeReason(String.valueOf(override.get("reason"))));
@@ -187,6 +212,8 @@ public class FeatureSwitchService {
             }
             // 确保所有功能都返回 maintenance 字段（默认 false）
             if (!merged.containsKey("maintenance")) merged.put("maintenance", false);
+            // 确保所有功能都返回 limitMode 字段（默认 none）
+            if (!merged.containsKey("limitMode")) merged.put("limitMode", LIMIT_MODE_NONE);
             result.add(merged);
         }
         // 允许后台预置清单之外的自定义条目（向前兼容）
@@ -198,6 +225,7 @@ public class FeatureSwitchService {
                 if (!extra.containsKey(level)) extra.put(level, true);
             }
             if (!extra.containsKey("maintenance")) extra.put("maintenance", false);
+            if (!extra.containsKey("limitMode")) extra.put("limitMode", LIMIT_MODE_NONE);
             result.add(extra);
         }
         return result;
@@ -209,15 +237,19 @@ public class FeatureSwitchService {
      *   {
      *     "level": "normal|vip|svp",
      *     "accessible": { "<pageKey>": true, ... },
-     *     "blocked": { "<pageKey>": { "reason": "disabled|level|maintenance", "required_level": "vip", "reason_text"?: "..." } }
+     *     "blocked": { "<pageKey>": { "reason": "disabled|level|maintenance|blocked", "required_level": "vip", "reason_text"?: "..." } },
+     *     "preview": { "<pageKey>": { "reason": "preview", "reason_text": "..." } }
      *   }
      *
      * 判定逻辑（按优先级）：
      *   1. 维护开关 maintenance=true → 所有用户拦截，reason=maintenance
-     *   2. 用户等级对应的开关为 true → 可访问
+     *   2. 限制模式 limitMode=blocked → 不可进入，reason=blocked
      *   3. 用户等级对应的开关为 false：
      *     - 存在更高级别开关为 true → reason=level, required_level=第一个开启的更高级别
      *     - 所有级别都为 false → reason=disabled
+     *   4. 用户等级对应的开关为 true：
+     *     - limitMode=preview → 可进入页面但预览模式（不可执行业务操作），记入 preview map
+     *     - limitMode=none → 正常访问
      */
     public Map<String, Object> getStatusForCurrentUser(Long userId) {
         Map<String, Object> status = new LinkedHashMap<>();
@@ -227,10 +259,11 @@ public class FeatureSwitchService {
         Map<String, Map<String, Object>> stored = loadStoredFeatures();
         Map<String, Boolean> accessible = new LinkedHashMap<>();
         Map<String, Map<String, Object>> blocked = new LinkedHashMap<>();
+        Map<String, Map<String, Object>> preview = new LinkedHashMap<>();
 
         for (Map<String, Object> def : DEFAULT_FEATURES) {
             String key = String.valueOf(def.get("key"));
-            // 维护开关优先级最高：开启时对所有等级用户拦截
+            // 1. 维护开关优先级最高：开启时对所有等级用户拦截
             if (resolveMaintenance(key, def, stored)) {
                 accessible.put(key, false);
                 Map<String, Object> info = new LinkedHashMap<>();
@@ -240,40 +273,62 @@ public class FeatureSwitchService {
                 blocked.put(key, info);
                 continue;
             }
+            // 2. 限制模式=不可进入：对所有用户拦截（语义为管理员主动限制不可访问）
+            String limitMode = resolveLimitMode(key, def, stored);
+            if (LIMIT_MODE_BLOCKED.equals(limitMode)) {
+                accessible.put(key, false);
+                Map<String, Object> info = new LinkedHashMap<>();
+                info.put("reason", "blocked");
+                info.put("required_level", normalizeLevel(userLevel));
+                info.put("reason_text", DEFAULT_BLOCKED_MESSAGE);
+                blocked.put(key, info);
+                continue;
+            }
+            // 3. 等级开关判定
             Map<String, Boolean> levelSwitches = resolveLevelSwitches(key, def, stored);
 
             boolean userAllowed = boolOr(levelSwitches.get(normalizeLevel(userLevel)), true);
-            if (userAllowed) {
-                accessible.put(key, true);
+            if (!userAllowed) {
+                accessible.put(key, false);
+                Map<String, Object> info = new LinkedHashMap<>();
+                String firstHigherOn = findFirstHigherEnabled(userLevel, levelSwitches);
+                if (firstHigherOn != null) {
+                    info.put("reason", "level");
+                    info.put("required_level", firstHigherOn);
+                } else {
+                    info.put("reason", "disabled");
+                    info.put("required_level", normalizeLevel(userLevel));
+                }
+                // 对于支持 reason 的功能（如 manual-slider-solve），返回管理员填写的关闭原因
+                // 没填写时返回系统默认文案，便于前端弹窗展示
+                if (REASON_SUPPORTED_KEYS.contains(key)) {
+                    String reasonText = resolveReasonText(key, def, stored);
+                    info.put("reason_text", reasonText);
+                }
+                blocked.put(key, info);
                 continue;
             }
-            accessible.put(key, false);
-            Map<String, Object> info = new LinkedHashMap<>();
-            String firstHigherOn = findFirstHigherEnabled(userLevel, levelSwitches);
-            if (firstHigherOn != null) {
-                info.put("reason", "level");
-                info.put("required_level", firstHigherOn);
-            } else {
-                info.put("reason", "disabled");
-                info.put("required_level", normalizeLevel(userLevel));
+            // 4. 用户等级允许访问
+            accessible.put(key, true);
+            // 限制模式=预览：可进入页面但不可执行业务操作
+            if (LIMIT_MODE_PREVIEW.equals(limitMode)) {
+                Map<String, Object> info = new LinkedHashMap<>();
+                info.put("reason", "preview");
+                info.put("reason_text", DEFAULT_PREVIEW_MESSAGE);
+                preview.put(key, info);
             }
-            // 对于支持 reason 的功能（如 manual-slider-solve），返回管理员填写的关闭原因
-            // 没填写时返回系统默认文案，便于前端弹窗展示
-            if (REASON_SUPPORTED_KEYS.contains(key)) {
-                String reasonText = resolveReasonText(key, def, stored);
-                info.put("reason_text", reasonText);
-            }
-            blocked.put(key, info);
         }
         status.put("accessible", accessible);
         status.put("blocked", blocked);
+        status.put("preview", preview);
         return status;
     }
 
     /**
      * 查询单个功能对当前用户的拦截信息。
      * 返回：
-     *   allowed=true  → 该功能对当前用户允许使用
+     *   allowed=true, preview=false → 该功能对当前用户允许使用（正常模式）
+     *   allowed=true, preview=true  → 该功能对当前用户允许进入但预览模式（不可执行业务操作）
      *   allowed=false → 该功能被拦截，附带 {reason, required_level, reason_text}
      *
      * 用于 Java 网关在 captcha/handle 入口校验 manual-slider-solve。
@@ -283,12 +338,14 @@ public class FeatureSwitchService {
         result.put("feature_key", featureKey);
         if (featureKey == null || featureKey.isBlank()) {
             result.put("allowed", true);  // 未知 key 默认放行，避免锁死
+            result.put("preview", false);
             return result;
         }
         String userLevel = resolveUserLevel(userId);
         Map<String, Object> def = findDefaultFeature(featureKey);
         if (def == null) {
             result.put("allowed", true);  // 非预置功能默认放行
+            result.put("preview", false);
             return result;
         }
         Map<String, Map<String, Object>> stored;
@@ -297,33 +354,53 @@ public class FeatureSwitchService {
         } catch (Exception e) {
             log.warn("getFeatureStatusForUser 读取存储配置失败，降级放行 featureKey={}", featureKey);
             result.put("allowed", true);
+            result.put("preview", false);
             return result;
         }
-        // 维护开关优先级最高：开启时对所有等级用户拦截
+        // 1. 维护开关优先级最高：开启时对所有等级用户拦截
         if (resolveMaintenance(featureKey, def, stored)) {
             result.put("allowed", false);
+            result.put("preview", false);
             result.put("reason", "maintenance");
             result.put("required_level", normalizeLevel(userLevel));
             result.put("reason_text", DEFAULT_MAINTENANCE_MESSAGE);
             return result;
         }
-        Map<String, Boolean> levelSwitches = resolveLevelSwitches(featureKey, def, stored);
-        boolean userAllowed = boolOr(levelSwitches.get(normalizeLevel(userLevel)), true);
-        result.put("allowed", userAllowed);
-        if (userAllowed) {
+        // 2. 限制模式=不可进入：对所有用户拦截
+        String limitMode = resolveLimitMode(featureKey, def, stored);
+        if (LIMIT_MODE_BLOCKED.equals(limitMode)) {
+            result.put("allowed", false);
+            result.put("preview", false);
+            result.put("reason", "blocked");
+            result.put("required_level", normalizeLevel(userLevel));
+            result.put("reason_text", DEFAULT_BLOCKED_MESSAGE);
             return result;
         }
-        // 拦截时附带 required_level
-        String firstHigherOn = findFirstHigherEnabled(userLevel, levelSwitches);
-        if (firstHigherOn != null) {
-            result.put("reason", "level");
-            result.put("required_level", firstHigherOn);
-        } else {
-            result.put("reason", "disabled");
-            result.put("required_level", normalizeLevel(userLevel));
+        // 3. 等级开关判定
+        Map<String, Boolean> levelSwitches = resolveLevelSwitches(featureKey, def, stored);
+        boolean userAllowed = boolOr(levelSwitches.get(normalizeLevel(userLevel)), true);
+        if (!userAllowed) {
+            result.put("allowed", false);
+            result.put("preview", false);
+            String firstHigherOn = findFirstHigherEnabled(userLevel, levelSwitches);
+            if (firstHigherOn != null) {
+                result.put("reason", "level");
+                result.put("required_level", firstHigherOn);
+            } else {
+                result.put("reason", "disabled");
+                result.put("required_level", normalizeLevel(userLevel));
+            }
+            if (REASON_SUPPORTED_KEYS.contains(featureKey)) {
+                result.put("reason_text", resolveReasonText(featureKey, def, stored));
+            }
+            return result;
         }
-        if (REASON_SUPPORTED_KEYS.contains(featureKey)) {
-            result.put("reason_text", resolveReasonText(featureKey, def, stored));
+        // 4. 用户等级允许访问
+        result.put("allowed", true);
+        // 限制模式=预览：可进入但不可执行业务操作
+        result.put("preview", LIMIT_MODE_PREVIEW.equals(limitMode));
+        if (LIMIT_MODE_PREVIEW.equals(limitMode)) {
+            result.put("reason_text", DEFAULT_PREVIEW_MESSAGE);
         }
         return result;
     }
@@ -394,6 +471,7 @@ public class FeatureSwitchService {
                 f.put(level, def.get(level));
             }
             f.put("maintenance", false);
+            f.put("limitMode", LIMIT_MODE_NONE);
             features.put(String.valueOf(def.get("key")), f);
         }
         Map<String, Object> root = new LinkedHashMap<>();
@@ -439,6 +517,32 @@ public class FeatureSwitchService {
             val = boolOr(override.get("maintenance"), val);
         }
         return val;
+    }
+
+    /**
+     * 解析某功能的限制模式（合并默认值与存储覆盖）。
+     * 限制模式优先级：maintenance > limitMode=blocked > 等级开关 > limitMode=preview
+     * - none：无限制（默认，正常使用）
+     * - preview：预览模式（可进入页面查看，但不可执行业务操作/发送业务请求）
+     * - blocked：不可进入模式（直接无法访问该页面）
+     */
+    private String resolveLimitMode(String key, Map<String, Object> def, Map<String, Map<String, Object>> stored) {
+        String val = normalizeLimitMode(def.get("limitMode"));
+        Map<String, Object> override = stored.get(key);
+        if (override != null && override.containsKey("limitMode")) {
+            val = normalizeLimitMode(override.get("limitMode"));
+        }
+        return val;
+    }
+
+    /**
+     * 规范化限制模式值：非法值统一降级为 none。
+     */
+    private String normalizeLimitMode(Object v) {
+        if (v == null) return LIMIT_MODE_NONE;
+        String s = String.valueOf(v).trim().toLowerCase(Locale.ROOT);
+        if (VALID_LIMIT_MODES.contains(s)) return s;
+        return LIMIT_MODE_NONE;
     }
 
     /**
@@ -532,6 +636,8 @@ public class FeatureSwitchService {
             if (f.containsKey("group")) m.put("group", f.get("group"));
             // 维护开关：所有功能均支持持久化
             m.put("maintenance", boolOr(f.get("maintenance"), false));
+            // 限制模式：所有功能均支持持久化（none/preview/blocked 单选）
+            m.put("limitMode", normalizeLimitMode(f.get("limitMode")));
             // 仅 REASON_SUPPORTED_KEYS 中的功能保留 reason 字段
             if (REASON_SUPPORTED_KEYS.contains(key)) {
                 Object reasonVal = f.get("reason");

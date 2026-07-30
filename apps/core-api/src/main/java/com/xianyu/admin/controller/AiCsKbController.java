@@ -84,6 +84,41 @@ public class AiCsKbController {
         return ResponseEntity.ok(Map.of("unbound_count", count));
     }
 
+    /* ===== 一级大类（V1.49 三级分类） ===== */
+
+    /**
+     * V1.49: 按一级分类 code 列出其下所有二级分类的所有 Q&A。
+     */
+    @GetMapping("/parent-categories/{code}/learned")
+    public ResponseEntity<List<Map<String, Object>>> listLearnedByParentCategory(
+        @PathVariable String code,
+        @RequestParam(required = false) String keyword
+    ) {
+        return ResponseEntity.ok(kbService.listLearnedKbByParentCategoryCode(code, keyword));
+    }
+
+    /**
+     * V1.49: 一键启用某个一级分类下所有二级分类的所有 Q&A（按大类启用）。
+     */
+    @PostMapping("/parent-categories/{code}/bind")
+    public ResponseEntity<Map<String, Object>> bindParentCategory(@PathVariable String code) {
+        Long tenantId = TenantContext.getCurrentTenantId();
+        Long userId = TenantContext.getCurrentUserId();
+        int count = kbService.bindParentCategory(tenantId, userId, code);
+        return ResponseEntity.ok(Map.of("bound_count", count));
+    }
+
+    /**
+     * V1.49: 一键取消启用某个一级分类下所有二级分类的所有 Q&A。
+     */
+    @DeleteMapping("/parent-categories/{code}/bind")
+    public ResponseEntity<Map<String, Object>> unbindParentCategory(@PathVariable String code) {
+        Long tenantId = TenantContext.getCurrentTenantId();
+        Long userId = TenantContext.getCurrentUserId();
+        int count = kbService.unbindParentCategory(tenantId, userId, code);
+        return ResponseEntity.ok(Map.of("unbound_count", count));
+    }
+
     /* ===== 用户私有 KB ===== */
 
     @GetMapping("/user-kb")

@@ -179,6 +179,189 @@ public class DeliveryGoodsConfigService {
         apply(tenantId, List.of(goodsId), patch);
     }
 
+    /**
+     * 查询商品的 SKU 列表（从 xianyu_goods_sku 表，由 automation-service 维护）。
+     * 返回标准化的 SKU 信息列表，含 skuId/propertyKey/propertyText/price/quantity。
+     * 单规格商品返回空列表。
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listGoodsSkus(Long tenantId, Long goodsId) {
+        requireTenantAndGoodsId(tenantId, goodsId);
+        // 先查 xianyu_goods 获取 external_goods_id
+        String externalGoodsId;
+        try {
+            List<Map<String, Object>> goodsRows = jdbcTemplate.queryForList(
+                    "SELECT external_goods_id FROM xianyu_goods WHERE tenant_id=? AND id=? AND deleted=0",
+                    tenantId, goodsId
+            );
+            if (goodsRows.isEmpty()) {
+                throw new BizException(404, "商品不存在或不属于当前租户");
+            }
+            externalGoodsId = text(goodsRows.get(0).get("external_goods_id"));
+            if (externalGoodsId.isBlank()) {
+                return List.of();
+            }
+        } catch (BizException error) {
+            throw error;
+        } catch (Exception error) {
+            log.error("查询商品 external_goods_id 失败 goodsId={}, errorType={}", goodsId, error.getClass().getSimpleName());
+            throw new BizException(503, "商品 SKU 暂时不可查询，请稍后重试");
+        }
+
+        // 查询 xianyu_goods_sku 表
+        try {
+            List<Map<String, Object>> skuRows = jdbcTemplate.queryForList(
+                    "SELECT sku_id, inventory_id, property_list_json, property_key, price_in_cent, quantity "
+                            + "FROM xianyu_goods_sku WHERE external_goods_id=? AND deleted=0 ORDER BY id",
+                    externalGoodsId
+            );
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (Map<String, Object> row : skuRows) {
+                Map<String, Object> sku = new LinkedHashMap<>();
+                sku.put("skuId", text(row.get("sku_id")));
+                sku.put("inventoryId", text(row.get("inventory_id")));
+                sku.put("propertyKey", text(row.get("property_key")));
+                sku.put("propertyText", buildPropertyText(row.get("property_list_json")));
+                sku.put("priceCent", row.get("price_in_cent"));
+                sku.put("quantity", row.get("quantity"));
+                result.add(sku);
+            }
+            return result;
+        } catch (Exception error) {
+            log.error("查询商品 SKU 失败 goodsId={}, externalGoodsId={}, errorType={}",
+                    goodsId, externalGoodsId, error.getClass().getSimpleName());
+            // 表可能未创建（automation-service 尚未同步 SKU），返回空列表而非报错
+            return List.of();
+        }
+    }
+
+    /**
+     * 读取商品的 SKU 发货规则（从 config_json.skuRules）。
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> readSkuRules(Long tenantId, Long goodsId) {
+        requireTenantAndGoodsId(tenantId, goodsId);
+        StoredConfig stored = loadStoredConfig(tenantId, goodsId, false);
+        if (stored == null) return List.of();
+        Object skuRules = stored.config().get("skuRules");
+        if (!(skuRules instanceof List<?> list)) return List.of();
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> raw) {
+                Map<String, Object> rule = new LinkedHashMap<>();
+                raw.forEach((k, v) -> rule.put(String.valueOf(k), v));
+                result.add(rule);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 保存商品的 SKU 发货规则（写入 config_json.skuRules）。
+     * 每条规则含 skuId/propertyKey/propertyText + payDelivery/confirmDelivery/reviewDelivery。
+     */
+    @Transactional
+    public int saveSkuRules(Long tenantId, Long goodsId, List<Map<String, Object>> skuRules) {
+        requireTenantAndGoodsId(tenantId, goodsId);
+        requireGoods(tenantId, List.of(goodsId), true);
+        List<Map<String, Object>> normalized = normalizeSkuRules(tenantId, skuRules);
+
+        StoredConfig stored = loadStoredConfig(tenantId, goodsId, true);
+        Map<String, Object> config = stored == null
+                ? new LinkedHashMap<>()
+                : new LinkedHashMap<>(stored.config());
+        config.put("skuRules", normalized);
+        persist(tenantId, goodsId, stored, config);
+        return normalized.size();
+    }
+
+    /**
+     * 规范化并校验 SKU 规则列表。
+     * - 校验 skuId 非空
+     * - 校验每个 timing 配置的 mode/cardGroupId 合法性
+     * - 卡密模式校验 card_group 归属且 sku_property_key 匹配（若配置了专属卡密池）
+     */
+    private List<Map<String, Object>> normalizeSkuRules(Long tenantId, List<Map<String, Object>> rawRules) {
+        if (rawRules == null || rawRules.isEmpty()) return List.of();
+        List<Map<String, Object>> result = new ArrayList<>();
+        Set<String> seenSkuIds = new LinkedHashSet<>();
+        for (Map<String, Object> raw : rawRules) {
+            if (raw == null) continue;
+            String skuId = text(raw.get("skuId"));
+            if (skuId.isBlank()) {
+                throw new BizException(422, "SKU 规则的 skuId 不能为空");
+            }
+            if (!seenSkuIds.add(skuId)) {
+                throw new BizException(422, "SKU 规则存在重复的 skuId: " + skuId);
+            }
+            Map<String, Object> rule = new LinkedHashMap<>();
+            rule.put("skuId", skuId);
+            rule.put("propertyKey", text(raw.get("propertyKey")));
+            rule.put("propertyText", text(raw.get("propertyText")));
+
+            for (String timing : SUPPORTED_TIMINGS) {
+                Object timingObj = raw.get(timing);
+                if (!(timingObj instanceof Map<?, ?> timingRaw)) {
+                    // 未配置的 timing 保留空对象
+                    rule.put(timing, new LinkedHashMap<>());
+                    continue;
+                }
+                Map<String, Object> timingConfig = new LinkedHashMap<>();
+                timingRaw.forEach((k, v) -> timingConfig.put(String.valueOf(k), v));
+
+                int enabled = intFlag(timingConfig.getOrDefault("enabled", 0), 0);
+                timingConfig.put("enabled", enabled);
+                String mode = text(timingConfig.getOrDefault("mode", "text"));
+                if (!SUPPORTED_MODES.contains(mode)) {
+                    throw new BizException(422, "SKU 规则的发货模式暂不支持（仅支持 text/card）");
+                }
+                timingConfig.put("mode", mode);
+
+                if (enabled == 1) {
+                    if ("card".equals(mode)) {
+                        Long cardGroupId = positiveLong(timingConfig.get("cardGroupId"), "请选择有效的卡密组");
+                        requireOwnedReference("card_group", tenantId, cardGroupId, "卡密组不存在或不可用");
+                    } else {
+                        String content = text(timingConfig.get("content"));
+                        Long sourceId = nullablePositiveLong(timingConfig.get("sourceId"), "发货正文来源无效");
+                        if (sourceId == null && content.isBlank()) {
+                            throw new BizException(422, "启用文本发货前请填写发货正文或选择正文来源");
+                        }
+                        if (sourceId != null) {
+                            requireOwnedReference("delivery_text_source", tenantId, sourceId, "发货正文来源不存在或不可用");
+                        }
+                    }
+                }
+                rule.put(timing, timingConfig);
+            }
+            result.add(rule);
+        }
+        return result;
+    }
+
+    /**
+     * 从 property_list_json 构建 human-readable 的 propertyText。
+     * property_list_json 格式：[{"propertyText":"颜色","valueText":"红色"}, ...]
+     * 输出："颜色:红色 | 尺码:M"
+     */
+    @SuppressWarnings("unchecked")
+    private String buildPropertyText(Object propertyListJson) {
+        if (propertyListJson == null) return "";
+        try {
+            String json = propertyListJson instanceof String s ? s : objectMapper.writeValueAsString(propertyListJson);
+            List<Map<String, Object>> list = objectMapper.readValue(json, new TypeReference<List<Map<String, Object>>>() {});
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < list.size(); i++) {
+                if (i > 0) sb.append(" | ");
+                Map<String, Object> prop = list.get(i);
+                sb.append(text(prop.get("propertyText"))).append(":").append(text(prop.get("valueText")));
+            }
+            return sb.toString();
+        } catch (Exception error) {
+            return "";
+        }
+    }
+
     @Transactional
     public void removeSourceBinding(Long tenantId, Long goodsId, Long sourceId) {
         requireTenantAndGoodsId(tenantId, goodsId);

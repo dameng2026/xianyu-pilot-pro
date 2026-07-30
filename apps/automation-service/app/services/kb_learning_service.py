@@ -409,64 +409,55 @@ async def _resolve_category_id(
     db: AsyncSession,
     name_or_code: str,
 ) -> int | None:
-    """查或建分类，返回 id。
+    """查二级分类 id（V1.49 三级分类改造）。
 
-    V1.47 改造：优先按 code 查找预定义分类，回退到按 name 查找。
-    若 LLM 返回的是预定义分类 code（如 stock_query），直接命中预定义分类。
-    若 LLM 返回的是自定义名称（向后兼容旧 prompt），按 name 查找或新建。
+    V1.49 改造：LLM 必须输出预定义的 68 个二级分类 code 之一，
+    函数仅查找已存在的二级分类（parent_id IS NOT NULL），不再新建自定义分类。
+    未命中时归到 general_product_consult（交易通用问题-商品咨询）兜底。
 
-    注意：不要在此函数内 commit()，否则会破坏外层 _dedup_and_store 的事务原子性。
-    改用 INSERT IGNORE 避免并发同名插入导致 IntegrityError。
-    最终 commit 由外层 run_learning_job 统一执行。
+    注意：不在此函数内 commit()，由外层 _dedup_and_store 统一提交。
     """
-    name_or_code = (name_or_code or "other").strip()
-    # 1. 优先按 code 查找预定义分类
+    name_or_code = (name_or_code or "general_product_consult").strip()
+    # 1. 优先按 code 查找二级分类（parent_id IS NOT NULL）
     existing = await db.execute(text("""
         SELECT id FROM ai_cs_kb_category
-        WHERE code = :c AND deleted = 0
+        WHERE code = :c AND parent_id IS NOT NULL AND deleted = 0
         LIMIT 1
     """), {"c": name_or_code})
     row = existing.mappings().first()
     if row:
         return row["id"]
 
-    # 2. 按 name 查找（兼容旧 prompt 输出的中文分类名）
+    # 2. 兼容旧版中文分类名：按 name 查找二级分类
     name_hash = md5_hash(name_or_code)
     existing = await db.execute(text("""
         SELECT id FROM ai_cs_kb_category
-        WHERE name_hash = :h AND deleted = 0
+        WHERE name_hash = :h AND parent_id IS NOT NULL AND deleted = 0
         LIMIT 1
     """), {"h": name_hash})
     row = existing.mappings().first()
     if row:
         return row["id"]
 
-    # 3. 都未命中：作为新分类新建（AI 可自行增加分类）
-    # 兜底：若 name_or_code 看起来像 code（全小写下划线），归到 other
-    if name_or_code and not any('\u4e00' <= ch <= '\u9fff' for ch in name_or_code) and "_" in name_or_code:
-        # 是 code 但不在预定义列表中，归到 other
-        existing = await db.execute(text("""
-            SELECT id FROM ai_cs_kb_category
-            WHERE code = 'other' AND deleted = 0 LIMIT 1
-        """))
-        row = existing.mappings().first()
-        if row:
-            return row["id"]
-
-    # 新建自定义分类（source='ai' 表示 AI 自动创建，可被后台管理员审核/合并）
-    await db.execute(text("""
-        INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, parent_id, sort_order,
-                                       entry_count, source, deleted,
-                                       created_time, updated_time)
-        VALUES (:n, :h, NULL, 0, 0, 'ai', 0, NOW(), NOW())
-    """), {"n": name_or_code, "h": name_hash})
-    # 不 commit，由外层统一提交
-    result = await db.execute(text("""
+    # 3. 兜底：归到 general_product_consult（V1.49 兜底二级分类）
+    #    V1.47 时代的 'other' 已在 V1.49 中被软删，不再使用
+    existing = await db.execute(text("""
         SELECT id FROM ai_cs_kb_category
-        WHERE name_hash = :h AND deleted = 0 LIMIT 1
-    """), {"h": name_hash})
-    r = result.mappings().first()
-    return r["id"] if r else None
+        WHERE code = 'general_product_consult' AND parent_id IS NOT NULL AND deleted = 0
+        LIMIT 1
+    """))
+    row = existing.mappings().first()
+    if row:
+        return row["id"]
+
+    # 4. 极端兜底：如果连 general_product_consult 都没有，取任意一个二级分类
+    existing = await db.execute(text("""
+        SELECT id FROM ai_cs_kb_category
+        WHERE parent_id IS NOT NULL AND deleted = 0
+        ORDER BY sort_order, id LIMIT 1
+    """))
+    row = existing.mappings().first()
+    return row["id"] if row else None
 
 
 async def _index_vectors(db: AsyncSession) -> None:

@@ -727,7 +727,21 @@ async def _process_delivery_inner(
             fail_reason="未配置自动发货规则",
         )
         return
-    
+
+    # === 7.5 多规格 SKU 规则匹配 ===
+    # 若商品配置了 skuRules，则反查订单 skuId 并按 SKU 精确匹配发货规则。
+    # 反查失败或未匹配时回退到商品通用配置（保证发货不中断）。
+    sku_rules = rule.get("_sku_rules") if isinstance(rule, dict) else None
+    if sku_rules:
+        sku_id = await _resolve_order_sku_id(db, order_id, account_id, xy_goods_id)
+        if sku_id:
+            rule = _apply_sku_rule_override(rule, sku_id)
+            logger.info("SKU规则匹配 accountId=%d xyGoodsId=%s skuId=%s matched=%s",
+                        account_id, xy_goods_id, sku_id, rule.get("_sku_matched"))
+        else:
+            logger.info("SKU反查失败，回退商品通用配置 accountId=%d orderId=%s",
+                        account_id, order_id)
+
     # === 8. 执行发货 ===
     delivery_mode = str(rule.get("delivery_mode") or "kami").lower()
     delivery_content = str(rule.get("delivery_content") or rule.get("content") or "")
@@ -926,47 +940,87 @@ async def _execute_text_delivery(
         delivery_timing=rule.get("delivery_timing") or DELIVERY_TIMING_AFTER_PAYMENT,
     )
 
-    if send_ok and order_id:
-        # 先调用闲鱼确认发货 API，只有平台真正标记为已发货后才更新本地 order_status=3
+    if send_ok:
+        # 发送成功：尝试反查 order_id（付款消息常不含 orderId），再调用闲鱼确认发货 API
+        # 只有平台真正标记为已发货后才更新本地 order_status=3
         # 避免本地标记 3 但闲鱼平台实际未发货的状态不一致问题
-        is_bargain = await _detect_bargain_from_message_or_db(
-            db, account_id, order_id, xy_goods_id, buyer_user_id, rule
+        resolved_order_id = await _resolve_order_id_for_confirm(
+            db, tenant_id, account_id, order_id, xy_goods_id, buyer_user_id,
         )
-        confirm_result = await _auto_confirm_shipment(
-            tenant_id, account_id, order_id,
-            is_bargain=is_bargain,
-            xy_goods_id=xy_goods_id,
-            buyer_user_id=buyer_user_id,
-        )
-        if confirm_result and confirm_result.get("success"):
-            await db.execute(
-                text("""
-                    UPDATE xianyu_trade_order
-                    SET order_status = 3, ship_time = NOW(), updated_time = NOW()
-                    WHERE tenant_id = :tenant_id
-                      AND external_order_id = :external_order_id
-                      AND deleted = 0
-                """),
-                {
-                    "tenant_id": tenant_id,
-                    "external_order_id": order_id,
-                }
+        if resolved_order_id:
+            is_bargain = await _detect_bargain_from_message_or_db(
+                db, account_id, resolved_order_id, xy_goods_id, buyer_user_id, rule
             )
-        else:
-            # 确认发货失败：发货消息已发送给买家，但闲鱼平台未标记为已发货
-            # 保持本地 order_status 不变（仍为待发货），等待下次同步或重试
-            logger.warning(
-                "确认发货失败，本地订单状态保持不变: tenantId=%d accountId=%d orderId=%s error=%s",
-                tenant_id, account_id, order_id,
-                confirm_result.get("error", "UNKNOWN") if confirm_result else "CAPABILITY_UNAVAILABLE",
-            )
-            await _notify_realtime_delivery_failure(
-                db=db,
-                tenant_id=tenant_id,
-                account_id=account_id,
-                order_id=order_id,
+            confirm_result = await _auto_confirm_shipment(
+                tenant_id, account_id, resolved_order_id,
+                is_bargain=is_bargain,
                 xy_goods_id=xy_goods_id,
-                fail_reason=f"发货消息已发送，但确认发货失败：{confirm_result.get('message', '未知错误') if confirm_result else '确认发货能力不可用'}",
+                buyer_user_id=buyer_user_id,
+            )
+            if confirm_result and confirm_result.get("success"):
+                await db.execute(
+                    text("""
+                        UPDATE xianyu_trade_order
+                        SET order_status = 3, ship_time = NOW(), updated_time = NOW()
+                        WHERE tenant_id = :tenant_id
+                          AND external_order_id = :external_order_id
+                          AND deleted = 0
+                    """),
+                    {
+                        "tenant_id": tenant_id,
+                        "external_order_id": resolved_order_id,
+                    }
+                )
+                # 反查到的 order_id 回写到 delivery_record（仅当原 order_id 为空）
+                # 用于后续对账与去重命中（_has_existing_realtime_delivery 按 order_id 精确匹配）
+                if not order_id:
+                    try:
+                        await db.execute(
+                            text("""
+                                UPDATE delivery_record
+                                SET order_id = :order_id, updated_time = NOW()
+                                WHERE tenant_id = :tenant_id
+                                  AND account_id = :account_id
+                                  AND deleted = 0
+                                  AND (order_id IS NULL OR order_id = '')
+                                  AND delivery_timing = :delivery_timing
+                                  AND REPLACE(JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.sid')), '@goofish', '') = REPLACE(:sid, '@goofish', '')
+                                  AND REPLACE(JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.buyerUserId')), '@goofish', '') = REPLACE(:buyer_user_id, '@goofish', '')
+                                  AND JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.xyGoodsId')) = :xy_goods_id
+                            """),
+                            {
+                                "tenant_id": tenant_id,
+                                "account_id": account_id,
+                                "order_id": resolved_order_id,
+                                "delivery_timing": DELIVERY_TIMING_AFTER_PAYMENT,
+                                "sid": s_id,
+                                "buyer_user_id": buyer_user_id,
+                                "xy_goods_id": xy_goods_id,
+                            }
+                        )
+                    except Exception as e:
+                        logger.warning("回写 order_id 到 delivery_record 失败: %s", e)
+            else:
+                # 确认发货失败：发货消息已发送给买家，但闲鱼平台未标记为已发货
+                # 保持本地 order_status 不变（仍为待发货），等待下次同步或重试
+                logger.warning(
+                    "确认发货失败，本地订单状态保持不变: tenantId=%d accountId=%d orderId=%s error=%s",
+                    tenant_id, account_id, resolved_order_id,
+                    confirm_result.get("error", "UNKNOWN") if confirm_result else "CAPABILITY_UNAVAILABLE",
+                )
+                await _notify_realtime_delivery_failure(
+                    db=db,
+                    tenant_id=tenant_id,
+                    account_id=account_id,
+                    order_id=resolved_order_id,
+                    xy_goods_id=xy_goods_id,
+                    fail_reason=f"发货消息已发送，但确认发货失败：{confirm_result.get('message', '未知错误') if confirm_result else '确认发货能力不可用'}",
+                )
+        else:
+            # order_id 为空且本地订单表也查不到（订单同步未完成）
+            logger.info(
+                "发货消息已发送但 order_id 为空且本地反查无果，跳过 confirm_shipment: tenantId=%d accountId=%d xyGoodsId=%s buyer=%s",
+                tenant_id, account_id, xy_goods_id, buyer_user_id,
             )
     elif not send_ok:
         await _notify_realtime_delivery_failure(
@@ -1225,6 +1279,8 @@ async def _load_goods_delivery_rule(
         return None
 
     delivery_content = _build_delivery_content(header, content, footer)
+    # 保留 SKU 规则列表，供 _apply_sku_rule_override 按 skuId 精确匹配
+    sku_rules = config.get("skuRules") if isinstance(config.get("skuRules"), list) else []
     return {
         "id": row.get("id"),
         "goods_id": goods.get("id"),
@@ -1239,6 +1295,8 @@ async def _load_goods_delivery_rule(
         or timing_config.get("auto_confirm_shipment")
         or 0,
         "segment_send": timing_config.get("segmentSend"),
+        "_sku_rules": sku_rules,
+        "_raw_config": config,
     }
 
 
@@ -1247,6 +1305,120 @@ def _build_delivery_content(header: str, content: str, footer: str) -> str:
         part for part in [str(header or "").strip(), str(content or "").strip(), str(footer or "").strip()]
         if part
     )
+
+
+async def _resolve_order_sku_id(
+    db: AsyncSession,
+    order_id: Optional[str],
+    account_id: int,
+    xy_goods_id: str,
+) -> Optional[str]:
+    """反查订单的 skuId，用于多规格商品按 SKU 匹配发货规则。
+
+    查询顺序：
+    1. 从 xianyu_trade_order_item 表按 order_id 查 sku_id（若订单同步时已预存）
+    2. 调用闲鱼订单详情接口 mtop.taobao.idle.trade.merchant.full.info 反查
+
+    任一方式成功即返回 skuId 字符串；全部失败返回 None（调用方回退商品通用配置）。
+    """
+    if not order_id:
+        return None
+
+    # 1. 先查本地订单项表
+    try:
+        row = (await db.execute(
+            text("""
+                SELECT sku_id FROM xianyu_trade_order_item
+                WHERE order_id = :order_id AND deleted = 0
+                  AND sku_id IS NOT NULL AND sku_id != ''
+                LIMIT 1
+            """),
+            {"order_id": order_id}
+        )).mappings().first()
+        if row and row.get("sku_id"):
+            return str(row["sku_id"])
+    except Exception as error:
+        logger.debug("查询订单项 sku_id 失败 orderId=%s error=%s", order_id, error)
+
+    # 2. 调用闲鱼订单详情接口反查
+    try:
+        # 延迟导入避免循环依赖
+        from .refund_service import fetch_refund_full_info
+        result = await asyncio.to_thread(fetch_refund_full_info, account_id, order_id, 15)
+        if not result.get("success"):
+            logger.info("订单详情反查 skuId 失败 orderId=%s error=%s",
+                        order_id, result.get("error"))
+            return None
+        data = result.get("data") or {}
+        module = data.get("data", {}).get("module") if isinstance(data.get("data"), dict) else None
+        if not isinstance(module, dict):
+            module = data.get("module") if isinstance(data, dict) else None
+        if not isinstance(module, dict):
+            return None
+
+        # 从 merchantItemVO 中提取 skuId
+        item_vo = module.get("merchantItemVO") or {}
+        if isinstance(item_vo, dict):
+            sku_id = item_vo.get("skuId")
+            if sku_id:
+                return str(sku_id)
+            # 部分 SKU 信息在 itemInfoLines 中，但格式不固定，暂不解析
+
+        return None
+    except Exception as error:
+        logger.warning("反查订单 skuId 异常 orderId=%s errorType=%s error=%s",
+                       order_id, type(error).__name__, error)
+        return None
+
+
+def _apply_sku_rule_override(rule: dict, sku_id: str) -> dict:
+    """按 skuId 在 skuRules 中查找精确规则，覆盖商品通用规则字段。
+
+    匹配到则返回更新后的 rule（原地修改），未匹配则返回原 rule。
+    覆盖字段：delivery_mode / delivery_content / card_group_id / source_id 等。
+    """
+    sku_rules = rule.get("_sku_rules") or []
+    if not sku_rules or not sku_id:
+        return rule
+
+    matched = None
+    for item in sku_rules:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("skuId") or "") == str(sku_id):
+            matched = item
+            break
+
+    if not matched:
+        # skuId 未命中，尝试按 propertyKey 二次匹配（应对闲鱼返回 skuId 为空的场景）
+        # 此处暂不实现 propertyKey 匹配，保持简单
+        return rule
+
+    # 从 SKU 规则的 payDelivery 提取配置，覆盖商品通用规则
+    timing_config = matched.get("payDelivery") or {}
+    if not isinstance(timing_config, dict):
+        return rule
+
+    enabled = timing_config.get("enabled")
+    if enabled in (0, "0", False, "false", "False", None):
+        # SKU 规则明确禁用，保留商品通用配置不变
+        return rule
+
+    _raw_mode = str(timing_config.get("mode") or "text").lower()
+    mode = "kami" if _raw_mode == "card" else _raw_mode
+    header = str(timing_config.get("header") or "")
+    content = str(timing_config.get("content") or "")
+    footer = str(timing_config.get("footer") or "")
+
+    rule["delivery_mode"] = mode
+    rule["delivery_content"] = _build_delivery_content(header, content, footer)
+    rule["content"] = rule["delivery_content"]
+    rule["card_group_id"] = timing_config.get("cardGroupId")
+    rule["source_id"] = timing_config.get("sourceId")
+    rule["source_title"] = str(timing_config.get("sourceTitle") or "")
+    rule["_sku_matched"] = True
+    rule["_matched_sku_id"] = sku_id
+    return rule
 
 
 async def _load_text_source(
@@ -1284,14 +1456,30 @@ async def _has_existing_realtime_delivery(
 ) -> bool:
     """检查是否已存在该订单/会话的实时发货记录（去重核心）。
 
-    去重维度（任一命中即视为已发货）：
-    1. order_id 精确匹配（优先）：同一 order_id 已有 status IN (1,2) 的记录
+    去重维度（任一命中即视为已发货/已处理）：
+    1. order_id 精确匹配（优先）：同一 order_id 已有 status IN (1,2) 的记录，或 1 小时内的失败记录
     2. 会话+买家+商品 交叉匹配（order_id 为空时兜底）：同一 (sid, buyerUserId, xyGoodsId)
        已有 after_payment 发货记录
 
     重要：pnmId 是消息级唯一标识（每条 WS 消息不同），不参与去重判断。
     同一订单的付款消息和后续系统推送消息会有不同 pnmId，但属于同一发货单元。
     若 pnmId 参与去重会导致同一订单被重复发货（事故级 Bug）。
+
+    失败记录参与去重（事故级 Bug 修复）：
+    原逻辑仅匹配 status IN (1, 2)，导致永久性失败（如"未配置自动发货规则"）
+    形成 WS 推送 → 失败 → 不去重 → 闲鱼再推送 → 再失败 的死循环
+    （曾出现单订单 30+ 分钟内被重复触发发货 30+ 次）。
+
+    现引入双层去重窗口（72 小时，覆盖闲鱼最长推送周期）：
+    - 成功发货（status IN 1,2）：72 小时窗口
+    - 失败发货（status = 3）：72 小时窗口
+
+    背景（2026-07-29 事故级 Bug）：
+    原窗口成功 10 分钟/失败 1 小时，但闲鱼 WS 对未确认发货的订单会持续推送付款消息，
+    推送间隔约 10-11 分钟（略大于 10 分钟窗口）。每次新推送时前一次记录已超出窗口，
+    去重失效，形成无限循环。账号 69（768786986）6 小时内对同一商品+买家重复发货 33 次。
+    根因是订单同步 API 失败导致 order_id 永远为空，confirm_shipment 无法调用，
+    闲鱼平台不知道已发货而持续推送。72 小时窗口确保即使订单同步长期失败也不会重复发货。
     """
     if order_id:
         existing = (await db.execute(
@@ -1302,7 +1490,10 @@ async def _has_existing_realtime_delivery(
                   AND account_id = :account_id
                   AND order_id = :order_id
                   AND deleted = 0
-                  AND status IN (1, 2)
+                  AND (
+                      status IN (1, 2)
+                      OR (status = 3 AND created_time >= DATE_SUB(NOW(), INTERVAL 72 HOUR))
+                  )
                 LIMIT 1
             """),
             {
@@ -1325,8 +1516,16 @@ async def _has_existing_realtime_delivery(
     # 用 (delivery_timing = :delivery_timing OR delivery_timing IS NULL) 兼容旧数据，
     # 确保这些记录也能被去重命中，避免重复发货。
     # 当 order_id 为空时（付款消息 URL 不含 orderId），按会话+买家+商品去重。
-    # 添加 10 分钟时间窗口：同一会话同一商品 10 分钟内的记录视为同一订单的 WS 重复推送，
-    # 超过 10 分钟视为新订单（买家重新下单），避免跨天旧记录误判导致新订单不发货。
+    #
+    # 双层时间窗口（72 小时，事故级 Bug 修复）：
+    # - 成功记录 72 小时窗口：覆盖闲鱼 WS 最长推送周期，防止订单同步失败时
+    #   闲鱼持续推送付款消息导致重复发货
+    # - 失败记录 72 小时窗口：绝对止血，避免闲鱼周期性推送付款消息时形成死循环
+    #
+    # 2026-07-29 事故：原窗口成功 10 分钟/失败 1 小时，闲鱼推送间隔约 10-11 分钟，
+    # 账号 69 因订单同步 API 失败导致 order_id 永远为空，6 小时内对同一商品+买家
+    # 重复发货 33 次。72 小时窗口确保即使订单同步长期失败也不会重复发货。
+    # 72 小时后允许重试，避免永久阻塞（如买家重新下单时仍能发货）。
     existing = (await db.execute(
         text("""
             SELECT id
@@ -1339,8 +1538,10 @@ async def _has_existing_realtime_delivery(
               AND REPLACE(JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.buyerUserId')), '@goofish', '') = REPLACE(:buyer_user_id, '@goofish', '')
               AND JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.xyGoodsId')) = :xy_goods_id
               AND (:delivery_content = '' OR COALESCE(delivery_content, '') = :delivery_content)
-              AND status IN (1, 2)
-              AND created_time >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)
+              AND (
+                  (status IN (1, 2) AND created_time >= DATE_SUB(NOW(), INTERVAL 72 HOUR))
+                  OR (status = 3 AND created_time >= DATE_SUB(NOW(), INTERVAL 72 HOUR))
+              )
             LIMIT 1
         """),
         {
@@ -1353,7 +1554,78 @@ async def _has_existing_realtime_delivery(
             "delivery_content": str(delivery_content or ""),
         }
     )).mappings().first()
-    return bool(existing)
+    if existing:
+        return True
+
+    # 最后一道防线：本地订单表已标记为已发货（order_status=3）即视为已处理。
+    # 场景：发货消息已发送 + confirm_shipment 已成功 + xianyu_trade_order.order_status=3
+    # 但 delivery_record 因事务回滚/异常未写入；或之前发货走的是非实时路径（如定时任务）。
+    # 此时即使 delivery_record 没有匹配记录，也不应再次触发发货。
+    #
+    # 匹配优先级：
+    # 1. order_id 精确匹配（最稳）
+    # 2. (account_id, item_id, buyer_id) 交叉匹配（order_id 为空时兜底）
+    normalized_buyer = (buyer_user_id or "").replace("@goofish", "")
+    try:
+        if order_id:
+            order_shipped = (await db.execute(
+                text("""
+                    SELECT 1
+                    FROM xianyu_trade_order
+                    WHERE tenant_id = :tenant_id
+                      AND account_id = :account_id
+                      AND external_order_id = :external_order_id
+                      AND deleted = 0
+                      AND order_status = 3
+                    LIMIT 1
+                """),
+                {
+                    "tenant_id": tenant_id,
+                    "account_id": account_id,
+                    "external_order_id": order_id,
+                }
+            )).mappings().first()
+            if order_shipped:
+                logger.info(
+                    "去重命中：本地订单已发货(order_status=3) tenantId=%d accountId=%d orderId=%s",
+                    tenant_id, account_id, order_id,
+                )
+                return True
+        elif xy_goods_id and normalized_buyer:
+            # order_id 为空时按 商品+买家 兜底匹配（限制近 1 小时，避免老订单阻塞新订单）
+            order_shipped = (await db.execute(
+                text("""
+                    SELECT 1
+                    FROM xianyu_trade_order
+                    WHERE tenant_id = :tenant_id
+                      AND account_id = :account_id
+                      AND deleted = 0
+                      AND item_id = :item_id
+                      AND REPLACE(buyer_id, '@goofish', '') = :buyer_id
+                      AND order_status = 3
+                      AND ship_time >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+                    LIMIT 1
+                """),
+                {
+                    "tenant_id": tenant_id,
+                    "account_id": account_id,
+                    "item_id": xy_goods_id,
+                    "buyer_id": normalized_buyer,
+                }
+            )).mappings().first()
+            if order_shipped:
+                logger.info(
+                    "去重命中：本地订单已发货(order_status=3, 兜底匹配) tenantId=%d accountId=%d xyGoodsId=%s buyer=%s",
+                    tenant_id, account_id, xy_goods_id, buyer_user_id,
+                )
+                return True
+    except Exception as e:
+        # 订单状态查询失败不阻塞发货主流程（依赖原 delivery_record 去重逻辑）
+        logger.warning(
+            "本地订单状态查询异常，跳过 order_status=3 强校验: tenantId=%d accountId=%d error=%s",
+            tenant_id, account_id, e,
+        )
+    return False
 
 
 async def _execute_kami_delivery(
@@ -1691,50 +1963,89 @@ async def _execute_kami_delivery(
         fail_reason=fail_reason, trigger_source=trigger_source,
     )
 
-    # Step 8: 确认发货（仅在发送成功且有 order_id 时执行）
+    # Step 8: 确认发货（仅在发送成功时执行；order_id 为空时反查本地订单表）
     # 卡密已发送给买家，即使确认发货失败也不影响卡密状态（卡密已消费）
-    if send_ok and order_id:
-        try:
-            is_bargain = await _detect_bargain_from_message_or_db(
-                db, account_id, order_id, xy_goods_id, buyer_user_id, rule
+    if send_ok:
+        resolved_order_id = await _resolve_order_id_for_confirm(
+            db, tenant_id, account_id, order_id, xy_goods_id, buyer_user_id,
+        )
+        if not resolved_order_id:
+            logger.info(
+                "卡密已发送但 order_id 为空且本地反查无果，跳过 confirm_shipment: tenantId=%d accountId=%d xyGoodsId=%s buyer=%s",
+                tenant_id, account_id, xy_goods_id, buyer_user_id,
             )
-            confirm_result = await _auto_confirm_shipment(
-                tenant_id, account_id, order_id,
-                is_bargain=is_bargain,
-                xy_goods_id=xy_goods_id,
-                buyer_user_id=buyer_user_id,
-            )
-            if confirm_result and confirm_result.get("success"):
-                try:
-                    await db.execute(
-                        text("""
-                            UPDATE xianyu_trade_order
-                            SET order_status = 3, ship_time = NOW(), updated_time = NOW()
-                            WHERE tenant_id = :tenant_id
-                              AND external_order_id = :external_order_id
-                              AND deleted = 0
-                        """),
-                        {
-                            "tenant_id": tenant_id,
-                            "external_order_id": order_id,
-                        }
-                    )
-                except Exception as e:
-                    logger.warning("更新本地订单状态失败 tenantId=%d orderId=%s error=%s", tenant_id, order_id, e)
-            else:
-                # 确认发货失败：卡密已发送给买家，但闲鱼平台未标记为已发货
-                # 保持本地 order_status 不变，等待下次同步或重试
-                friendly_error = _friendly_confirm_error(confirm_result)
-                logger.warning(
-                    "卡密发货确认失败，本地订单状态保持不变: tenantId=%d accountId=%d orderId=%s error=%s",
-                    tenant_id, account_id, order_id,
-                    confirm_result.get("error", "UNKNOWN") if confirm_result else "CAPABILITY_UNAVAILABLE",
+        else:
+            try:
+                is_bargain = await _detect_bargain_from_message_or_db(
+                    db, account_id, resolved_order_id, xy_goods_id, buyer_user_id, rule
                 )
-                # 不向用户告警"确认发货失败"，因为卡密已发给买家，用户感知上是"已发货"
-                # 仅记录日志，由下次订单同步自动校正平台状态
-        except Exception as e:
-            logger.error("确认发货流程异常 tenantId=%d orderId=%s error=%s", tenant_id, order_id, e, exc_info=True)
-            # 确认发货异常不影响卡密已发送的事实，仅记录日志
+                confirm_result = await _auto_confirm_shipment(
+                    tenant_id, account_id, resolved_order_id,
+                    is_bargain=is_bargain,
+                    xy_goods_id=xy_goods_id,
+                    buyer_user_id=buyer_user_id,
+                )
+                if confirm_result and confirm_result.get("success"):
+                    # 反查到 order_id 后，更新卡密 used_order_id（用于对账）+ 更新本地订单状态
+                    try:
+                        await db.execute(
+                            text("""
+                                UPDATE xianyu_trade_order
+                                SET order_status = 3, ship_time = NOW(), updated_time = NOW()
+                                WHERE tenant_id = :tenant_id
+                                  AND external_order_id = :external_order_id
+                                  AND deleted = 0
+                            """),
+                            {
+                                "tenant_id": tenant_id,
+                                "external_order_id": resolved_order_id,
+                            }
+                        )
+                    except Exception as e:
+                        logger.warning("更新本地订单状态失败 tenantId=%d orderId=%s error=%s", tenant_id, resolved_order_id, e)
+                    # 反查到的 order_id 回写到 delivery_record（仅当原 order_id 为空）
+                    # 用于后续对账与去重命中（_has_existing_realtime_delivery 按 order_id 精确匹配）
+                    if not order_id:
+                        try:
+                            await db.execute(
+                                text("""
+                                    UPDATE delivery_record
+                                    SET order_id = :order_id, status = 2, updated_time = NOW()
+                                    WHERE tenant_id = :tenant_id
+                                      AND account_id = :account_id
+                                      AND deleted = 0
+                                      AND (order_id IS NULL OR order_id = '')
+                                      AND delivery_timing = :delivery_timing
+                                      AND REPLACE(JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.sid')), '@goofish', '') = REPLACE(:sid, '@goofish', '')
+                                      AND REPLACE(JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.buyerUserId')), '@goofish', '') = REPLACE(:buyer_user_id, '@goofish', '')
+                                      AND JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.xyGoodsId')) = :xy_goods_id
+                                """),
+                                {
+                                    "tenant_id": tenant_id,
+                                    "account_id": account_id,
+                                    "order_id": resolved_order_id,
+                                    "delivery_timing": DELIVERY_TIMING_AFTER_PAYMENT,
+                                    "sid": s_id,
+                                    "buyer_user_id": buyer_user_id,
+                                    "xy_goods_id": xy_goods_id,
+                                }
+                            )
+                        except Exception as e:
+                            logger.warning("回写 order_id 到 delivery_record 失败: %s", e)
+                else:
+                    # 确认发货失败：卡密已发送给买家，但闲鱼平台未标记为已发货
+                    # 保持本地 order_status 不变，等待下次同步或重试
+                    friendly_error = _friendly_confirm_error(confirm_result)
+                    logger.warning(
+                        "卡密发货确认失败，本地订单状态保持不变: tenantId=%d accountId=%d orderId=%s error=%s",
+                        tenant_id, account_id, resolved_order_id,
+                        confirm_result.get("error", "UNKNOWN") if confirm_result else "CAPABILITY_UNAVAILABLE",
+                    )
+                    # 不向用户告警"确认发货失败"，因为卡密已发给买家，用户感知上是"已发货"
+                    # 仅记录日志，由下次订单同步自动校正平台状态
+            except Exception as e:
+                logger.error("确认发货流程异常 tenantId=%d orderId=%s error=%s", tenant_id, resolved_order_id, e, exc_info=True)
+                # 确认发货异常不影响卡密已发送的事实，仅记录日志
 
     # 清理内存级去重标记
     _delivery_in_flight.discard(in_flight_key)
@@ -2082,6 +2393,202 @@ async def _detect_bargain_from_message_or_db(
             return True
 
     return False
+
+
+async def _resolve_order_id_for_confirm(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+    order_id: Optional[str],
+    xy_goods_id: str,
+    buyer_user_id: str,
+) -> Optional[str]:
+    """发货后用于确认发货接口的 order_id 解析（双状态架构核心）。
+
+    付款消息的 reminderUrl 经常不含 orderId（只有 itemId/sid/peerUserId），
+    导致 _execute_text_delivery / _execute_kami_delivery 跳过 confirm_shipment，
+    平台未标记为已发货 → 下次同步又把订单拉回待发货 → 重复触发生命循环。
+
+    本函数在 order_id 为空时按以下优先级解析：
+    1. 反查本地 xianyu_trade_order 表的 external_order_id
+    2. 调用闲鱼 API 实时查询订单列表（兜底，当订单同步失败导致本地表为空时）
+
+    解析失败返回 None，调用方应保持原有"跳过 confirm_shipment"行为，
+    但此时 72 小时去重窗口会防止重复发货。
+
+    2026-07-29 事故级 Bug 修复：
+    账号69（768786986）因订单同步 API 长期失败，xianyu_trade_order 表为空，
+    导致 order_id 永远为空，confirm_shipment 被跳过，闲鱼平台不知道已发货，
+    持续推送付款消息。新增闲鱼 API 实时查询兜底，确保 confirm_shipment 不被跳过。
+    """
+    if order_id:
+        return order_id
+    if not xy_goods_id or not buyer_user_id:
+        return None
+
+    normalized_buyer = buyer_user_id.replace("@goofish", "")
+
+    # === 第一层：反查本地 xianyu_trade_order 表 ===
+    try:
+        row = (await db.execute(
+            text("""
+                SELECT external_order_id
+                FROM xianyu_trade_order
+                WHERE tenant_id = :tenant_id
+                  AND account_id = :account_id
+                  AND deleted = 0
+                  AND item_id = :item_id
+                  AND REPLACE(buyer_id, '@goofish', '') = :buyer_id
+                  AND external_order_id IS NOT NULL
+                  AND external_order_id != ''
+                ORDER BY (order_status = 3) ASC,
+                         (delivery_status = 'shipped') ASC,
+                         pay_time DESC,
+                         id DESC
+                LIMIT 1
+            """),
+            {
+                "tenant_id": tenant_id,
+                "account_id": account_id,
+                "item_id": xy_goods_id,
+                "buyer_id": normalized_buyer,
+            }
+        )).mappings().first()
+        if row and row.get("external_order_id"):
+            resolved = str(row["external_order_id"]).strip()
+            logger.info(
+                "反查订单ID成功(本地表): tenantId=%d accountId=%d xyGoodsId=%s buyer=%s → orderId=%s",
+                tenant_id, account_id, xy_goods_id, buyer_user_id, resolved,
+            )
+            return resolved
+    except Exception as e:
+        logger.warning(
+            "反查订单ID异常(本地表): tenantId=%d accountId=%d xyGoodsId=%s buyer=%s error=%s",
+            tenant_id, account_id, xy_goods_id, buyer_user_id, e,
+        )
+
+    # === 第二层：调用闲鱼 API 实时查询订单列表（兜底）===
+    # 场景：订单同步 API 失败导致本地 xianyu_trade_order 表为空，
+    # 但发货消息已发送给买家，必须调用 confirm_shipment 更新闲鱼发货状态，
+    # 否则闲鱼平台不知道已发货会持续推送付款消息。
+    try:
+        resolved = await _resolve_order_id_from_remote_api(
+            account_id, xy_goods_id, normalized_buyer,
+        )
+        if resolved:
+            logger.info(
+                "反查订单ID成功(闲鱼API): tenantId=%d accountId=%d xyGoodsId=%s buyer=%s → orderId=%s",
+                tenant_id, account_id, xy_goods_id, buyer_user_id, resolved,
+            )
+            return resolved
+    except Exception as e:
+        logger.warning(
+            "反查订单ID异常(闲鱼API): tenantId=%d accountId=%d xyGoodsId=%s buyer=%s error=%s",
+            tenant_id, account_id, xy_goods_id, buyer_user_id, e,
+        )
+
+    logger.warning(
+        "反查订单ID失败(本地表+闲鱼API均无果): tenantId=%d accountId=%d xyGoodsId=%s buyer=%s",
+        tenant_id, account_id, xy_goods_id, buyer_user_id,
+    )
+    return None
+
+
+async def _resolve_order_id_from_remote_api(
+    account_id: int,
+    xy_goods_id: str,
+    normalized_buyer: str,
+) -> Optional[str]:
+    """从闲鱼 API 实时查询订单列表，按 item_id + buyer_id 筛选 order_id。
+
+    当本地 xianyu_trade_order 表为空（订单同步失败）时，作为兜底方案
+    实时调用闲鱼 API 获取 order_id，用于后续 confirm_shipment 调用。
+
+    查询策略：
+    - 拉取最近 1 页订单（30 条），按 item_id + buyer_id 精确匹配
+    - 如果第一页未命中，拉取第二页（最多 2 页，避免阻塞发货流程太久）
+    """
+    from .xianyu_api_service import fetch_sold_orders_page
+
+    for page_number in (1, 2):
+        try:
+            result = await asyncio.to_thread(
+                fetch_sold_orders_page,
+                account_id,
+                page_number,
+                30,
+                "ALL",
+            )
+            if not result or not result.get("success"):
+                logger.debug(
+                    "闲鱼API查询订单列表失败 page=%d accountId=%d: %s",
+                    page_number, account_id,
+                    result.get("message", "UNKNOWN") if result else "NONE",
+                )
+                break
+
+            payload = result.get("data") or {}
+            items = payload.get("items") or []
+            for item in items:
+                parsed = _parse_remote_order_item_for_resolve(item)
+                if not parsed:
+                    continue
+                item_id = str(parsed.get("itemId") or "").strip()
+                buyer_id = str(parsed.get("buyerId") or "").strip().replace("@goofish", "")
+                order_id = str(parsed.get("orderId") or "").strip()
+                if (item_id == xy_goods_id
+                    and buyer_id == normalized_buyer
+                    and order_id):
+                    return order_id
+
+            # 如果没有下一页，停止查询
+            if not payload.get("nextPage"):
+                break
+        except Exception as e:
+            logger.debug(
+                "闲鱼API查询订单列表异常 page=%d accountId=%d: %s",
+                page_number, account_id, e,
+            )
+            break
+
+    return None
+
+
+def _parse_remote_order_item_for_resolve(item: dict) -> Optional[dict]:
+    """从闲鱼 API 返回的订单列表项中提取 itemId/buyerId/orderId。
+
+    简化版的 _parse_remote_sold_order_item，仅用于 order_id 解析兜底。
+    """
+    if not isinstance(item, dict):
+        return None
+    common = item.get("commonData") if isinstance(item.get("commonData"), dict) else {}
+    buyer_info = item.get("buyerInfoVO") if isinstance(item.get("buyerInfoVO"), dict) else {}
+    item_info = item.get("itemInfoVO") if isinstance(item.get("itemInfoVO"), dict) else {}
+    item_buy_info = common.get("itemBuyInfo") if isinstance(common.get("itemBuyInfo"), dict) else {}
+
+    order_id = str(common.get("orderId") or "").strip()
+    if not order_id:
+        return None
+
+    item_id = str(
+        common.get("itemId")
+        or item_info.get("itemId")
+        or item_buy_info.get("itemId")
+        or ""
+    ).strip()
+
+    buyer_id = str(
+        buyer_info.get("buyerUserId")
+        or buyer_info.get("userId")
+        or common.get("buyerId")
+        or ""
+    ).strip()
+
+    return {
+        "orderId": order_id,
+        "itemId": item_id,
+        "buyerId": buyer_id,
+    }
 
 
 async def _auto_confirm_shipment(

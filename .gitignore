@@ -172,3 +172,63 @@ apps/user-web/mobile-390.png
 apps/user-web/tmp-mobile-verify/
 docs/superpowers/
 .trae/rules/mobile-pc-isolation.md
+
+# 2026-07-30 上线前清理：临时调试脚本、截图、输出文件、临时 SQL/文档
+# 根目录临时调试脚本
+/_*.sh
+/_sync_temp/
+/analyze_events.py
+/analyze_specific.py
+/reevaluate.py
+/retest_*.py
+/test_ai_cs*.py
+/test_debug_q1.py
+/test_fixes.py
+/test_q18_proactive.py
+/investigate*.sh
+/investigate_logs.sh
+# 根目录临时 SQL
+/reset_demo.sql
+/test-sku-*.sql
+/tmp_*.sql
+/tmp_*.sh
+/tmp_*.py
+# 根目录临时输出与截图
+/inv*_output.txt
+/logs_output*.txt
+/learned_b64.txt
+/ssh_*.txt
+/gp-screenshot*.png
+/gp-verify-*.png
+/screenshot-*.png
+/test_ai_cs_result.json
+/test_fix_q58_q61_q67_q77.py
+# 根目录临时文档（中文命名）
+/修复验证结果.json
+/小梦客服*.md
+/小梦客服*.json
+/用户体验与粘合度提升分析报告.md
+/重测*.json
+# automation-service 根目录临时测试脚本（非 tests/ 目录下的正式测试）
+/apps/automation-service/test_ai_cs*.py
+/apps/automation-service/test_dashboard_diag.py
+/apps/automation-service/重测写操作类问题结果.json
+# scripts 目录临时调试/诊断/热修脚本
+/scripts/_*.py
+/scripts/_*.sh
+/scripts/check-*.py
+/scripts/check-*.sh
+/scripts/cleanup-test-orders.sh
+/scripts/debug-handler.py
+/scripts/deploy-payment-*.py
+/scripts/diagnose-*.py
+/scripts/diagnose-*.sh
+/scripts/e2e-payment-test.sh
+/scripts/hotfix-*.py
+/scripts/inspect-backend.sh
+/scripts/quick-deploy-*.py
+/scripts/reproduce-error.py
+/scripts/search-payment-logs.sh
+/scripts/test-*.py
+/scripts/test-*.sh
+/scripts/verify-*.py

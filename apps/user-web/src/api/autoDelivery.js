@@ -200,3 +200,22 @@ export function applyDeliverySourceToGoods(id, data) {
 export function removeDeliverySourceFromGoods(id, goodsId) {
   return request({ url: `/auto-delivery/sources/${id}/goods/${goodsId}`, method: 'delete' })
 }
+
+// ─── 多规格 SKU 发货规则 ───
+// 获取商品的 SKU 列表（仅多规格商品返回非空数组）
+// 返回：[{skuId, inventoryId, propertyKey, propertyText, priceCent, quantity}, ...]
+export function getGoodsSkus(goodsId) {
+  return request({ url: `/auto-delivery/goods/${goodsId}/skus`, method: 'get' })
+}
+
+// 获取商品的 SKU 发货规则（从 config_json.skuRules 读取）
+// 返回：[{skuId, propertyKey, propertyText, payDelivery, confirmDelivery, reviewDelivery}, ...]
+export function getGoodsSkuRules(goodsId) {
+  return request({ url: `/auto-delivery/goods/${goodsId}/sku-rules`, method: 'get' })
+}
+
+// 保存商品的 SKU 发货规则
+// 请求体：[{skuId, propertyKey, propertyText, payDelivery:{...}, confirmDelivery:{...}, reviewDelivery:{...}}, ...]
+export function saveGoodsSkuRules(goodsId, data) {
+  return request({ url: `/auto-delivery/goods/${goodsId}/sku-rules`, method: 'put', data })
+}

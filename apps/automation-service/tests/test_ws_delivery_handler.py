@@ -177,6 +177,159 @@ async def test_has_existing_realtime_delivery_matches_full_receiver_info_payload
 
 
 @pytest.mark.asyncio
+async def test_has_existing_realtime_delivery_returns_true_when_local_order_already_shipped_by_order_id():
+    """delivery_record 无记录但本地订单表 order_status=3（按 order_id 精确匹配）应视为已发货。"""
+
+    class _OrderShippedDB:
+        async def execute(self, statement, params=None):
+            sql = str(statement)
+            # delivery_record 按 order_id 查不到
+            if "FROM delivery_record" in sql and "order_id = :order_id" in sql:
+                return _FakeResult(row=None)
+            # 交叉维度去重也查不到
+            if "FROM delivery_record" in sql and "REPLACE(JSON_UNQUOTE(JSON_EXTRACT(receiver_info" in sql:
+                return _FakeResult(row=None)
+            # 本地订单表 order_status=3 命中
+            if "FROM xianyu_trade_order" in sql and "external_order_id = :external_order_id" in sql:
+                assert params["external_order_id"] == "ORDER-001"
+                return _FakeResult(row={"1": 1})
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    exists = await ws_delivery_handler._has_existing_realtime_delivery(
+        db=_OrderShippedDB(),
+        tenant_id=1,
+        account_id=1,
+        order_id="ORDER-001",
+        s_id="62965262020",
+        xy_goods_id="1060794911332",
+        buyer_user_id="4182068955155@goofish",
+        pnm_id="4182068955155.PNM",
+        delivery_content="",
+    )
+
+    assert exists is True
+
+
+@pytest.mark.asyncio
+async def test_has_existing_realtime_delivery_returns_true_when_local_order_shipped_by_item_buyer_fallback():
+    """order_id 为空时，按 商品+买家+近 1 小时 兜底匹配 order_status=3 也应视为已发货。"""
+
+    class _OrderShippedByItemBuyerDB:
+        async def execute(self, statement, params=None):
+            sql = str(statement)
+            # delivery_record 按 order_id 查询路径不会触发（order_id 为空跳过）
+            if "FROM delivery_record" in sql and "order_id = :order_id" in sql:
+                raise AssertionError("order_id 为空不应进入精确匹配路径")
+            # 交叉维度去重查不到
+            if "FROM delivery_record" in sql and "REPLACE(JSON_UNQUOTE(JSON_EXTRACT(receiver_info" in sql:
+                return _FakeResult(row=None)
+            # 本地订单表 order_status=3 兜底匹配命中
+            if "FROM xianyu_trade_order" in sql and "item_id = :item_id" in sql:
+                assert params["item_id"] == "1060794911332"
+                assert params["buyer_id"] == "4182068955155"  # 归一化后去掉了 @goofish
+                return _FakeResult(row={"1": 1})
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    exists = await ws_delivery_handler._has_existing_realtime_delivery(
+        db=_OrderShippedByItemBuyerDB(),
+        tenant_id=1,
+        account_id=1,
+        order_id=None,
+        s_id="62965262020",
+        xy_goods_id="1060794911332",
+        buyer_user_id="4182068955155@goofish",
+        pnm_id="4182068955155.PNM",
+        delivery_content="",
+    )
+
+    assert exists is True
+
+
+@pytest.mark.asyncio
+async def test_has_existing_realtime_delivery_returns_false_when_neither_record_nor_order_shipped():
+    """delivery_record 无记录 + 本地订单表无 order_status=3 → 不视为已发货，允许触发。"""
+
+    class _NoExistingDB:
+        async def execute(self, statement, params=None):
+            sql = str(statement)
+            if "FROM delivery_record" in sql:
+                return _FakeResult(row=None)
+            if "FROM xianyu_trade_order" in sql:
+                return _FakeResult(row=None)
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    exists = await ws_delivery_handler._has_existing_realtime_delivery(
+        db=_NoExistingDB(),
+        tenant_id=1,
+        account_id=1,
+        order_id=None,
+        s_id="62965262020",
+        xy_goods_id="1060794911332",
+        buyer_user_id="4182068955155@goofish",
+        pnm_id="4182068955155.PNM",
+        delivery_content="",
+    )
+
+    assert exists is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_order_id_for_confirm_returns_input_order_id_unchanged():
+    """order_id 已存在时直接返回，不查数据库。"""
+    result = await ws_delivery_handler._resolve_order_id_for_confirm(
+        db=None,
+        tenant_id=1,
+        account_id=1,
+        order_id="ORDER-EXISTING",
+        xy_goods_id="1060794911332",
+        buyer_user_id="4182068955155@goofish",
+    )
+    assert result == "ORDER-EXISTING"
+
+
+@pytest.mark.asyncio
+async def test_resolve_order_id_for_confirm_queries_local_order_table_when_order_id_missing():
+    """order_id 为空时按 商品+买家 反查本地订单表 external_order_id。"""
+
+    class _ResolveOrderDB:
+        async def execute(self, statement, params=None):
+            sql = str(statement)
+            if "FROM xianyu_trade_order" in sql and "item_id = :item_id" in sql:
+                assert params["item_id"] == "1060794911332"
+                assert params["buyer_id"] == "4182068955155"
+                return _FakeResult(row={"external_order_id": "REMOTE-ORDER-001"})
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    result = await ws_delivery_handler._resolve_order_id_for_confirm(
+        db=_ResolveOrderDB(),
+        tenant_id=1,
+        account_id=1,
+        order_id=None,
+        xy_goods_id="1060794911332",
+        buyer_user_id="4182068955155@goofish",
+    )
+    assert result == "REMOTE-ORDER-001"
+
+
+@pytest.mark.asyncio
+async def test_resolve_order_id_for_confirm_returns_none_when_missing_goods_or_buyer():
+    """order_id 为空且 xy_goods_id 或 buyer_user_id 缺失时直接返回 None，不查库。"""
+
+    async def _no_call_db(_stmt, _params=None):
+        raise AssertionError("不应查询数据库")
+
+    result = await ws_delivery_handler._resolve_order_id_for_confirm(
+        db=_no_call_db,
+        tenant_id=1,
+        account_id=1,
+        order_id=None,
+        xy_goods_id="",
+        buyer_user_id="4182068955155@goofish",
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_process_delivery_skips_duplicate_same_order(monkeypatch):
     db = _RealtimeDeliveryDB()
     # _send_delivery_message 返回 (success, is_transient) 元组，mock 需匹配签名

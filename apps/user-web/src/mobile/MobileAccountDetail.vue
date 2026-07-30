@@ -1080,10 +1080,9 @@ defineExpose({ openMoreMenu })
 
 .m-profile-card {
   background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-lg);
+  border-radius: var(--m-radius-xl);
   padding: var(--m-space-4);
-  box-shadow: var(--m-shadow-card);
-  border: 1px solid var(--m-color-border-light);
+  box-shadow: var(--m-shadow-xs);
   margin-bottom: var(--m-space-3);
 }
 .m-profile-header {
@@ -1195,10 +1194,9 @@ defineExpose({ openMoreMenu })
 
 .m-detail-card {
   background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-lg);
+  border-radius: var(--m-radius-xl);
   padding: var(--m-space-4);
-  box-shadow: var(--m-shadow-card);
-  border: 1px solid var(--m-color-border);
+  box-shadow: var(--m-shadow-xs);
   margin-bottom: var(--m-space-3);
 }
 .m-card-header {
@@ -1300,8 +1298,7 @@ defineExpose({ openMoreMenu })
   display: flex;
   align-items: center;
   background: var(--m-color-bg-card);
-  border: 1px solid var(--m-color-border-light);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   padding: var(--m-space-3) 0;
   margin-bottom: 0;
 }
@@ -1371,8 +1368,8 @@ defineExpose({ openMoreMenu })
   min-height: 42px;
   padding: var(--m-space-2) var(--m-space-3);
   background: var(--m-color-bg-card);
-  border: 1px solid var(--m-color-border);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
+  box-shadow: var(--m-shadow-xs);
   cursor: pointer;
   text-align: left;
 }
@@ -1433,18 +1430,18 @@ defineExpose({ openMoreMenu })
 }
 .m-skeleton-profile {
   background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-lg);
+  border-radius: var(--m-radius-xl);
   padding: var(--m-space-4);
   display: flex;
   gap: var(--m-space-4);
+  box-shadow: var(--m-shadow-xs);
 }
 .m-skeleton-avatar-lg {
   width: 64px;
   height: 64px;
   border-radius: var(--m-radius-circle);
-  background: linear-gradient(90deg, var(--m-color-bg-subtle) 25%, var(--m-color-border-light) 50%, var(--m-color-bg-subtle) 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
+  background: var(--m-color-bg-subtle);
+  animation: skeletonPulse 1.5s ease-in-out infinite;
   flex-shrink: 0;
 }
 .m-skeleton-profile-info {
@@ -1456,26 +1453,26 @@ defineExpose({ openMoreMenu })
 }
 .m-skeleton-card {
   background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-lg);
+  border-radius: var(--m-radius-xl);
   padding: var(--m-space-4);
   display: flex;
   flex-direction: column;
   gap: var(--m-space-3);
+  box-shadow: var(--m-shadow-xs);
 }
 .m-skeleton-line {
   height: 14px;
   border-radius: var(--m-radius-sm);
-  background: linear-gradient(90deg, var(--m-color-bg-subtle) 25%, var(--m-color-border-light) 50%, var(--m-color-bg-subtle) 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
+  background: var(--m-color-bg-subtle);
+  animation: skeletonPulse 1.5s ease-in-out infinite;
 }
 .m-skeleton-line-xl { width: 50%; height: var(--m-space-5); }
 .m-skeleton-line-lg { width: 40%; }
 .m-skeleton-line-md { width: 30%; }
 .m-skeleton-line-sm { width: 70%; }
-@keyframes shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+@keyframes skeletonPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 .m-not-found {
@@ -1726,8 +1723,8 @@ defineExpose({ openMoreMenu })
   margin: 0 auto var(--m-space-4);
   padding: var(--m-space-3);
   background: var(--m-color-bg-card);
-  border: 2px solid var(--m-color-border-light);
   border-radius: var(--m-radius-lg);
+  box-shadow: var(--m-shadow-xs);
 }
 .m-qr-code {
   width: 100%;
@@ -1906,9 +1903,9 @@ defineExpose({ openMoreMenu })
 }
 .m-face-item {
   background: var(--m-color-bg-hover);
-  border: 1px solid var(--m-color-border);
   border-radius: var(--m-radius-lg);
   padding: var(--m-space-3);
+  box-shadow: var(--m-shadow-xs);
 }
 .m-face-item.read {
   background: var(--m-color-bg-subtle);

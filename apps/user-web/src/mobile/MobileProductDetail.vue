@@ -913,7 +913,7 @@ onMounted(() => {
   background: var(--m-color-primary);
   color: var(--m-color-text-inverse);
   border: none;
-  border-radius: var(--m-radius-pill);
+  border-radius: var(--m-radius-lg);
   font-size: var(--m-font-size-body);
   font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
@@ -925,8 +925,7 @@ onMounted(() => {
   padding: var(--m-space-4);
   margin: 0 var(--m-space-3) var(--m-space-3);
   border-radius: var(--m-radius-xl);
-  border: 1px solid var(--m-color-border-light);
-  box-shadow: var(--m-shadow-card);
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-hero-images {
@@ -1076,7 +1075,7 @@ onMounted(() => {
   height: 16px;
   background: var(--m-color-bg-card);
   border-radius: var(--m-radius-circle);
-  box-shadow: var(--m-shadow-card);
+  box-shadow: var(--m-shadow-xs);
   transition: transform 0.2s;
 }
 
@@ -1152,7 +1151,7 @@ onMounted(() => {
   min-width: 60px;
   padding: var(--m-space-3) var(--m-space-2);
   background: var(--m-color-bg-card);
-  border: 1px solid var(--m-color-border-light);
+  border: none;
   border-radius: var(--m-radius-lg);
   font-size: var(--m-font-size-body-sm);
   font-weight: var(--m-font-weight-medium);
@@ -1160,13 +1159,14 @@ onMounted(() => {
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-tab-btn.active {
   background: var(--m-color-primary);
-  border-color: var(--m-color-primary);
   color: var(--m-color-text-inverse);
   font-weight: var(--m-font-weight-semibold);
+  box-shadow: none;
 }
 
 /* === 表单 === */
@@ -1182,10 +1182,9 @@ onMounted(() => {
 
 .m-form-section {
   background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-lg);
+  border-radius: var(--m-radius-xl);
   padding: var(--m-space-4);
-  box-shadow: var(--m-shadow-card);
-  border: 1px solid var(--m-color-border-light);
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-section-title {
@@ -1496,7 +1495,7 @@ onMounted(() => {
   height: 22px;
   background: var(--m-color-bg-card);
   border-radius: var(--m-radius-circle);
-  box-shadow: var(--m-shadow-card);
+  box-shadow: var(--m-shadow-xs);
   transition: transform 0.2s;
 }
 
@@ -1604,18 +1603,17 @@ onMounted(() => {
   left: 0;
   right: 0;
   background: var(--m-color-bg-card);
-  border-top: 1px solid var(--m-color-border-light);
   padding: var(--m-space-3) var(--m-space-4) calc(var(--m-space-3) + var(--m-safe-area-bottom));
   display: flex;
   gap: var(--m-space-3);
   z-index: 50;
-  box-shadow: var(--m-shadow-elevated);
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-bar-btn {
   flex: 1;
   padding: var(--m-space-3);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   font-size: var(--m-font-size-h3);
   font-weight: var(--m-font-weight-semibold);
   cursor: pointer;
@@ -1660,10 +1658,11 @@ onMounted(() => {
 
 .m-dialog {
   background: var(--m-color-bg-elevated);
-  border-radius: var(--m-radius-2xl);
+  border-radius: var(--m-radius-xl);
   padding: var(--m-space-6);
   width: 100%;
   max-width: 320px;
+  box-shadow: var(--m-shadow-xs);
 }
 
 .m-dialog-title {
@@ -1688,7 +1687,7 @@ onMounted(() => {
 .m-dialog-btn {
   flex: 1;
   padding: var(--m-space-3);
-  border-radius: var(--m-radius-md);
+  border-radius: var(--m-radius-lg);
   font-size: var(--m-font-size-body);
   font-weight: var(--m-font-weight-semibold);
   cursor: pointer;

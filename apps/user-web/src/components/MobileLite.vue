@@ -1,112 +1,219 @@
 <template>
   <div class="mobile-shell">
+    <!-- 主顶栏 -->
     <header v-if="!subPage && !searchMode" class="m-topbar">
-      <button class="m-menu-btn" aria-label="菜单" @click="drawerOpen = true">
-        <MIcon name="menu" :size="22" />
-      </button>
-      <div class="m-brand-center" @click="switchTab('home')">
-        <div class="m-brand-mark">
-          <span></span>
-          <span></span>
+      <div class="m-topbar-inner">
+        <button class="m-menu-btn" aria-label="菜单" @click="drawerOpen = true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="4" y1="7" x2="20" y2="7"/>
+            <line x1="4" y1="12" x2="14" y2="12"/>
+            <line x1="4" y1="17" x2="17" y2="17"/>
+          </svg>
+        </button>
+        <div class="m-brand-center" @click="switchTab('home')">
+          <div class="m-brand-logo">
+            <div class="m-brand-logo-inner"></div>
+          </div>
+          <span class="m-brand-name">闲鱼助手</span>
         </div>
-        <span class="m-brand-name">闲鱼助手</span>
-      </div>
-      <div class="m-top-actions">
-        <button v-if="canSearch" class="m-top-action-btn" aria-label="搜索" @click="toggleSearch">
-          <MIcon name="search" :size="20" />
-        </button>
-        <button class="m-top-action-btn" aria-label="我的" @click="switchTab('profile')">
-          <MIcon name="user" :size="20" />
-        </button>
+        <div class="m-top-actions">
+          <button v-if="canSearch" class="m-top-action-btn" aria-label="搜索" @click="toggleSearch">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="7"/>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+          </button>
+          <button class="m-top-action-btn m-top-action-btn-profile" aria-label="我的" @click="switchTab('profile')">
+            <div class="m-profile-dot"></div>
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </button>
+        </div>
       </div>
     </header>
 
+    <!-- 搜索顶栏 -->
     <header v-else-if="searchMode" class="m-topbar m-topbar-search">
-      <button class="m-back-btn" aria-label="关闭搜索" @click="closeSearch">
-        <MIcon name="chevronLeft" :size="22" />
-      </button>
-      <div class="m-search-bar">
-        <MIcon name="search" :size="16" class="m-search-icon" />
-        <input
-          ref="searchInputRef"
-          v-model="searchKeyword"
-          type="text"
-          class="m-search-input"
-          :placeholder="searchPlaceholder"
-          @input="onSearchInput"
-        />
-        <button v-if="searchKeyword" class="m-search-clear" aria-label="清空" @click="clearSearch">
-          <MIcon name="xCircle" :size="16" />
+      <div class="m-topbar-inner">
+        <button class="m-back-btn" aria-label="关闭搜索" @click="closeSearch">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
         </button>
+        <div class="m-search-bar">
+          <svg class="m-search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="7"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input
+            ref="searchInputRef"
+            v-model="searchKeyword"
+            type="text"
+            class="m-search-input"
+            :placeholder="searchPlaceholder"
+            @input="onSearchInput"
+          />
+          <button v-if="searchKeyword" class="m-search-clear" aria-label="清空" @click="clearSearch">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="9"/>
+              <line x1="15" y1="9" x2="9" y2="15"/>
+              <line x1="9" y1="9" x2="15" y2="15"/>
+            </svg>
+          </button>
+        </div>
       </div>
     </header>
 
+    <!-- 子页面顶栏 -->
     <header v-else class="m-topbar m-topbar-sub">
-      <button class="m-back-btn" @click="handleSubBack">
-        <MIcon name="chevronLeft" :size="22" />
-        <span>返回</span>
-      </button>
-      <div class="m-sub-title">{{ subPageTitle }}</div>
-      <button v-if="subPage === 'accounts'" class="m-add-account-topbtn" aria-label="添加账号" @click="triggerAddAccount">
-        <MIcon name="plus" :size="16" />
-        <span>添加</span>
-      </button>
-      <button v-else-if="subPage === 'account-detail'" class="m-icon-btn-top" aria-label="更多操作" @click="triggerAccountDetailMore">
-        <MIcon name="moreVertical" :size="22" />
-      </button>
-      <button v-else-if="subPage === 'product-detail'" class="m-icon-btn-top" aria-label="保存" @click="triggerProductSave">
-        <MIcon name="save" :size="20" />
-      </button>
-      <button v-else class="m-desktop-btn" @click="goDesktop">
-        <MIcon name="desktop" :size="20" />
-      </button>
+      <div class="m-topbar-inner">
+        <button class="m-back-btn" @click="handleSubBack">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
+        </button>
+        <div class="m-sub-title">{{ subPageTitle }}</div>
+        <button v-if="subPage === 'accounts'" class="m-add-account-topbtn" aria-label="添加账号" @click="triggerAddAccount">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          <span>添加</span>
+        </button>
+        <button v-else-if="subPage === 'account-detail'" class="m-icon-btn-top" aria-label="更多操作" @click="triggerAccountDetailMore">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="1"/>
+            <circle cx="19" cy="12" r="1"/>
+            <circle cx="5" cy="12" r="1"/>
+          </svg>
+        </button>
+        <button v-else-if="subPage === 'product-detail'" class="m-icon-btn-top" aria-label="保存" @click="triggerProductSave">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+            <polyline points="17 21 17 13 7 13 7 21"/>
+            <polyline points="7 3 7 8 15 8"/>
+          </svg>
+        </button>
+        <button v-else class="m-icon-btn-top" @click="goDesktop">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+            <line x1="8" y1="21" x2="16" y2="21"/>
+            <line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+        </button>
+      </div>
     </header>
 
     <MaintenanceBanner />
 
+    <!-- 抽屉遮罩 -->
     <div v-if="drawerOpen" class="m-drawer-mask" @click="drawerOpen = false"></div>
+    
+    <!-- 侧边抽屉 - 两栏布局（与PC版一致）+ iOS 18 级获奖级设计 -->
     <aside v-if="drawerOpen" class="m-drawer">
-      <div class="m-drawer-header">
-        <div class="m-drawer-user">
-          <div class="m-drawer-avatar">
-            <MIcon name="user" :size="24" />
-          </div>
-          <div class="m-drawer-userinfo">
-            <div class="m-drawer-username">{{ username }}</div>
-            <div class="m-drawer-sub">闲鱼智能助手</div>
-          </div>
-        </div>
-        <button class="m-drawer-close" aria-label="关闭菜单" @click="drawerOpen = false">
-          <MIcon name="close" :size="20" />
-        </button>
-      </div>
-      <div class="m-drawer-content">
-        <div v-for="group in drawerGroups" :key="group.title" class="m-drawer-group">
-          <div class="m-drawer-group-title">{{ group.title }}</div>
-          <button
-            v-for="item in group.items"
-            :key="item.key"
-            class="m-drawer-item"
-            :class="{ active: isDrawerItemActive(item.key) }"
-            @click="onDrawerItem(item.key)"
-          >
-            <div class="m-drawer-item-icon" :style="{ background: item.iconBg }">
-              <MIcon :name="item.icon" :size="18" :color="item.iconColor" />
-            </div>
-            <span class="m-drawer-item-label">{{ item.label }}</span>
-            <MIcon name="chevronRight" :size="16" class="m-drawer-item-arrow" />
+      <!-- 顶部用户区域 - 极简克制 -->
+      <div class="m-drawer-top">
+        <div class="m-drawer-header-bar">
+          <button class="m-drawer-close" aria-label="关闭菜单" @click="drawerOpen = false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
           </button>
+          <span class="m-drawer-header-title">菜单</span>
+          <div class="m-drawer-header-spacer"></div>
         </div>
       </div>
-      <div class="m-drawer-footer">
-        <button class="m-drawer-foot-btn" @click="goDesktop">
-          <MIcon name="desktop" :size="16" />
-          <span>切换到桌面版</span>
-        </button>
-        <button class="m-drawer-foot-btn m-drawer-foot-danger" @click="emit('logout')">
-          <MIcon name="logOut" :size="16" />
-          <span>退出登录</span>
-        </button>
+
+      <!-- 两栏导航主体 -->
+      <div class="m-drawer-body">
+        <!-- 左栏：一级分类（与PC版一致） -->
+        <nav class="m-drawer-primary">
+          <button
+            v-for="group in drawerGroups"
+            :key="group.key"
+            class="m-drawer-primary-item"
+            :class="{ 'is-active': activeDrawerGroup === group.key }"
+            @click="activeDrawerGroup = group.key"
+          >
+            <div class="m-drawer-primary-icon" :class="`icon-bg-${group.iconClass || group.key}`">
+              <MIcon :name="group.icon" :size="20" />
+            </div>
+            <span class="m-drawer-primary-label">{{ group.title }}</span>
+          </button>
+        </nav>
+
+        <!-- 右栏：二级菜单项 -->
+        <div class="m-drawer-secondary">
+          <div class="m-drawer-secondary-scroll">
+            <!-- 用户卡片 - 右栏顶部 -->
+            <div class="m-drawer-user-card" @click="onDrawerItem('profile')">
+              <div class="m-drawer-avatar-wrap">
+                <div class="m-drawer-avatar">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                    <circle cx="12" cy="7" r="4"/>
+                  </svg>
+                </div>
+                <div class="m-drawer-avatar-status"></div>
+              </div>
+              <div class="m-drawer-userinfo">
+                <div class="m-drawer-username">{{ username }}</div>
+                <div class="m-drawer-sub-row">
+                  <span class="m-drawer-badge">PRO</span>
+                  <span class="m-drawer-sub-text">专业版</span>
+                </div>
+              </div>
+              <svg class="m-drawer-user-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+            </div>
+
+            <!-- 当前分组的二级菜单 - 网格布局（一行两个） -->
+            <div class="m-drawer-section">
+              <div class="m-drawer-section-title">{{ currentDrawerGroup?.title }}</div>
+              <div class="m-drawer-secondary-grid">
+                <button
+                  v-for="item in currentDrawerGroup?.items"
+                  :key="item.key"
+                  class="m-drawer-secondary-item"
+                  :class="{ 
+                    'is-active': isDrawerItemActive(item.key),
+                    'is-wip': item.wip
+                  }"
+                  @click="onDrawerItem(item.key)"
+                >
+                  <span class="m-drawer-secondary-label">{{ item.label }}</span>
+                  <span v-if="item.wip" class="m-drawer-wip-badge">维护中</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- 底部操作区 -->
+            <div class="m-drawer-footer">
+              <button class="m-drawer-footer-item" @click="goDesktop">
+                <div class="m-drawer-footer-icon icon-bg-desktop">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                    <line x1="8" y1="21" x2="16" y2="21"/>
+                    <line x1="12" y1="17" x2="12" y2="21"/>
+                  </svg>
+                </div>
+                <span>桌面版访问</span>
+                <svg class="m-drawer-footer-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="9 18 15 12 9 6"/>
+                </svg>
+              </button>
+              <button class="m-drawer-logout-btn" @click="emit('logout')">
+                <span>退出登录</span>
+              </button>
+            </div>
+
+            <div class="m-drawer-safe-bottom"></div>
+          </div>
+        </div>
       </div>
     </aside>
 
@@ -272,15 +379,20 @@
       />
     </main>
 
+    <!-- FAB 快速发布按钮 -->
     <button
       v-if="showFAB"
       class="m-fab-action"
       :aria-label="fabLabel"
       @click="onFABClick"
     >
-      <MIcon :name="fabIcon" :size="26" />
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19"/>
+        <line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
     </button>
 
+    <!-- AI 客服悬浮按钮 -->
     <button
       v-if="!subPage"
       type="button"
@@ -289,7 +401,7 @@
       @click="openAiCs"
     >
       <span class="m-cs-fab-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
         </svg>
       </span>
@@ -298,22 +410,31 @@
 
     <AiCsPanel :visible="aiCsVisible" @close="aiCsVisible = false" />
 
+    <!-- 底部 Tab 栏 - iOS 18 级毛玻璃精品 -->
     <nav v-if="!subPage" class="m-tabbar">
-      <button
-        v-for="tab in bottomTabs"
-        :key="tab.key"
-        class="m-tab"
-        :class="{ active: activeTab === tab.key, center: tab.center }"
-        @click="switchTab(tab.key)"
-      >
-        <div v-if="tab.center" class="m-tab-center-btn">
-          <MIcon :name="tab.icon" :size="24" />
-        </div>
-        <template v-else>
-          <MIcon :name="tab.icon" :size="22" />
-          <span>{{ tab.label }}</span>
-        </template>
-      </button>
+      <div class="m-tabbar-bg"></div>
+      <div class="m-tabbar-inner">
+        <button
+          v-for="tab in bottomTabs"
+          :key="tab.key"
+          class="m-tab"
+          :class="{ active: activeTab === tab.key, center: tab.center }"
+          @click="switchTab(tab.key)"
+        >
+          <div v-if="tab.center" class="m-tab-center-wrap">
+            <div class="m-tab-center-btn">
+              <MIcon :name="tab.icon" :size="22" />
+            </div>
+            <span class="m-tab-center-label">{{ tab.label }}</span>
+          </div>
+          <template v-else>
+            <div class="m-tab-icon">
+              <MIcon :name="tab.icon" :size="20" />
+            </div>
+            <span class="m-tab-label">{{ tab.label }}</span>
+          </template>
+        </button>
+      </div>
     </nav>
 
     <MToast />
@@ -322,6 +443,7 @@
 
 <script setup>
 import { ref, onBeforeUnmount, onMounted, computed, nextTick } from 'vue'
+import '../mobile-responsive.css'
 import MIcon from '../mobile/MIcon.vue'
 import MaintenanceBanner from './MaintenanceBanner.vue'
 import AiCsPanel from './AiCsPanel.vue'
@@ -364,51 +486,114 @@ const bottomTabs = [
   { key: 'profile', label: '我的', icon: 'user' }
 ]
 
+// 导航分组 - 与PC版完全一致（两栏布局）
 const drawerGroups = [
   {
-    title: '工作台',
+    key: 'overview',
+    title: '概览',
+    icon: 'home',
+    iconClass: 'overview',
     items: [
-      { key: 'dashboard', label: '首页概览', icon: 'home', iconBg: 'rgba(51,128,255,0.1)', iconColor: '#3380ff' },
-      { key: 'data', label: '数据看板', icon: 'pieChart', iconBg: 'rgba(139,92,246,0.1)', iconColor: '#8b5cf6' },
-      { key: 'data-detail', label: '数据详情', icon: 'chart', iconBg: 'rgba(139,92,246,0.1)', iconColor: '#8b5cf6' }
+      { key: 'dashboard', label: '导航面板' },
+      { key: 'data', label: '数据面板' }
     ]
   },
   {
-    title: '商品与订单',
+    key: 'accounts',
+    title: '账号',
+    icon: 'users',
+    iconClass: 'accounts',
     items: [
-      { key: 'products', label: '商品管理', icon: 'bag', iconBg: 'rgba(22,191,120,0.1)', iconColor: '#16bf78' },
-      { key: 'product-publish', label: '发布商品', icon: 'edit', iconBg: 'rgba(22,191,120,0.1)', iconColor: '#16bf78' },
-      { key: 'orders', label: '订单管理', icon: 'shoppingCart', iconBg: 'rgba(255,124,67,0.1)', iconColor: '#ff7c43' },
-      { key: 'order-detail', label: '订单详情', icon: 'fileText', iconBg: 'rgba(255,124,67,0.1)', iconColor: '#ff7c43' },
-      { key: 'opportunity', label: '商机发掘', icon: 'zap', iconBg: 'rgba(255,159,34,0.1)', iconColor: '#ff9f22' }
+      { key: 'accounts', label: '闲鱼账号' },
+      { key: 'orders', label: '订单管理' },
+      { key: 'refunds', label: '退款管理', wip: true },
+      { key: 'reviews', label: '评价管理', wip: true },
+      { key: 'fish-shop-data', label: '鱼小铺数据分析', wip: true }
     ]
   },
   {
-    title: '账号与消息',
+    key: 'products',
+    title: '商品',
+    icon: 'bag',
+    iconClass: 'products',
     items: [
-      { key: 'accounts', label: '账号管理', icon: 'users', iconBg: 'rgba(51,128,255,0.1)', iconColor: '#3380ff' },
-      { key: 'account-detail', label: '账号详情', icon: 'user', iconBg: 'rgba(51,128,255,0.1)', iconColor: '#3380ff' },
-      { key: 'messages', label: '在线消息', icon: 'messageCircle', iconBg: 'rgba(22,191,120,0.1)', iconColor: '#16bf78' },
-      { key: 'notifications', label: '消息中心', icon: 'bell', iconBg: 'rgba(255,159,34,0.1)', iconColor: '#ff9f22' }
+      { key: 'products', label: '商品管理' },
+      { key: 'product-publish', label: '商品发布' },
+      { key: 'opportunity', label: '商机发掘' },
+      { key: 'product-analytics', label: '商品数据分析', wip: true }
     ]
   },
   {
-    title: '自动化',
+    key: 'messages',
+    title: '消息',
+    icon: 'messageCircle',
+    iconClass: 'messages',
     items: [
-      { key: 'workflow', label: '工作流', icon: 'workflow', iconBg: 'rgba(139,92,246,0.1)', iconColor: '#8b5cf6' },
-      { key: 'auto-delivery', label: '自动发货', icon: 'send', iconBg: 'rgba(255,159,34,0.1)', iconColor: '#ff9f22' },
-      { key: 'auto-delivery-config', label: '自动发货配置', icon: 'settings', iconBg: 'rgba(255,159,34,0.1)', iconColor: '#ff9f22' },
-      { key: 'delivery-source-library', label: '货源库', icon: 'folder', iconBg: 'rgba(139,92,246,0.1)', iconColor: '#8b5cf6' },
-      { key: 'delivery-records', label: '发货记录', icon: 'truck', iconBg: 'rgba(255,159,34,0.1)', iconColor: '#ff9f22' }
+      { key: 'messages', label: '在线消息' },
+      { key: 'auto-reply', label: '自动回复', wip: true },
+      { key: 'ai-cs-settings', label: 'AI客服配置' },
+      { key: 'cs-knowledge', label: '客服知识库', wip: true }
     ]
   },
   {
-    title: '个人',
+    key: 'auto-delivery',
+    title: '自动发货',
+    icon: 'send',
+    iconClass: 'delivery',
     items: [
-      { key: 'profile-security', label: '安全设置', icon: 'shield', iconBg: 'rgba(51,128,255,0.1)', iconColor: '#3380ff' },
-      { key: 'profile-ledger', label: 'Token 流水', icon: 'coins', iconBg: 'rgba(255,159,34,0.1)', iconColor: '#ff9f22' },
-      { key: 'profile-recharge', label: '充值记录', icon: 'dollar', iconBg: 'rgba(22,191,120,0.1)', iconColor: '#16bf78' },
-      { key: 'api-slider-solve', label: 'API滑块求解', icon: 'link', iconBg: 'rgba(51,128,255,0.1)', iconColor: '#3380ff' }
+      { key: 'auto-delivery', label: '自动发货' },
+      { key: 'delivery-source-library', label: '货源库' },
+      { key: 'card-warehouse', label: '卡密仓库', wip: true },
+      { key: 'delivery-statement', label: '发货声明', wip: true },
+      { key: 'delivery-records', label: '发货记录' }
+    ]
+  },
+  {
+    key: 'distribution',
+    title: '分销管理',
+    icon: 'link',
+    iconClass: 'distribution',
+    items: [
+      { key: 'supply-mall', label: '货源商城' },
+      { key: 'supply-center', label: '供货中心', wip: true },
+      { key: 'platform-connect', label: '平台对接', wip: true }
+    ]
+  },
+  {
+    key: 'workflow',
+    title: '工作流',
+    icon: 'workflow',
+    iconClass: 'workflow',
+    items: [
+      { key: 'workflow', label: '工作流' },
+      { key: 'workflow-tasks', label: '工作流任务', wip: true },
+      { key: 'product-drafts', label: '商品草稿箱', wip: true },
+      { key: 'image-records', label: '图片生成记录' }
+    ]
+  },
+  {
+    key: 'marketing',
+    title: '营销增长',
+    icon: 'trendingUp',
+    iconClass: 'marketing',
+    items: [
+      { key: 'growth-partner', label: '增长合伙人' },
+      { key: 'invite-poster', label: '邀请海报', wip: true }
+    ]
+  },
+  {
+    key: 'system',
+    title: '系统',
+    icon: 'settings',
+    iconClass: 'system',
+    items: [
+      { key: 'scheduled-tasks', label: '定时任务', wip: true },
+      { key: 'notifications', label: '通知设置' },
+      { key: 'slider-solve', label: '滑块求解', wip: true },
+      { key: 'api-slider-solve', label: 'API滑块求解' },
+      { key: 'operation-logs', label: '操作日志', wip: true },
+      { key: 'feedback', label: '反馈建议', wip: true },
+      { key: 'about', label: '关于我们', wip: true }
     ]
   }
 ]
@@ -439,7 +624,7 @@ const activeTab = ref('home')
 const subPage = ref(null)
 const contentRef = ref(null)
 const username = ref(getCachedUsername() || '未登录用户')
-const userInfo = ref({ username: username.value })
+const userInfo = ref({ username: username.value, tokenBalance: '—', accountCount: '—', orderCount: '—' })
 const selectedAccountId = ref(null)
 const selectedProduct = ref(null)
 const selectedDeliveryGoods = ref(null)
@@ -449,6 +634,7 @@ const accountDetailRef = ref(null)
 const productsListRef = ref(null)
 const productDetailRef = ref(null)
 const drawerOpen = ref(false)
+const activeDrawerGroup = ref('overview')
 
 const searchMode = ref(false)
 const searchKeyword = ref('')
@@ -456,6 +642,10 @@ const searchInputRef = ref(null)
 let searchDebounceTimer = null
 
 const subPageTitle = computed(() => mobileSubPages[subPage.value] || '')
+
+const currentDrawerGroup = computed(() => {
+  return drawerGroups.find(g => g.key === activeDrawerGroup.value) || drawerGroups[0]
+})
 
 const selectedDeliveryGoodsId = computed(() => {
   return selectedDeliveryGoods.value?.id
@@ -480,14 +670,9 @@ const fabIcon = computed(() => 'plus')
 const fabLabel = computed(() => subPage.value === 'products' ? '发布商品' : '快速发布')
 
 function onFABClick() {
-  if (subPage.value === 'products') {
-    emit('navigate', 'product-publish')
-  } else {
-    emit('navigate', 'product-publish')
-  }
+  emit('navigate', 'product-publish')
 }
 
-// AI 客服"小梦"面板可见性（仅在不显示底部 tab 的子页面时不出现 FAB）
 const aiCsVisible = ref(false)
 function openAiCs() {
   aiCsVisible.value = true
@@ -531,10 +716,6 @@ function goDesktop(target) {
 
 function onNavigate(pageKey) {
   drawerOpen.value = false
-  if (mobileSubPages[pageKey] || bottomTabs.some(t => pageForMobileTab(t.key) === pageKey)) {
-    emit('navigate', pageKey)
-    return
-  }
   emit('navigate', pageKey)
 }
 
@@ -558,10 +739,6 @@ function onSubNavigate(pageKey, payload) {
     selectedOrderId.value = payload.id
     setMobileOrderDetailId(payload.id)
     emit('navigate', `order-detail/${payload.id}`)
-    return
-  }
-  if (mobileSubPages[pageKey] || bottomTabs.some(t => pageForMobileTab(t.key) === pageKey)) {
-    emit('navigate', pageKey)
     return
   }
   emit('navigate', pageKey)
@@ -590,7 +767,6 @@ function backToProfile() {
 }
 
 function onProfileSecurityUpdated() {
-  // 安全信息更新后，MobileProfile 在重新挂载时会自动重新加载 overview
 }
 
 function backToWorkflow() {
@@ -604,7 +780,6 @@ function backToAutoDelivery() {
 }
 
 function onDeliveryConfigSaved() {
-  // 保存成功后由 back 事件触发返回到 auto-delivery，MobileAutoDelivery 在 onMounted 中会重新加载
 }
 
 function backToProducts() {
@@ -708,8 +883,6 @@ function handleSubBack() {
     backToProfile()
   } else if (subPage.value === 'api-slider-solve') {
     backToMain()
-  } else if (subPage.value === 'products' || subPage.value === 'accounts' || subPage.value === 'opportunity') {
-    backToMain()
   } else {
     backToMain()
   }
@@ -803,8 +976,6 @@ function syncRouteState() {
     if (savedGoodsId && !selectedDeliveryGoods.value) {
       selectedDeliveryGoods.value = { id: savedGoodsId }
     }
-  } else {
-    // 离开配置页时不清空 sessionStorage，仅在显式返回时清理（backToAutoDelivery）
   }
 
   if (currentPage.startsWith('order-detail/')) {
@@ -839,20 +1010,30 @@ onBeforeUnmount(() => {
 
 <style scoped>
 @import '../mobile/tokens.css';
+
+/* ============================================================
+ * 闲鱼助手移动端主壳 - 严格对齐PC版设计系统
+ * 主色: #0d6bff | 背景: #f6f9ff 浅蓝渐变 | 圆角: 16px
+ * ============================================================ */
+
 .mobile-shell {
   width: 100%;
   max-width: 100vw;
   min-height: 100vh;
-  background: var(--m-color-bg-page);
+  background: var(--m-color-bg-gradient);
   font-family: var(--m-font-family);
   color: var(--m-color-text-primary);
-  font-size: var(--m-font-size-body);
-  line-height: var(--m-line-height-base);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
   display: flex;
   flex-direction: column;
   position: relative;
   overflow-x: hidden;
 }
+
 .mobile-shell > header,
 .mobile-shell > main,
 .mobile-shell > nav {
@@ -862,79 +1043,104 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
 }
 
+/* ============ 顶栏 - PC版浅蓝渐变风格 ============ */
 .m-topbar {
   position: sticky;
   top: 0;
-  z-index: 50;
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  padding: calc(var(--m-space-3) + var(--m-safe-area-top)) var(--m-space-4) 10px;
+  z-index: 100;
+  background: linear-gradient(180deg, #f8fbff 0%, #f4f8ff 100%);
+  padding: calc(10px + var(--m-safe-area-top)) 16px 10px;
+  border-bottom: 1px solid transparent;
+}
+
+.m-topbar-inner {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--m-color-border-light);
   gap: 10px;
+  min-height: 42px;
 }
 
 .m-topbar-sub {
-  padding: calc(10px + env(safe-area-inset-top)) 8px 10px 4px;
+  padding-left: 8px;
+  padding-right: 16px;
 }
 
 .m-topbar-search {
-  padding: calc(10px + env(safe-area-inset-top)) 12px 10px;
-  gap: 8px;
+  padding-left: 16px;
+  padding-right: 16px;
 }
 
 .m-menu-btn {
-  width: var(--m-space-10);
-  height: var(--m-space-10);
+  width: 36px;
+  height: 36px;
   border-radius: var(--m-radius-lg);
   border: none;
-  background: var(--m-color-bg-card);
-  color: var(--m-color-text-primary);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--m-color-primary);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: var(--m-shadow-card);
   flex-shrink: 0;
+  transition: all 0.18s ease;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 2px 6px rgba(31, 53, 94, 0.05);
 }
-.m-menu-btn:active { background: var(--m-color-bg-subtle); }
+.m-menu-btn:active {
+  background: var(--m-color-primary-lighter);
+  transform: scale(0.96);
+}
 
 .m-brand-center {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   cursor: pointer;
   flex: 1;
   justify-content: center;
   min-width: 0;
+  -webkit-tap-highlight-color: transparent;
 }
-.m-brand-mark {
+.m-brand-center:active {
+  opacity: 0.85;
+}
+
+/* PC版品牌Logo - 双条渐变 */
+.m-brand-logo {
   width: 32px;
   height: 32px;
   position: relative;
   flex-shrink: 0;
 }
-.m-brand-mark span {
+
+.m-brand-logo-inner {
   position: absolute;
-  left: 12px;
-  top: -2px;
+  left: 13px;
+  top: 0px;
   width: 10px;
   height: 34px;
-  border-radius: 6px;
+  border-radius: 7px;
   background: linear-gradient(180deg, #0d7fff, #16b7ff);
   transform: rotate(42deg);
-  box-shadow: 0 4px 12px rgba(51,128,255,0.25);
+  box-shadow: 0 4px 12px rgba(13, 107, 255, 0.28);
 }
-.m-brand-mark span + span {
-  transform: rotate(-42deg);
+.m-brand-logo-inner::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 10px;
+  height: 34px;
+  border-radius: 7px;
   background: linear-gradient(180deg, #25a5ff, #0362f4);
+  transform: rotate(-84deg);
+  transform-origin: center;
 }
+
 .m-brand-name {
-  font-size: var(--m-font-size-h2);
-  font-weight: var(--m-font-weight-extrabold);
+  font-size: 18px;
+  font-weight: 800;
   color: var(--m-color-text-primary);
   letter-spacing: -0.2px;
 }
@@ -945,94 +1151,136 @@ onBeforeUnmount(() => {
   gap: 6px;
   flex-shrink: 0;
 }
+
 .m-top-action-btn {
-  width: var(--m-space-10);
-  height: var(--m-space-10);
+  width: 36px;
+  height: 36px;
   border-radius: var(--m-radius-lg);
   border: none;
-  background: var(--m-color-bg-card);
-  color: var(--m-color-text-primary);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--m-color-text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: var(--m-shadow-card);
+  transition: all 0.18s ease;
+  position: relative;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 2px 6px rgba(31, 53, 94, 0.05);
 }
-.m-top-action-btn:active { background: var(--m-color-bg-subtle); }
+.m-top-action-btn:active {
+  background: var(--m-color-bg-hover);
+  color: var(--m-color-primary);
+  transform: scale(0.96);
+}
+
+.m-top-action-btn-profile .m-profile-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--m-color-success);
+  border: 2px solid #FFFFFF;
+  box-shadow: 0 0 0 1px rgba(22, 191, 120, 0.2);
+}
 
 .m-back-btn {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  background: none;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.9);
   border: none;
-  color: var(--m-color-text-primary);
-  font-size: var(--m-font-size-h3);
-  font-weight: var(--m-font-weight-semibold);
+  color: var(--m-color-primary);
   cursor: pointer;
-  padding: 6px 8px;
-  border-radius: var(--m-radius-pill);
+  padding: 8px;
+  border-radius: var(--m-radius-lg);
   flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  transition: all 0.18s ease;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 2px 6px rgba(31, 53, 94, 0.05);
 }
-.m-back-btn:active { background: var(--m-color-primary-bg); }
+.m-back-btn:active {
+  background: var(--m-color-primary-lighter);
+  transform: scale(0.96);
+}
 
 .m-sub-title {
   flex: 1;
   text-align: center;
-  font-size: var(--m-font-size-h2);
-  font-weight: var(--m-font-weight-bold);
+  font-size: 17px;
+  font-weight: 700;
   color: var(--m-color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.m-desktop-btn,
 .m-icon-btn-top {
-  width: var(--m-space-10);
-  height: var(--m-space-10);
+  width: 36px;
+  height: 36px;
   border-radius: var(--m-radius-lg);
   border: none;
-  background: var(--m-color-bg-card);
-  color: var(--m-color-text-primary);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--m-color-text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: var(--m-shadow-card);
   flex-shrink: 0;
+  transition: all 0.18s ease;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 2px 6px rgba(31, 53, 94, 0.05);
 }
-.m-desktop-btn:active,
-.m-icon-btn-top:active { background: var(--m-color-bg-subtle); }
+.m-icon-btn-top:active {
+  background: var(--m-color-bg-hover);
+  color: var(--m-color-primary);
+  transform: scale(0.96);
+}
 
+/* PC版主按钮样式 - 蓝渐变+阴影 */
 .m-add-account-topbtn {
   display: inline-flex;
   align-items: center;
-  gap: var(--m-space-1);
-  background: linear-gradient(135deg, #3380ff, #2580ff);
+  gap: 5px;
+  background: var(--m-color-primary-gradient);
   border: none;
-  color: var(--m-color-text-inverse);
-  font-size: var(--m-font-size-body-sm);
-  font-weight: var(--m-font-weight-semibold);
+  color: white;
+  font-size: 13px;
+  font-weight: 700;
   padding: 8px 14px;
-  border-radius: var(--m-radius-pill);
+  border-radius: var(--m-radius-lg);
   cursor: pointer;
   flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(51,128,255,0.3);
+  transition: all 0.18s ease;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: var(--m-color-primary-soft-glow);
 }
-.m-add-account-topbtn:active { transform: scale(0.96); }
+.m-add-account-topbtn:active {
+  transform: scale(0.96);
+  opacity: 0.9;
+}
 
 .m-search-bar {
   flex: 1;
   display: flex;
   align-items: center;
-  background: var(--m-color-bg-card);
-  border-radius: var(--m-radius-pill);
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: var(--m-radius-lg);
   padding: 0 14px;
-  height: var(--m-space-10);
-  gap: var(--m-space-2);
-  box-shadow: var(--m-shadow-card);
-  border: 1px solid var(--m-color-border-light);
+  height: 38px;
+  gap: 8px;
+  border: 1px solid var(--m-color-border);
+  box-shadow: 0 2px 6px rgba(31, 53, 94, 0.04);
+  transition: all 0.18s ease;
+}
+.m-search-bar:focus-within {
+  border-color: var(--m-color-primary);
+  background: #FFFFFF;
+  box-shadow: 0 0 0 3px rgba(13, 107, 255, 0.1);
 }
 .m-search-icon { color: var(--m-color-text-tertiary); flex-shrink: 0; }
 .m-search-input {
@@ -1040,191 +1288,495 @@ onBeforeUnmount(() => {
   border: none;
   outline: none;
   background: transparent;
-  font-size: var(--m-font-size-h3);
+  font-size: 14px;
   color: var(--m-color-text-primary);
   min-width: 0;
+  font-weight: 500;
 }
-.m-search-input::placeholder { color: var(--m-color-text-tertiary); }
+.m-search-input::placeholder { color: var(--m-color-text-placeholder); }
 .m-search-clear {
   border: none;
   background: none;
   color: var(--m-color-text-tertiary);
-  padding: var(--m-space-1);
+  padding: 4px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
 }
 
+/* ============ 抽屉菜单 - PC版毛玻璃+两栏布局 ============ */
 .m-drawer-mask {
   position: fixed;
   inset: 0;
-  background: var(--m-mask-drawer);
+  background: rgba(20, 36, 58, 0.5);
   z-index: 200;
-  animation: fadeIn 0.2s ease;
+  animation: maskFadeIn 0.22s ease-out;
+  -webkit-tap-highlight-color: transparent;
+  backdrop-filter: blur(2px);
 }
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes maskFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 
 .m-drawer {
   position: fixed;
   top: 0;
   left: 0;
   bottom: 0;
-  width: 300px;
-  max-width: 82vw;
-  background: var(--m-color-bg-card);
+  width: min(350px, 92vw);
+  background: rgba(255, 255, 255, 0.98);
   z-index: 201;
   display: flex;
   flex-direction: column;
-  animation: slideInLeft 0.25s ease;
-  box-shadow: var(--m-shadow-elevated);
+  animation: drawerSlideIn 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
+  box-shadow: var(--m-shadow-drawer);
+  overflow: hidden;
+  backdrop-filter: blur(20px);
 }
-@keyframes slideInLeft { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+@keyframes drawerSlideIn {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(0); }
+}
 
-.m-drawer-header {
-  padding: calc(16px + env(safe-area-inset-top)) 20px 20px;
-  background: linear-gradient(135deg, #3380ff 0%, #2580ff 100%);
-  color: white;
+.m-drawer-top {
+  position: relative;
+  padding-top: calc(16px + env(safe-area-inset-top));
+  padding-bottom: 16px;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--m-color-border-light);
+}
+
+.m-drawer-header-bar {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 0 18px;
 }
-.m-drawer-user {
+
+.m-drawer-close {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--m-radius-lg);
+  border: none;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--m-color-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 2px 6px rgba(31, 53, 94, 0.05);
+}
+.m-drawer-close:active {
+  background: var(--m-color-bg-hover);
+  color: var(--m-color-primary);
+  transform: scale(0.96);
+}
+
+.m-drawer-header-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--m-color-text-primary);
+}
+
+.m-drawer-header-spacer {
+  width: 32px;
+  height: 32px;
+}
+
+.m-drawer-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* 左栏一级分类 - PC版彩色图标风格 */
+.m-drawer-primary {
+  width: 84px;
+  flex-shrink: 0;
+  background: linear-gradient(180deg, #f8fbff 0%, #f4f8ff 100%);
+  display: flex;
+  flex-direction: column;
+  padding: 14px 8px;
+  gap: 6px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border-right: 1px solid var(--m-color-border-light);
+}
+
+.m-drawer-primary-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 4px 8px;
+  background: transparent;
+  border: none;
+  border-radius: var(--m-radius-2xl);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+  position: relative;
+}
+
+.m-drawer-primary-item.is-active {
+  background: #FFFFFF;
+  box-shadow: var(--m-shadow-sm);
+}
+
+.m-drawer-primary-item.is-active::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 24px;
+  background: var(--m-color-primary-gradient);
+  border-radius: 0 4px 4px 0;
+  box-shadow: 0 2px 8px rgba(13, 107, 255, 0.3);
+}
+
+.m-drawer-primary-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--m-radius-2xl);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.m-drawer-primary-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--m-color-text-tertiary);
+  text-align: center;
+  line-height: 1.2;
+}
+
+.m-drawer-primary-item.is-active .m-drawer-primary-label {
+  color: var(--m-color-text-primary);
+  font-weight: 700;
+}
+
+/* PC版彩色图标背景 - 与stat-icon一致 */
+.icon-bg-overview {
+  background: var(--m-color-primary-bg-solid);
+  color: var(--m-color-primary);
+}
+.icon-bg-accounts {
+  background: var(--m-color-violet-bg-solid);
+  color: var(--m-color-violet);
+}
+.icon-bg-products {
+  background: var(--m-color-emerald-bg-solid);
+  color: var(--m-color-emerald);
+}
+.icon-bg-messages {
+  background: var(--m-color-cyan-bg-solid);
+  color: var(--m-color-cyan);
+}
+.icon-bg-delivery {
+  background: var(--m-color-gold-bg-solid);
+  color: var(--m-color-gold);
+}
+.icon-bg-distribution {
+  background: var(--m-color-rose-bg-solid);
+  color: var(--m-color-rose);
+}
+.icon-bg-workflow {
+  background: var(--m-color-violet-bg-solid);
+  color: var(--m-color-violet);
+}
+.icon-bg-marketing {
+  background: var(--m-color-rose-bg-solid);
+  color: var(--m-color-rose);
+}
+.icon-bg-system {
+  background: #f0f3f8;
+  color: var(--m-color-text-secondary);
+}
+.icon-bg-desktop {
+  background: var(--m-color-primary-bg-solid);
+  color: var(--m-color-primary);
+}
+
+/* 右栏二级菜单 */
+.m-drawer-secondary {
+  flex: 1;
+  background: #FFFFFF;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.m-drawer-secondary-scroll {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 18px;
+}
+
+.m-drawer-user-card {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-width: 0;
-  flex: 1;
+  cursor: pointer;
+  padding: 14px;
+  border-radius: var(--m-radius-3xl);
+  background: linear-gradient(135deg, #f8fbff 0%, #edf5ff 100%);
+  border: 1px solid var(--m-color-border-light);
+  margin-bottom: 18px;
+  transition: all 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: var(--m-shadow-xs);
 }
+.m-drawer-user-card:active {
+  background: var(--m-color-bg-hover);
+  transform: scale(0.98);
+}
+
+.m-drawer-avatar-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
 .m-drawer-avatar {
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  background: rgba(255,255,255,0.2);
+  background: linear-gradient(135deg, #f7a94b, #2ebd8f);
   display: flex;
   align-items: center;
   justify-content: center;
+  color: white;
   flex-shrink: 0;
+  border: 3px solid white;
+  box-shadow: 0 4px 12px rgba(33, 49, 81, 0.12);
 }
+
+.m-drawer-avatar-status {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--m-color-success);
+  border: 2.5px solid #FFFFFF;
+  box-shadow: 0 0 0 1px rgba(22, 191, 120, 0.3);
+}
+
 .m-drawer-userinfo {
   min-width: 0;
   flex: 1;
 }
+
 .m-drawer-username {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 700;
+  color: var(--m-color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.3;
 }
-.m-drawer-sub {
-  font-size: 12px;
-  opacity: 0.8;
-  margin-top: 2px;
-}
-.m-drawer-close {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(255,255,255,0.15);
-  color: white;
+
+.m-drawer-sub-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  cursor: pointer;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.m-drawer-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  background: linear-gradient(135deg, #ff982a 0%, #ffb03a 100%);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgba(255, 152, 42, 0.25);
+}
+
+.m-drawer-sub-text {
+  font-size: 12px;
+  color: var(--m-color-text-tertiary);
+  font-weight: 500;
+}
+
+.m-drawer-user-arrow {
+  color: var(--m-color-text-quaternary);
   flex-shrink: 0;
 }
-.m-drawer-close:active { background: rgba(255,255,255,0.25); }
 
-.m-drawer-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px 12px;
+.m-drawer-section {
+  margin-bottom: 18px;
 }
-.m-drawer-group {
-  margin-bottom: 16px;
-}
-.m-drawer-group-title {
-  font-size: var(--m-font-size-caption);
-  font-weight: var(--m-font-weight-semibold);
+
+.m-drawer-section-title {
+  font-size: 12px;
+  font-weight: 700;
   color: var(--m-color-text-tertiary);
-  padding: var(--m-space-2) var(--m-space-3) 6px;
+  margin-bottom: 10px;
+  padding-left: 4px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
-.m-drawer-item {
+
+.m-drawer-secondary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.m-drawer-secondary-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 14px 10px;
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-2xl);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-height: 48px;
+  -webkit-tap-highlight-color: transparent;
+  position: relative;
+}
+
+.m-drawer-secondary-item:active {
+  background: var(--m-color-bg-hover);
+  border-color: var(--m-color-border);
+  transform: scale(0.98);
+}
+
+.m-drawer-secondary-item.is-active {
+  background: var(--m-color-primary-bg-solid);
+  border-color: rgba(13, 107, 255, 0.25);
+  box-shadow: 0 4px 12px rgba(13, 107, 255, 0.1);
+}
+
+.m-drawer-secondary-item.is-active .m-drawer-secondary-label {
+  color: var(--m-color-primary);
+  font-weight: 700;
+}
+
+.m-drawer-secondary-item.is-wip {
+  opacity: 0.55;
+}
+
+.m-drawer-secondary-label {
+  font-size: 13px;
+  color: var(--m-color-text-primary);
+  font-weight: 600;
+  text-align: center;
+}
+
+.m-drawer-wip-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  background: linear-gradient(135deg, #ff982a 0%, #ffb03a 100%);
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgba(255, 152, 42, 0.3);
+}
+
+.m-drawer-footer {
+  margin-top: 8px;
+}
+
+.m-drawer-footer-item {
   width: 100%;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px;
-  background: transparent;
-  border: none;
-  border-radius: 12px;
+  padding: 14px;
+  background: var(--m-color-bg-card);
+  border: 1px solid var(--m-color-border-light);
+  border-radius: var(--m-radius-2xl);
   cursor: pointer;
-  text-align: left;
-  transition: background 0.15s;
+  transition: all 0.2s ease;
+  margin-bottom: 10px;
+  -webkit-tap-highlight-color: transparent;
 }
-.m-drawer-item:active { background: var(--m-color-bg-hover); }
-.m-drawer-item.active {
-  background: var(--m-color-primary-bg);
+
+.m-drawer-footer-item:active {
+  background: var(--m-color-bg-hover);
+  transform: scale(0.98);
 }
-.m-drawer-item.active .m-drawer-item-label {
-  color: var(--m-color-primary);
-  font-weight: var(--m-font-weight-semibold);
-}
-.m-drawer-item-icon {
+
+.m-drawer-footer-icon {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: var(--m-radius-2xl);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
-.m-drawer-item-label {
+
+.m-drawer-footer-item span {
   flex: 1;
-  font-size: var(--m-font-size-h3);
+  font-size: 14px;
   color: var(--m-color-text-primary);
+  font-weight: 600;
+  text-align: left;
 }
-.m-drawer-item-arrow {
-  color: var(--m-color-text-disabled);
+
+.m-drawer-footer-chevron {
+  color: var(--m-color-text-quaternary);
   flex-shrink: 0;
 }
 
-.m-drawer-footer {
-  padding: var(--m-space-3);
-  border-top: 1px solid var(--m-color-border-light);
-  display: flex;
-  flex-direction: column;
-  gap: var(--m-space-2);
-  padding-bottom: calc(var(--m-space-3) + var(--m-safe-area-bottom));
-}
-.m-drawer-foot-btn {
+.m-drawer-logout-btn {
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--m-space-2);
-  padding: var(--m-space-3);
-  border-radius: var(--m-radius-lg);
-  border: 1px solid var(--m-color-border);
-  background: var(--m-color-bg-card);
-  color: var(--m-color-text-secondary);
-  font-size: var(--m-font-size-body);
-  font-weight: var(--m-font-weight-medium);
+  gap: 8px;
+  padding: 14px;
+  border-radius: var(--m-radius-2xl);
+  border: 1px solid #ffd6d6;
+  background: #fff8f8;
+  font-size: 14px;
+  font-weight: 700;
   cursor: pointer;
-}
-.m-drawer-foot-btn:active { background: var(--m-color-bg-subtle); }
-.m-drawer-foot-btn.m-drawer-foot-danger {
   color: var(--m-color-danger);
-  background: var(--m-color-danger-bg);
-  border-color: var(--m-color-danger-border);
+  transition: all 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
 }
-.m-drawer-foot-btn.m-drawer-foot-danger:active { background: var(--m-color-danger-bg); }
 
+.m-drawer-logout-btn:active {
+  background: var(--m-color-danger-bg-solid);
+  border-color: rgba(255, 91, 97, 0.3);
+  transform: scale(0.98);
+}
+
+.m-drawer-safe-bottom {
+  height: calc(20px + env(safe-area-inset-bottom));
+}
+
+/* ============ 主内容区 ============ */
 .m-content {
   flex: 1;
   width: 100%;
@@ -1232,65 +1784,63 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
-  padding-bottom: calc(76px + env(safe-area-inset-bottom));
+  padding-bottom: calc(84px + env(safe-area-inset-bottom));
 }
 .m-content :deep(.m-safe-bottom) {
   display: none;
 }
 
+/* ============ FAB按钮 - PC版主按钮风格 ============ */
 .m-fab-action {
   position: fixed;
-  right: 20px;
+  right: 16px;
   bottom: calc(92px + env(safe-area-inset-bottom));
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
+  width: 52px;
+  height: 52px;
+  border-radius: var(--m-radius-3xl);
   border: none;
-  background: linear-gradient(135deg, #0d7fff 0%, #3b9bff 50%, #5eb5ff 100%);
+  background: var(--m-color-primary-gradient);
   color: white;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 8px 28px rgba(13,127,255,0.45), 0 4px 12px rgba(13,127,255,0.25);
   z-index: 48;
-  transition: all 0.2s;
-}
-.m-fab-action::before {
-  content: '';
-  position: absolute;
-  inset: -4px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, rgba(13,127,255,0.3), rgba(94,181,255,0.3));
-  z-index: -1;
-  animation: fabPulse 2s ease-in-out infinite;
-}
-@keyframes fabPulse {
-  0%, 100% { transform: scale(1); opacity: 0.6; }
-  50% { transform: scale(1.15); opacity: 0; }
+  transition: all 0.2s ease;
+  box-shadow: var(--m-shadow-fab);
+  -webkit-tap-highlight-color: transparent;
 }
 .m-fab-action:active {
   transform: scale(0.92);
 }
 
+/* ============ 底部Tab栏 - PC版毛玻璃风格 ============ */
 .m-tabbar {
   position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
-  background: rgba(255,255,255,0.96);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-top: 1px solid var(--m-color-border-light);
-  padding: 6px 0 max(8px, var(--m-safe-area-bottom));
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-around;
   z-index: 100;
-  box-shadow: var(--m-shadow-tabbar);
-  height: 64px;
-  box-sizing: content-box;
+  padding-bottom: max(0px, env(safe-area-inset-bottom));
+  background: rgba(255, 255, 255, 0.92);
+  border-top: 1px solid var(--m-color-border);
+  backdrop-filter: var(--m-blur-tabbar);
+  -webkit-backdrop-filter: var(--m-blur-tabbar);
 }
+
+.m-tabbar-bg {
+  display: none;
+}
+
+.m-tabbar-inner {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-around;
+  height: 60px;
+  padding-top: 8px;
+}
+
 .m-tab {
   flex: 1;
   background: none;
@@ -1298,72 +1848,103 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 3px;
-  padding: 6px 0 4px;
+  padding: 4px 0;
   color: var(--m-color-text-tertiary);
-  font-size: var(--m-font-size-tiny);
-  font-weight: var(--m-font-weight-medium);
   cursor: pointer;
-  transition: color 0.2s;
+  transition: all 0.2s ease;
   position: relative;
   height: 100%;
+  -webkit-tap-highlight-color: transparent;
 }
-.m-tab :deep(svg) { transition: transform 0.2s; }
-.m-tab.active {
+
+.m-tab-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--m-color-text-tertiary);
+  transition: all 0.2s ease;
+}
+
+.m-tab.active .m-tab-icon {
   color: var(--m-color-primary);
-}
-.m-tab.active :deep(svg) {
   transform: scale(1.08);
 }
+
+.m-tab-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--m-color-text-tertiary);
+  transition: all 0.2s ease;
+}
+
+.m-tab.active .m-tab-label {
+  color: var(--m-color-primary);
+  font-weight: 700;
+}
+
 .m-tab.center {
   position: relative;
 }
+
+.m-tab-center-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: -24px;
+}
+
 .m-tab-center-btn {
-  width: 50px;
-  height: 50px;
-  border-radius: var(--m-radius-circle);
-  background: linear-gradient(135deg, #0d7fff, #3b9bff);
-  color: var(--m-color-text-inverse);
+  width: 48px;
+  height: 48px;
+  border-radius: var(--m-radius-3xl);
+  background: var(--m-color-primary-gradient);
+  color: white;
   display: flex;
   align-items: center;
   justify-content: center;
   box-shadow: var(--m-shadow-fab);
-  margin-bottom: var(--m-space-3);
-  position: relative;
-  top: -14px;
-}
-.m-tab.center span {
-  display: none;
+  transition: all 0.2s ease;
+  border: 3px solid rgba(255, 255, 255, 0.9);
 }
 
-@media (max-width: 360px) {
-  .m-topbar { padding-left: 10px; padding-right: 10px; }
-  .m-brand-name { font-size: 15px; }
-  .m-top-action-btn,
-  .m-menu-btn { width: 36px; height: 36px; }
-  .m-drawer { width: 270px; }
+.m-tab:active .m-tab-center-btn {
+  transform: scale(0.92);
 }
 
-/* AI 客服悬浮按钮：独立 FAB，不修改 .m-topbar / .m-tabbar / .m-drawer */
+.m-tab-center-label {
+  font-size: 10px;
+  color: var(--m-color-text-tertiary);
+  margin-top: 5px;
+  font-weight: 600;
+}
+
+.m-tab.active .m-tab-center-label {
+  color: var(--m-color-primary);
+  font-weight: 700;
+}
+
+/* ============ AI客服FAB - PC版绿色风格 ============ */
 .m-cs-fab {
   position: fixed;
   right: 16px;
-  bottom: 84px; /* 位于底部 tab 之上 */
+  bottom: calc(156px + env(safe-area-inset-bottom));
   z-index: 50;
   width: 48px;
   height: 48px;
-  border-radius: 50%;
+  border-radius: var(--m-radius-3xl);
   border: none;
-  background: linear-gradient(135deg, #147dff 0%, #0865f4 100%);
+  background: linear-gradient(135deg, #16bf78 0%, #0fa566 100%);
   color: #fff;
-  box-shadow: 0 8px 24px rgba(20, 125, 255, 0.4), 0 2px 8px rgba(31, 53, 94, 0.16);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: all 0.2s ease;
   padding: 0;
+  box-shadow: 0 9px 18px rgba(22, 191, 120, 0.25), 0 4px 12px rgba(31, 53, 94, 0.1);
+  -webkit-tap-highlight-color: transparent;
 }
 
 .m-cs-fab:active {
@@ -1375,24 +1956,29 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   line-height: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .m-cs-fab-pulse {
   position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 10px;
-  height: 10px;
+  top: 3px;
+  right: 3px;
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
-  background: #22c55e;
-  border: 2px solid #fff;
-  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6);
-  animation: m-cs-fab-pulse-anim 2s infinite;
+  background: var(--m-color-danger);
+  border: 2.5px solid #fff;
+  z-index: 2;
+  box-shadow: 0 0 0 1px rgba(255, 91, 97, 0.3);
 }
 
-@keyframes m-cs-fab-pulse-anim {
-  0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55); }
-  70% { box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+/* ============ 响应式 ============ */
+@media (max-width: 360px) {
+  .m-topbar { padding-left: 12px; padding-right: 12px; }
+  .m-drawer { width: min(330px, 94vw); }
+  .m-brand-name { font-size: 16px; }
+  .m-drawer-primary { width: 76px; }
+  .m-drawer-secondary-grid { gap: 8px; }
 }
 </style>

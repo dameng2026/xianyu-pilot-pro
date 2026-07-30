@@ -1,87 +1,140 @@
 <template>
-  <div>
-    <div class="page-head">
+  <div class="ad-page">
+    <!-- 页面标题 -->
+    <div class="ad-header">
       <div>
-        <h1>自动发货</h1>
-        <p>按商品配置自动发货时机，支持文本发货、卡密发货，以及引用货源库快速配置。</p>
+        <h2 class="ad-title">自动发货</h2>
+        <p class="ad-subtitle">按商品配置自动发货时机，支持文本发货、卡密发货，以及引用货源库快速配置</p>
+      </div>
+      <div class="ad-header-actions">
+        <button class="ad-header-btn" @click="scanPendingOrders">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+          扫描待发货
+        </button>
+        <button class="ad-header-btn ad-header-btn-primary" @click="goSourceLibrary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+          货源库
+        </button>
       </div>
     </div>
 
-    <div v-if="error" class="global-notice error">{{ error }}</div>
-    <div v-if="success" class="global-notice success">{{ success }}</div>
-    <div v-if="statsError" class="global-notice warn">{{ statsError }}</div>
-    <div v-if="sourcesError" class="global-notice warn">{{ sourcesError }}</div>
-    <div v-if="dependenciesError" class="global-notice warn">{{ dependenciesError }}</div>
-
-    <div class="stat-row">
-      <StatCard title="今日发货成功" :value="statValue(stats.todaySuccess)" :change="statsAvailable ? '今日' : '状态不可用'" icon="shield" color="green" />
-      <StatCard title="今日失败" :value="statValue(stats.todayFail)" :change="statsAvailable ? '今日' : '状态不可用'" icon="warning" color="orange" />
-      <StatCard title="待处理订单" :value="statValue(stats.pendingOrders)" :change="statsAvailable ? '待处理' : '状态不可用'" icon="clock" />
-      <StatCard title="库存不足" :value="statValue(stats.lowStockGoods)" :change="statsAvailable ? '需关注' : '状态不可用'" icon="warning" color="red" />
-      <StatCard title="已启用自动发货" :value="statValue(stats.enabledGoods)" :change="statsAvailable ? '全部商品' : '状态不可用'" icon="product" />
+    <!-- 功能说明横幅 -->
+    <div class="ad-banner">
+      <div class="ad-banner-icon">🚀</div>
+      <div class="ad-banner-content">
+        <div class="ad-banner-title">自动发货省心省力</div>
+        <p class="ad-banner-desc">
+          买家付款后系统自动发送卡密或文本内容，支持付款后发货、确认收货后赠送、好评后赠送三种时机。多规格商品可按 SKU 独立配置发货规则。
+        </p>
+      </div>
+      <div class="ad-banner-stats">
+        <div class="ad-stat-item ad-stat-green">
+          <b>{{ statValue(stats.todaySuccess) }}</b>
+          <span>今日成功</span>
+        </div>
+        <div class="ad-stat-item" :class="stats.todayFail > 0 ? 'ad-stat-red' : 'ad-stat-gray'">
+          <b>{{ statValue(stats.todayFail) }}</b>
+          <span>今日失败</span>
+        </div>
+        <div class="ad-stat-item ad-stat-orange">
+          <b>{{ statValue(stats.pendingOrders) }}</b>
+          <span>待处理</span>
+        </div>
+        <div class="ad-stat-item" :class="stats.lowStockGoods > 0 ? 'ad-stat-red' : 'ad-stat-blue'">
+          <b>{{ statValue(stats.lowStockGoods) }}</b>
+          <span>库存预警</span>
+        </div>
+        <div class="ad-stat-item ad-stat-indigo">
+          <b>{{ statValue(stats.enabledGoods) }}</b>
+          <span>已启用</span>
+        </div>
+      </div>
     </div>
 
-    <div class="delivery-body">
-      <div class="filter-panel">
-        <CardPanel title="筛选条件">
-          <div class="filter-section">
-            <label class="filter-label">闲鱼账号</label>
-            <select v-model="query.accountId" class="input" style="width:100%" :disabled="!accountsAvailable" @change="loadGoods">
-              <option value="">全部账号</option>
-              <option v-for="account in accounts" :key="account.id" :value="account.id">{{ accountName(account) }}</option>
-            </select>
-          </div>
-          <div class="filter-section">
-            <label class="filter-label">搜索商品</label>
-            <input v-model="query.keyword" class="input" placeholder="标题 / ID" style="width:100%" @keyup.enter="loadGoods" />
-          </div>
-          <div class="filter-section">
-            <label class="filter-label">发货形式</label>
-            <select v-model="query.deliveryType" class="input" style="width:100%">
-              <option value="">全部</option>
-              <option value="text">文本发货</option>
-              <option value="card">卡密发货</option>
-              <option value="none">未配置</option>
-            </select>
-          </div>
-          <div class="filter-section">
-            <label class="filter-label">配置状态</label>
-            <select v-model="query.configStatus" class="input" style="width:100%">
-              <option value="">全部</option>
-              <option value="configured">已配置</option>
-              <option value="unconfigured">未配置</option>
-            </select>
-          </div>
-          <div class="filter-section">
-            <label class="filter-label">商品状态</label>
-            <select v-model="query.goodsStatus" class="input" style="width:100%">
-              <option value="">全部</option>
-              <option value="0">在售</option>
-              <option value="1">下架</option>
-            </select>
-          </div>
-          <AppButton type="primary" style="width:100%;margin-top:8px" @click="applyFilter">应用筛选</AppButton>
-          <AppButton style="width:100%;margin-top:6px" @click="resetFilter">重置筛选</AppButton>
-        </CardPanel>
+    <div v-if="error" class="ad-toast ad-toast-error">
+      <span class="ad-toast-icon">❌</span>{{ error }}
+    </div>
+    <div v-if="success" class="ad-toast ad-toast-success">
+      <span class="ad-toast-icon">✅</span>{{ success }}
+    </div>
+    <div v-if="statsError" class="ad-toast ad-toast-warn">
+      <span class="ad-toast-icon">⚠️</span>{{ statsError }}
+    </div>
+    <div v-if="sourcesError" class="ad-toast ad-toast-warn">
+      <span class="ad-toast-icon">⚠️</span>{{ sourcesError }}
+    </div>
+    <div v-if="dependenciesError" class="ad-toast ad-toast-warn">
+      <span class="ad-toast-icon">⚠️</span>{{ dependenciesError }}
+    </div>
 
-        <CardPanel title="快捷操作" style="margin-top:12px">
-          <AppButton type="primary" style="width:100%;margin-bottom:8px" :disabled="!goodsAvailable || hasUnavailableGoods || filteredGoods.length === 0" @click="openBatchDialog">批量设置</AppButton>
-          <AppButton style="width:100%;margin-bottom:8px" @click="goSourceLibrary">打开货源库</AppButton>
-          <AppButton type="danger" style="width:100%;margin-bottom:8px" :disabled="!goodsAvailable || hasUnavailableGoods || filteredGoods.length === 0" @click="batchDelete">批量删除配置</AppButton>
-          <AppButton style="width:100%" @click="scanPendingOrders">扫描待发货订单</AppButton>
-        </CardPanel>
-      </div>
+    <div class="ad-layout">
+      <aside class="ad-sidebar">
+        <div class="ad-filter-card">
+          <div class="ad-card-header">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+            <span>筛选条件</span>
+          </div>
+          <div class="ad-filter-body">
+            <div class="ad-filter-item">
+              <label class="ad-filter-label">闲鱼账号</label>
+              <select v-model="query.accountId" class="ad-input" :disabled="!accountsAvailable" @change="loadGoods">
+                <option value="">全部账号</option>
+                <option v-for="account in accounts" :key="account.id" :value="account.id">{{ accountName(account) }}</option>
+              </select>
+            </div>
+            <div class="ad-filter-item">
+              <label class="ad-filter-label">搜索商品</label>
+              <input v-model="query.keyword" class="ad-input" placeholder="标题 / ID" @keyup.enter="loadGoods" />
+            </div>
+            <div class="ad-filter-item">
+              <label class="ad-filter-label">发货形式</label>
+              <select v-model="query.deliveryType" class="ad-input">
+                <option value="">全部</option>
+                <option value="text">文本发货</option>
+                <option value="card">卡密发货</option>
+                <option value="none">未配置</option>
+              </select>
+            </div>
+            <div class="ad-filter-item">
+              <label class="ad-filter-label">配置状态</label>
+              <select v-model="query.configStatus" class="ad-input">
+                <option value="">全部</option>
+                <option value="configured">已配置</option>
+                <option value="unconfigured">未配置</option>
+              </select>
+            </div>
+            <div class="ad-filter-item">
+              <label class="ad-filter-label">商品状态</label>
+              <select v-model="query.goodsStatus" class="ad-input">
+                <option value="">全部</option>
+                <option value="0">在售</option>
+                <option value="1">下架</option>
+              </select>
+            </div>
+            <div class="ad-filter-actions">
+              <button class="ad-btn ad-btn-primary ad-btn-block" @click="applyFilter">应用筛选</button>
+              <button class="ad-btn ad-btn-ghost ad-btn-block" @click="resetFilter">重置筛选</button>
+            </div>
+          </div>
+        </div>
+      </aside>
 
-      <div class="main-content">
-        <div class="timing-notice">
-          <span class="timing-notice-icon">i</span>
-          <span><b>付款后发货</b>会由系统定时扫描自动执行；<b>确认收货后赠送</b>和<b>好评后赠送</b>可在发货记录页手动触发，也可接入后续事件自动化。</span>
+      <main class="ad-main">
+        <div class="ad-tip">
+          <div class="ad-tip-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          </div>
+          <div class="ad-tip-content">
+            <b>付款后发货</b>会由系统定时扫描自动执行；<b>确认收货后赠送</b>和<b>好评后赠送</b>可在发货记录页手动触发。
+          </div>
         </div>
 
-        <CardPanel>
-          <div class="toolbar" style="margin-bottom:12px">
-            <span class="table-info">共 <b>{{ filteredGoods.length }}</b> 个商品</span>
-            <span style="margin-left:12px" class="subtle">点击状态列可快速进入对应时机配置。</span>
+        <div class="ad-table-card">
+          <div class="ad-table-header">
+            <div class="ad-table-title-row">
+              <span class="ad-table-count">共 <b>{{ filteredGoods.length }}</b> 个商品</span>
+              <span class="ad-table-hint">点击状态列可快速进入对应时机配置</span>
+            </div>
           </div>
           <BaseTable :columns="columns" :rows="tableRows">
             <template #goodsInfo="{ row }">
@@ -134,8 +187,8 @@
             </template>
           </BaseTable>
           <Pagination :total="filteredGoods.length" :current="current" :page-size="pageSize" @page-change="goPage" />
-        </CardPanel>
-      </div>
+        </div>
+      </main>
     </div>
 
     <div v-if="showBatchDialog" class="modal-overlay" @click.self="showBatchDialog = false">
@@ -202,11 +255,104 @@
           <button v-for="timing in configTimings" :key="timing.key" type="button" :class="['config-tab', { active: configTiming === timing.key }]" @click="switchTiming(timing.key)">
             {{ timing.label }}
           </button>
+          <button v-if="isMultiSpecGoods || skuLoading" type="button" :class="['config-tab', { active: configTiming === 'skuRules' }]" @click="switchTiming('skuRules')">
+            多规格配置
+            <span v-if="isMultiSpecGoods" class="sku-count-badge">{{ skuList.length }}</span>
+          </button>
         </div>
 
         <div class="config-modal-body">
+          <!-- SKU 多规格配置面板 -->
+          <div v-if="configTiming === 'skuRules'" class="sku-config-panel">
+            <div v-if="skuLoading" class="sku-loading">正在加载规格信息...</div>
+            <div v-else-if="skuError" class="global-notice error" style="margin:0 0 12px">{{ skuError }}</div>
+            <div v-else-if="!isMultiSpecGoods" class="sku-empty">
+              该商品未检测到多规格 SKU，无需进行 SKU 维度配置。<br>
+              可直接使用上方的「付款后发货 / 确认收货后赠送 / 好评后赠送」进行商品通用配置。
+            </div>
+            <div v-else>
+              <div class="sku-config-hint">
+                <div class="sku-config-hint-text">
+                  <b>多规格发货说明：</b>为每个 SKU 独立配置发货规则。付款触发后，系统会反查订单 SKU 并按 SKU 精确匹配发货规则；未匹配到的 SKU 自动回退到商品通用配置。
+                </div>
+                <div class="sku-config-actions">
+                  <AppButton class="sku-btn-small" @click="applyToAllSkus('payDelivery')">应用通用付款配置</AppButton>
+                  <AppButton class="sku-btn-small" type="primary" :loading="skuSaving" :disabled="!isMultiSpecGoods" @click="saveSkuRules">保存 SKU 规则</AppButton>
+                </div>
+              </div>
+              <div v-if="skuSuccess" class="global-notice success" style="margin:0 0 12px">{{ skuSuccess }}</div>
+
+              <div v-for="(rule, idx) in skuRules" :key="rule.skuId || idx" class="sku-rule-card">
+                <div class="sku-rule-header">
+                  <div class="sku-rule-title">
+                    <span class="sku-rule-index">#{{ idx + 1 }}</span>
+                    <span class="sku-rule-property" :title="rule.propertyText">{{ rule.propertyText || rule.propertyKey || `SKU: ${rule.skuId}` }}</span>
+                  </div>
+                  <span class="sku-rule-id">SKU ID: {{ rule.skuId }}</span>
+                </div>
+
+                <div class="sku-timing-grid">
+                  <div v-for="timing in configTimings" :key="timing.key" class="sku-timing-cell">
+                    <div class="sku-timing-header">
+                      <label class="checkbox-label">
+                        <input type="checkbox" :checked="rule[timing.key].enabled === 1" @change="toggleSkuTiming(rule, timing.key, $event.target.checked)" />
+                        {{ timing.label }}
+                      </label>
+                    </div>
+                    <div v-if="rule[timing.key].enabled === 1" class="sku-timing-body">
+                      <div class="form-row" style="margin-bottom:6px">
+                        <label>模式</label>
+                        <select v-model="rule[timing.key].mode" class="input" style="max-width:160px">
+                          <option value="text">文本发货</option>
+                          <option value="card">卡密发货</option>
+                        </select>
+                      </div>
+                      <div v-if="rule[timing.key].mode === 'text'" class="form-row" style="margin-bottom:6px">
+                        <label>关联货源</label>
+                        <select v-model="rule[timing.key].sourceId" class="input" style="max-width:240px" :disabled="!sourcesAvailable">
+                          <option value="">手写内容</option>
+                          <option v-for="source in textSources" :key="source.id" :value="source.id">{{ source.title }}</option>
+                        </select>
+                      </div>
+                      <div v-if="rule[timing.key].mode === 'card'" class="form-row" style="margin-bottom:6px">
+                        <label>卡密组</label>
+                        <select v-model="rule[timing.key].cardGroupId" class="input" style="max-width:240px" :disabled="!cardGroupsAvailable">
+                          <option value="">请选择</option>
+                          <option v-for="group in cardGroups" :key="group.id" :value="group.id">
+                            {{ group.groupName }}（余 {{ group.remainCount ?? '—' }}）
+                            <span v-if="group.skuPropertyKey"> · 专属:{{ group.skuPropertyKey }}</span>
+                          </option>
+                        </select>
+                      </div>
+                      <div v-if="rule[timing.key].mode === 'text'" class="form-row" style="margin-bottom:0">
+                        <label>发货内容</label>
+                        <textarea v-model="rule[timing.key].content" rows="2" placeholder="买家将收到的发货内容"></textarea>
+                      </div>
+                      <div v-else class="form-row" style="margin-bottom:0">
+                        <label>卡密模板</label>
+                        <textarea v-model="rule[timing.key].cardTemplate" rows="2" placeholder="例如：您的卡密为：{卡密}"></textarea>
+                      </div>
+                    </div>
+                    <div v-else class="sku-timing-body-disabled">
+                      未启用，将回退到商品通用「{{ timing.label }}」配置
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="sku-config-footer">
+                <AppButton type="primary" :loading="skuSaving" :disabled="!isMultiSpecGoods" @click="saveSkuRules">保存 SKU 规则</AppButton>
+              </div>
+            </div>
+          </div>
+
+          <!-- 商品通用配置表单（原有逻辑） -->
+          <template v-else>
           <div class="config-modal-hint">
             当前配置时机：<b>{{ currentTimingLabel }}</b>
+            <span v-if="isMultiSpecGoods" class="config-modal-hint-extra">
+              · 此为<b>商品通用配置</b>，未匹配到 SKU 规则时生效。如需按规格差异化发货，请切到「多规格配置」标签。
+            </span>
           </div>
 
           <div class="form-grid">
@@ -317,11 +463,13 @@
               </label>
             </div>
           </div>
+        </template>
         </div>
 
         <div class="config-modal-footer">
           <AppButton @click="closeConfig">取消</AppButton>
-          <AppButton type="primary" :loading="configSaving" :disabled="configSaveDisabled" @click="saveConfig">保存配置</AppButton>
+          <AppButton v-if="configTiming !== 'skuRules'" type="primary" :loading="configSaving" :disabled="configSaveDisabled" @click="saveConfig">保存配置</AppButton>
+          <AppButton v-else type="primary" :loading="skuSaving" :disabled="!isMultiSpecGoods" @click="saveSkuRules">保存 SKU 规则</AppButton>
         </div>
       </div>
     </div>
@@ -388,7 +536,10 @@ import {
   getDeliverySources,
   getDeliveryStats,
   getGoodsDeliveryConfig,
+  getGoodsSkus,
+  getGoodsSkuRules,
   saveGoodsDeliveryConfig,
+  saveGoodsSkuRules,
   scanPendingOrders as scanApi
 } from '../api/autoDelivery.js'
 import { accountName } from '../utils/format.js'
@@ -438,6 +589,15 @@ const configTimings = [
   { key: 'confirmDelivery', label: '确认收货后赠送' },
   { key: 'reviewDelivery', label: '好评后赠送' }
 ]
+
+// 多规格 SKU 配置状态
+const skuList = ref([])          // 商品 SKU 列表（从 xianyu_goods_sku 表）
+const skuRules = ref([])         // 已保存的 SKU 发货规则
+const skuLoading = ref(false)
+const skuSaving = ref(false)
+const skuError = ref('')
+const skuSuccess = ref('')
+const isMultiSpecGoods = computed(() => Array.isArray(skuList.value) && skuList.value.length > 0)
 
 const configForm = reactive({
   enabled: 1,
@@ -782,6 +942,8 @@ function openConfig(goods, timing) {
     error.value = '该规则使用的是已停用的 API 发货模式；保存时请改用文本或卡密发货。'
   }
   fillConfigForm(timingConfig)
+  // 异步加载 SKU 列表与已保存的 SKU 规则（不阻塞主配置表单）
+  loadGoodsSkuData(goods.id)
 }
 
 function openBatchDialog() {
@@ -791,11 +953,146 @@ function openBatchDialog() {
 
 function switchTiming(timing) {
   configTiming.value = timing
+  if (timing === 'skuRules') return  // SKU 配置 tab 不复用主表单
   fillConfigForm(configTarget.value?.goods?._config?.[timing] || {})
 }
 
 function closeConfig() {
   configTarget.value = null
+  // 清理 SKU 状态
+  skuList.value = []
+  skuRules.value = []
+  skuError.value = ''
+  skuSuccess.value = ''
+}
+
+// 加载商品 SKU 列表 + 已保存的 SKU 发货规则
+async function loadGoodsSkuData(goodsId) {
+  skuList.value = []
+  skuRules.value = []
+  skuError.value = ''
+  skuLoading.value = true
+  try {
+    const [skuRes, rulesRes] = await Promise.all([
+      getGoodsSkus(goodsId),
+      getGoodsSkuRules(goodsId)
+    ])
+    const skus = skuRes?.data || []
+    const rules = rulesRes?.data || []
+    skuList.value = Array.isArray(skus) ? skus : []
+    skuRules.value = Array.isArray(rules) ? mergeSkuRules(skus, rules) : []
+  } catch (e) {
+    // SKU 接口失败不影响主配置流程，仅记录告警
+    skuError.value = e?.message || 'SKU 信息加载失败，多规格配置暂不可用'
+    skuList.value = []
+    skuRules.value = []
+  } finally {
+    skuLoading.value = false
+  }
+}
+
+// 将 SKU 列表与已保存的 SKU 规则合并，确保每个 SKU 都有一条可编辑的规则
+function mergeSkuRules(skus, savedRules) {
+  const ruleMap = new Map()
+  for (const rule of savedRules) {
+    if (rule && rule.skuId) ruleMap.set(String(rule.skuId), rule)
+  }
+  return skus.map(sku => {
+    const saved = ruleMap.get(String(sku.skuId)) || {}
+    return {
+      skuId: sku.skuId,
+      propertyKey: sku.propertyKey || saved.propertyKey || '',
+      propertyText: sku.propertyText || saved.propertyText || '',
+      payDelivery: normalizeSkuTimingConfig(saved.payDelivery),
+      confirmDelivery: normalizeSkuTimingConfig(saved.confirmDelivery),
+      reviewDelivery: normalizeSkuTimingConfig(saved.reviewDelivery)
+    }
+  })
+}
+
+function normalizeSkuTimingConfig(raw) {
+  const cfg = raw && typeof raw === 'object' ? raw : {}
+  return {
+    enabled: cfg.enabled === 1 || cfg.enabled === true ? 1 : 0,
+    mode: ['text', 'card'].includes(cfg.mode) ? cfg.mode : 'text',
+    sourceId: cfg.sourceId || '',
+    sourceTitle: cfg.sourceTitle || '',
+    cardGroupId: cfg.cardGroupId || '',
+    cardTemplate: cfg.cardTemplate || '',
+    header: cfg.header || '',
+    content: cfg.content || '',
+    footer: cfg.footer || ''
+  }
+}
+
+// 切换 SKU 单个 timing 的启用状态时，重置为默认值
+function toggleSkuTiming(rule, timing, enabled) {
+  const cfg = rule[timing]
+  cfg.enabled = enabled ? 1 : 0
+  if (!enabled) return
+  // 启用时若未配置过，给默认值
+  if (!cfg.mode) cfg.mode = 'text'
+}
+
+// 批量应用：将商品通用配置应用到所有 SKU 的指定 timing
+function applyToAllSkus(timing) {
+  if (!isMultiSpecGoods.value) return
+  const sourceConfig = configTarget.value?.goods?._config?.[timing] || {}
+  const template = normalizeSkuTimingConfig(sourceConfig)
+  // 启用状态跟随通用配置（通用配置未启用则不勾选，但模板字段仍填充便于快速启用）
+  template.enabled = sourceConfig.enabled === 1 || sourceConfig.enabled === true ? 1 : 0
+  for (const rule of skuRules.value) {
+    rule[timing] = JSON.parse(JSON.stringify(template))
+  }
+  skuSuccess.value = `已将「${currentTimingLabelFor(timing)}」的通用配置应用到全部 ${skuRules.value.length} 个 SKU`
+  setTimeout(() => { skuSuccess.value = '' }, 3000)
+}
+
+function currentTimingLabelFor(timing) {
+  return configTimings.find(item => item.key === timing)?.label || timing
+}
+
+// 保存 SKU 规则
+async function saveSkuRules() {
+  if (!configTarget.value || !isMultiSpecGoods.value) return
+  skuSaving.value = true
+  skuError.value = ''
+  skuSuccess.value = ''
+  try {
+    // 仅提交启用了至少一个 timing 的 SKU 规则；未启用的 SKU 不写入（让运行时回退商品通用配置）
+    const payload = skuRules.value
+      .filter(rule => ['payDelivery', 'confirmDelivery', 'reviewDelivery']
+        .some(t => rule[t]?.enabled === 1))
+      .map(rule => ({
+        skuId: rule.skuId,
+        propertyKey: rule.propertyKey,
+        propertyText: rule.propertyText,
+        payDelivery: cleanSkuTimingForSave(rule.payDelivery),
+        confirmDelivery: cleanSkuTimingForSave(rule.confirmDelivery),
+        reviewDelivery: cleanSkuTimingForSave(rule.reviewDelivery)
+      }))
+    await saveGoodsSkuRules(configTarget.value.goods.id, payload)
+    skuSuccess.value = `已保存 ${payload.length} 个 SKU 的发货规则`
+    await loadGoodsSkuData(configTarget.value.goods.id)
+  } catch (e) {
+    skuError.value = e?.message || 'SKU 规则保存失败'
+  } finally {
+    skuSaving.value = false
+  }
+}
+
+function cleanSkuTimingForSave(cfg) {
+  return {
+    enabled: cfg.enabled === 1 ? 1 : 0,
+    mode: cfg.mode || 'text',
+    sourceId: cfg.mode === 'text' && cfg.sourceId ? Number(cfg.sourceId) : null,
+    sourceTitle: cfg.mode === 'text' ? (cfg.sourceTitle || '') : '',
+    cardGroupId: cfg.mode === 'card' && cfg.cardGroupId ? Number(cfg.cardGroupId) : null,
+    cardTemplate: cfg.cardTemplate || '',
+    header: cfg.header || '',
+    content: cfg.content || '',
+    footer: cfg.footer || ''
+  }
 }
 
 async function saveConfig() {
@@ -852,6 +1149,7 @@ async function removeConfig(goods) {
 }
 
 async function submitBatch() {
+  if (!await guardFeatureAction()) return
   if (batchSubmitDisabled.value) return
   batchLoading.value = true
   try {
@@ -876,6 +1174,7 @@ async function submitBatch() {
 }
 
 async function batchDelete() {
+  if (!await guardFeatureAction()) return
   if (!goodsAvailable.value || hasUnavailableGoods.value || filteredGoods.value.length === 0) return
   if (!await confirmAction({
     title: '确认批量删除发货配置？',
@@ -972,546 +1271,1090 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.page-head {
-  margin-bottom: 10px;
+/* ── 页面容器 ── */
+.ad-page {
+  width: 100%;
 }
 
-.page-head h1 {
+/* ── 页面头部 ── */
+.ad-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding: 0 2px;
+}
+.ad-title {
   margin: 0;
-  font-size: 30px;
+  font-size: 26px;
+  font-weight: 800;
+  color: #15213d;
+  letter-spacing: -0.3px;
+}
+.ad-subtitle {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: #7a879e;
+}
+.ad-header-actions {
+  display: flex;
+  gap: 10px;
+}
+.ad-header-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 16px;
+  border: 1px solid #dbe4f2;
+  border-radius: 10px;
+  background: #fff;
+  color: #526079;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .18s;
+}
+.ad-header-btn:hover {
+  border-color: #0d6bff;
+  color: #0d6bff;
+  background: #f0f6ff;
+}
+.ad-header-btn-primary {
+  background: linear-gradient(135deg, #0d6bff, #3b82f6);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(13, 107, 255, .25);
+}
+.ad-header-btn-primary:hover {
+  background: linear-gradient(135deg, #0b5fe6, #2563eb);
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(13, 107, 255, .3);
 }
 
-.page-head p {
-  margin: 10px 0 0;
-  color: #667491;
+/* ── 功能说明横幅 ── */
+.ad-banner {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 22px;
+  background: linear-gradient(135deg, #f0f7ff 0%, #e8f2ff 50%, #f5f3ff 100%);
+  border: 1px solid #d8e6ff;
+  border-radius: 16px;
+  margin-bottom: 18px;
 }
+.ad-banner-icon {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  background: linear-gradient(135deg, #fff, #e8f2ff);
+  border-radius: 14px;
+  box-shadow: 0 4px 12px rgba(13, 107, 255, .10);
+}
+.ad-banner-content {
+  flex: 1;
+  min-width: 0;
+}
+.ad-banner-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1a2742;
+  margin-bottom: 4px;
+}
+.ad-banner-desc {
+  margin: 0;
+  font-size: 13px;
+  color: #5b6b88;
+  line-height: 1.6;
+}
+.ad-banner-stats {
+  display: flex;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.ad-stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 14px;
+  background: #fff;
+  border-radius: 12px;
+  min-width: 68px;
+  box-shadow: 0 2px 8px rgba(31, 53, 94, .06);
+}
+.ad-stat-item b {
+  font-size: 22px;
+  font-weight: 800;
+  color: #15213d;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.ad-stat-item span {
+  font-size: 11px;
+  color: #8896ab;
+  font-weight: 600;
+  margin-top: 2px;
+}
+.ad-stat-green b { color: #16bf78; }
+.ad-stat-red b { color: #ef4444; }
+.ad-stat-orange b { color: #f59e0b; }
+.ad-stat-blue b { color: #0d6bff; }
+.ad-stat-indigo b { color: #6366f1; }
+.ad-stat-gray b { color: #98a2b3; }
 
-.stat-row {
+/* ── Toast 提示 ── */
+.ad-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  font-weight: 500;
+  animation: ad-toast-in .25s ease;
+}
+@keyframes ad-toast-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.ad-toast-icon { font-size: 15px; flex-shrink: 0; }
+.ad-toast-success { background: #ecfdf3; color: #067647; border: 1px solid #abefc6; }
+.ad-toast-error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+.ad-toast-warn { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+
+/* ── 布局 ── */
+.ad-layout {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 16px;
-  margin: 14px 0 18px;
-}
-
-.delivery-body {
-  display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 260px minmax(0, 1fr);
   gap: 18px;
 }
 
-.filter-section {
-  margin-bottom: 10px;
+/* ── 左侧筛选面板 ── */
+.ad-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ad-filter-card {
+  background: #fff;
+  border: 1px solid var(--line, #e8edf5);
+  border-radius: 14px;
+  box-shadow: 0 2px 8px rgba(31, 53, 94, .04);
+  overflow: hidden;
+}
+.ad-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px 10px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #1a2742;
+  border-bottom: 1px solid #f0f3f8;
+}
+.ad-card-header svg {
+  color: #0d6bff;
+}
+.ad-filter-body {
+  padding: 14px 16px 16px;
+}
+.ad-filter-item {
+  margin-bottom: 12px;
+}
+.ad-filter-item:last-of-type {
+  margin-bottom: 0;
+}
+.ad-filter-label {
+  display: block;
+  font-size: 12px;
+  color: #6b7a90;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.ad-input {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid #e2e8f2;
+  border-radius: 9px;
+  font-size: 13px;
+  color: #1a2742;
+  background: #fff;
+  transition: all .18s;
+  box-sizing: border-box;
+}
+.ad-input:focus {
+  outline: none;
+  border-color: #0d6bff;
+  box-shadow: 0 0 0 3px rgba(13, 107, 255, .10);
+}
+select.ad-input {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7a90' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+}
+.ad-filter-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
 }
 
-.filter-label {
-  display: block;
+/* ── 按钮 ── */
+.ad-btn {
+  height: 36px;
+  padding: 0 16px;
+  border: 1px solid #e2e8f2;
+  border-radius: 9px;
   font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .18s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ad-btn-block {
+  width: 100%;
+}
+.ad-btn-primary {
+  background: linear-gradient(135deg, #0d6bff, #3b82f6);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 3px 10px rgba(13, 107, 255, .22);
+}
+.ad-btn-primary:hover {
+  background: linear-gradient(135deg, #0b5fe6, #2563eb);
+  transform: translateY(-1px);
+  box-shadow: 0 5px 14px rgba(13, 107, 255, .3);
+}
+.ad-btn-ghost {
+  background: #f8fafc;
   color: #526079;
-  margin-bottom: 4px;
+}
+.ad-btn-ghost:hover {
+  background: #eef2f7;
+  border-color: #c8d4e6;
+  color: #1a2742;
+}
+
+/* ── 快捷操作按钮 ── */
+.ad-quick-actions .ad-filter-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ad-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: #4a5b75;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+  text-align: left;
+}
+.ad-action-btn svg {
+  color: #8896ab;
+  transition: color .15s;
+}
+.ad-action-btn:hover:not(:disabled) {
+  background: #f0f6ff;
+  color: #0d6bff;
+  border-color: #d0e2ff;
+}
+.ad-action-btn:hover:not(:disabled) svg {
+  color: #0d6bff;
+}
+.ad-action-btn-danger:hover:not(:disabled) {
+  background: #fef2f2;
+  color: #dc2626;
+  border-color: #fecaca;
+}
+.ad-action-btn-danger:hover:not(:disabled) svg {
+  color: #dc2626;
+}
+.ad-action-btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+/* ── 主内容区 ── */
+.ad-main {
+  min-width: 0;
+}
+
+/* ── 提示条 ── */
+.ad-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #eff6ff, #f5f3ff);
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: #4a5b75;
+  line-height: 1.6;
+}
+.ad-tip-icon {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0d6bff;
+  color: #fff;
+  border-radius: 50%;
+  margin-top: 1px;
+}
+.ad-tip-content b {
+  color: #1a2742;
+  font-weight: 600;
+}
+
+/* ── 表格卡片 ── */
+.ad-table-card {
+  background: #fff;
+  border: 1px solid var(--line, #e8edf5);
+  border-radius: 14px;
+  box-shadow: 0 2px 8px rgba(31, 53, 94, .04);
+  overflow: hidden;
+}
+.ad-table-header {
+  padding: 14px 18px;
+  border-bottom: 1px solid #f0f3f8;
+}
+.ad-table-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ad-table-count {
+  font-size: 14px;
+  color: #4a5b75;
+  font-weight: 600;
+}
+.ad-table-count b {
+  color: #0d6bff;
+  font-weight: 800;
+  font-size: 16px;
+  margin: 0 2px;
+}
+.ad-table-hint {
+  font-size: 12px;
+  color: #98a2b3;
   font-weight: 500;
 }
 
-.table-info {
-  font-size: 14px;
-  color: #526079;
-}
-
+/* ── 商品单元格 ── */
 .goods-cell {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 220px;
 }
-
 .goods-thumb {
   width: 44px;
   height: 44px;
-  border-radius: 8px;
+  border-radius: 10px;
   object-fit: cover;
-  background: #f0f4ff;
+  background: linear-gradient(135deg, #f0f4ff, #e8f0ff);
+  border: 1px solid #e8edf5;
+  flex-shrink: 0;
 }
-
 .goods-thumb.placeholder {
-  background: #f0f4ff;
+  background: linear-gradient(135deg, #f0f4ff, #e8f0ff);
 }
-
 .goods-detail {
   min-width: 0;
 }
-
 .goods-title {
   font-weight: 600;
+  font-size: 13px;
+  color: #1a2742;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
 .goods-meta {
   display: flex;
   gap: 10px;
   font-size: 12px;
-  color: #667085;
+  color: #8896ab;
+  margin-top: 3px;
 }
-
 .goods-meta .price {
   color: #ef4444;
-  font-weight: 600;
+  font-weight: 700;
 }
 
+/* ── 发货状态徽章 ── */
 .delivery-status {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
+  padding: 5px 12px;
   border-radius: 20px;
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
-  font-weight: 500;
+  font-weight: 600;
+  transition: all .15s;
 }
-
+.delivery-status:hover {
+  transform: scale(1.02);
+}
 .status-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
 }
-
-.dot-green { background: #16bf78; }
+.dot-green { background: #16bf78; box-shadow: 0 0 0 3px rgba(22, 191, 120, .15); }
 .dot-gray { background: #c4cddb; }
-.dot-red { background: #ef4444; }
+.dot-red { background: #ef4444; box-shadow: 0 0 0 3px rgba(239, 68, 68, .15); }
 .status-enabled { background: #ecfdf3; color: #067647; }
-.status-none { background: #f5f6fa; color: #667085; }
-.status-disabled { background: #f5f6fa; color: #98a2b3; }
+.status-none { background: #f5f7fb; color: #667085; }
+.status-disabled { background: #f5f7fb; color: #98a2b3; }
 .status-unavailable { background: #fff1f2; color: #be123c; }
-.link:disabled { opacity: .5; cursor: not-allowed; }
 
+/* ── 操作链接 ── */
+.link:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ── 配置弹窗 Tabs ── */
 .config-tabs {
   display: flex;
   gap: 4px;
   margin-bottom: 16px;
-  background: #f5f6fa;
-  border-radius: 10px;
-  padding: 3px;
+  background: #f5f7fb;
+  border-radius: 12px;
+  padding: 4px;
 }
-
 .config-tab {
   flex: 1;
-  padding: 8px 12px;
+  padding: 10px 14px;
   border: none;
-  border-radius: 8px;
+  border-radius: 9px;
   background: transparent;
   cursor: pointer;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   color: #667085;
-  transition: color .15s, background .15s, box-shadow .15s;
+  transition: all .18s;
 }
-
 .config-tab:hover:not(.active) {
-  color: #2d5bff;
+  color: #0d6bff;
+  background: rgba(13, 107, 255, .05);
 }
-
 .config-tab.active {
   background: #fff;
-  color: #2d5bff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .08);
+  color: #0d6bff;
+  box-shadow: 0 2px 8px rgba(13, 107, 255, .10);
 }
 
+/* ── 弹窗遮罩 ── */
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, .35);
+  background: rgba(15, 23, 42, .45);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  animation: ad-overlay-in .2s ease;
 }
-
+@keyframes ad-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 .modal-content {
   background: #fff;
   border-radius: 20px;
   padding: 28px;
   max-width: 560px;
   width: 90%;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, .2);
+  box-shadow: 0 28px 80px rgba(15, 23, 42, .22);
+  animation: ad-modal-in .25s cubic-bezier(.2, 1, .3, 1);
+}
+@keyframes ad-modal-in {
+  from { opacity: 0; transform: translateY(16px) scale(.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.modal-content h3 {
+  margin: 0 0 20px;
+  font-size: 18px;
+  font-weight: 800;
+  color: #16213e;
 }
 
+/* ── 配置弹窗 ── */
 .config-modal-content {
-  max-width: 640px;
+  max-width: 700px;
   padding: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   max-height: 90vh;
-  animation: config-modal-in .2s cubic-bezier(.16, .84, .44, 1);
+  animation: ad-modal-in .25s cubic-bezier(.16, .84, .44, 1);
 }
-
-@keyframes config-modal-in {
-  from { opacity: 0; transform: translateY(16px) scale(.97); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
 .config-modal-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 20px 24px 16px;
-  border-bottom: 1px solid #eef1f6;
+  padding: 22px 26px 16px;
+  border-bottom: 1px solid #f0f3f8;
+  background: linear-gradient(135deg, #fafbff, #f5f8ff);
 }
-
 .config-modal-heading {
   min-width: 0;
   flex: 1;
 }
-
 .config-modal-title {
-  font-size: 17px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 800;
   color: #1a2233;
   line-height: 1.3;
 }
-
 .config-modal-subtitle {
-  margin-top: 4px;
+  margin-top: 6px;
   font-size: 13px;
   color: #667491;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
 .config-modal-close {
   flex-shrink: 0;
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   border: none;
-  border-radius: 8px;
-  background: #f5f6fa;
+  border-radius: 10px;
+  background: #f0f3f8;
   color: #667085;
-  font-size: 20px;
+  font-size: 22px;
   line-height: 1;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background .15s, color .15s;
+  transition: all .15s;
 }
-
 .config-modal-close:hover {
-  background: #eef1f6;
+  background: #e4e9f2;
   color: #1a2233;
+  transform: rotate(90deg);
 }
-
 .config-modal-tabs {
-  margin: 16px 24px 0;
-  margin-bottom: 0;
+  margin: 16px 26px 0;
 }
-
 .config-modal-body {
-  padding: 16px 24px 20px;
+  padding: 18px 26px 22px;
   overflow-y: auto;
   flex: 1 1 auto;
   min-height: 0;
 }
-
 .config-modal-hint {
-  margin-bottom: 14px;
-  padding: 8px 12px;
-  background: linear-gradient(90deg, #f0f4ff, #f6f9ff);
-  border-radius: 10px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #f0f6ff, #eef2ff);
+  border-radius: 12px;
   font-size: 13px;
-  color: #2d5bff;
+  color: #1d4ed8;
+  border: 1px solid #dbeafe;
+  line-height: 1.6;
+}
+.config-modal-hint b {
+  font-weight: 700;
+}
+.config-modal-hint-extra {
+  margin-left: 8px;
+  color: #6b7a90;
+  font-weight: normal;
 }
 
+/* ── SKU 配置面板 ── */
+.sku-count-badge {
+  display: inline-block;
+  margin-left: 6px;
+  min-width: 20px;
+  height: 20px;
+  line-height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #0d6bff, #3b82f6);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  box-shadow: 0 2px 6px rgba(13, 107, 255, .25);
+}
+.sku-config-panel {
+  padding: 4px 0;
+}
+.sku-loading, .sku-empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: #8896ab;
+  font-size: 13px;
+  line-height: 1.8;
+  background: linear-gradient(135deg, #f8fafc, #f5f7fb);
+  border-radius: 12px;
+}
+.sku-config-hint {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, #fffbeb, #fff7ed);
+  border: 1px solid #fde68a;
+  border-radius: 12px;
+  margin-bottom: 16px;
+}
+.sku-config-hint-text {
+  flex: 1;
+  font-size: 13px;
+  color: #92400e;
+  line-height: 1.7;
+}
+.sku-config-hint-text b { font-weight: 700; }
+.sku-config-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+:deep(.sku-btn-small) {
+  padding: 5px 12px !important;
+  font-size: 12px !important;
+  border-radius: 8px !important;
+}
+.sku-rule-card {
+  border: 1px solid #e8edf5;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+  background: #fff;
+  transition: all .2s;
+}
+.sku-rule-card:hover {
+  box-shadow: 0 4px 16px rgba(31, 53, 94, .08);
+  border-color: #d8e2f0;
+}
+.sku-rule-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed #e8edf5;
+}
+.sku-rule-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sku-rule-index {
+  display: inline-block;
+  min-width: 28px;
+  height: 28px;
+  line-height: 28px;
+  text-align: center;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #eef2ff, #e0e7ff);
+  color: #4338ca;
+  font-size: 12px;
+  font-weight: 700;
+}
+.sku-rule-property {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1f2937;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sku-rule-id {
+  font-size: 11px;
+  color: #b0bbd0;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: #f8fafc;
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+.sku-timing-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+@media (max-width: 1100px) {
+  .sku-timing-grid { grid-template-columns: 1fr; }
+}
+.sku-timing-cell {
+  border: 1px solid #eef1f6;
+  border-radius: 10px;
+  padding: 12px;
+  background: #fafbfd;
+  transition: all .15s;
+}
+.sku-timing-cell:hover {
+  border-color: #d8e2f0;
+  background: #fff;
+}
+.sku-timing-header {
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #eef1f6;
+}
+.sku-timing-header .checkbox-label {
+  font-weight: 600;
+  color: #1f2937;
+  font-size: 13px;
+}
+.sku-timing-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sku-timing-body-disabled {
+  font-size: 12px;
+  color: #b0bbd0;
+  padding: 12px 6px;
+  line-height: 1.6;
+  text-align: center;
+}
+.sku-timing-body .form-row label {
+  font-size: 12px;
+  color: #6b7a90;
+  font-weight: 600;
+}
+.sku-timing-body textarea,
+.sku-timing-body .input {
+  font-size: 12.5px;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+.sku-config-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 16px;
+  margin-top: 8px;
+  border-top: 1px solid #f0f3f8;
+}
 .config-modal-footer {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  padding: 14px 24px;
-  border-top: 1px solid #eef1f6;
-  background: #fafbfd;
+  padding: 16px 26px;
+  border-top: 1px solid #f0f3f8;
+  background: linear-gradient(135deg, #fafbff, #f8faff);
 }
 
+/* ── 表单 ── */
 .form-grid {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
-
 .form-row {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
-
+.form-row label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #4a5b75;
+}
 .form-row textarea {
   width: 100%;
-  min-height: 60px;
-  padding: 8px 12px;
-  border: 1px solid #dbe1ed;
+  min-height: 70px;
+  padding: 10px 14px;
+  border: 1px solid #e2e8f2;
   border-radius: 10px;
-  font-size: 14px;
+  font-size: 13px;
   font-family: inherit;
   resize: vertical;
   box-sizing: border-box;
+  transition: all .18s;
+  line-height: 1.6;
 }
-
+.form-row textarea:focus {
+  outline: none;
+  border-color: #0d6bff;
+  box-shadow: 0 0 0 3px rgba(13, 107, 255, .10);
+}
+.form-row .input,
+.form-row select {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid #e2e8f2;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #1a2742;
+  transition: all .18s;
+}
+.form-row .input:focus,
+.form-row select:focus {
+  outline: none;
+  border-color: #0d6bff;
+  box-shadow: 0 0 0 3px rgba(13, 107, 255, .10);
+}
 .content-label-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 2px;
+  margin-bottom: 4px;
 }
-
 .insert-source-btn {
-  height: 26px;
-  padding: 0 10px;
+  height: 28px;
+  padding: 0 12px;
   border: 1px solid #c7d2fe;
-  background: #eef2ff;
+  background: linear-gradient(135deg, #eef2ff, #e0e7ff);
   color: #4338ca;
-  border-radius: 7px;
+  border-radius: 8px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: background .15s, color .15s, border-color .15s;
+  transition: all .15s;
+  display: inline-flex;
+  align-items: center;
 }
-
 .insert-source-btn:hover:not(:disabled) {
-  background: #4f46e5;
+  background: linear-gradient(135deg, #4f46e5, #6366f1);
   border-color: #4f46e5;
   color: #fff;
+  transform: translateY(-1px);
 }
-
 .insert-source-btn:disabled {
   opacity: .5;
   cursor: not-allowed;
 }
-
 .insert-source-btn.ghost {
   background: #fff;
-  border-color: #dbe1ed;
+  border-color: #e2e8f2;
   color: #526079;
 }
-
 .insert-source-btn.ghost:hover:not(:disabled) {
-  background: #f5f6fa;
-  border-color: #98a2b3;
-  color: #1a2233;
+  background: #f5f7fb;
+  border-color: #c8d4e6;
+  color: #1a2742;
+}
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #4a5b75;
+  font-weight: 500;
+}
+.checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #0d6bff;
+  cursor: pointer;
+}
+.subtle {
+  color: #98a2b3;
+  font-size: 12px;
+  font-weight: 500;
 }
 
+/* ── 货源抽屉 ── */
 .source-drawer-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, .35);
+  background: rgba(15, 23, 42, .40);
+  backdrop-filter: blur(3px);
   z-index: 1100;
   display: flex;
   justify-content: flex-end;
-  animation: source-drawer-fade .18s ease-out;
+  animation: ad-overlay-in .18s ease-out;
 }
-
-@keyframes source-drawer-fade {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
 .source-drawer {
-  width: 420px;
+  width: 440px;
   max-width: 90vw;
   height: 100%;
   background: #fff;
-  box-shadow: -16px 0 48px rgba(15, 23, 42, .18);
+  box-shadow: -20px 0 60px rgba(15, 23, 42, .18);
   display: flex;
   flex-direction: column;
-  animation: source-drawer-slide .22s cubic-bezier(.16, .84, .44, 1);
+  animation: ad-drawer-slide .25s cubic-bezier(.16, .84, .44, 1);
 }
-
-@keyframes source-drawer-slide {
-  from { transform: translateX(16px); opacity: 0; }
+@keyframes ad-drawer-slide {
+  from { transform: translateX(24px); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
 }
-
 .source-drawer-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 20px 14px;
-  border-bottom: 1px solid #eef1f6;
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid #f0f3f8;
+  background: linear-gradient(135deg, #fafbff, #f5f8ff);
 }
-
 .source-drawer-title {
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 17px;
+  font-weight: 800;
   color: #1a2233;
 }
-
 .source-drawer-close {
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   border: none;
-  border-radius: 8px;
-  background: #f5f6fa;
+  border-radius: 10px;
+  background: #f0f3f8;
   color: #667085;
-  font-size: 20px;
+  font-size: 22px;
   line-height: 1;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background .15s, color .15s;
+  transition: all .15s;
 }
-
 .source-drawer-close:hover {
-  background: #eef1f6;
+  background: #e4e9f2;
   color: #1a2233;
+  transform: rotate(90deg);
 }
-
 .source-drawer-tip {
-  padding: 10px 20px;
+  padding: 12px 22px;
   font-size: 12px;
-  color: #526079;
-  background: linear-gradient(90deg, #f0f4ff, #f6f9ff);
-  border-bottom: 1px solid #eef1f6;
-  line-height: 1.6;
+  color: #5b6b88;
+  background: linear-gradient(135deg, #f0f6ff, #eef2ff);
+  border-bottom: 1px solid #f0f3f8;
+  line-height: 1.7;
 }
-
 .source-drawer-tip code {
   background: #e0e7ff;
   color: #3730a3;
-  padding: 1px 5px;
-  border-radius: 4px;
+  padding: 2px 7px;
+  border-radius: 6px;
   font-size: 11px;
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
 }
-
 .source-drawer-body {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 16px 20px;
+  padding: 14px 18px 22px;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-
 .source-drawer-empty {
-  padding: 40px 16px;
+  padding: 48px 20px;
   text-align: center;
-  color: #98a2b3;
+  color: #b0bbd0;
   font-size: 13px;
 }
-
 .source-drawer-item {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid #e6ebf3;
+  padding: 14px 16px;
+  border: 1px solid #e8edf5;
   border-radius: 12px;
   background: #fff;
   cursor: pointer;
   text-align: left;
-  transition: border-color .15s, background .15s, box-shadow .15s;
+  transition: all .18s;
 }
-
 .source-drawer-item:hover {
-  border-color: #4f46e5;
-  background: #f5f7ff;
-  box-shadow: 0 4px 14px rgba(79, 70, 229, .12);
+  border-color: #6366f1;
+  background: linear-gradient(135deg, #f5f7ff, #eef2ff);
+  box-shadow: 0 4px 16px rgba(99, 102, 241, .12);
+  transform: translateY(-1px);
 }
-
 .source-drawer-item-main {
   flex: 1;
   min-width: 0;
 }
-
 .source-drawer-item-title {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 4px;
+  margin-bottom: 5px;
 }
-
 .source-drawer-item-name {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
   color: #1a2233;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 240px;
 }
-
 .source-drawer-item-meta {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   font-size: 12px;
-  color: #667085;
+  color: #8896ab;
 }
-
 .source-drawer-item-insert {
   flex-shrink: 0;
-  padding: 4px 12px;
-  border-radius: 6px;
-  background: #eef2ff;
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #eef2ff, #e0e7ff);
   color: #4338ca;
   font-size: 12px;
   font-weight: 700;
+  transition: all .15s;
 }
-
 .source-drawer-item:hover .source-drawer-item-insert {
-  background: #4f46e5;
+  background: linear-gradient(135deg, #4f46e5, #6366f1);
   color: #fff;
 }
 
-.checkbox-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: #526079;
-}
-
-.subtle {
-  color: #98a2b3;
-  font-size: 13px;
-}
-
-.timing-notice {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 14px;
-  margin-bottom: 12px;
-  background: linear-gradient(90deg, #fff8e6, #fffbf2);
-  border: 1px solid #ffd98a;
-  border-radius: 12px;
-  font-size: 13px;
-  color: #6b4f12;
-  line-height: 1.6;
-}
-
-.timing-notice-icon {
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: #f5a623;
-  color: #fff;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: bold;
-}
-
+/* ── 响应式 ── */
 @media (max-width: 1400px) {
-  .stat-row {
-    grid-template-columns: repeat(3, 1fr);
-  }
-
-  .delivery-body {
+  .ad-layout {
     grid-template-columns: 1fr;
+  }
+  .ad-sidebar {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 900px) {
+  .ad-banner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .ad-banner-stats {
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .ad-sidebar {
+    grid-template-columns: 1fr;
+  }
+  .ad-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
   }
 }
 </style>
