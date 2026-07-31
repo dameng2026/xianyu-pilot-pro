@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -74,22 +75,22 @@ class XianyuTradeOrderControllerTest {
     @Test
     void pageShouldRejectLegacyGetSideEffectInsteadOfReturningPossiblyStaleSuccess() {
         BizException error = assertThrows(BizException.class,
-                () -> controller.page(8L, null, null, null, 1, 20, true));
+                () -> controller.page(8L, null, null, null, 1, 20, true, null, null));
 
         assertEquals(410, error.getCode());
         verify(orderDeliveryCommandService, never()).syncOrders(eq(1L), any(OrderSyncRequest.class));
-        verify(orderService, never()).page(1L, 8L, null, null, null, 1, 20);
+        verify(orderService, never()).page(eq(1L), eq(8L), isNull(), isNull(), isNull(), eq(1), eq(20), any(), any());
     }
 
     @Test
     void pageShouldListWithoutTriggeringSyncWhenSyncIsFalse() {
-        when(orderService.page(1L, null, null, null, null, 1, 20))
+        when(orderService.page(eq(1L), isNull(), isNull(), isNull(), isNull(), eq(1), eq(20), isNull(), isNull()))
                 .thenReturn(new PageResult<XianyuTradeOrderVO>(java.util.List.of(), 1, 20, 0));
 
-        Result<PageResult<XianyuTradeOrderVO>> result = controller.page(null, null, null, null, 1, 20, false);
+        Result<PageResult<XianyuTradeOrderVO>> result = controller.page(null, null, null, null, 1, 20, false, null, null);
 
         verify(orderDeliveryCommandService, never()).syncOrders(eq(1L), any(OrderSyncRequest.class));
-        verify(orderService).page(1L, null, null, null, null, 1, 20);
+        verify(orderService).page(eq(1L), isNull(), isNull(), isNull(), isNull(), eq(1), eq(20), isNull(), isNull());
         assertEquals(200, result.getCode());
     }
 
