@@ -403,7 +403,7 @@
           "version": "1.49",
           "description": "three-level kb categories: add icon/color/description columns to ai_cs_kb_category, add source_type to ai_cs_learned_kb, soft-delete legacy flat categories, rebuild as 13 first-level + 68 second-level hierarchy (MySQL 8.0 compatible via INFORMATION_SCHEMA + PREPARE/EXECUTE; adds name_hash cleanup step for unique key conflicts)",
           "path": "apps/core-api/src/main/resources/db/migration/V1.49__three_level_kb_categories.sql",
-          "sha256": "6037ea7a9339d591f8f304ee58928ce4e99a79650c5bf9cc2ef3dbbc7fb4c85e",
+          "sha256": "09cfc36a58597b2714b83d057691240543899ce7cc06cd8be3b842906aecd75c",
           "risk": "expand",
           "rollback": "restore"
         },
@@ -411,7 +411,7 @@
           "version": "1.50",
           "description": "seed Q&A for general_trade parent category (6 second-level categories x 30 entries = 180 high-value sales-grade Q&A covering stock/shipping/refund/consult/price/login)",
           "path": "apps/core-api/src/main/resources/db/migration/V1.50__seed_qa_general_trade.sql",
-          "sha256": "07188c9c0d0d31d5dcb5e41c6b11e00c12eb5dc849d142741db667cada2dd27b",
+          "sha256": "3182af439c43d0a0c0cf6e52b515db965e669d04e32fa585cabfd4003e891aca",
           "risk": "expand",
           "rollback": "restore"
         },
@@ -419,7 +419,7 @@
           "version": "1.51",
           "description": "seed Q&A for fashion_bag parent category (5 second-level categories x 30 entries = 150 entries covering men/women/shoes/bags/accessories size, fabric, fit, authenticity, washing)",
           "path": "apps/core-api/src/main/resources/db/migration/V1.51__seed_qa_fashion_bag.sql",
-          "sha256": "e254e6ca246ec2238580f6290d2011fa320a0556d6fa58060e70a0ee0fe1c414",
+          "sha256": "8e219d61824564654f826b7bf88ebfd853a73d1e1227159e4fc37c8abe6e9735",
           "risk": "expand",
           "rollback": "restore"
         },
@@ -427,7 +427,7 @@
           "version": "1.52",
           "description": "seed Q&A for digital_appliance parent category (30+ entries covering phones, computers, audio, cameras, accessories)",
           "path": "apps/core-api/src/main/resources/db/migration/V1.52__seed_qa_digital_appliance.sql",
-          "sha256": "492d096e763cd8e6fed2ce0a66b9323d75b8ffeea8467afb5fcae29f0c2d41f5",
+          "sha256": "de74778be057c6cea0c05263daf6e68e21f35eba147c2cc7065a15dd410cee48",
           "risk": "expand",
           "rollback": "restore"
         },
@@ -435,7 +435,7 @@
           "version": "1.53",
           "description": "seed Q&A for beauty_care parent category (30+ entries covering skincare, makeup, fragrance, personal care)",
           "path": "apps/core-api/src/main/resources/db/migration/V1.53__seed_qa_beauty_care.sql",
-          "sha256": "59c3bb514d2bdb3d6be12a3cfaa846bcbea0ca1a7737c91118836f74377072b0",
+          "sha256": "1fd75c38031c469ee33d4d862e3319b5a23da05b842a7f0e5114a7a984f42415",
           "risk": "expand",
           "rollback": "restore"
         },
@@ -443,7 +443,7 @@
           "version": "1.54",
           "description": "seed Q&A for home_living parent category (30+ entries covering home goods, kitchen, furniture, decor)",
           "path": "apps/core-api/src/main/resources/db/migration/V1.54__seed_qa_home_living.sql",
-          "sha256": "d41f455aec6b9935aebdf3a4df637215399ce4a459f6d7c7547290221e46bb0b",
+          "sha256": "2cecc0f2b92a0f680d217323328696ae3d267764b0eb3efa7332dd1e4ff86f50",
           "risk": "expand",
           "rollback": "restore"
         },
@@ -451,7 +451,7 @@
           "version": "1.55",
           "description": "seed Q&A for baby_maternity parent category (30+ entries covering maternity, infant goods, baby care)",
           "path": "apps/core-api/src/main/resources/db/migration/V1.55__seed_qa_baby_maternity.sql",
-          "sha256": "24941dfefe51b88b6418d8cdf822e6e5f39fe3352dc5309cb0800348964377a0",
+          "sha256": "19090f28c828a3d614ab8a1bd65072a40e9832d1a5a1e92aba2d356c5c0eb25b",
           "risk": "expand",
           "rollback": "restore"
         },
@@ -459,7 +459,7 @@
           "version": "1.56",
           "description": "seed Q&A for sports_outdoor parent category (30+ entries covering sports gear, outdoor equipment, fitness)",
           "path": "apps/core-api/src/main/resources/db/migration/V1.56__seed_qa_sports_outdoor.sql",
-          "sha256": "6774f8709bab1626b1ddf9056d5c2a5928cad90af1d4cb3eba1e58763803ea01",
+          "sha256": "49dbf6b3e01db03865cc6c5cf496a5897afa885c284453f19b377be78cd01a39",
           "risk": "expand",
           "rollback": "restore"
         },
@@ -467,7 +467,7 @@
           "version": "1.57",
           "description": "seed Q&A for books_textbook parent category (30+ entries covering books, textbooks, exam prep, stationery)",
           "path": "apps/core-api/src/main/resources/db/migration/V1.57__seed_qa_books_textbook.sql",
-          "sha256": "08d662952c74c239f3681c451c44122b934684ac9de3c57bedbcd309a6be2c86",
+          "sha256": "e8d758b9a066613228675413fdf9125e627c9992f8115db3b1cb2620cf2dc6ba",
           "risk": "expand",
           "rollback": "restore"
         },
@@ -475,7 +475,7 @@
           "version": "1.58",
           "description": "seed Q&A for art_collection parent category (30+ entries covering antiques, collectibles, jewelry, art)",
           "path": "apps/core-api/src/main/resources/db/migration/V1.58__seed_qa_art_collection.sql",
-          "sha256": "b2be81c7c6003e7a9b82f55b3b8f7396e9a316825fb242bbf76b3e8be3e835b8",
+          "sha256": "ed4a165ab6fcdf5775ae328ee59b0cfbf48f162c0eeed55fd09a2f4a874f1da8",
           "risk": "expand",
           "rollback": "restore"
         },
@@ -483,7 +483,7 @@
           "version": "1.59",
           "description": "seed Q&A for pet_supplies parent category (30+ entries covering pet food, pet supplies, pet care)",
           "path": "apps/core-api/src/main/resources/db/migration/V1.59__seed_qa_pet_supplies.sql",
-          "sha256": "4cecec65cb6580ec7d6dfc4a4d86298a4d73b32b04d04e18929c223302450133",
+          "sha256": "26a14b14e5dea463c5d8e5b070a2a70d3da318b72414b2c6e40dcf4b3655703d",
           "risk": "expand",
           "rollback": "restore"
         },
@@ -491,7 +491,7 @@
           "version": "1.60",
           "description": "seed Q&A for auto_accessories parent category (30+ entries covering car accessories, parts, maintenance)",
           "path": "apps/core-api/src/main/resources/db/migration/V1.60__seed_qa_auto_accessories.sql",
-          "sha256": "dc52920f934fba3811876fde16b7dbfadcfff96df5f482aeffd8a0d40881ef1d",
+          "sha256": "5ea3af418711621bc62757254a350a69fe57625efd61ab47b4b8cd9ab8bcff13",
           "risk": "expand",
           "rollback": "restore"
         },
@@ -499,7 +499,7 @@
           "version": "1.61",
           "description": "seed Q&A for handcraft parent category (30+ entries covering handmade crafts, DIY materials, tools)",
           "path": "apps/core-api/src/main/resources/db/migration/V1.61__seed_qa_handcraft.sql",
-          "sha256": "3f1abe9d539a395f80b210aa7cebb81458a65a6d30e56253b15f33928bd986f6",
+          "sha256": "8aeab9f2b421dd7eb9ba003e18251f51dfb9c32fd2b7cdcb7a9b908031c05337",
           "risk": "expand",
           "rollback": "restore"
         },
