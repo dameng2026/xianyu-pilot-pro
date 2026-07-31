@@ -130,22 +130,18 @@
               <th class="col-check">
                 <input type="checkbox" class="table-check" :checked="allSelected" :indeterminate.prop="someSelected" @change="toggleAll" />
               </th>
-              <th class="col-sortable">
-                订单信息 <span class="sort-arrow">↕</span>
+              <th class="col-sortable" :class="{ 'sort-active': isSortActive('createdAt') }" @click="toggleSort('createdAt')">
+                订单信息 <span class="sort-arrow">{{ sortArrow('createdAt') }}</span>
               </th>
-              <th class="col-sortable">
-                买家信息 <span class="sort-arrow">↕</span>
+              <th class="col-sortable" :class="{ 'sort-active': isSortActive('buyerName') }" @click="toggleSort('buyerName')">
+                买家信息 <span class="sort-arrow">{{ sortArrow('buyerName') }}</span>
               </th>
-              <th class="col-sortable">
-                商品信息 <span class="sort-arrow">↕</span>
-              </th>
+              <th>商品信息</th>
               <th>数量 / 进度</th>
-              <th class="col-sortable">
-                订单状态 <span class="sort-arrow">↕</span>
+              <th class="col-sortable" :class="{ 'sort-active': isSortActive('orderStatus') }" @click="toggleSort('orderStatus')">
+                订单状态 <span class="sort-arrow">{{ sortArrow('orderStatus') }}</span>
               </th>
-              <th class="col-sortable">
-                发货状态 <span class="sort-arrow">↕</span>
-              </th>
+              <th>发货状态</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -438,7 +434,10 @@ const query = reactive({
   status: '',
   keyword: '',
   current: 1,
-  size: 20
+  size: 20,
+  // 排序状态：默认按创建时间倒序（与后端默认一致）
+  sortField: 'createdAt',
+  sortOrder: 'desc'
 })
 
 const manualForm = reactive({
@@ -906,11 +905,40 @@ function search() {
   loadOrders()
 }
 
+// 表头排序：点击可排序列切换升降序
+// 支持的字段：createdAt（订单信息）、buyerName（买家信息）、orderStatus（订单状态）
+function toggleSort(field) {
+  if (!field) return
+  if (query.sortField === field) {
+    // 同一列：切换升降序
+    query.sortOrder = query.sortOrder === 'desc' ? 'asc' : 'desc'
+  } else {
+    // 新列：默认降序（最新/最大优先）
+    query.sortField = field
+    query.sortOrder = 'desc'
+  }
+  query.current = 1
+  loadOrders()
+}
+
+// 返回某列当前排序箭头字符：'↑' / '↓' / '↕'
+function sortArrow(field) {
+  if (query.sortField !== field) return '↕'
+  return query.sortOrder === 'asc' ? '↑' : '↓'
+}
+
+// 判断某列是否为当前激活的排序列（用于高亮显示）
+function isSortActive(field) {
+  return query.sortField === field
+}
+
 function resetFilters() {
   query.accountId = ''
   query.status = ''
   query.keyword = ''
   query.current = 1
+  query.sortField = 'createdAt'
+  query.sortOrder = 'desc'
   selected.value = null
   manualForm.visible = false
   selectedKeys.value = []
