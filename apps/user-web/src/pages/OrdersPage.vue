@@ -1359,9 +1359,12 @@ onBeforeUnmount(() => {
   padding: 0 16px;
   white-space: nowrap;
 }
-.orders-table th.col-sortable { cursor: pointer; user-select: none; }
+.orders-table th.col-sortable { cursor: pointer; user-select: none; transition: color .12s; }
 .orders-table th.col-sortable:hover { color: #334155; }
-.sort-arrow { font-size: 10px; opacity: .4; margin-left: 2px; }
+.orders-table th.col-sortable.sort-active { color: var(--primary); }
+.orders-table th.col-sortable.sort-active:hover { color: var(--primary); }
+.sort-arrow { font-size: 10px; opacity: .4; margin-left: 2px; transition: opacity .12s, color .12s; }
+.orders-table th.col-sortable.sort-active .sort-arrow { opacity: 1; color: var(--primary); }
 
 .orders-table td {
   padding: 14px 16px;
