@@ -8,6 +8,8 @@
     <!-- 预连接后端 API，减少首次请求的 DNS+TLS 握手时间 -->
     <link rel="preconnect" href="/api" />
     <link rel="dns-prefetch" href="/api" />
+    <!-- 预加载首屏品牌图片：boot-screen 与 Sidebar 登录后立即需要 -->
+    <link rel="preload" as="image" href="/xya/brand/brand_004.png" />
     <!-- 内联 critical CSS，避免白屏等待 entry CSS 下载 -->
     <style>
       body{margin:0;background:#f6f9ff;font-family:system-ui,-apple-system,sans-serif}

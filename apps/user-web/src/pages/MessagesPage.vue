@@ -624,8 +624,8 @@ import { createSessionPrivacyStore } from '../utils/privacySession.js'
 import { resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
 import { useCaptchaSolver } from '../composables/useCaptchaSolver.js'
 
-const POLL_INTERVAL_SSE_HEALTHY = 8000
-const POLL_INTERVAL_FALLBACK = 2500
+const POLL_INTERVAL_SSE_HEALTHY = 15000
+const POLL_INTERVAL_FALLBACK = 10000
 const SSE_STALE_TIMEOUT = 15000
 const CHAT_BOTTOM_THRESHOLD = 72
 const CONVERSATION_LIST_LOAD_MORE_THRESHOLD = 72
@@ -1846,7 +1846,13 @@ async function loadConversations(preserveSelected = true, { silent = false } = {
     if (avatarAccountId) {
       scheduleAvatarHydration(avatarAccountId, conversations.value, silent ? 2000 : 800)
     }
-    if (!silent && selected.value) await loadContext(true)
+    // 性能优化：移除隐式 await loadContext(true)。
+    // 原逻辑在会话列表加载完成后会自动加载第一个会话的消息上下文（5s+），
+    // 导致"10s 才显示会话列表"。现在会话列表显示后立即返回，消息由用户主动点击会话时加载。
+    // 若已选中会话（如账号切换场景），改为后台异步预热消息上下文，不阻塞会话列表渲染。
+    if (!silent && selected.value) {
+      loadContext(true).catch(() => {})
+    }
   } catch (e) {
     if (!shouldApplyConversationLoadResult({
       requestId,
@@ -2034,12 +2040,17 @@ async function selectChat(conversation) {
   selected.value = mergeSelectedConversationSnapshot(selected.value, nextConversation, { preserveUnreadAsRead: true })
   error.value = ''
   restoreCachedConversationContext(selectedAccountId(), selected.value, { scrollBottom: true })
-  await loadContext(true)
   // 立即在本地标记为已读：记录该会话最后查看时的最新消息时间
   // 这样即使服务端 markRead 因后端数据源割裂（IM redPoint + 内存缓存 + read_status）未能立即清零，
   // 下次轮询返回时 applyLocalReadState 也会强制 unreadCount = 0，避免小红点持续显示
   markConversationReadLocally(selected.value)
-  await markSelectedConversationRead(selected.value)
+  // 性能优化：loadContext（加载消息）与 markSelectedConversationRead（标记已读）无数据依赖，
+  // 原串行 await 导致消息显示需等 2 个请求累加耗时（5s+）。
+  // 改为 Promise.allSettled 并行，消息显示耗时降为单个请求耗时（2-3s）。
+  await Promise.allSettled([
+    loadContext(true),
+    markSelectedConversationRead(selected.value),
+  ])
   refreshAiScopeState()
   schedulePersistCurrentAccountCache()
 }
@@ -3230,11 +3241,16 @@ onMounted(async () => {
       return
     }
     if (!selectedAccountId()) {
+      // 性能优化：loadAiCsSetting / loadTokenBalanceValue / loadConversations 三者无数据依赖，
+      // 原串行 await 链导致首屏等待 3 个请求累加耗时（3-6s）。
+      // 改为 Promise.allSettled 并行，首屏耗时降为最长那个请求的耗时（1-2s）。
+      // loadConversations 内部会触发 scheduleAvatarHydration（延迟 800ms 后台补全头像），不阻塞主链路。
+      // 移除原 loadConversations 末尾的隐式 await loadContext(true)：用户未点击会话时不应加载消息上下文。
       await Promise.allSettled([
         loadAiCsSetting(),
         loadTokenBalanceValue(),
+        loadConversations(false),
       ])
-      await loadConversations(false)
       accountSelectionReady.value = true
     }
     startPolling()

@@ -78,8 +78,8 @@ import Sidebar from './components/Sidebar.vue'
 import Topbar from './components/Topbar.vue'
 import PageHeader from './components/PageHeader.vue'
 import AppButton from './components/AppButton.vue'
-import ConfirmModal from './components/ConfirmModal.vue'
 // 弹窗与移动端组件懒加载，避免首屏加载不必要代码
+const ConfirmModal = defineAsyncComponent(() => import('./components/ConfirmModal.vue'))
 const DraftGuardModal = defineAsyncComponent(() => import('./components/DraftGuardModal.vue'))
 const PaymentModal = defineAsyncComponent(() => import('./components/PaymentModal.vue'))
 const AiCsPanel = defineAsyncComponent(() => import('./components/AiCsPanel.vue'))
@@ -90,7 +90,7 @@ const MobileLite = defineAsyncComponent({
   delay: 200,
   timeout: 30000
 })
-import MaintenanceBanner from './components/MaintenanceBanner.vue'
+const MaintenanceBanner = defineAsyncComponent(() => import('./components/MaintenanceBanner.vue'))
 import { pageTitles } from './data/nav.js'
 import { createMediaSession, logout as logoutApi } from './api/auth.js'
 import { currentUser, invalidateCurrentUserCache } from './api/system.js'
@@ -101,6 +101,7 @@ import { closeSse, connectSse } from './utils/sse.js'
 import { installClientErrorReporter, recordClientError } from './utils/errorReporter.js'
 import { playIncomingMessageSound, primeAudioOnFirstGesture } from './utils/notifySound.js'
 import { warmLiteAccountsList } from './api/accounts.js'
+import { getNavigationHome } from './api/navigation.js'
 import { getFeatureSwitchStatus, invalidateFeatureSwitchCache } from './api/feature-switch.js'
 import { globalConfirm } from './composables/confirmState.js'
 import { setBrowseMode, setPreviewMode, clearAllLimitModes } from './composables/featureGuard.js'
@@ -671,10 +672,14 @@ async function handleLoginSuccess(payload) {
     invalidateCurrentUserCache()
     invalidateFeatureSwitchCache()
     setAuth(token, payload.username)
-    await initializeMediaSession()
     currentUserInfo.value = buildDefaultUserInfo(payload?.username || getCachedUsername() || '当前用户')
     startSse()
     scheduleWarmups()
+    // 功能开关预热 + 媒体会话后台异步，不阻塞进入首页
+    getFeatureSwitchStatus().catch(() => {})
+    initializeMediaSession().catch(() => {
+      showNotice('私有图片会话初始化失败，图片预览暂不可用', 'warn')
+    })
     await loadCurrentUser(true)
     navigate(defaultPage)
     authNotice.value = ''
@@ -727,14 +732,18 @@ async function boot() {
     if (getToken()) {
       bootMessage.value = '正在恢复登录会话'
       if (authPages.includes(getNormalizedKey(active.value))) active.value = defaultPage
-      // 并行化首屏请求：媒体会话、用户信息、SSE 同时发起，避免串行等待
-      const bootPromises = [
-        initializeMediaSession().catch(() => {}),
-        loadCurrentUser()
-      ]
+      // 首屏只等待用户信息（决定登录态），媒体会话与功能开关后台异步预热，不阻塞渲染
       startSse()
       scheduleWarmups()
-      await Promise.all(bootPromises)
+      // 功能开关预热：与用户信息并行，首次路由切换时直接命中 30s 内存缓存
+      getFeatureSwitchStatus().catch(() => {})
+      // 媒体会话后台异步：仅用于私有图片预览，失败时提示但不阻塞首屏
+      initializeMediaSession().catch(() => {
+        showNotice('私有图片会话初始化失败，图片预览暂不可用', 'warn')
+      })
+      // 首页数据预热：与用户信息并行，DashboardPage 进入时直接命中缓存避免"加载中"卡顿
+      getNavigationHome({ limit: 5 }).catch(() => {})
+      await loadCurrentUser()
       if (!location.hash || authPages.includes(getNormalizedKey(getHash()))) navigate(defaultPage)
       return
     }

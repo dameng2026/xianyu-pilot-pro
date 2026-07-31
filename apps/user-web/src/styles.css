@@ -2390,34 +2390,15 @@ input {
   box-shadow: 0 6px 16px rgba(21, 76, 155, .15)
 }
 
-.hero-art {
-  background-image: url('/xya/dashboard_3d/dashboard_3d_002.png'), url('/xya/dashboard_3d/dashboard_3d_003.png'), url('/xya/dashboard_3d/dashboard_3d_004.png'), url('/xya/dashboard_3d/dashboard_3d_007.png') !important;
-  background-size: 170px auto, 170px auto, 95px auto, 420px auto !important;
-  background-repeat: no-repeat !important;
-  background-position: 72% 25%, 58% 51%, 91% 51%, 74% 86% !important;
-  filter: drop-shadow(0 16px 26px rgba(34, 110, 255, .15))
-}
-
-.big-illus {
-  background-image: url('/xya/dashboard_3d/dashboard_3d_001.png'), url('/xya/dashboard_3d/dashboard_3d_003.png'), url('/xya/dashboard_3d/dashboard_3d_002.png'), url('/xya/dashboard_3d/dashboard_3d_007.png') !important;
-  background-size: 190px auto, 210px auto, 220px auto, 520px auto !important;
-  background-repeat: no-repeat !important;
-  background-position: 13% 22%, 44% 42%, 75% 30%, 45% 88% !important;
-  filter: drop-shadow(0 20px 34px rgba(33, 107, 255, .14))
-}
-
-
+/* 性能优化：移除 !important background-image 规则，避免浏览器解析 styles.css 时
+   预加载 10 张 public 目录 PNG（8 张 dashboard_3d + 头像 + 商品占位图）。
+   .hero-art / .big-illus 为死代码（无组件引用），直接删除。
+   .avatar-img / .product-thumb 保留纯色背景兜底，真实图片由组件按需加载。 */
 .avatar-img {
-  background-image: url('/xya/chat_ui_assets/chat_ui_assets_023.png') !important;
-  background-size: 235px auto !important;
-  background-position: 9% 50% !important;
   background-color: #eaf3ff !important
 }
 
 .product-thumb {
-  background-image: url('/xya/utility_icons/utility_icons_012.png') !important;
-  background-size: contain !important;
-  background-repeat: no-repeat !important;
   background-color: #f7fbff !important
 }
 

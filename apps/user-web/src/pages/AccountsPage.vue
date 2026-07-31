@@ -845,6 +845,7 @@ import StatCard from '../components/StatCard.vue'; import CardPanel from '../com
 import { checkAccountAuth, deleteAccount, getLiteAccounts, createAccountByCookie, getAccountDetail, refreshAccountProfile, updateAccountCookie, getAccountCookie, runItemPolish, getItemPolishProgress, getAccountAutoRateConfig, saveAccountAutoRateConfig, getAccountFaceVerifications, markAccountFaceVerificationRead, getAccountStrategyConfig as getAccountStrategyConfigRequest, saveAccountStrategyConfig as saveAccountStrategyConfigRequest, getAccountLoginCredential as getAccountLoginCredentialRequest, saveAccountLoginCredential as saveAccountLoginCredentialRequest } from '../api/accounts.js'
 import { startWebSocket, stopWebSocket, websocketStatus } from '../api/websocket.js'
 import { useDebouncedRef } from '../composables/useDebouncedRef.js'
+import { guardFeatureAction } from '../composables/featureGuard.js'
 const emit = defineEmits(['navigate'])
 import { generateQrLogin, getQrLoginStatus, cleanupQrLogin } from '../api/qrlogin.js'
 import { accountName } from '../utils/format.js'

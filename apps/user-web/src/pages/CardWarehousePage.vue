@@ -356,6 +356,7 @@ import AppButton from '../components/AppButton.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Icon from '../components/Icon.vue'
 import { confirmDelete, confirmAction } from '../utils/confirmAction.js'
+import { guardFeatureAction } from '../composables/featureGuard.js'
 import {
   getCards,
   createCard,

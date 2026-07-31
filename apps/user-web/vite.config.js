@@ -30,14 +30,18 @@ export default defineConfig({
   build: {
     minify: 'oxc',
     sourcemap: false,
-    // ES2018 target drops legacy polyfills and shrinks bundle size.
-    target: 'es2018',
+    // ES2020 target：现代浏览器支持 optional chaining / nullish coalescing / dynamic import，
+    // 无需降级转译，产物更紧凑。兼容性覆盖率 96%+（caniuse）。
+    target: 'es2020',
     // Split CSS per route so opening the products page does not load order CSS.
     cssCodeSplit: true,
-    // Inline assets below 8KB as base64 to cut HTTP request count (icons, small SVGs).
-    assetsInlineLimit: 8192,
+    // Inline assets below 4KB as base64 to cut HTTP request count (icons, small SVGs).
+    // 从 8KB 降到 4KB：避免首屏 JS 被大量 base64 内联资源撑大，延迟首屏执行。
+    assetsInlineLimit: 4096,
     // Larger warning threshold to avoid noise from echarts vendor chunk.
     chunkSizeWarningLimit: 1200,
+    // 启用 modulePreload：Vite 自动注入 <link rel="modulepreload"> 预加载入口 chunk 及依赖
+    modulePreload: { polyfill: true },
     // Keep Vite 8's native Oxc minifier and remove production diagnostics
     // that may otherwise retain account/event objects in the browser bundle.
     rolldownOptions: {
