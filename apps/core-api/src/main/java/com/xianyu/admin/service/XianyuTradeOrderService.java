@@ -61,6 +61,9 @@ public class XianyuTradeOrderService {
      * 默认：created_time DESC（保持原有默认行为）
      */
     private String buildOrderClause(String sortField, String sortOrder) {
+        if (sortField == null) {
+            return "created_time DESC";
+        }
         String column = SORT_FIELD_WHITELIST.get(sortField);
         if (column == null) {
             return "created_time DESC";
