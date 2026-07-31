@@ -10,7 +10,7 @@
 -- ============================================================
 
 -- ============ 男装 fashion_men (30条) ============
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -54,7 +54,7 @@ FROM (
 JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS NOT NULL;
 
 -- ============ 女装 fashion_women (30条) ============
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -98,7 +98,7 @@ FROM (
 JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS NOT NULL;
 
 -- ============ 鞋类 fashion_shoes (30条) ============
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -142,7 +142,7 @@ FROM (
 JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS NOT NULL;
 
 -- ============ 箱包 fashion_bags (30条) ============
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -186,7 +186,7 @@ FROM (
 JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS NOT NULL;
 
 -- ============ 配饰 fashion_accessories (30条) ============
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,

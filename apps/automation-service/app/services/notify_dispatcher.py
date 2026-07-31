@@ -74,6 +74,14 @@ EVENT_CAPTCHA_REQUIRED = "人机验证"
 EVENT_CAPTCHA_SUCCESS = "人机验证成功"
 EVENT_TOKEN_LOW_BALANCE = "Token 余额预警"
 EVENT_AUTO_REPLY_PAUSED = "自动回复暂停"
+EVENT_SUPPLY_AUDIT_APPROVED = "supply_audit_approved"      # 货源审核通过
+EVENT_SUPPLY_AUDIT_REJECTED = "supply_audit_rejected"      # 货源审核驳回
+
+# 货源审核事件显示名称映射（新事件使用英文标识符，需通过此映射获取中文显示名）
+EVENT_DISPLAY_NAMES: dict[str, str] = {
+    EVENT_SUPPLY_AUDIT_APPROVED: "货源审核通过",
+    EVENT_SUPPLY_AUDIT_REJECTED: "货源审核驳回",
+}
 
 # 用户级通知使用 account_id=0 作为占位符，与账号级通知区分
 USER_LEVEL_ACCOUNT_PLACEHOLDER = 0

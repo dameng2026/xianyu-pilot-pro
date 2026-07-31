@@ -5,6 +5,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -80,7 +82,10 @@ public class DataRetentionConfigService {
 
     /**
      * 读取完整配置（管理端用）。合并默认值，确保所有字段存在。
+     *
+     * 缓存：结果缓存到 dataRetention key='config'；saveConfig 后失效。
      */
+    @Cacheable(value = "dataRetention", key = "'config'")
     public Map<String, Object> getConfig() {
         String json = getConfigJson();
         if (json != null) {
@@ -99,7 +104,10 @@ public class DataRetentionConfigService {
     /**
      * 读取公开信息（前台展示用）。仅返回 retentionDays + chatMessageCleanupEnabled。
      * 不暴露全局 enabled、cleanupCron、其他类别开关详情。
+     *
+     * 缓存：结果缓存到 dataRetention key='public'；saveConfig 后失效。
      */
+    @Cacheable(value = "dataRetention", key = "'public'")
     public Map<String, Object> getRetentionInfoForPublic() {
         Map<String, Object> config = getConfig();
         Map<String, Object> info = new LinkedHashMap<>();
@@ -113,8 +121,11 @@ public class DataRetentionConfigService {
     /**
      * 保存配置。校验 retentionDays 范围 [1, 365]，超出抛 400。
      * categoryDays 中每个值也校验 [1, 365]，非法值剔除并使用默认值。
+     *
+     * 缓存：写入成功后清空整个 dataRetention cache（getConfig 与 getRetentionInfoForPublic 都依赖）。
      */
     @Transactional
+    @CacheEvict(value = "dataRetention", allEntries = true)
     public void saveConfig(Map<String, Object> config) {
         if (config == null || config.isEmpty()) {
             throw new BizException(400, "数据保留策略配置不能为空");

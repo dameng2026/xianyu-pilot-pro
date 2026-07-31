@@ -1196,7 +1196,16 @@ async def _fetch_live_context_messages(
         messages: list[dict[str, Any]] = []
 
         while len(messages) < max(int(limit or 50), 1) and page < 4:
-            body = await client.list_messages(resolved_sid, start_timestamp=cursor, limit=page_limit)
+            # 性能优化：单次 IM 调用加 2 秒超时，避免 IM 慢响应导致消息加载卡死 5s+。
+            # 参考 get_online_conversations_paged 第 2779 行的 2 秒超时保护。
+            try:
+                body = await asyncio.wait_for(
+                    client.list_messages(resolved_sid, start_timestamp=cursor, limit=page_limit),
+                    timeout=2.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("IM list_messages 超时 accountId=%d page=%d sid=%s", account_id, page, resolved_sid)
+                break
             models = body.get("userMessageModels", []) if isinstance(body, dict) else []
             if not models:
                 break
@@ -1244,14 +1253,19 @@ async def _finalize_context_messages(
     filter_base_messages_by_peer: bool = True,
 ) -> tuple[list[dict[str, Any]], int]:
     fetch_limit = max(int(limit or 0) + int(offset or 0), int(limit or 0), 50)
-    live_messages = await _fetch_live_context_messages(
-        db,
-        tenant_id,
-        account_id,
-        s_id=s_id,
-        limit=fetch_limit,
-        peer_user_id=peer_user_id,
-    )
+    # 性能优化：DB 消息已足够覆盖请求范围时跳过 IM 翻页，避免 4 页串行 IM 调用（4-8s）。
+    # _merge_context_messages_with_ai_replies 仍会合并 DB 中的 AI 回复消息，不影响完整性。
+    # 仅当 DB 数据不足以覆盖 limit+offset 时才走 IM 补充最新实时消息。
+    live_messages: list[dict[str, Any]] = []
+    if len(base_messages) < fetch_limit:
+        live_messages = await _fetch_live_context_messages(
+            db,
+            tenant_id,
+            account_id,
+            s_id=s_id,
+            limit=fetch_limit,
+            peer_user_id=peer_user_id,
+        )
     merged_source = _merge_context_source_messages(base_messages, live_messages)
     if not merged_source:
         return [], 0
@@ -2445,8 +2459,9 @@ async def get_online_conversations(
 # 简单的内存缓存：避免短时间重复调用 IM 导致限流（flow control）
 # key: (tenant_id, account_id, cursor, page_size), value: (timestamp, result)
 _online_conversations_cache: dict[tuple, tuple[float, dict[str, Any]]] = {}
-# IM 数据缓存 TTL：10 秒内复用 IM 拉取结果，避免轮询触发限流
-_ONLINE_CONVERSATIONS_CACHE_TTL = 10.0  # 秒
+# IM 数据缓存 TTL：30 秒内复用 IM 拉取结果，避免轮询触发限流。
+# 原 10 秒太短，前端轮询周期内几乎每次都穿透到 DB 走重 SQL。
+_ONLINE_CONVERSATIONS_CACHE_TTL = 30.0  # 秒
 # 后台 IM 刷新去抖动：同一 (tenant, account, cursor) 在此时间内不重复触发
 _im_refresh_inflight: dict[tuple, float] = {}
 _IM_REFRESH_DEBOUNCE = 5.0  # 秒

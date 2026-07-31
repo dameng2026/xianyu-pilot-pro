@@ -89,7 +89,7 @@ export function getPool(): pg.Pool {
 
     pool = new Pool({
       connectionString,
-      max: 10,
+      max: Math.max(10, Number(process.env.CRAWLER_DB_POOL_MAX) || 20),
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,
     });

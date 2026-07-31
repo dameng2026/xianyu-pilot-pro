@@ -24,7 +24,12 @@ services:
     #   - sort-buffer-size=4M：每个排序线程缓冲区（保持原值，过大反而浪费内存）
     #   - join-buffer-size=4M：每个 join 线程缓冲区（新增，默认 256K 偏小）
     #   - max-connections=500：连接数上限（原 300，配合 HikariCP 最大 50 + Python + crawler + 监控）
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-time-zone=+08:00 --sort-buffer-size=4194304 --tmp-table-size=134217728 --max-heap-table-size=134217728 --join-buffer-size=4194304 --binlog-expire-logs-seconds=172800 --max-binlog-size=256M --innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-8G} --innodb-log-file-size=${MYSQL_INNODB_LOG_FILE_SIZE:-1G} --max-connections=${MYSQL_MAX_CONNECTIONS:-500} --innodb-flush-method=O_DIRECT --innodb-buffer-pool-instances=8 --innodb-flush-log-at-trx-commit=2 --innodb-buffer-pool-dump-at-shutdown=ON --innodb-buffer-pool-load-at-startup=ON
+    #   - slow-query-log=ON：开启慢查询日志，定位性能瓶颈的前置条件
+    #   - long-query-time=1：超过 1 秒的查询记入慢查询日志（生产建议 0.5~1s）
+    #   - log-queries-not-using-indexes=ON：未走索引的查询也记入日志（即使 <1s）
+    #     用于发现漏建索引的 SQL，配合 V1.64 复合索引修复后应基本无命中
+    #   慢查询日志输出到容器 /var/lib/mysql/ 下，通过 docker logs 或挂载卷查看
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-time-zone=+08:00 --sort-buffer-size=4194304 --tmp-table-size=134217728 --max-heap-table-size=134217728 --join-buffer-size=4194304 --binlog-expire-logs-seconds=172800 --max-binlog-size=256M --innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-8G} --innodb-log-file-size=${MYSQL_INNODB_LOG_FILE_SIZE:-1G} --max-connections=${MYSQL_MAX_CONNECTIONS:-500} --innodb-flush-method=O_DIRECT --innodb-buffer-pool-instances=8 --innodb-flush-log-at-trx-commit=2 --innodb-buffer-pool-dump-at-shutdown=ON --innodb-buffer-pool-load-at-startup=ON --slow-query-log=ON --long-query-time=1 --log-queries-not-using-indexes=ON
     logging:
       driver: json-file
       options:

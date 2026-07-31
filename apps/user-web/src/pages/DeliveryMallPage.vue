@@ -450,6 +450,7 @@
               </div>
               <span v-if="detailIsText" class="detail-type-tag detail-type-text">文本商品</span>
               <span v-else-if="detailIsCard" class="detail-type-tag detail-type-card">卡密商品</span>
+              <span v-if="detailSourceLabel" class="detail-type-tag detail-type-source" :class="detailSourceClass">{{ detailSourceLabel }}</span>
             </div>
 
             <div class="detail-info-section">
@@ -530,7 +531,7 @@
                 </button>
               </template>
               <template v-else>
-                <!-- 已购买：展示开始上架 + 一键上架按钮 -->
+                <!-- 已购买：展示已购买提示 + 上架操作 + 更多管理入口 -->
                 <div class="detail-purchased-tip">
                   <svg viewBox="0 0 20 20" fill="none">
                     <circle cx="10" cy="10" r="8" fill="#16bf78" fill-opacity="0.15"/>
@@ -540,7 +541,7 @@
                 </div>
                 <div class="detail-list-btns">
                   <button type="button" class="detail-list-btn detail-list-btn-primary" @click="openListFlow(false)">
-                    开始上架
+                    上架该商品
                   </button>
                   <button type="button" class="detail-list-btn detail-list-btn-auto" @click="openListFlow(true)">
                     <svg viewBox="0 0 20 20" fill="none">
@@ -548,6 +549,44 @@
                       <path d="M10 3V5M10 15V17M3 10H5M15 10H17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                     </svg>
                     一键上架
+                  </button>
+                </div>
+                <!-- 更多管理入口 -->
+                <div class="detail-action-grid">
+                  <button type="button" class="detail-action-cell" @click="goToSourceLibrary">
+                    <span class="action-cell-icon action-cell-icon-blue">
+                      <svg viewBox="0 0 20 20" fill="none">
+                        <path d="M3 4H8L10 6H17V16H3V4Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                        <path d="M7 10H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                      </svg>
+                    </span>
+                    <span class="action-cell-label">查看货源库</span>
+                  </button>
+                  <button type="button" class="detail-action-cell" @click="openListFlow(false)">
+                    <span class="action-cell-icon action-cell-icon-green">
+                      <svg viewBox="0 0 20 20" fill="none">
+                        <path d="M10 3V17M3 10H17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                      </svg>
+                    </span>
+                    <span class="action-cell-label">上传该商品</span>
+                  </button>
+                  <button type="button" class="detail-action-cell" @click="openFeedbackForRefund">
+                    <span class="action-cell-icon action-cell-icon-orange">
+                      <svg viewBox="0 0 20 20" fill="none">
+                        <path d="M3 10C3 6.13401 6.13401 3 10 3C13.866 3 17 6.13401 17 10C17 13.866 13.866 17 10 17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                        <path d="M7 10H13M7 10L9 8M7 10L9 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                    </span>
+                    <span class="action-cell-label">申请退款</span>
+                  </button>
+                  <button type="button" class="detail-action-cell" @click="openFeedbackModal">
+                    <span class="action-cell-icon action-cell-icon-red">
+                      <svg viewBox="0 0 20 20" fill="none">
+                        <path d="M10 3C6.13401 3 3 6.13401 3 10C3 13.866 6.13401 17 10 17C13.866 17 17 13.866 17 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                        <path d="M10 6V10.5M10 13.5V14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                      </svg>
+                    </span>
+                    <span class="action-cell-label">投诉反馈</span>
                   </button>
                 </div>
               </template>
@@ -746,6 +785,8 @@ import { isPublishAddressComplete, normalizePublishAddress } from '../utils/publ
 import { friendlyError } from '../utils/friendlyError.js'
 import { getPublishAddressHistory } from '../api/publishAddress.js'
 
+const emit = defineEmits(['navigate'])
+
 const activeTab = ref('text')
 const activeCategory = ref('全部')
 const viewMode = ref('grid')
@@ -874,9 +915,10 @@ const pageNumbers = computed(() => {
   return arr
 })
 
-onMounted(async () => {
-  await loadCategories()
-  await loadProducts()
+onMounted(() => {
+  // 并行加载分类、商品列表、客服配置，减少首屏等待时间
+  loadCategories().catch(e => console.error('[mall] 加载分类失败', e))
+  loadProducts().catch(e => console.error('[mall] 加载商品失败', e))
   loadServiceConfig()
 })
 
@@ -933,6 +975,24 @@ const feedbackTypeOptions = [
 
 function openFeedbackModal() {
   feedbackForm.value = { type: 'product_invalid', title: '', content: '', contact: '' }
+  feedbackError.value = ''
+  feedbackModalVisible.value = true
+}
+
+// 跳转到货源库页面（已购买商品已自动绑定到货源库）
+function goToSourceLibrary() {
+  closeDetailModal()
+  emit('navigate', 'delivery-source-library')
+}
+
+// 申请退款：打开工单弹窗并预填退款类型
+function openFeedbackForRefund() {
+  feedbackForm.value = {
+    type: 'other',
+    title: detailProduct.value ? `申请退款：${detailProduct.value.title || ''}`.slice(0, 60) : '申请退款',
+    content: `商品：${detailProduct.value?.title || '-'}\n订单号：${currentOrder.value?.orderNo || '-'}\n请说明退款原因：`,
+    contact: ''
+  }
   feedbackError.value = ''
   feedbackModalVisible.value = true
 }
@@ -1127,8 +1187,8 @@ async function createMallOrder() {
       payStep.value = 'success'
       stopPayPolling()
       stopPayCountdown()
-      // 免费领取后刷新列表，避免重复领取
-      try { await loadProducts() } catch { /* ignore */ }
+      // 免费领取后异步刷新列表（不阻塞 UI，避免"支付成功"页面卡住）
+      Promise.resolve().then(() => loadProducts()).catch(() => { /* ignore */ })
     } else {
       payStep.value = 'qr'
       payCountdownSeconds.value = PAY_TIMEOUT_SECONDS
@@ -1260,19 +1320,35 @@ async function closePayModal() {
     try { await closePaymentOrder(orderNo) } catch (e) { /* 忽略关闭失败 */ }
   }
   const wasSuccess = detectedPaid || payStep.value === 'success'
+  // 立即关闭弹窗并重置支付步骤，避免下次打开时残留"支付成功"状态
   payModalVisible.value = false
+  const pendingDetailId = (wasSuccess && detailProduct.value?.id && !detailModalVisible.value)
+    ? detailProduct.value.id
+    : null
+  const pendingDetailSource = (wasSuccess && detailProduct.value?.source)
+    ? detailProduct.value.source
+    : 'mall'
+  // 重置支付状态，避免下次打开弹窗时还显示"支付成功"
+  payStep.value = 'select'
+  currentPayProduct.value = null
+  currentOrder.value = null
+  payError.value = ''
   if (wasSuccess) {
-    loadProducts()
-    // 支付成功后，若详情弹窗曾关闭以触发支付，重新打开详情弹窗（让用户看到"开始上架"按钮）
-    refreshDetailAfterPayment()
-    if (detailProduct.value?.id && !detailModalVisible.value) {
-      // 重新打开详情弹窗，展示已购买状态
-      const pid = detailProduct.value.id
-      const refreshed = await getMallProductDetail(pid).catch(() => null)
-      if (refreshed) {
-        detailProduct.value = { ...detailProduct.value, ...refreshed }
-      }
+    // 异步刷新列表与详情，不阻塞弹窗关闭
+    Promise.resolve().then(() => loadProducts()).catch(() => { /* ignore */ })
+    if (pendingDetailId) {
+      // 支付成功后重新打开详情弹窗展示已购买状态（先打开弹窗显示 loading，再后台拉取详情）
       detailModalVisible.value = true
+      detailLoading.value = true
+      getMallProductDetail(pendingDetailSource, pendingDetailId).then(data => {
+        if (data && typeof data === 'object') {
+          detailProduct.value = { ...detailProduct.value, ...data }
+        }
+      }).catch(() => { /* 忽略详情拉取失败 */ }).finally(() => {
+        detailLoading.value = false
+      })
+    } else {
+      refreshDetailAfterPayment()
     }
   }
 }
@@ -1294,6 +1370,20 @@ const detailError = ref('')
 const detailIsText = computed(() => detailProduct.value?.productType === 'text' || detailProduct.value?.type === 'text')
 const detailIsCard = computed(() => detailProduct.value?.productType === 'card' || detailProduct.value?.type === 'card')
 const detailPurchased = computed(() => !!detailProduct.value?.purchased)
+
+// 商品来源标签（平台自营 / 供货商），后端 UNION 查询返回 source 字段
+const detailSourceLabel = computed(() => {
+  const src = detailProduct.value?.source
+  if (src === 'supply') return '供货商'
+  if (src === 'mall') return '平台自营'
+  return ''
+})
+const detailSourceClass = computed(() => {
+  const src = detailProduct.value?.source
+  if (src === 'supply') return 'detail-source-supply'
+  if (src === 'mall') return 'detail-source-mall'
+  return ''
+})
 
 const detailCreateTimeDisplay = computed(() => {
   const raw = detailProduct.value?.createdTime || detailProduct.value?.createTime
@@ -1359,7 +1449,8 @@ async function openDetailModal(product) {
   detailError.value = ''
   detailProduct.value = { ...product }
   try {
-    const data = await getMallProductDetail(product.id)
+    // 后端 UNION 查询返回 source 字段（mall / supply），详情接口按 source 路由
+    const data = await getMallProductDetail(product.source || 'mall', product.id)
     if (data && typeof data === 'object') {
       detailProduct.value = { ...product, ...data }
     }
@@ -1389,8 +1480,9 @@ function handleDetailPay() {
 function refreshDetailAfterPayment() {
   if (detailModalVisible.value && detailProduct.value?.id) {
     const id = detailProduct.value.id
+    const src = detailProduct.value.source || 'mall'
     detailLoading.value = true
-    getMallProductDetail(id).then(data => {
+    getMallProductDetail(src, id).then(data => {
       if (data && typeof data === 'object') {
         detailProduct.value = { ...detailProduct.value, ...data }
       }
@@ -3351,6 +3443,20 @@ onBeforeUnmount(() => {
   background: linear-gradient(135deg, rgba(245, 158, 11, .92), rgba(217, 119, 6, .92));
 }
 
+/* 商品来源标签：右上角展示（避免与左上角的文本/卡密类型标签重叠） */
+.detail-type-source {
+  left: auto;
+  right: 10px;
+}
+.detail-source-mall {
+  background: linear-gradient(135deg, rgba(22, 191, 120, .92), rgba(29, 214, 138, .92));
+  color: #fff;
+}
+.detail-source-supply {
+  background: linear-gradient(135deg, rgba(139, 92, 246, .92), rgba(168, 126, 255, .92));
+  color: #fff;
+}
+
 .detail-info-section {
   margin-bottom: 14px;
 }
@@ -3645,6 +3751,86 @@ onBeforeUnmount(() => {
 .detail-list-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* 已购买状态下的更多操作入口网格 */
+.detail-action-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.detail-action-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 4px;
+  background: #f7f9fc;
+  border: 1px solid #eef2f8;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all .18s ease;
+  min-width: 0;
+}
+
+.detail-action-cell:hover {
+  background: #fff;
+  border-color: #4F7CFF;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(31, 53, 94, .06);
+}
+
+.action-cell-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.action-cell-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.action-cell-icon-blue {
+  background: rgba(79, 124, 255, .12);
+  color: #4F7CFF;
+}
+
+.action-cell-icon-green {
+  background: rgba(22, 191, 120, .12);
+  color: #16bf78;
+}
+
+.action-cell-icon-orange {
+  background: rgba(255, 159, 67, .14);
+  color: #ff9f43;
+}
+
+.action-cell-icon-red {
+  background: rgba(255, 91, 97, .12);
+  color: #ff5b61;
+}
+
+.action-cell-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4a5568;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+@media (max-width: 540px) {
+  .detail-action-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 /* ===== 上架流程弹窗 ===== */

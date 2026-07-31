@@ -36,7 +36,7 @@
 -- ============================================================================
 -- 1. home_furniture（家具）- 30 条
 -- ============================================================================
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -83,7 +83,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ============================================================================
 -- 2. home_textile（家纺）- 30 条
 -- ============================================================================
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -130,7 +130,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ============================================================================
 -- 3. home_kitchen（厨房用品）- 30 条
 -- ============================================================================
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -177,7 +177,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ============================================================================
 -- 4. home_decor（装饰摆件）- 30 条
 -- ============================================================================
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -224,7 +224,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ============================================================================
 -- 5. home_storage（收纳整理）- 30 条
 -- ============================================================================
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,

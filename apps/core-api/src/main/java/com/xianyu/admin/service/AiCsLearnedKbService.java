@@ -127,9 +127,9 @@ public class AiCsLearnedKbService {
             "UPDATE ai_cs_learned_kb SET deleted=1, vector_indexed=0, updated_time=NOW() WHERE id=?",
             id
         );
-        // 级联软删所有用户的绑定关系
+        // 级联删除所有用户的绑定关系（物理删除，避免 uk_user_kb_binding 唯一键冲突）
         jdbc.update(
-            "UPDATE ai_cs_user_kb_binding SET deleted=1 WHERE kb_type='learned' AND kb_id=?",
+            "DELETE FROM ai_cs_user_kb_binding WHERE kb_type='learned' AND kb_id=?",
             id
         );
         log.info("softDelete learned_kb id={}, cascade unbound user bindings", id);
@@ -438,7 +438,7 @@ public class AiCsLearnedKbService {
      */
     @Transactional
     public int unbindParentCategory(Long tenantId, Long userId, String parentCode) {
-        // 查该一级下所有 KB id，然后批量软删绑定
+        // 查该一级下所有 KB id，然后批量删除绑定（物理删除，避免 uk_user_kb_binding 唯一键冲突）
         List<Long> kbIds = jdbc.queryForList(
             "SELECT k.id FROM ai_cs_learned_kb k " +
             "JOIN ai_cs_kb_category c ON k.category_id=c.id " +
@@ -451,7 +451,7 @@ public class AiCsLearnedKbService {
         String inClause = kbIds.stream().map(String::valueOf)
             .collect(java.util.stream.Collectors.joining(","));
         return jdbc.update(
-            "UPDATE ai_cs_user_kb_binding SET deleted=1 " +
+            "DELETE FROM ai_cs_user_kb_binding " +
             "WHERE tenant_id=? AND user_id=? AND kb_type='learned' " +
             "AND kb_id IN (" + inClause + ")"
         );
@@ -500,7 +500,7 @@ public class AiCsLearnedKbService {
      */
     @Transactional
     public int unbindCategory(Long tenantId, Long userId, String categoryCode) {
-        // 查该分类下所有 KB id，然后批量软删绑定
+        // 查该分类下所有 KB id，然后批量删除绑定（物理删除，避免 uk_user_kb_binding 唯一键冲突）
         List<Long> kbIds = jdbc.queryForList(
             "SELECT k.id FROM ai_cs_learned_kb k " +
             "JOIN ai_cs_kb_category c ON k.category_id=c.id " +
@@ -513,7 +513,7 @@ public class AiCsLearnedKbService {
         String inClause = kbIds.stream().map(String::valueOf)
             .collect(java.util.stream.Collectors.joining(","));
         return jdbc.update(
-            "UPDATE ai_cs_user_kb_binding SET deleted=1 " +
+            "DELETE FROM ai_cs_user_kb_binding " +
             "WHERE tenant_id=? AND user_id=? AND kb_type='learned' " +
             "AND kb_id IN (" + inClause + ")"
         );
@@ -585,6 +585,55 @@ public class AiCsLearnedKbService {
         );
     }
 
+    /**
+     * 批量创建用户私有 KB（用于"新建知识库"弹窗的文件上传/会话提取模式）。
+     * 跳过 title 或 content 为空的条目，最多 50 条。
+     */
+    @Transactional
+    public Map<String, Object> batchCreateUserKb(Long tenantId, Long userId,
+                                                  List<Map<String, Object>> entries,
+                                                  String defaultCategory, String defaultTags) {
+        if (entries == null || entries.isEmpty()) {
+            return Map.of("createdIds", List.of(), "count", 0, "skipped", 0);
+        }
+        int maxBatch = 50;
+        int skipped = 0;
+        List<Long> createdIds = new ArrayList<>();
+        for (Map<String, Object> entry : entries) {
+            if (createdIds.size() >= maxBatch) break;
+            String title = normalizeStr(entry.get("title"));
+            String content = normalizeStr(entry.get("content"));
+            if (title.isEmpty() || content.isEmpty()) {
+                skipped++;
+                continue;
+            }
+            // 条目自带 category/tags，若无则用默认值
+            String category = normalizeStr(entry.get("category"));
+            if (category.isEmpty()) category = normalizeStr(defaultCategory);
+            String tags = normalizeStr(entry.get("tags"));
+            if (tags.isEmpty()) tags = normalizeStr(defaultTags);
+
+            jdbc.update(
+                "INSERT INTO ai_cs_user_kb (tenant_id, user_id, title, content, category, tags, " +
+                "vector_indexed, enabled, deleted, created_time, updated_time) " +
+                "VALUES (?, ?, ?, ?, ?, ?, 0, 1, 0, NOW(), NOW())",
+                tenantId, userId, title, content, category, tags
+            );
+            Long newId = jdbc.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
+            if (newId != null) createdIds.add(newId);
+        }
+        return Map.of(
+            "createdIds", createdIds,
+            "count", createdIds.size(),
+            "skipped", skipped
+        );
+    }
+
+    private static String normalizeStr(Object value) {
+        if (value == null) return "";
+        return String.valueOf(value).trim();
+    }
+
     public void updateUserKb(Long tenantId, Long userId, Long id, String title,
                               String content, String category, String tags) {
         jdbc.update(
@@ -602,9 +651,9 @@ public class AiCsLearnedKbService {
             "WHERE id=? AND tenant_id=? AND user_id=?",
             id, tenantId, userId
         );
-        // 级联软删绑定
+        // 级联删除绑定（物理删除，避免 uk_user_kb_binding 唯一键冲突）
         jdbc.update(
-            "UPDATE ai_cs_user_kb_binding SET deleted=1 " +
+            "DELETE FROM ai_cs_user_kb_binding " +
             "WHERE kb_type='user' AND kb_id=? AND tenant_id=? AND user_id=?",
             id, tenantId, userId
         );
@@ -649,7 +698,7 @@ public class AiCsLearnedKbService {
 
     public void unbindKb(Long tenantId, Long userId, String kbType, Long kbId) {
         jdbc.update(
-            "UPDATE ai_cs_user_kb_binding SET deleted=1 " +
+            "DELETE FROM ai_cs_user_kb_binding " +
             "WHERE tenant_id=? AND user_id=? AND kb_type=? AND kb_id=?",
             tenantId, userId, kbType, kbId
         );

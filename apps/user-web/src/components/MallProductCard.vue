@@ -26,12 +26,21 @@
         </span>
       </div>
       <div class="mall-footer">
-        <span v-if="isFree" class="mall-price mall-price-free">免费</span>
-        <span v-else class="mall-price"><em>¥</em>{{ priceNum }}</span>
-        <div class="mall-actions">
-          <button class="mall-btn-outline" type="button" @click="$emit('detail')">上架该商品</button>
-          <button class="mall-btn-buy" type="button" @click="$emit('buy')">{{ isFree ? '立即领取' : '立即购买' }}</button>
-        </div>
+        <template v-if="purchased">
+          <span class="mall-price mall-price-owned">已领取</span>
+          <div class="mall-actions">
+            <button class="mall-btn-outline" type="button" @click="$emit('detail')">查看详情</button>
+            <button class="mall-btn-owned" type="button" @click="$emit('detail')">管理商品</button>
+          </div>
+        </template>
+        <template v-else>
+          <span v-if="isFree" class="mall-price mall-price-free">免费</span>
+          <span v-else class="mall-price"><em>¥</em>{{ priceNum }}</span>
+          <div class="mall-actions">
+            <button class="mall-btn-outline" type="button" @click="$emit('detail')">上架该商品</button>
+            <button class="mall-btn-buy" type="button" @click="$emit('buy')">{{ isFree ? '立即领取' : '立即购买' }}</button>
+          </div>
+        </template>
       </div>
     </div>
   </article>
@@ -98,6 +107,9 @@ const isFree = computed(() => {
   }
   return false
 })
+
+// 当前用户是否已拥有该商品（已购买/已领取）
+const purchased = computed(() => !!props.product?.purchased)
 
 const boughtDisplay = computed(() => {
   const raw = props.product?.boughtCount
@@ -365,6 +377,39 @@ const tagClass = computed(() => {
   color: #00b578;
   font-size: 18px;
   letter-spacing: 1px;
+}
+
+.mall-price-owned {
+  color: #16bf78;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.mall-price-owned::before {
+  content: "";
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: #16bf78;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>");
+  background-size: 10px 10px;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.mall-btn-owned {
+  background: linear-gradient(90deg, #16bf78, #1dd68a);
+  color: #fff;
+  box-shadow: 0 4px 10px rgba(22, 191, 120, .2);
+}
+
+.mall-btn-owned:hover {
+  box-shadow: 0 6px 14px rgba(22, 191, 120, .3);
 }
 
 .mall-actions {

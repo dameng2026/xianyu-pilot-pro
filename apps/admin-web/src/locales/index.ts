@@ -59,9 +59,11 @@ export const languageOptions = [
  */
 const getDefaultLanguage = (): LanguageEnum => {
   // 尝试从版本化的存储中获取语言设置
+  // 修复：useUserStore 使用 sessionStorage 持久化，此处必须从 sessionStorage 读取
+  // 否则页面刷新时 localStorage 读不到语言设置，回退到默认 LanguageEnum.ZH
   try {
     const storageKey = storageKeyManager.getStorageKey('user')
-    const userStore = localStorage.getItem(storageKey)
+    const userStore = sessionStorage.getItem(storageKey)
 
     if (userStore) {
       const { language } = JSON.parse(userStore)

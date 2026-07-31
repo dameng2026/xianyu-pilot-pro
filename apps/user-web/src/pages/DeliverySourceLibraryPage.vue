@@ -143,7 +143,9 @@
                 @click="insertMallSourceContent"
               >+ 插入货源</button>
             </label>
-            <div class="field-input-wrap">
+
+            <!-- 卡密发货 / 商城货源：保持单 textarea（向后兼容） -->
+            <div v-if="form.deliveryMode === 'card' || form.fromMall" class="field-input-wrap">
               <textarea
                 ref="contentTextareaRef"
                 v-model="form.content"
@@ -153,6 +155,93 @@
                 maxlength="5000"
               ></textarea>
               <span class="char-count">{{ (form.content || '').length }}/5000</span>
+            </div>
+
+            <!-- 文本发货：多条正文 + 图片发货（每条文本/图片二选一互斥） -->
+            <div v-else class="segments-editor">
+              <div
+                v-for="(seg, idx) in form.segments"
+                :key="seg._uid"
+                class="segment-card"
+              >
+                <div class="segment-header">
+                  <span class="segment-index">第 {{ idx + 1 }} 条</span>
+                  <div class="segment-type-switch">
+                    <button
+                      type="button"
+                      class="segment-type-btn"
+                      :class="{ active: seg.type === 'text' }"
+                      @click="setSegmentType(idx, 'text')"
+                    >文本</button>
+                    <button
+                      type="button"
+                      class="segment-type-btn"
+                      :class="{ active: seg.type === 'image' }"
+                      @click="setSegmentType(idx, 'image')"
+                    >图片</button>
+                  </div>
+                  <button
+                    v-if="form.segments.length > 1"
+                    type="button"
+                    class="segment-remove-btn"
+                    @click="removeSegment(idx)"
+                  >删除</button>
+                </div>
+
+                <div class="segment-body">
+                  <!-- 文本类型 -->
+                  <div v-if="seg.type === 'text'" class="segment-text-area">
+                    <textarea
+                      v-model="seg.content"
+                      rows="3"
+                      class="field-textarea"
+                      placeholder="输入文本内容（如发货说明、引导好评话术等），发货时按顺序逐条发送"
+                      maxlength="5000"
+                    ></textarea>
+                    <span class="char-count">{{ (seg.content || '').length }}/5000</span>
+                  </div>
+
+                  <!-- 图片类型 -->
+                  <div v-else class="segment-image-area">
+                    <div v-if="seg.imageUrl" class="segment-image-preview-wrap">
+                      <img :src="seg.imageUrl" class="segment-image-preview" alt="发货图片预览" />
+                      <div class="segment-image-actions">
+                        <button type="button" class="link" @click="triggerSegmentImagePick(idx)">更换图片</button>
+                        <button type="button" class="link danger-text" @click="clearSegmentImage(idx)">移除</button>
+                      </div>
+                    </div>
+                    <div v-else class="segment-image-upload">
+                      <button
+                        type="button"
+                        class="segment-image-upload-btn"
+                        :disabled="seg._uploading"
+                        @click="triggerSegmentImagePick(idx)"
+                      >
+                        <span v-if="seg._uploading">上传中…</span>
+                        <span v-else>+ 上传图片</span>
+                      </button>
+                      <div class="segment-image-tip">支持 JPEG / PNG / GIF / WebP，单张不超过 5MB</div>
+                    </div>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/gif,image/webp"
+                      hidden
+                      :ref="el => registerSegmentFileInput(idx, el)"
+                      @change="onSegmentImagePick(idx, $event)"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <button
+                v-if="form.segments.length < 20"
+                type="button"
+                class="add-segment-btn"
+                @click="addSegment"
+              >+ 增加一条对话</button>
+              <div class="segments-tip">
+                每条正文为"纯文本"或"单张图片"二选一；如需同时发送文本和图片，请分两条配置。多条消息发货时按顺序逐条单独发送，不会合并。
+              </div>
             </div>
           </div>
 
@@ -413,8 +502,10 @@ import {
   updateDeliverySource
 } from '../api/autoDelivery.js'
 import { getCards } from '../api/cards.js'
+import { uploadImage } from '../api/misc.js'
 import { recordsOfOrThrow } from '../utils/apiData.js'
 import { confirmAction } from '../utils/confirmAction.js'
+import { imageUploadValidationMessage } from '../utils/imageUploadPolicy.js'
 import { accountName } from '../utils/format.js'
 
 const error = ref('')
@@ -458,8 +549,106 @@ const form = reactive({
   fromMall: false,
   mallProductTitle: '',
   mallProductContent: '',
-  mallProductOnline: false
+  mallProductOnline: false,
+  // V1.66: 文本发货支持多条正文 + 图片发货（仅 deliveryMode === 'text' && !fromMall 时启用）
+  // 每个 segment: { type: 'text'|'image', content: '', imageUrl: '', _uid: string, _uploading: false }
+  segments: []
 })
+
+// segments 编辑器：唯一 id 用于 v-for key 稳定
+let _segmentUidSeed = 0
+function _nextSegmentUid() {
+  _segmentUidSeed += 1
+  return `seg_${Date.now()}_${_segmentUidSeed}`
+}
+
+function makeSegment(type = 'text') {
+  return {
+    _uid: _nextSegmentUid(),
+    type,
+    content: '',
+    imageUrl: '',
+    _uploading: false
+  }
+}
+
+// segment file input refs（按 idx 收集，避免 v-for 内 ref 冲突）
+const segmentFileInputs = ref({})
+function registerSegmentFileInput(idx, el) {
+  if (el) segmentFileInputs.value[idx] = el
+  else delete segmentFileInputs.value[idx]
+}
+
+function ensureSegmentsInitialized() {
+  if (!Array.isArray(form.segments) || form.segments.length === 0) {
+    // 从单条 content 回填为第一条 segment（向后兼容）
+    const first = makeSegment('text')
+    first.content = form.content || ''
+    form.segments = [first]
+  }
+}
+
+function addSegment() {
+  if (form.segments.length >= 20) return
+  form.segments.push(makeSegment('text'))
+}
+
+function removeSegment(idx) {
+  if (form.segments.length <= 1) return
+  form.segments.splice(idx, 1)
+}
+
+function setSegmentType(idx, type) {
+  const seg = form.segments[idx]
+  if (!seg || seg.type === type) return
+  seg.type = type
+  // 切换类型时清空另一字段，强制二选一互斥
+  if (type === 'text') {
+    seg.imageUrl = ''
+  } else {
+    seg.content = ''
+  }
+}
+
+function triggerSegmentImagePick(idx) {
+  const input = segmentFileInputs.value[idx]
+  if (input) input.click()
+}
+
+function clearSegmentImage(idx) {
+  const seg = form.segments[idx]
+  if (!seg) return
+  seg.imageUrl = ''
+}
+
+async function onSegmentImagePick(idx, event) {
+  const seg = form.segments[idx]
+  const input = event?.target
+  const file = input?.files?.[0]
+  if (!seg || !file) return
+  // 重置 input.value 允许重复选择同一文件
+  if (input) input.value = ''
+  const validationMessage = imageUploadValidationMessage(file)
+  if (validationMessage) {
+    error.value = validationMessage
+    return
+  }
+  error.value = ''
+  success.value = ''
+  seg._uploading = true
+  try {
+    // 货源库为租户级资源，accountId=0 表示图片存到租户共享空间（Python 端跳过账号归属校验）
+    const res = await uploadImage(0, file)
+    const data = res?.data
+    const imageUrl = data?.imageUrl || data?.url || data?.data?.url || data?.data?.imageUrl || res?.imageUrl || res?.url || ''
+    if (!imageUrl) throw new Error('图片上传成功但未返回可发送地址')
+    seg.imageUrl = imageUrl
+  } catch (e) {
+    error.value = e?.message || '图片上传失败，请稍后重试'
+  } finally {
+    seg._uploading = false
+  }
+}
 
 const columns = [
   { key: 'title', title: '货源信息' },
@@ -588,6 +777,8 @@ function openCreate() {
     mallProductContent: '',
     mallProductOnline: false
   })
+  // 初始化一条空 segment（文本模式默认显示 segments 编辑器）
+  form.segments = [makeSegment('text')]
   ensureCardGroupsLoaded()
 }
 
@@ -605,6 +796,21 @@ function editSource(row) {
     mallProductContent: row.mallProductContent || '',
     mallProductOnline: row.mallProductOnline ?? false
   })
+  // 加载已有 segments：若货源已配置 segments 则回填，否则用 content 作为第一条文本
+  const rawSegments = Array.isArray(row.segments) ? row.segments : []
+  if (rawSegments.length > 0) {
+    form.segments = rawSegments.map(seg => ({
+      _uid: _nextSegmentUid(),
+      type: seg.type === 'image' ? 'image' : 'text',
+      content: seg.content || '',
+      imageUrl: seg.imageUrl || '',
+      _uploading: false
+    }))
+  } else {
+    const first = makeSegment('text')
+    first.content = row.content || ''
+    form.segments = [first]
+  }
   ensureCardGroupsLoaded()
 }
 
@@ -769,7 +975,13 @@ async function saveSource() {
   if (!sourcesAvailable.value) return
   error.value = ''
   success.value = ''
-  // 卡密发货模式校验
+  if (!form.title || !form.title.trim()) {
+    error.value = '请填写标题'
+    return
+  }
+  const isTextMode = form.deliveryMode === 'text' && !form.fromMall
+
+  // 卡密发货模式校验（卡密保持单 textarea + 占位符）
   if (form.deliveryMode === 'card') {
     if (!form.cardGroupId) {
       error.value = '卡密发货模式下必须选择一个卡密分组'
@@ -780,6 +992,56 @@ async function saveSource() {
       return
     }
   }
+
+  // 文本发货模式：segments 校验 + 互斥校验 + 构造清洗后的 segments
+  let cleanedSegments = null
+  if (isTextMode) {
+    if (!Array.isArray(form.segments) || form.segments.length === 0) {
+      error.value = '请至少配置一条正文'
+      return
+    }
+    if (form.segments.length > 20) {
+      error.value = '正文条数过多，最多支持 20 条'
+      return
+    }
+    const cleaned = []
+    for (let i = 0; i < form.segments.length; i++) {
+      const seg = form.segments[i]
+      const type = seg.type === 'image' ? 'image' : 'text'
+      const content = (seg.content || '').trim()
+      const imageUrl = (seg.imageUrl || '').trim()
+      if (type === 'image') {
+        if (!imageUrl) {
+          error.value = `第 ${i + 1} 条正文为图片类型，必须上传图片`
+          return
+        }
+        if (content) {
+          error.value = `第 ${i + 1} 条正文为图片类型，不能同时填写文本（每条只能文本或图片二选一）`
+          return
+        }
+        cleaned.push({ type: 'image', imageUrl })
+      } else {
+        if (!content) {
+          error.value = `第 ${i + 1} 条正文内容不能为空`
+          return
+        }
+        if (imageUrl) {
+          error.value = `第 ${i + 1} 条正文为文本类型，不能同时上传图片（每条只能文本或图片二选一）`
+          return
+        }
+        if (content.length > 5000) {
+          error.value = `第 ${i + 1} 条正文内容超过 5000 字符`
+          return
+        }
+        cleaned.push({ type: 'text', content })
+      }
+    }
+    cleanedSegments = cleaned
+    // 用第一条文本 segment 同步 form.content（保持 content 字段向后兼容，便于列表预览/搜索）
+    const firstText = cleaned.find(s => s.type === 'text')
+    form.content = firstText ? firstText.content : (cleaned[0]?.imageUrl ? '[图片]' : '')
+  }
+
   try {
     const editingId = editing.value?.id
     const payload = {
@@ -788,6 +1050,12 @@ async function saveSource() {
       remark: form.remark,
       deliveryMode: form.deliveryMode,
       cardGroupId: form.deliveryMode === 'card' ? form.cardGroupId : null
+    }
+    // 文本发货模式透传 segments（卡密/商城货源不发 segments，后端会强制置 null）
+    if (isTextMode && cleanedSegments) {
+      payload.segments = cleanedSegments
+    } else {
+      payload.segments = null
     }
     if (editingId) {
       await updateDeliverySource(editingId, payload)
@@ -1241,6 +1509,196 @@ select.field-input {
 .placeholder-btn:hover {
   background: #3b82f6;
   color: #fff;
+}
+
+/* V1.66: segments 编辑器（多条正文 + 图片发货） */
+.segments-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.segment-card {
+  border: 1px solid #e2e6ed;
+  border-radius: 12px;
+  background: #fafbfc;
+  padding: 14px 16px 12px;
+  transition: border-color .2s, box-shadow .2s;
+}
+.segment-card:hover {
+  border-color: #c5cee0;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .04);
+}
+
+.segment-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.segment-index {
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+  flex-shrink: 0;
+}
+
+.segment-type-switch {
+  display: inline-flex;
+  border: 1px solid #d8deeb;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.segment-type-btn {
+  padding: 4px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #64748b;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background .2s, color .2s;
+}
+.segment-type-btn.active {
+  background: #0d6bff;
+  color: #fff;
+}
+.segment-type-btn:not(.active):hover {
+  background: #f1f5f9;
+  color: #1a2236;
+}
+
+.segment-remove-btn {
+  margin-left: auto;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: #dc2626;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background .2s;
+}
+.segment-remove-btn:hover {
+  background: rgba(220, 38, 38, .08);
+  border-color: rgba(220, 38, 38, .2);
+}
+
+.segment-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.segment-text-area {
+  position: relative;
+}
+
+.segment-text-area .field-textarea {
+  background: #fff;
+}
+
+.segment-image-area {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.segment-image-preview-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 10px;
+  border: 1px solid #e2e6ed;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.segment-image-preview {
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid #edf0f5;
+  flex-shrink: 0;
+}
+
+.segment-image-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  padding-top: 6px;
+}
+
+.segment-image-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 20px;
+  border: 1.5px dashed #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+  align-items: center;
+  justify-content: center;
+}
+
+.segment-image-upload-btn {
+  padding: 6px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #0d6bff;
+  background: rgba(13, 107, 255, .06);
+  border: 1px solid #0d6bff;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background .2s, color .2s;
+}
+.segment-image-upload-btn:hover:not(:disabled) {
+  background: #0d6bff;
+  color: #fff;
+}
+.segment-image-upload-btn:disabled {
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+.segment-image-tip {
+  font-size: 12px;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.add-segment-btn {
+  align-self: flex-start;
+  padding: 7px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #0d6bff;
+  background: rgba(13, 107, 255, .04);
+  border: 1px dashed #0d6bff;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background .2s, color .2s, border-color .2s;
+}
+.add-segment-btn:hover {
+  background: #0d6bff;
+  color: #fff;
+  border-style: solid;
+}
+
+.segments-tip {
+  margin-top: 4px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #64748b;
+  background: rgba(13, 107, 255, .04);
+  border-radius: 8px;
+  line-height: 1.5;
 }
 
 .setting-card {

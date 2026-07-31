@@ -836,8 +836,8 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
             cookieStr,
             targetUrl: safeTargetUrl,
             headless: resolvedHeadless,
-            maxRetries: Math.max(1, Math.min(Number(maxRetries) || 5, 8)),
-            timeoutMs: Math.max(5000, Math.min(Number(timeoutMs) || 90000, 180000)),
+            maxRetries: Math.max(1, Math.min(Number(maxRetries) || 5, 5)),
+            timeoutMs: Math.max(5000, Math.min(Number(timeoutMs) || 30000, 180000)),
             proxy: safeProxy,
             // profile 策略：persistent（默认持久化，累积历史降低风控）/ seed / temp
             profileStrategy: (profileStrategy === 'seed' || profileStrategy === 'temp') ? profileStrategy : 'persistent',

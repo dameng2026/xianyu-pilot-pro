@@ -4,7 +4,7 @@ import { invalidateRequestCache, withRequestCache } from '../utils/requestCache.
 
 const QUICK_REPLY_CACHE_NAMESPACE = 'api:quick-reply/templates'
 
-// 蹇嵎鍥炲妯℃澘 CRUD
+// 快捷回复模板 CRUD
 export function listQuickReplyTemplates(params = {}, options = {}) {
   const force = options.force === true
   return withRequestCache({
@@ -33,7 +33,7 @@ export function deleteQuickReplyTemplate(id) {
   })
 }
 
-// AI 瀹㈡湇璁剧疆锛岃鍙?user_business_setting 涓殑 ai-customer-service
+// AI 客服设置，读取 user_business_setting 中的 ai-customer-service
 export function getAiCsSetting(options = {}) {
   return getBusinessSettings('ai-customer-service', options)
 }
@@ -42,7 +42,7 @@ export function saveAiCsSetting(data) {
   return saveBusinessSettings('ai-customer-service', data)
 }
 
-// Token 浣欓鏌ヨ
+// Token 余额查询
 export function getTokenBalance() {
   return request({ url: '/ai-billing/balance', method: 'get' })
 }

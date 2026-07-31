@@ -35,7 +35,7 @@
 -- ============================================================
 -- 1. 字画书法 (art_calligraphy) - 30条
 -- ============================================================
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -142,7 +142,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ============================================================
 -- 2. 邮票钱币 (art_stamp_coin) - 30条
 -- ============================================================
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -249,7 +249,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ============================================================
 -- 3. 古董收藏 (art_antique) - 30条
 -- ============================================================
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -356,7 +356,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ============================================================
 -- 4. 潮玩手办 (art_trendy) - 30条
 -- ============================================================
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -463,7 +463,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ============================================================
 -- 5. 纪念品 (art_memorabilia) - 30条
 -- ============================================================
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,

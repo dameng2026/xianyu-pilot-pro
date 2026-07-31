@@ -12,7 +12,7 @@
 -- ============================================================
 
 -- ============ 1. 宠物食品 pet_food (30 条) ============
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -56,7 +56,7 @@ FROM (
 JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS NOT NULL;
 
 -- ============ 2. 宠物玩具 pet_toys (30 条) ============
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -100,7 +100,7 @@ FROM (
 JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS NOT NULL;
 
 -- ============ 3. 宠物服饰 pet_clothes (30 条) ============
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -144,7 +144,7 @@ FROM (
 JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS NOT NULL;
 
 -- ============ 4. 宠物用具 pet_supplies_misc (30 条) ============
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -188,7 +188,7 @@ FROM (
 JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS NOT NULL;
 
 -- ============ 5. 水族用品 pet_aquarium (30 条) ============
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,

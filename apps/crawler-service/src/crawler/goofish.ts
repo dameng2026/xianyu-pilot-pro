@@ -555,6 +555,11 @@ function readExpectedItemCount(headResp: unknown): number | undefined {
   return undefined;
 }
 
+/**
+ * @deprecated 已弃用：该函数通过 fetch 直调 MTOP API 违反硬约束
+ * "店铺商品爬取必须通过浏览器进行，不可使用 API 接口"
+ * 保留函数定义仅为参考，任何调用点都应改为从浏览器拦截的 MTOP 响应中推断
+ */
 async function fetchExpectedStoreItemCount(userId: string, cookieHeader?: string): Promise<number | undefined> {
   if (!extractMtopToken(cookieHeader)) return undefined;
   try {
@@ -986,10 +991,13 @@ export async function crawlGoofishStoreDetailed(url: string, cookieHeader?: stri
   const isWindows = process.platform === 'win32';
   const isLinux = process.platform !== 'win32' && process.platform !== 'darwin';
   const diagnostics: CrawlDiagnostics = { networkCandidateCount: 0, domCandidateCount: 0 };
-  const expectedItemCount = await fetchExpectedStoreItemCount(userId, cookieHeader);
+  // 已移除 fetchExpectedStoreItemCount 调用：该函数通过 fetch 直调 MTOP API 违反硬约束
+  // "店铺商品爬取必须通过浏览器进行，不可使用 API 接口"
+  // 预期商品数量改为在浏览器拦截 MTOP 响应过程中推断（autoScrollUntilStable 走 stableRounds 兜底）
+  const expectedItemCount: number | undefined = undefined;
   diagnostics.expectedItemCount = expectedItemCount;
 
-  console.log(`[Crawler] 开始爬取店铺全部商品: expected=${expectedItemCount ?? 'unknown'}, headless=${headless}`);
+  console.log(`[Crawler] 开始爬取店铺全部商品: expected=unknown, headless=${headless}`);
 
   let browser: Browser | null = null;
   const networkItems: CrawledItem[] = [];

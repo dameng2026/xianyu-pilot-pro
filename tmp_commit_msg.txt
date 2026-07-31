@@ -1,0 +1,29 @@
+fix: 修复工作流执行失败和图片丢失问题，新增供货中心Phase1
+
+工作流修复（核心）：
+- automation_runtime.py: 将 node_success 事件记录移至 ok=False 检查之后，
+  确保失败节点不会被标记为成功，重试时能重新执行并复用已生成图片
+- automation_runtime.py: IMAGE_GENERATE 余额不足时添加 partial=True 标识，
+  使工作流标记为 partial_success 而非 failed，已生成的图片会被保存
+- automation_runtime.py: 重试时复用已生成的图片并发布未发布的商品
+  （已成功发布的跳过，已生成图但发布失败的复用 img_url 重新发布）
+- internal.py: 添加 _await_execution_visible 函数，处理 Java 事务提交后
+  Python 数据库连接可见性延迟，重试 5 次（总计最多 1 秒），避免返回 404
+  导致"自动化服务暂时不可用"错误
+
+供货中心 Phase 1：
+- 新增 supply_product 和 audit_record 表（V1.67 迁移脚本）
+- 新增 mall_product weight 字段（V1.68 迁移脚本）
+- 实现供货商品 CRUD 与审核流程
+- 合并商品展示，后台通过权重调整展示顺序
+- 集成客服微信 JiShu0724
+
+自动发货多条正文支持：
+- 新增 delivery_text_source segments 字段（V1.66 迁移脚本）
+- 支持多条正文逐条发送和图片发货功能
+
+其他改进：
+- 修正 .env.production.example 中 SCHEMA_RUNTIME_MUTATIONS_ENABLED 变量名
+- 新增 automation-service V1.26/V1.27 迁移脚本（消息服务索引修复）
+- Nginx Brotli 压缩配置
+- 知识库测试文件和文档

@@ -199,10 +199,25 @@
             @retry="loadCategories"
           />
           <template v-else>
-            <ElTable :data="categoryList" border stripe height="480">
+            <ElTable
+              :data="categoryList"
+              border
+              stripe
+              height="480"
+              row-key="id"
+              :tree-props="{ children: 'children', hasChildren: 'hasChildren' }"
+              default-expand-all
+            >
               <template #empty><div class="empty-state">暂无分类，点击"新增分类"创建</div></template>
               <ElTableColumn prop="id" label="ID" width="70" />
               <ElTableColumn prop="name" label="名称" min-width="200" />
+              <ElTableColumn label="层级" width="100">
+                <template #default="{ row }">
+                  <ElTag size="small" :type="row.parent_id ? 'info' : 'success'">
+                    {{ row.parent_id ? '二级' : '一级' }}
+                  </ElTag>
+                </template>
+              </ElTableColumn>
               <ElTableColumn prop="entry_count" label="条目数" width="100" />
               <ElTableColumn prop="source" label="来源" width="100">
                 <template #default="{ row }">
@@ -534,6 +549,50 @@ interface CategoryRow {
   entry_count?: number
   source?: string
   created_time?: string
+  /** 子分类列表（树形表格使用） */
+  children?: CategoryRow[]
+  /** 是否有子分类（树形表格懒加载标记，此处始终与 children 同步设置） */
+  hasChildren?: boolean
+}
+
+/**
+ * 将平铺的分类列表转换为树形结构（按 parent_id 建立父子关系）
+ * - parent_id 为 null/undefined/0 的视为一级分类
+ * - 其余按 parent_id 归类到对应父分类的 children 数组
+ * - 同时设置 hasChildren 标记，便于 ElTable tree-props 渲染
+ */
+function buildCategoryTree(list: CategoryRow[]): CategoryRow[] {
+  const map = new Map<number, CategoryRow>()
+  list.forEach(item => {
+    map.set(item.id, { ...item, children: [], hasChildren: false })
+  })
+  const roots: CategoryRow[] = []
+  map.forEach(item => {
+    const parentId = item.parent_id ?? null
+    if (parentId === null || parentId === 0 || !map.has(parentId)) {
+      roots.push(item)
+    } else {
+      const parent = map.get(parentId)!
+      parent.children!.push(item)
+      parent.hasChildren = true
+    }
+  })
+  // 对每个节点的 children 按 sort_order 排序（无 sort_order 视为 0）
+  const sortFn = (a: CategoryRow, b: CategoryRow) =>
+    (a.sort_order ?? 0) - (b.sort_order ?? 0)
+  const sortRecursive = (nodes: CategoryRow[]) => {
+    nodes.sort(sortFn)
+    nodes.forEach(node => {
+      if (node.children && node.children.length > 0) sortRecursive(node.children)
+      else {
+        // 叶子节点清空 children，避免空数组影响树形展示
+        node.children = undefined
+        node.hasChildren = false
+      }
+    })
+  }
+  sortRecursive(roots)
+  return roots
 }
 
 interface LogRow {
@@ -784,7 +843,9 @@ async function loadCategories() {
   categoryError.value = ''
   try {
     const data = await request.get<any[]>({ url: '/learned-kb/categories' })
-    categoryList.value = Array.isArray(data) ? data : []
+    // 修复：将平铺列表转换为树形结构，按 parent_id 建立父子关系
+    // 配合 ElTable 的 row-key + tree-props 实现层级显示
+    categoryList.value = buildCategoryTree(Array.isArray(data) ? data : [])
     categoryState.value = 'ready'
   } catch (error: unknown) {
     categoryError.value = getErrorMessage(error, '分类读取失败。')

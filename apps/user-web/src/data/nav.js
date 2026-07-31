@@ -61,7 +61,7 @@ export const navCategories = [
     icon: 'distribution',
     items: [
       { key: 'delivery-mall', label: '货源商城', icon: 'crown' },
-      { key: 'supply-center', label: '供货中心', icon: 'distribution', maintenance: true },
+      { key: 'supply-center', label: '供货中心', icon: 'distribution' },
       { key: 'platform-connect', label: '平台对接', icon: 'link', maintenance: true }
     ]
   },
@@ -152,7 +152,10 @@ export const pageTitles = {
   'api-slider-solve': ['API滑块求解', '开放滑块求解能力，对接外部系统，独立记录 API 求解与 Token 消费情况'],
   logs: ['操作日志', '查看系统操作与关键行为记录'],
   feedback: ['反馈建议', '提交产品建议、Bug 反馈与功能诉求'],
-  'supply-center': ['供货中心', '该功能正在维护升级中，敬请期待'],
+  'supply-center': ['供货中心', '管理你的供货商品、查看收入与审核状态'],
+  'supply-center-products': ['我的货源', '管理已上传的货源商品'],
+  'supply-center-products-new': ['上传货源', '提交新的货源商品到平台'],
+  'supply-center-products-edit': ['编辑货源', '修改货源商品信息'],
   'platform-connect': ['平台对接', '该功能正在维护升级中，敬请期待'],
   'growth-partner': ['增长合伙人', '邀请用户、收益概览、代理功能与数据分析全掌握'],
   'invite-poster': ['邀请海报', '该功能正在维护升级中，敬请期待'],

@@ -2240,6 +2240,8 @@ public class AutomationProxyController {
     public Result<Object> refreshRefundDetail(@RequestBody(required = false) Map<String, Object> body) {
         Map<String, Object> payload = body == null ? new LinkedHashMap<>() : new LinkedHashMap<>(body);
         injectTenantId(payload);
+        // 防御性白名单：仅保留已知字段，剥离 type/valueType/data 等内部 MTOP 参数，避免客户端注入
+        payload.keySet().retainAll(java.util.Set.of("accountId", "orderId", "refundId", "tenantId"));
         Object accountId = payload.get("accountId");
         if (accountId == null) {
             throw new BizException(400, "accountId 不能为空");
@@ -2259,6 +2261,8 @@ public class AutomationProxyController {
     public Result<Object> retryRefundDetailApi(@RequestBody(required = false) Map<String, Object> body) {
         Map<String, Object> payload = body == null ? new LinkedHashMap<>() : new LinkedHashMap<>(body);
         injectTenantId(payload);
+        // 防御性白名单：仅保留已知字段，剥离 type/valueType/data 等内部 MTOP 参数，避免客户端注入
+        payload.keySet().retainAll(java.util.Set.of("accountId", "orderId", "refundId", "api", "tenantId"));
         Object accountId = payload.get("accountId");
         if (accountId == null) {
             throw new BizException(400, "accountId 不能为空");

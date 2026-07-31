@@ -899,6 +899,129 @@ async def _trigger_delivery_for_confirmed_statement(
         logger.debug("绑定 delivery_record_id 到声明会话失败 sessionId=%d", session_id, exc_info=True)
 
 
+async def _execute_segments_delivery(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+    order_id: str,
+    s_id: str,
+    buyer_user_id: str,
+    buyer_user_name: str,
+    segments: list[dict],
+) -> tuple[bool, Optional[str], str]:
+    """遍历 segments 逐条发送（文本/图片分别走对应发送函数，严禁合并为一条消息）。
+
+    每条 segment 为 text 或 image 二选一（已在配置端和 _normalize_segments 双重校验）。
+    发送规则：
+      - text  : 调用 _send_delivery_message（先做变量替换 {buyerUserName} 等）
+      - image : 调用 _send_delivery_image（转推闲鱼 CDN + WebSocket 图片消息）
+      - 多条之间加 200ms 间隔，避免触发闲鱼 IM 风控
+
+    判定规则：
+      - 全部成功 → overall_success=True
+      - 部分成功 → overall_success=False（仍触发确认发货，已发送的消息买家能收到）
+      - 全部失败 → overall_success=False（不触发确认发货）
+
+    Returns:
+        (overall_success, fail_reason, record_content)
+        - record_content: 用于 delivery_record.content 的 JSON 审计摘要
+    """
+    results: list[dict] = []
+    success_count = 0
+    failure_count = 0
+    last_error: Optional[str] = None
+    total = len(segments)
+
+    for idx, seg in enumerate(segments):
+        seg_type = str(seg.get("type") or "text").lower()
+        seg_result: dict = {"index": idx, "type": seg_type}
+
+        if seg_type == "image":
+            image_url = str(seg.get("imageUrl") or "")
+            seg_result["imageUrl"] = image_url
+            try:
+                ok, is_transient, cdn_or_error = await _send_delivery_image(
+                    db, tenant_id, account_id, s_id, buyer_user_id, image_url,
+                )
+                if ok:
+                    seg_result["status"] = "success"
+                    seg_result["cdnUrl"] = cdn_or_error
+                    success_count += 1
+                else:
+                    seg_result["status"] = "failed"
+                    seg_result["error"] = cdn_or_error or "图片发送失败"
+                    seg_result["transient"] = is_transient
+                    failure_count += 1
+                    last_error = seg_result["error"]
+            except Exception as e:
+                seg_result["status"] = "failed"
+                seg_result["error"] = str(e)
+                failure_count += 1
+                last_error = str(e)
+                logger.error("图片发货异常: accountId=%d segIdx=%d error=%s", account_id, idx, e)
+        else:
+            # text 类型：先做变量替换（与原 _execute_text_delivery 一致）
+            text_content = str(seg.get("content") or "")
+            text_content = text_content.replace("{buyerUserName}", buyer_user_name or "买家")
+            text_content = text_content.replace("{orderId}", order_id or "")
+            text_content = text_content.replace("{goodsTitle}", "")
+            text_content = text_content.replace("{deliveryTime}", time.strftime("%Y-%m-%d %H:%M:%S"))
+            seg_result["content"] = text_content
+            try:
+                ok, is_transient = await _send_delivery_message(
+                    account_id, s_id, buyer_user_id, text_content,
+                )
+                if ok:
+                    seg_result["status"] = "success"
+                    success_count += 1
+                else:
+                    seg_result["status"] = "failed"
+                    seg_result["error"] = "买家会话连接暂时不可用" if is_transient else "无法向买家发送消息"
+                    seg_result["transient"] = is_transient
+                    failure_count += 1
+                    last_error = seg_result["error"]
+            except Exception as e:
+                seg_result["status"] = "failed"
+                seg_result["error"] = str(e)
+                failure_count += 1
+                last_error = str(e)
+                logger.error("文本发货异常: accountId=%d segIdx=%d error=%s", account_id, idx, e)
+
+        results.append(seg_result)
+
+        # 多条消息之间加 200ms 间隔，避免触发闲鱼 IM 风控（最后一条不需要等待）
+        if idx < total - 1:
+            await asyncio.sleep(0.2)
+
+    # 判定整体成功与否
+    if failure_count == 0:
+        overall_success = True
+        fail_reason: Optional[str] = None
+    elif success_count == 0:
+        overall_success = False
+        fail_reason = f"全部 {total} 条消息发送失败：{last_error}"
+    else:
+        # 部分成功：标记为失败，但仍触发确认发货（已发送的消息买家能收到）
+        overall_success = False
+        fail_reason = f"{failure_count}/{total} 条消息发送失败：{last_error}（其余 {success_count} 条已送达）"
+
+    # 构造审计内容（JSON 摘要，记录每条 segment 的发送结果，便于排查）
+    record_content = json.dumps({
+        "mode": "segments",
+        "total": total,
+        "success": success_count,
+        "failed": failure_count,
+        "segments": results,
+    }, ensure_ascii=False)
+
+    logger.info(
+        "segments 发货完成: accountId=%d total=%d success=%d failed=%d",
+        account_id, total, success_count, failure_count,
+    )
+
+    return (overall_success, fail_reason, record_content)
+
+
 async def _execute_text_delivery(
     db: AsyncSession,
     tenant_id: int,
@@ -914,21 +1037,30 @@ async def _execute_text_delivery(
     delivery_content: str,
     trigger_source: str,
 ):
-    content = delivery_content
-    content = content.replace("{buyerUserName}", buyer_user_name or "买家")
-    content = content.replace("{orderId}", order_id or "")
-    content = content.replace("{goodsTitle}", "")
-    content = content.replace("{deliveryTime}", time.strftime("%Y-%m-%d %H:%M:%S"))
+    # V1.66: 优先走 segments 多条发送（文本/图片逐条单独发送，不合并为一条消息）
+    segments = rule.get("segments") or []
+    if segments:
+        send_ok, fail_reason, content = await _execute_segments_delivery(
+            db, tenant_id, account_id, order_id, s_id, buyer_user_id,
+            buyer_user_name, segments,
+        )
+    else:
+        # 原单条正文发送逻辑（向后兼容旧货源，无 segments 时回退）
+        content = delivery_content
+        content = content.replace("{buyerUserName}", buyer_user_name or "买家")
+        content = content.replace("{orderId}", order_id or "")
+        content = content.replace("{goodsTitle}", "")
+        content = content.replace("{deliveryTime}", time.strftime("%Y-%m-%d %H:%M:%S"))
 
-    send_ok = False
-    fail_reason = None
-    try:
-        send_ok, is_transient = await _send_delivery_message(account_id, s_id, buyer_user_id, content)
-        if not send_ok:
-            fail_reason = "买家会话连接暂时不可用，系统将自动重试" if is_transient else "无法向买家发送消息，请检查账号登录状态"
-    except Exception as e:
-        fail_reason = "发送消息时出现异常，系统将自动重试"
-        logger.error("文本发货发送消息异常: accountId=%d error=%s", account_id, e)
+        send_ok = False
+        fail_reason = None
+        try:
+            send_ok, is_transient = await _send_delivery_message(account_id, s_id, buyer_user_id, content)
+            if not send_ok:
+                fail_reason = "买家会话连接暂时不可用，系统将自动重试" if is_transient else "无法向买家发送消息，请检查账号登录状态"
+        except Exception as e:
+            fail_reason = "发送消息时出现异常，系统将自动重试"
+            logger.error("文本发货发送消息异常: accountId=%d error=%s", account_id, e)
 
     await _insert_delivery_record(
         db, tenant_id, account_id, order_id, s_id, pnm_id,
@@ -1267,6 +1399,11 @@ async def _load_goods_delivery_rule(
     source_id = timing_config.get("sourceId")
     source_title = str(timing_config.get("sourceTitle") or "")
 
+    # V1.66: 解析 segments（多条正文 + 图片发货）
+    # config_json.payDelivery.segments 由 Java 端 normalizeSegmentsForConfig 写入，是 List[Dict] 形式
+    segments_raw = timing_config.get("segments")
+    segments = _normalize_segments(segments_raw)
+
     if mode == MODE_TEXT and source_id:
         source = await _load_text_source(db, tenant_id, source_id)
         if source:
@@ -1274,8 +1411,11 @@ async def _load_goods_delivery_rule(
                 content = str(source.get("content") or "")
             if not source_title:
                 source_title = str(source.get("title") or "")
+            # 若商品配置未带 segments，从货源表回填（保证货源修改后实时发货能拿到最新 segments）
+            if not segments:
+                segments = _normalize_segments(source.get("segments"))
 
-    if mode == MODE_TEXT and not any([header.strip(), content.strip(), footer.strip()]):
+    if mode == MODE_TEXT and not any([header.strip(), content.strip(), footer.strip()]) and not segments:
         return None
 
     delivery_content = _build_delivery_content(header, content, footer)
@@ -1295,9 +1435,60 @@ async def _load_goods_delivery_rule(
         or timing_config.get("auto_confirm_shipment")
         or 0,
         "segment_send": timing_config.get("segmentSend"),
+        "segments": segments,
         "_sku_rules": sku_rules,
         "_raw_config": config,
     }
+
+
+def _normalize_segments(raw: Any) -> list[dict]:
+    """规范化 segments 字段为 list[dict]。
+    兼容三种输入：
+      - List[Dict]（来自 config_json 解析后的 Python 对象）
+      - JSON 字符串（来自 delivery_text_source.segments 列）
+      - None / 空值
+    校验：每个 segment 必须含 type ∈ {text, image}，且 text/image 互斥。
+    返回空 list 表示无 segments（执行端回退到单条 content 发送）。
+    """
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        if not raw.strip():
+            return []
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("segments JSON 解析失败，回退到单条发送: raw=%s", raw[:200])
+            return []
+    if not isinstance(raw, list) or not raw:
+        return []
+    result: list[dict] = []
+    for idx, item in enumerate(raw):
+        if not isinstance(item, dict):
+            continue
+        seg_type = str(item.get("type") or "text").strip().lower()
+        if seg_type not in ("text", "image"):
+            logger.warning("segments[%d] type 无效: %s，跳过", idx, seg_type)
+            continue
+        if seg_type == "image":
+            url = str(item.get("imageUrl") or "").strip()
+            if not url:
+                logger.warning("segments[%d] image 类型但 imageUrl 为空，跳过", idx)
+                continue
+            seg = {"type": "image", "imageUrl": url}
+            if item.get("assetId") is not None:
+                try:
+                    seg["assetId"] = int(item.get("assetId"))
+                except (TypeError, ValueError):
+                    pass
+            result.append(seg)
+        else:
+            text_content = str(item.get("content") or "").strip()
+            if not text_content:
+                logger.warning("segments[%d] text 类型但 content 为空，跳过", idx)
+                continue
+            result.append({"type": "text", "content": text_content})
+    return result
 
 
 def _build_delivery_content(header: str, content: str, footer: str) -> str:
@@ -1428,7 +1619,7 @@ async def _load_text_source(
 ) -> Optional[dict]:
     row = (await db.execute(
         text("""
-            SELECT id, title, content, remark
+            SELECT id, title, content, remark, segments
             FROM delivery_text_source
             WHERE tenant_id = :tenant_id
               AND id = :source_id
@@ -2355,6 +2546,127 @@ async def _send_delivery_message(
         return (False, is_transient)
 
 
+async def _send_delivery_image(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+    s_id: str,
+    buyer_user_id: str,
+    image_url: str,
+) -> tuple[bool, bool, Optional[str]]:
+    """通过 WebSocket 发送图片发货消息给买家。
+
+    复用在线消息页面的图片发送链路：
+      1. 读取本地 /uploads/ 图片的宽高
+      2. 转推到闲鱼 CDN（_resolve_outbound_image_url）
+      3. 调用 client.send_image_message 发送 WebSocket 图片消息
+
+    Args:
+        db: 数据库会话（用于读取账号 Cookie 和图片资产租户校验）
+        tenant_id: 租户ID
+        account_id: 闲鱼账号ID
+        s_id: 会话ID
+        buyer_user_id: 买家用户ID
+        image_url: 图片 URL（本地 /uploads/images/... 或闲鱼 CDN URL）
+
+    Returns:
+        (success, is_transient, cdn_url_or_error) 元组
+        - success: True 表示发送成功
+        - is_transient: True 表示失败是临时性的（连接断开、CDN 上传失败），可重试；
+                        False 表示永久性错误（参数缺失、URL 非法），不可重试
+        - cdn_url_or_error: 成功时为闲鱼 CDN URL（用于 delivery_record 审计），
+                            失败时为错误信息
+    """
+    if not image_url or not image_url.strip():
+        logger.warning("图片发货 URL 为空，跳过发送: accountId=%d", account_id)
+        return (False, False, "图片 URL 为空")
+
+    if not s_id or not buyer_user_id:
+        logger.warning("会话ID或买家ID为空，无法发送图片: accountId=%d sId=%s buyer=%s",
+                       account_id, s_id, buyer_user_id)
+        return (False, False, "会话ID或买家ID为空")
+
+    client = ws_manager.get_client(account_id)
+    if not client or not client.is_connected:
+        logger.warning("WebSocket未连接，无法发送图片消息: accountId=%d", account_id)
+        return (False, True, "WebSocket未连接")
+    if not client._sid:
+        logger.warning("WebSocket未注册（无sid），无法发送图片消息: accountId=%d", account_id)
+        return (False, True, "WebSocket未注册")
+
+    cid = s_id if s_id.endswith("@goofish") else f"{s_id}@goofish"
+    to_id = buyer_user_id if buyer_user_id.endswith("@goofish") else f"{buyer_user_id}@goofish"
+
+    # 延迟 import：复用 misc.py 的图片转推逻辑（本地 /uploads/ → 闲鱼 CDN）
+    # 避免模块加载顺序问题和服务层对路由层的硬依赖
+    try:
+        from ..api.v1.routes.misc import (
+            _resolve_outbound_image_dimensions,
+            _resolve_outbound_image_url,
+        )
+    except ImportError as e:
+        logger.error("无法 import 图片转推模块: %s", e)
+        return (False, False, "图片转推模块不可用")
+
+    # 步骤1: 读取本地图片宽高（用于消息体，闲鱼 IM 协议要求带 width/height）
+    try:
+        image_width, image_height = await asyncio.to_thread(
+            _resolve_outbound_image_dimensions, image_url, tenant_id
+        )
+    except Exception as e:
+        logger.warning("读取图片尺寸失败，使用默认 800x600: %s", e)
+        image_width, image_height = 800, 600
+
+    # 步骤2: 转推到闲鱼 CDN（如果是 /uploads/ 本地路径；已是 https URL 则原样返回）
+    try:
+        cdn_url = await _resolve_outbound_image_url(db, tenant_id, account_id, image_url)
+    except ValueError as e:
+        # ValueError 通常是：URL 非法、图片资产不存在、租户不匹配 → 永久性错误
+        logger.warning("图片转推闲鱼 CDN 失败（永久错误）: accountId=%d error=%s", account_id, e)
+        return (False, False, str(e))
+    except Exception as e:
+        # 其他异常（网络、CDN 上传失败）→ 临时性错误，可重试
+        logger.warning("图片转推异常（临时错误）: accountId=%d errorType=%s error=%s",
+                       account_id, type(e).__name__, e)
+        return (False, True, f"图片转推异常: {e}")
+
+    # 步骤3: 通过 WebSocket 发送图片消息
+    logger.info(
+        "发送图片发货消息: accountId=%d cid=%s to_id=%s cdnUrl=%s dimensions=%dx%d",
+        account_id, cid, to_id, cdn_url, image_width, image_height,
+    )
+
+    try:
+        result = await client.send_image_message(
+            cid=cid, to_id=to_id, image_url=cdn_url,
+            width=image_width, height=image_height,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("图片发货消息发送超时: accountId=%d cid=%s", account_id, cid)
+        return (False, True, "发送图片超时")
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning("图片发货消息发送异常: accountId=%d errorType=%s error=%s",
+                       account_id, type(e).__name__, e)
+        return (False, True, f"发送图片异常: {e}")
+
+    code = result.get("code", 500)
+    error_msg = str(result.get("error") or "")
+
+    if code == 200:
+        logger.info("图片发货消息发送成功: accountId=%d cdnUrl=%s", account_id, cdn_url)
+        return (True, False, cdn_url)
+    else:
+        transient_keywords = ["未连接", "断开", "重连", "超时", "timeout", "未注册", "无 sid", "无sid"]
+        is_transient = any(kw in error_msg for kw in transient_keywords)
+        logger.warning(
+            "图片发货消息发送失败: accountId=%d code=%s error=%s transient=%s",
+            account_id, code, error_msg, is_transient,
+        )
+        return (False, is_transient, error_msg or "图片消息发送失败")
+
+
 async def _detect_bargain_from_message_or_db(
     db: AsyncSession,
     account_id: int,
@@ -2608,7 +2920,11 @@ async def _auto_confirm_shipment(
     try:
         from .xianyu_api_service import confirm_order_shipment
 
-        result = confirm_order_shipment(
+        # confirm_order_shipment 内部发起同步 MTOP HTTP 请求，必须放到线程池执行
+        # 否则会阻塞事件循环，导致 WS 心跳停滞、其他账号消息排队、滑块求解卡死。
+        # 参考：ws_delivery_handler.py 第 362/1347/2515 行、internal.py 第 490 行均使用 asyncio.to_thread。
+        result = await asyncio.to_thread(
+            confirm_order_shipment,
             account_id,
             order_id,
             is_bargain=is_bargain,

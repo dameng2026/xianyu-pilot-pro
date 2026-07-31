@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import viteCompression from 'vite-plugin-compression'
+// Bundle 分析工具：通过 --mode analyze 启用，生成 stats.html 用于分析产物体积分布
+import { visualizer } from 'rollup-plugin-visualizer'
 import pkg from './package.json'
 
 // Build metadata must be supplied by the release pipeline. Falling back to an
@@ -11,7 +13,7 @@ if (buildDate && Number.isNaN(Date.parse(buildDate))) {
   throw new Error('VITE_BUILD_DATE must be an ISO-8601 timestamp')
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     vue(),
     // 构建时预压缩 .gz 文件，配合 nginx `gzip_static on` 实现零 CPU 在线压缩开销
@@ -22,7 +24,26 @@ export default defineConfig({
       threshold: 10240,
       deleteOriginFile: false,
     }),
-  ],
+    // 构建时预压缩 .br 文件，配合 nginx `brotli_static on` 启用 Brotli 压缩。
+    // Brotli 比 gzip 再小 10-20%，现代浏览器（Chrome/Edge/Firefox/Safari 11+）均支持。
+    // 服务器 Nginx 需编译 ngx_brotli 模块（参见 deploy/nginx/brotli.conf）。
+    viteCompression({
+      algorithm: 'brotliCompress',
+      ext: '.br',
+      threshold: 10240,
+      deleteOriginFile: false,
+    }),
+    // Bundle 分析：仅在 --mode analyze 时启用，生成 stats.html 在 dist/ 下。
+    // 用法：npm run analyze
+    // 产物：dist/stats.html（用浏览器打开查看各 chunk 体积分布，定位可拆分的大依赖）
+    mode === 'analyze' && visualizer({
+      filename: 'dist/stats.html',
+      open: false,
+      gzipSize: true,
+      brotliSize: true,
+      template: 'treemap',
+    }),
+  ].filter(Boolean),
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
     __APP_BUILD_DATE__: JSON.stringify(buildDate)
@@ -85,4 +106,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))

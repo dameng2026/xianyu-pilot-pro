@@ -432,7 +432,7 @@ public class PaymentService {
             paymentMethod = "free"; // 免费订单占位，避免数据库 NOT NULL 约束失败
         }
         String orderNo = newOrderNo(orderType);
-        LocalDateTime expireAt = LocalDateTime.now().plusMinutes(15);
+        LocalDateTime expireAt = dbExpireAt(15);
         // 免费商品（amountCent=0）或余额支付：跳过支付网关下单，qr_content / pay_url 留空
         Map<String, Object> payPayload = (amountCent == 0 || balancePay)
                 ? new LinkedHashMap<>()
@@ -500,7 +500,7 @@ public class PaymentService {
         long paymentConfigId = storedPositiveLong(first(config, "id"), "支付配置 ID");
         String providerType = normalizeProvider(text(first(config, "provider_type", "providerType")));
         String orderNo = newOrderNo("ad");
-        LocalDateTime expireAt = LocalDateTime.now().plusMinutes(15);
+        LocalDateTime expireAt = dbExpireAt(15);
         Map<String, Object> payPayload = buildPayPayload(orderNo, safeTitle, amountCent, normalizedMethod, providerType, config, expireAt);
         requireSingleWrite("创建广告支付订单失败",
                 "INSERT INTO payment_order(tenant_id, user_id, order_no, order_type, target_type, target_id, plan_id, token_plan_id, title, amount_cent, token_amount, payment_method, provider_type, payment_config_id, status, client_ip, qr_content, pay_url, expire_time, created_time, updated_time, deleted) " +
@@ -1702,6 +1702,22 @@ public class PaymentService {
                 targetId, tenantId, userId);
         if (account == null) throw new BizException(404, "会员权益目标不存在");
         return targetId;
+    }
+
+    /**
+     * 从数据库查询当前时间 + N 分钟作为订单过期时间。
+     *
+     * 必须用数据库 NOW() 计算，不能用 Java LocalDateTime.now()：
+     * 容器 JVM 默认时区为 UTC，而 MySQL time_zone=+08:00，
+     * 若用 Java 时间写入 expire_time，MemberPromotionScheduler 的
+     * "expire_time < NOW()" 比较会因时区差 8 小时恒为真，
+     * 导致新订单创建后最多 2 分钟即被定时任务误关闭，
+     * 后续支付回调到达时返回"订单状态不可支付"，充值无法到账。
+     */
+    private LocalDateTime dbExpireAt(int minutes) {
+        java.sql.Timestamp ts = jdbcTemplate.queryForObject(
+                "SELECT DATE_ADD(NOW(), INTERVAL ? MINUTE)", java.sql.Timestamp.class, minutes);
+        return ts == null ? LocalDateTime.now().plusMinutes(minutes) : ts.toLocalDateTime();
     }
 
     private int safeUpdate(String unavailableMessage, String sql, Object... args) {

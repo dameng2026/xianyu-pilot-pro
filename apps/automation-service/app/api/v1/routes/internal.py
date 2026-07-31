@@ -585,6 +585,47 @@ async def internal_business_search(
 
 
 # ---- Phase12 工作流执行器 ----
+
+# 事务可见性重试配置：Java 端 insertExecution 提交后，Python 端数据库连接可能存在短暂可见性延迟，
+# 导致查询 workflow_execution 记录返回 None。重试 5 次，每次间隔 200ms，总计最多 1 秒。
+_EXECUTION_VISIBILITY_MAX_RETRIES = 5
+_EXECUTION_VISIBILITY_INTERVAL_SEC = 0.2
+
+
+async def _await_execution_visible(
+    db: AsyncSession,
+    execution_id: int,
+    tenant_id: int,
+    workflow_id: Optional[int] = None,
+) -> bool:
+    """等待 workflow_execution 记录对当前数据库会话可见。
+
+    Java 端 insertExecution 事务提交后，Python 端的数据库连接（尤其是连接池复用的连接）
+    可能存在短暂的可见性延迟。通过 commit 清除会话缓存并重试查询，确保记录可见。
+
+    Returns:
+        True 如果记录可见；False 如果重试后仍不可见。
+    """
+    for attempt in range(_EXECUTION_VISIBILITY_MAX_RETRIES):
+        # commit 清除 SQLAlchemy 会话缓存，强制下次查询走数据库
+        try:
+            await db.commit()
+        except Exception:
+            pass
+        stmt = _sel(WorkflowExecution.id).where(
+            WorkflowExecution.id == execution_id,
+            WorkflowExecution.tenant_id == tenant_id,
+        )
+        if workflow_id is not None:
+            stmt = stmt.where(WorkflowExecution.workflow_id == workflow_id)
+        execution = (await db.execute(stmt)).scalar_one_or_none()
+        if execution is not None:
+            return True
+        if attempt < _EXECUTION_VISIBILITY_MAX_RETRIES - 1:
+            await _asyncio.sleep(_EXECUTION_VISIBILITY_INTERVAL_SEC)
+    return False
+
+
 @router.post("/workflows/{workflow_id}/execute")
 async def internal_execute_workflow(
     workflow_id: int,
@@ -601,14 +642,14 @@ async def internal_execute_workflow(
     execution_id = _required_tenant_id(body.get("executionId"))
     if execution_id is None:
         return ResultObject.validate_failed("executionId 不能为空且必须为正整数")
-    execution = (await db.execute(
-        _sel(WorkflowExecution.id).where(
-            WorkflowExecution.id == execution_id,
-            WorkflowExecution.workflow_id == workflow_id,
-            WorkflowExecution.tenant_id == tenant_id,
+    # ★ 事务可见性重试：Java 端 insertExecution 刚提交，Python 端可能短暂看不到记录。
+    #   重试 5 次（总计最多 1 秒），避免因事务可见性延迟返回 404 导致"自动化服务暂时不可用"。
+    visible = await _await_execution_visible(db, execution_id, tenant_id, workflow_id)
+    if not visible:
+        logger.warning(
+            "[INTERNAL-WORKFLOW] execution 记录不可见 execution=%s workflow=%s tenant=%s（重试 %d 次后仍不存在）",
+            execution_id, workflow_id, tenant_id, _EXECUTION_VISIBILITY_MAX_RETRIES,
         )
-    )).scalar_one_or_none()
-    if execution is None:
         return ResultObject.failed("工作流执行记录不存在", code=404)
     workflow_name = (body.get("workflow") or {}).get("name") or f"工作流#{workflow_id}"
 
@@ -642,13 +683,13 @@ async def internal_continue_workflow(
         return ResultObject.validate_failed("tenantId 不能为空且必须为正整数")
     if _required_tenant_id(execution_id) is None:
         return ResultObject.validate_failed("executionId 必须为正整数")
-    execution = (await db.execute(
-        _sel(WorkflowExecution.id).where(
-            WorkflowExecution.id == execution_id,
-            WorkflowExecution.tenant_id == tenant_id,
+    # ★ 事务可见性重试：与 execute 端点一致，避免因事务可见性延迟返回 404。
+    visible = await _await_execution_visible(db, execution_id, tenant_id)
+    if not visible:
+        logger.warning(
+            "[INTERNAL-WORKFLOW-CONTINUE] execution 记录不可见 execution=%s tenant=%s（重试 %d 次后仍不存在）",
+            execution_id, tenant_id, _EXECUTION_VISIBILITY_MAX_RETRIES,
         )
-    )).scalar_one_or_none()
-    if execution is None:
         return ResultObject.failed("工作流执行记录不存在", code=404)
 
     # 异步化：fire-and-forget 后台执行，立即返回

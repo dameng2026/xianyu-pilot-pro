@@ -37,7 +37,7 @@
 -- ============================================================================
 -- 1. beauty_skincare（护肤品）- 30 条
 -- ============================================================================
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -84,7 +84,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ============================================================================
 -- 2. beauty_makeup（化妆品）- 30 条
 -- ============================================================================
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -131,7 +131,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ============================================================================
 -- 3. beauty_perfume（香水）- 30 条
 -- ============================================================================
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -178,7 +178,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ============================================================================
 -- 4. beauty_personal_care（个人护理）- 30 条
 -- ============================================================================
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -225,7 +225,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ============================================================================
 -- 5. beauty_tools（美容工具）- 30 条
 -- ============================================================================
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,

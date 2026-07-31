@@ -96,6 +96,12 @@ export interface AiCsBillingConfig {
 export interface AiCsKnowledgeCategory {
   key: string
   label: string
+  /** 父分类 ID（一级分类为 null） */
+  parent_id?: number | null
+  /** 该分类下的知识库条目数 */
+  entry_count?: number
+  /** 子分类列表（用于三级分类树形结构） */
+  children?: AiCsKnowledgeCategory[]
 }
 
 export interface AiCsKnowledgeQuery {

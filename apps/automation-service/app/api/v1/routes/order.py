@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import logging
 import math
@@ -109,7 +110,8 @@ async def confirm_shipment(
             if row and row.is_bargain:
                 is_bargain = True
 
-        result = confirm_order_shipment(
+        result = await asyncio.to_thread(
+            confirm_order_shipment,
             req.xianyu_account_id,
             req.order_id,
             is_bargain=is_bargain,

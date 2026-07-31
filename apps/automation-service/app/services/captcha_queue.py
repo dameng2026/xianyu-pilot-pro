@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -43,9 +44,14 @@ logger = logging.getLogger(__name__)
 # 配置常量
 # ============================================================
 
-# 并发 worker 数量：匹配 crawler-service 单租户并发上限（4）
-# 不超过 crawler-service 全局并发（8），避免 503 拒绝
-SOLVE_WORKER_CONCURRENCY = 4
+# 并发 worker 数量：与 crawler-service MAX_BROWSER_CONCURRENCY=2 严格对齐
+# 关键修复（2026-07-31 事故）：原值 4 远超 crawler-service 默认并发 2，导致
+# 4 个 worker 同时调用 crawler-service 时，3-4 个 Chrome 实例争抢 Xvfb 资源，
+# 浏览器崩溃率飙升（browserContext.newPage: Target page, context or browser has been closed）
+# 降到 2 后，与 crawler-service BrowserSlot 严格匹配，避免资源争抢。
+# 支持环境变量 SOLVE_WORKER_CONCURRENCY 覆盖（仅在线上紧急调整时使用）。
+_default_worker_concurrency = int(os.environ.get("SOLVE_WORKER_CONCURRENCY", "2") or "2")
+SOLVE_WORKER_CONCURRENCY = max(1, min(_default_worker_concurrency, 4))
 
 # 同账号去重冷却时间（秒）：60 秒内同账号只入队一次（对齐产品设计"每分钟可主动求解一次"）
 SOLVE_DEDUP_COOLDOWN_SEC = 60

@@ -56,9 +56,11 @@ function removeElement(el: HTMLElement): void {
   }
 }
 
+// 仅在 mounted 钩子执行权限检查
+// 修复：updated 钩子在元素被 removeElement 移除后仍可能触发，重复执行权限检查无意义
+// （指令是"移除"而非"隐藏"，已移除的元素不会重新插入，updated 对已移除元素无意义）
 const authDirective: AuthDirective = {
-  mounted: checkAuthPermission,
-  updated: checkAuthPermission
+  mounted: checkAuthPermission
 }
 
 export function setupAuthDirective(app: App): void {

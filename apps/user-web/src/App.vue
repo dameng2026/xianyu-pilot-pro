@@ -177,13 +177,20 @@ const pageMap = {
   'settings-notify': asyncPage(() => import('./pages/settings/NotifySettings.vue')),
   'settings-ai-cs': AiCsSettings,
   'settings-kb': KnowledgeBaseSettings,
-  'settings-sync': SyncSettings,
+  // 数据同步页面仅在本地开发环境注册（VITE_SHOW_DATA_SYNC=true）
+  // 商业版（线上生产）不注册该路由，直接访问 #/settings-sync 会被重定向到默认页
+  ...(import.meta.env.VITE_SHOW_DATA_SYNC === 'true' ? { 'settings-sync': SyncSettings } : {}),
   'settings-about': AboutSettings,
   vip: asyncPage(() => import('./pages/VipPage.vue')),
   profile: asyncPage(() => import('./pages/ProfileCenterPage.vue')),
   'feature-unavailable': asyncPage(() => import('./pages/FeatureUnavailablePage.vue')),
+  // 供货中心（Phase 1 上线）：供货商管理货源商品
+  'supply-center': asyncPage(() => import('./pages/SupplyCenterPage.vue')),
+  'supply-center-products': asyncPage(() => import('./pages/SupplyProductListPage.vue')),
+  'supply-center-products-new': asyncPage(() => import('./pages/SupplyProductEditPage.vue')),
+  // 路由形态 supply-center-products-edit/{id}，由 SupplyProductListPage 编辑按钮进入
+  'supply-center-products-edit': asyncPage(() => import('./pages/SupplyProductEditPage.vue')),
   // 维护中页面
-  'supply-center': asyncPage(() => import('./pages/FeatureUnavailablePage.vue')),
   'platform-connect': asyncPage(() => import('./pages/FeatureUnavailablePage.vue')),
   'growth-partner': asyncPage(() => import('./pages/GrowthPartnerPage.vue')),
   'invite-poster': asyncPage(() => import('./pages/FeatureUnavailablePage.vue'))
@@ -201,9 +208,9 @@ const allSettingKeys = [
 const authPages = ['login', 'register', 'forgot-password']
 const defaultPage = 'dashboard'
 const profileEntryStorageKey = 'xya_profile_initial_tab'
-const pagesWithEmbeddedTitle = new Set(['messages', 'message-center', 'delivery-statement', 'delivery-mall', 'feature-unavailable', 'card-warehouse', 'auto-delivery', 'refund-detail', 'settings-ai-cs', 'settings-kb', 'settings-notify', 'settings-sync', 'settings-about', 'growth-partner'])
+const pagesWithEmbeddedTitle = new Set(['messages', 'message-center', 'delivery-statement', 'delivery-mall', 'feature-unavailable', 'card-warehouse', 'auto-delivery', 'refund-detail', 'settings-ai-cs', 'settings-kb', 'settings-notify', 'settings-sync', 'settings-about', 'growth-partner', 'supply-center', 'supply-center-products', 'supply-center-products-new', 'supply-center-products-edit'])
 // 功能开关检查跳过的页面：登录/注册/忘记密码/占位页/工作台（避免登录后卡死）/维护中页面
-const featureSwitchSkipPages = new Set(['login', 'register', 'forgot-password', 'feature-unavailable', 'dashboard', 'supply-center', 'platform-connect', 'growth-partner', 'invite-poster'])
+const featureSwitchSkipPages = new Set(['login', 'register', 'forgot-password', 'feature-unavailable', 'dashboard', 'platform-connect', 'growth-partner', 'invite-poster'])
 const profileEntryTabs = new Set(['overview', 'security', 'token', 'recharge'])
 const mobileLitePages = new Set([
   'dashboard',
@@ -224,7 +231,12 @@ const mobileLitePages = new Set([
   'orders',
   'profile',
   'api-slider-solve',
-  'refund-detail'
+  'refund-detail',
+  'delivery-source-library',
+  'supply-center',
+  'supply-center-products',
+  'supply-center-products-new',
+  'supply-center-products-edit'
 ])
 
 // 剥离 hash 路由中的查询参数（如 register?ref=XXX -> register）
@@ -247,6 +259,7 @@ const isKnownPage = key => {
     if (path.startsWith('chat-detail/')) return true
     if (path.startsWith('fish-shop-edit/')) return true
     if (path.startsWith('refund-detail/')) return true
+    if (path.startsWith('supply-center-products-edit/')) return true
   }
   return false
 }
@@ -261,6 +274,7 @@ const normalizePageKey = key => {
       if (path.startsWith('chat-detail/')) return 'chat-detail'
       if (path.startsWith('fish-shop-edit/')) return 'fish-shop-edit'
       if (path.startsWith('refund-detail/')) return 'refund-detail'
+      if (path.startsWith('supply-center-products-edit/')) return 'supply-center-products-edit'
     }
     return path
   }
@@ -280,6 +294,7 @@ const getNormalizedKey = (raw) => {
       if (path.startsWith('chat-detail/')) return 'chat-detail'
       if (path.startsWith('fish-shop-edit/')) return 'fish-shop-edit'
       if (path.startsWith('refund-detail/')) return 'refund-detail'
+      if (path.startsWith('supply-center-products-edit/')) return 'supply-center-products-edit'
     }
     return path
   }
@@ -847,6 +862,9 @@ onMounted(() => {
   window.addEventListener('xya-toast', onGlobalToast)
   // 全局充值弹窗事件监听：Token 余额不足时由 aiTokenGuard 等模块派发，弹出充值 modal
   window.addEventListener('xya-open-payment', onOpenPayment)
+  // AI 客服面板打开事件：Dashboard / 货源商城等页面派发 xya-open-ai-cs，由 App.vue 统一打开"小梦"面板
+  // 必须与 onBeforeUnmount 中的 removeEventListener 配对（修复前缺失 addEventListener 导致入口失效）
+  window.addEventListener('xya-open-ai-cs', openAiCs)
   // 浏览模式等级不足弹窗点击"立即升级"后，由 featureGuard 派发导航请求
   window.addEventListener('xya-navigate', onNavigateRequest)
   // 初始化滑块求解 SSE 监听

@@ -5,6 +5,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,6 +17,8 @@ import java.util.*;
  * 系统配置服务。
  * 管理系统全局配置项（网站名称、LOGO、备案号、联系方式等）。
  * 数据存储在 admin_module_record 表中，module_key = 'system-settings'，status = 'config'。
+ *
+ * 缓存策略：getConfig/getRawConfig 整体结果缓存到 systemConfig；saveConfig 写入后清空。
  */
 @Service
 public class SystemConfigService {
@@ -33,6 +37,7 @@ public class SystemConfigService {
     /**
      * 获取系统配置。
      */
+    @Cacheable(value = "systemConfig", key = "'config'")
     public Map<String, Object> getConfig() {
         return getRawConfig();
     }
@@ -40,6 +45,7 @@ public class SystemConfigService {
     /**
      * 获取系统配置（供后端内部使用）。
      */
+    @Cacheable(value = "systemConfig", key = "'raw'")
     public Map<String, Object> getRawConfig() {
         String json = getConfigJson();
         if (json != null) {
@@ -64,6 +70,7 @@ public class SystemConfigService {
      * 若敏感字段为掩码值 ******，则保留数据库原值，避免被覆盖为掩码字符串
      */
     @Transactional
+    @CacheEvict(value = "systemConfig", allEntries = true)
     public void saveConfig(Map<String, Object> config) {
         if (config == null || config.isEmpty()) {
             throw new BizException(400, "系统配置不能为空");

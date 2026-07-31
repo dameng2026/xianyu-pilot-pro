@@ -19,7 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from ..core.config import settings
 from ..core.database import engine
 from ..core.http_failures import get_request_id
-from ..core.image_security import ValidatedImage
+from ..core.image_security import ValidatedImage, maybe_convert_to_webp
 
 
 _SAFE_COMPONENT = re.compile(r"[^A-Za-z0-9_-]+")
@@ -334,6 +334,10 @@ async def store_governed_image(
         normalized_owner_id = _positive_id(owner_id, "ownerId")
     elif normalized_user_id:
         normalized_owner_id = normalized_user_id
+    # 上传图片自动转 WebP：JPEG/PNG 静态图转为 WebP 以减小体积（约减少 30-50%）。
+    # GIF 保留动图、WebP 不再转、过小图片或转换后体积反而变大的保留原格式。
+    # 转换后的 image.content/extension/media_type 都会更新，digest 基于转换后的字节计算。
+    image = maybe_convert_to_webp(image)
     saved_name = f"{safe_prefix}_{secrets.token_urlsafe(18)}{image.extension}"
     tenant_segment = f"tenant-{tenant_id}"
     storage_key = f"{tenant_segment}/{saved_name}"

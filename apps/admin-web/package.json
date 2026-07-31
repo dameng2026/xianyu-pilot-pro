@@ -12,6 +12,7 @@
     "dev": "vite --open",
     "prebuild": "npm run icons:generate",
     "build": "vite build && node ./scripts/dist-safety-check.mjs",
+    "analyze": "vite build --mode analyze",
     "icons:generate": "node ./scripts/generate-icon-bundle.mjs",
     "serve": "vite preview",
     "pretest": "npm run icons:generate",

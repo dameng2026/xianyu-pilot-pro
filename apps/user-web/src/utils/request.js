@@ -27,7 +27,10 @@ function createRequestId() {
 }
 
 function messageWithRequestId(message, requestId) {
-  return requestId ? `${message}（错误编号：${requestId}）` : message
+  if (!requestId) return message
+  // 后端 GlobalExceptionHandler 返回的 msg 可能已包含"错误编号：xxx"，避免重复拼接
+  if (message && /错误编号[:：]/.test(message)) return message
+  return `${message}（错误编号：${requestId}）`
 }
 
 function createStructuredError(message, requestId, extra = {}) {

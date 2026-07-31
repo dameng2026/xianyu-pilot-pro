@@ -63,7 +63,7 @@ public class DeliveryTextSourceService {
         listArgs.add(safeSize);
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
                 "SELECT s.id, s.source_type AS sourceType, s.delivery_mode AS deliveryMode, s.card_group_id AS cardGroupId, " +
-                        "s.title, s.content, s.remark, s.from_mall AS fromMall, s.mall_product_id AS mallProductId, s.created_time AS createdTime, s.updated_time AS updatedTime, " +
+                        "s.title, s.content, s.remark, s.segments AS segments, s.from_mall AS fromMall, s.mall_product_id AS mallProductId, s.created_time AS createdTime, s.updated_time AS updatedTime, " +
                         "g.group_name AS cardGroupName, g.remain_count AS cardRemainCount, " +
                         "mp.title AS mallProductTitle, mp.content AS mallProductContent, mp.status AS mallProductStatus " +
                         "FROM delivery_text_source s " +
@@ -75,6 +75,8 @@ public class DeliveryTextSourceService {
         );
         enrichUsageStats(tenantId, rows);
         for (Map<String, Object> row : rows) {
+            // segments 在数据库中是 JSON 字符串，解析为 List 后返回前端
+            row.put("segments", parseSegmentsJson(text(row.get("segments"))));
             applyMallProductSnapshot(row);
             row.put("stockLabel", buildStockLabel(row));
         }
@@ -104,7 +106,7 @@ public class DeliveryTextSourceService {
     public Map<String, Object> detail(Long tenantId, Long sourceId) {
         Map<String, Object> source = jdbcTemplate.queryForMap(
                 "SELECT s.id, s.source_type AS sourceType, s.delivery_mode AS deliveryMode, s.card_group_id AS cardGroupId, " +
-                        "s.title, s.content, s.remark, s.from_mall AS fromMall, s.mall_product_id AS mallProductId, s.created_time AS createdTime, s.updated_time AS updatedTime, " +
+                        "s.title, s.content, s.remark, s.segments AS segments, s.from_mall AS fromMall, s.mall_product_id AS mallProductId, s.created_time AS createdTime, s.updated_time AS updatedTime, " +
                         "g.group_name AS cardGroupName, g.remain_count AS cardRemainCount, " +
                         "mp.title AS mallProductTitle, mp.content AS mallProductContent, mp.status AS mallProductStatus " +
                         "FROM delivery_text_source s " +
@@ -113,6 +115,8 @@ public class DeliveryTextSourceService {
                         "WHERE s.tenant_id=? AND s.id=? AND s.deleted=0",
                 tenantId, sourceId
         );
+        // segments 在数据库中是 JSON 字符串，解析为 List 后返回前端
+        source.put("segments", parseSegmentsJson(text(source.get("segments"))));
         applyMallProductSnapshot(source);
         source.put("configuredGoods", listConfiguredGoods(tenantId, sourceId));
         source.put("usageCount", ((List<?>) source.get("configuredGoods")).size());
@@ -123,10 +127,12 @@ public class DeliveryTextSourceService {
     public Long create(Long tenantId, Map<String, Object> body) {
         String deliveryMode = normalizeDeliveryMode(body.get("deliveryMode"));
         Long cardGroupId = "card".equals(deliveryMode) ? asLong(body.get("cardGroupId")) : null;
+        // 仅文本模式支持 segments（多条正文 + 图片发货）；卡密模式保持单条模板语义
+        String segmentsJson = "text".equals(deliveryMode) ? serializeSegments(body.get("segments")) : null;
         jdbcTemplate.update(
-                "INSERT INTO delivery_text_source(tenant_id, source_type, delivery_mode, card_group_id, title, content, remark, from_mall, mall_product_id, created_time, updated_time, deleted) " +
-                        "VALUES(?, 'text', ?, ?, ?, ?, ?, 0, NULL, NOW(), NOW(), 0)",
-                tenantId, deliveryMode, cardGroupId, text(body.get("title")), text(body.get("content")), text(body.get("remark"))
+                "INSERT INTO delivery_text_source(tenant_id, source_type, delivery_mode, card_group_id, title, content, remark, segments, from_mall, mall_product_id, created_time, updated_time, deleted) " +
+                        "VALUES(?, 'text', ?, ?, ?, ?, ?, ?, 0, NULL, NOW(), NOW(), 0)",
+                tenantId, deliveryMode, cardGroupId, text(body.get("title")), text(body.get("content")), text(body.get("remark")), segmentsJson
         );
         return jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
     }
@@ -143,10 +149,11 @@ public class DeliveryTextSourceService {
         // 商城货源可编辑标题/正文/备注，但发货类型固定为文本模式（不可改为卡密）
         String deliveryMode = isMall ? "text" : normalizeDeliveryMode(body.get("deliveryMode"));
         Long cardGroupId = "card".equals(deliveryMode) ? asLong(body.get("cardGroupId")) : null;
+        String segmentsJson = "text".equals(deliveryMode) ? serializeSegments(body.get("segments")) : null;
         jdbcTemplate.update(
-                "UPDATE delivery_text_source SET delivery_mode=?, card_group_id=?, title=?, content=?, remark=?, updated_time=NOW() " +
+                "UPDATE delivery_text_source SET delivery_mode=?, card_group_id=?, title=?, content=?, remark=?, segments=?, updated_time=NOW() " +
                         "WHERE tenant_id=? AND id=? AND deleted=0",
-                deliveryMode, cardGroupId, text(body.get("title")), text(body.get("content")), text(body.get("remark")), tenantId, sourceId
+                deliveryMode, cardGroupId, text(body.get("title")), text(body.get("content")), text(body.get("remark")), segmentsJson, tenantId, sourceId
         );
     }
 
@@ -199,6 +206,14 @@ public class DeliveryTextSourceService {
         patch.put("sourceId", sourceId);
         patch.put("sourceTitle", source.get("title"));
         patch.put("content", text(source.get("content")));
+        // 透传 segments 到商品配置 config_json.payDelivery.segments（仅文本模式有值）
+        Object segments = source.get("segments");
+        if (segments instanceof List<?> list && !list.isEmpty()) {
+            patch.put("segments", list);
+        } else {
+            // 显式置空，避免旧商品配置中残留的 segments 干扰
+            patch.put("segments", null);
+        }
         if ("card".equals(deliveryMode)) {
             patch.put("cardGroupId", asLong(source.get("cardGroupId")));
         }
@@ -434,6 +449,107 @@ public class DeliveryTextSourceService {
         if (value == null) return "text";
         String mode = String.valueOf(value).trim().toLowerCase(Locale.ROOT);
         return "card".equals(mode) ? "card" : "text";
+    }
+
+    /**
+     * 序列化前端传入的 segments 数组为 JSON 字符串用于持久化。
+     * 校验规则（强约束，违反抛 422）：
+     *   - 必须是数组，最多 20 条（防止滥用）
+     *   - 每个 segment 必须含 type ∈ {text, image}
+     *   - type=text  : content 必填且非空（最长 5000），imageUrl 必须为空
+     *   - type=image : imageUrl 必填且非空（最长 500），content 必须为空
+     * 返回 null 表示空数组或 null 输入（回退 content 单条发送）。
+     */
+    private String serializeSegments(Object raw) {
+        if (raw == null) return null;
+        if (!(raw instanceof List<?> rawList)) {
+            throw new com.xianyu.admin.common.BizException(422, "正文配置格式错误，应为数组");
+        }
+        if (rawList.isEmpty()) return null;
+        if (rawList.size() > 20) {
+            throw new com.xianyu.admin.common.BizException(422, "正文条数过多，最多支持 20 条");
+        }
+        List<Map<String, Object>> normalized = new ArrayList<>(rawList.size());
+        for (int i = 0; i < rawList.size(); i++) {
+            Object item = rawList.get(i);
+            if (!(item instanceof Map<?, ?> rawMap)) {
+                throw new com.xianyu.admin.common.BizException(422, "第 " + (i + 1) + " 条正文格式错误，应为对象");
+            }
+            Object typeVal = rawMap.get("type");
+            String type = String.valueOf(typeVal != null ? typeVal : "text").trim().toLowerCase(Locale.ROOT);
+            String content = text(rawMap.get("content"));
+            String imageUrl = text(rawMap.get("imageUrl"));
+            if ("image".equals(type)) {
+                if (imageUrl.isBlank()) {
+                    throw new com.xianyu.admin.common.BizException(422, "第 " + (i + 1) + " 条正文为图片类型，必须上传图片");
+                }
+                if (!content.isBlank()) {
+                    throw new com.xianyu.admin.common.BizException(422, "第 " + (i + 1) + " 条正文为图片类型，不能同时填写文本（每条只能文本或图片二选一）");
+                }
+                if (imageUrl.length() > 500) {
+                    throw new com.xianyu.admin.common.BizException(422, "第 " + (i + 1) + " 条正文图片地址过长");
+                }
+            } else {
+                if (!"text".equals(type)) {
+                    throw new com.xianyu.admin.common.BizException(422, "第 " + (i + 1) + " 条正文类型无效，仅支持 text 或 image");
+                }
+                if (content.isBlank()) {
+                    throw new com.xianyu.admin.common.BizException(422, "第 " + (i + 1) + " 条正文内容不能为空");
+                }
+                if (!imageUrl.isBlank()) {
+                    throw new com.xianyu.admin.common.BizException(422, "第 " + (i + 1) + " 条正文为文本类型，不能同时上传图片（每条只能文本或图片二选一）");
+                }
+                if (content.length() > 5000) {
+                    throw new com.xianyu.admin.common.BizException(422, "第 " + (i + 1) + " 条正文内容超过 5000 字符");
+                }
+            }
+            Map<String, Object> seg = new LinkedHashMap<>();
+            seg.put("type", type);
+            if ("image".equals(type)) {
+                seg.put("imageUrl", imageUrl);
+                Object assetId = rawMap.get("assetId");
+                if (assetId != null) seg.put("assetId", asLong(assetId));
+            } else {
+                seg.put("content", content);
+            }
+            normalized.add(seg);
+        }
+        try {
+            return objectMapper.writeValueAsString(normalized);
+        } catch (Exception e) {
+            throw new com.xianyu.admin.common.BizException(500, "正文配置序列化失败");
+        }
+    }
+
+    /**
+     * 解析数据库中的 segments JSON 字符串为 List。
+     * 解析失败或为空时返回空 List（执行端会回退到 content 单条发送）。
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> parseSegmentsJson(String json) {
+        if (json == null || json.isBlank()) return java.util.Collections.emptyList();
+        try {
+            List<?> parsed = objectMapper.readValue(json, new TypeReference<List<?>>() {});
+            List<Map<String, Object>> result = new ArrayList<>(parsed.size());
+            for (Object item : parsed) {
+                if (item instanceof Map<?, ?> map) {
+                    Map<String, Object> seg = new LinkedHashMap<>();
+                    Object typeVal = map.get("type");
+                    seg.put("type", String.valueOf(typeVal != null ? typeVal : "text").toLowerCase(Locale.ROOT));
+                    if ("image".equals(seg.get("type"))) {
+                        seg.put("imageUrl", text(map.get("imageUrl")));
+                        Object assetId = map.get("assetId");
+                        if (assetId != null) seg.put("assetId", asLong(assetId));
+                    } else {
+                        seg.put("content", text(map.get("content")));
+                    }
+                    result.add(seg);
+                }
+            }
+            return result;
+        } catch (Exception e) {
+            return java.util.Collections.emptyList();
+        }
     }
 
     private String buildStockLabel(Map<String, Object> row) {

@@ -34,7 +34,7 @@ export interface SlideSolveOptions {
   cookieStr?: string;
   targetUrl?: string;     // 默认为闲鱼首页
   headless?: boolean;     // 默认 false（滑块识别需有头模式更稳定）
-  maxRetries?: number;    // 单次会话最多重试次数，默认 3
+  maxRetries?: number;    // 单次会话最多重试次数，默认 5
   timeoutMs?: number;     // 单次操作超时，默认 30000
   /** 账号绑定代理（全自动固定出口） */
   proxy?: { server: string; username?: string; password?: string };
@@ -1216,32 +1216,50 @@ async function closeCaptchaDialog(page: Page): Promise<boolean> {
  * 特征：通常是一个模态对话框，包含"刷新"/"重新加载"/"连接中断"/"请重连"等文本。
  */
 async function checkRefreshDialog(page: Page): Promise<boolean> {
+  // 判断 frame 是否应该被检测"刷新/连接中断"弹窗
+  // 排除：Baxia punish frame（_____tmd_____/punish）、第三方脚本 frame（非 goofish.com）
+  // 原因：Baxia punish frame 的 nocaptcha/nc.js 脚本中包含"重新加载"、"刷新"等词，
+  //       会导致误判为"刷新弹窗"，从而在拖动前一直刷新页面，永远没机会拖动滑块。
+  const isCheckableFrame = (f: any): boolean => {
+    try {
+      const url: string = f.url() || '';
+      if (!url) return false;
+      // 排除 Baxia punish / 验证码 frame
+      if (/_____tmd_____|punish|baxia|nocaptcha|captcha|verify/i.test(url)) return false;
+      // 只检测 goofish.com 主 frame（IM 页面），排除第三方脚本 frame
+      if (!/goofish\.com/i.test(url)) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const checkFrame = async (f: any) => {
     try {
       return await f.evaluate(() => {
-        const text = document.body ? document.body.innerText : '';
-        // 匹配刷新弹窗的文本特征：
-        // - "请刷新页面"/"刷新重试"/"刷新页面后重试"
-        // - "网络异常，请刷新"/"页面已失效，请刷新"
-        // - "重新加载"/"刷新试试"
-        // - "连接中断，请重连"/"连接已断开"/"网络连接中断"
-        if (/请刷新页面|刷新重试|刷新页面后重试|网络异常.*刷新|页面已失效.*刷新|重新加载|刷新试试|刷新后重试|连接中断|连接已断开|网络连接中断|请重连|重新连接/i.test(text)) {
-          return true;
-        }
-        // 检测常见的刷新/重连按钮/弹窗元素
-        const refreshSelectors = [
-          '.refresh-btn', '.reload-btn', '.refresh-dialog',
-          '.modal-refresh', '.dialog-refresh',
-          'button[class*="refresh"]', 'button[class*="reload"]',
-          'button[class*="reconnect"]', '.reconnect-btn',
-          '.ant-modal-confirm', '.next-dialog',
-          '.next-dialog-message', '.ant-modal-body',
+        // 严格检测：必须有可见的 modal/dialog 元素，且元素内有明确的"刷新"按钮文本
+        // 不再检测整个 body 的 innerText，避免误判闲鱼 IM 页面的 WebSocket 状态提示（如"连接中断"）
+        // 误判根因：闲鱼 IM 页面在风控触发时会显示"连接中断"等 WebSocket 状态提示，
+        //          但这只是连接状态，不是真的需要刷新页面，滑块验证仍然可以进行。
+        const modalSelectors = [
+          '.ant-modal-confirm', '.ant-modal-body', '.ant-modal',
+          '.next-dialog', '.next-dialog-message',
+          '.refresh-dialog', '.modal-refresh', '.dialog-refresh',
+          '[role="dialog"]', '[class*="modal"]', '[class*="dialog"]',
         ];
-        for (const sel of refreshSelectors) {
-          const elem = document.querySelector(sel);
-          if (elem) {
-            const elemText = elem.textContent || '';
-            if (/刷新|重新加载|reload|refresh|连接中断|重连|重新连接/i.test(elemText)) {
+        for (const sel of modalSelectors) {
+          const elems = document.querySelectorAll(sel);
+          for (const elem of elems) {
+            // 必须可见
+            const rect = elem.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) continue;
+            const style = window.getComputedStyle(elem);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+            // 元素文本必须包含明确的"刷新页面"指令（不是"连接中断"等状态提示）
+            const elemText = (elem.textContent || '').trim();
+            if (elemText.length === 0) continue;
+            // 只匹配明确的"请刷新页面"指令，不匹配"连接中断"等状态提示
+            if (/请刷新页面|刷新重试|刷新页面后重试|网络异常.*请刷新|页面已失效.*请刷新|刷新后重试/i.test(elemText)) {
               return true;
             }
           }
@@ -1253,9 +1271,11 @@ async function checkRefreshDialog(page: Page): Promise<boolean> {
     }
   };
 
-  if (await checkFrame(page)) return true;
+  // 只检测 goofish.com 主 frame，排除 Baxia punish frame
+  if (isCheckableFrame(page) && await checkFrame(page)) return true;
   for (const f of page.frames()) {
     if (f === page.mainFrame()) continue;
+    if (!isCheckableFrame(f)) continue;
     if (await checkFrame(f)) return true;
   }
   return false;
@@ -2131,7 +2151,18 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
     // 使用 while 循环，让场景4(下载消息失败)和场景5(刷新小弹窗)的刷新重试
     // 不占用 maxRetries 的滑动重试配额，否则5次滑动配额会被刷新操作耗尽
     let attempt = 0;
+    // 总尝试次数硬上限：防止 attempt-- 回退 + 多种重试叠加导致循环次数超预期
+    // 理论最大循环次数 = maxRetries(5) + MAX_REFRESH_RETRIES(5) + MAX_DOWNLOAD_RETRIES(2) + MAX_CLICK_RETRIES(5) = 17
+    // 设置 maxRetries * 3 = 15 作为硬上限，接近 170s 整体超时前必须退出
+    const MAX_TOTAL_ATTEMPTS = Math.max(maxRetries * 3, 15);
+    let totalAttempts = 0;
     while (attempt < maxRetries) {
+      totalAttempts++;
+      if (totalAttempts > MAX_TOTAL_ATTEMPTS) {
+        console.warn(`[SliderSolver] 总尝试次数已达上限 (${MAX_TOTAL_ATTEMPTS})，强制退出循环`);
+        lastError = lastError || `滑块求解总尝试次数超限 (${MAX_TOTAL_ATTEMPTS})`;
+        break;
+      }
       attempt++;
       attempts = attempt;
 

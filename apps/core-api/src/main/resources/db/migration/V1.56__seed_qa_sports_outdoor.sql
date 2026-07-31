@@ -24,7 +24,7 @@
 -- ---------------------------------------------------------------------------
 -- 1. sports_equipment - 运动器材 (30 条)
 -- ---------------------------------------------------------------------------
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -70,7 +70,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ---------------------------------------------------------------------------
 -- 2. sports_outdoor_gear - 户外装备 (30 条)
 -- ---------------------------------------------------------------------------
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -116,7 +116,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ---------------------------------------------------------------------------
 -- 3. sports_apparel - 运动服饰 (30 条)
 -- ---------------------------------------------------------------------------
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -162,7 +162,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ---------------------------------------------------------------------------
 -- 4. sports_cycling - 骑行装备 (30 条)
 -- ---------------------------------------------------------------------------
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -208,7 +208,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ---------------------------------------------------------------------------
 -- 5. sports_fishing - 垂钓用品 (30 条)
 -- ---------------------------------------------------------------------------
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,

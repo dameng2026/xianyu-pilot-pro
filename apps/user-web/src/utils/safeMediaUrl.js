@@ -170,9 +170,10 @@ export function resolveAvatarUrl(value) {
                        path.includes('headimg')
     
     if (isImagePath) return parsed.href
-    
-    // 最后兜底：只要是看起来正常的URL都尝试返回（头像展示风险低）
-    return parsed.href
+
+    // 不在可信域名白名单且不像图片路径的 URL，返回空字符串
+    // 强制调用方使用默认头像，避免隐私追踪像素、CDN 泄露等风险
+    return ''
   } catch {
     // 如果是相对路径，尝试补全为https
     if (cleaned.startsWith('/')) {

@@ -8043,16 +8043,8 @@ async def execute_workflow(db: AsyncSession, payload: dict[str, Any]) -> dict[st
                     "nodeResults": node_results, "artifacts": context.get("artifacts", []), "timeline": [],
                 }
 
-            await insert_timeline(db, tenant_id, execution_id, workflow_id, key, "INFO", "node_success",
-                                  f"节点执行成功: {name}",
-                                  f"耗时: {int((__import__('time').perf_counter() - started) * 1000)}ms",
-                                  {"output": output})
-            # ★ 节点成功后更新完成节点数
-            await update_execution_progress(
-                db, tenant_id, execution_id,
-                progress=int((idx + 1) * 100 / max(len(ordered), 1)),
-                node_success=idx + 1,
-            )
+            # ★ 注意：node_success 事件和进度更新必须延后到 ok=False 检查之后，
+            #   否则失败节点会被标记为成功，导致 continue_workflow_execution 跳过该节点。
 
         except BaseException as exc:
             # 捕获 BaseException（含 asyncio.CancelledError），避免外部连接取消导致已发布商品记录丢失
@@ -8072,14 +8064,16 @@ async def execute_workflow(db: AsyncSession, payload: dict[str, Any]) -> dict[st
         if status == "success" and output and output.get("ok") is False:
             error_code = _text(output.get("errorCode") or "WORKFLOW_NODE_FAILED")
             node_err = _text(output.get("errorMessage") or output.get("message") or "节点返回失败")
-            # PUBLISH 节点：若已发布部分商品（partial=True），不终止，标记为 partial_success
-            if typ in {"publish_goods", "publish", "发布商品", "PUBLISH"} and output.get("partial"):
+            # ★ 任何节点：若已产出部分结果（partial=True，如已生成部分图片/已发布部分商品），
+            #   标记为 partial_success，不终止工作流，重试时会重新执行该节点以复用已产出结果。
+            if output.get("partial"):
                 status = "partial_success"
                 error_message = node_err
                 await insert_timeline(db, tenant_id, execution_id, workflow_id, key, "WARN", "node_partial",
-                                      f"发布节点部分成功: {name}",
-                                      f"{node_err}（已发布的商品已落库，不阻断流程）",
-                                      {"successCount": output.get("successCount", 0), "failedCount": output.get("failedCount", 0)})
+                                      f"节点部分成功: {name}",
+                                      f"{node_err}（已产出的结果已保存，重试时将复用）",
+                                      {"successCount": output.get("successCount", 0), "failedCount": output.get("failedCount", 0),
+                                       "errorCode": error_code})
                 # partial_success 不进入 failed 终止分支，继续下一个节点
             else:
                 # 其他节点 ok=False（如生图全失败）：终止工作流
@@ -8088,6 +8082,26 @@ async def execute_workflow(db: AsyncSession, payload: dict[str, Any]) -> dict[st
                 await insert_timeline(db, tenant_id, execution_id, workflow_id, key, "ERROR", "node_failed",
                                       f"节点执行失败(返回失败): {name}", error_message,
                                       {"errorCode": error_code, "message": error_message})
+
+        # ★ 仅在节点真正成功时记录 node_success 事件并更新完成节点数。
+        #   partial_success 节点不记录 node_success（只记录了 node_partial），
+        #   这样 continue_workflow_execution 不会将其加入 skipNodeKeys，重试时会重新执行以复用已产出结果。
+        if status == "success":
+            await insert_timeline(db, tenant_id, execution_id, workflow_id, key, "INFO", "node_success",
+                                  f"节点执行成功: {name}",
+                                  f"耗时: {int((__import__('time').perf_counter() - started) * 1000)}ms",
+                                  {"output": output})
+            await update_execution_progress(
+                db, tenant_id, execution_id,
+                progress=int((idx + 1) * 100 / max(len(ordered), 1)),
+                node_success=idx + 1,
+            )
+        elif status == "partial_success":
+            # partial_success 仅更新进度条，不更新 node_success 计数（避免被 continue 跳过）
+            await update_execution_progress(
+                db, tenant_id, execution_id,
+                progress=int((idx + 1) * 100 / max(len(ordered), 1)),
+            )
 
         duration = int((__import__('time').perf_counter() - started) * 1000)
         node_results.append(_sanitize_runtime_value({
@@ -10093,25 +10107,43 @@ async def _execute_workflow_node(
                     _log_runtime_failure("image_generate_worker", _r)
 
             if any(isinstance(_r, AiBillingPaymentRequired) for _r in _results):
+                # ★ 余额不足时，若已有部分图片生成或发布，标记 partial=True，
+                #   使 execute_workflow 将节点标记为 partial_success 而非 failed，
+                #   重试时会重新执行该节点以复用已产出的结果。
+                _has_partial = bool(images) or bool(publish_results)
+                _pub_ok = sum(1 for r in publish_results if r.get("status") == "published")
+                # ★ 保存已产出结果到 state，确保重试时能复用
+                state["generated_images"] = images
+                state["publish_results"] = publish_results
                 return {
                     "ok": False,
                     "errorCode": "AI_BALANCE_INSUFFICIENT",
                     "errorMessage": "AI Token 余额不足，请充值后重试",
                     "message": "AI Token 余额不足，请充值后重试",
+                    "partial": _has_partial,
                     "images": images,
                     "count": len(images),
                     "publishResults": publish_results,
+                    "successCount": _pub_ok,
+                    "failedCount": len(pending_idxs) - _pub_ok,
                     "steps": gen_steps,
                 }
             if any(isinstance(_r, AiBillingError) for _r in _results):
+                _has_partial = bool(images) or bool(publish_results)
+                _pub_ok = sum(1 for r in publish_results if r.get("status") == "published")
+                state["generated_images"] = images
+                state["publish_results"] = publish_results
                 return {
                     "ok": False,
                     "errorCode": "AI_BILLING_UNAVAILABLE",
                     "errorMessage": "AI 计费服务暂不可用，生图与发布已停止，请稍后重试",
                     "message": "AI 计费服务暂不可用，生图与发布已停止，请稍后重试",
+                    "partial": _has_partial,
                     "images": images,
                     "count": len(images),
                     "publishResults": publish_results,
+                    "successCount": _pub_ok,
+                    "failedCount": len(pending_idxs) - _pub_ok,
                     "steps": gen_steps,
                 }
 

@@ -71,7 +71,7 @@ UPDATE ai_cs_kb_category SET deleted = 1, updated_time = NOW() WHERE deleted = 0
 
 -- 5. 插入 13 个一级分类（parent_id IS NULL，is_system=1）
 -- 命名规范：code 使用 lower_snake_case，name 使用中文
-INSERT INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, icon, color, description, source, deleted, created_time, updated_time)
+INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, icon, color, description, source, deleted, created_time, updated_time)
 VALUES
   ('交易通用问题', MD5('交易通用问题'), 'general_trade',
    '["库存","发货","退款","价格","咨询","登录"]', 1, NULL, 1,
@@ -129,7 +129,7 @@ VALUES
 -- 6. 插入 68 个二级分类（parent_id = 对应一级id，is_system=1）
 -- 使用子查询获取父分类id，避免硬编码
 -- 6.1 交易通用问题（parent=general_trade）下 6 个二级
-INSERT INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
+INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
 SELECT name, MD5(name), code, keywords, 1, p.id, sort_order, 'manual', 0, NOW(), NOW()
 FROM (
   SELECT '库存查询' AS name, 'general_stock_query' AS code, '["库存","有货","现货","还有吗","没货","缺货","断货","在不在"]' AS keywords, 1 AS sort_order
@@ -142,7 +142,7 @@ FROM (
 CROSS JOIN (SELECT id FROM ai_cs_kb_category WHERE code = 'general_trade' AND deleted = 0 LIMIT 1) AS p;
 
 -- 6.2 服饰鞋包（parent=fashion_bag）下 5 个二级
-INSERT INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
+INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
 SELECT name, MD5(name), code, keywords, 1, p.id, sort_order, 'manual', 0, NOW(), NOW()
 FROM (
   SELECT '男装' AS name, 'fashion_men' AS code, '["男装","衬衫","T恤","外套","裤子","夹克"]' AS keywords, 1 AS sort_order
@@ -154,7 +154,7 @@ FROM (
 CROSS JOIN (SELECT id FROM ai_cs_kb_category WHERE code = 'fashion_bag' AND deleted = 0 LIMIT 1) AS p;
 
 -- 6.3 数码家电（parent=digital_appliance）下 6 个二级
-INSERT INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
+INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
 SELECT name, MD5(name), code, keywords, 1, p.id, sort_order, 'manual', 0, NOW(), NOW()
 FROM (
   SELECT '手机' AS name, 'digital_phone' AS code, '["手机","iPhone","华为","小米","三星","OPPO","vivo"]' AS keywords, 1 AS sort_order
@@ -167,7 +167,7 @@ FROM (
 CROSS JOIN (SELECT id FROM ai_cs_kb_category WHERE code = 'digital_appliance' AND deleted = 0 LIMIT 1) AS p;
 
 -- 6.4 美妆个护（parent=beauty_care）下 5 个二级
-INSERT INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
+INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
 SELECT name, MD5(name), code, keywords, 1, p.id, sort_order, 'manual', 0, NOW(), NOW()
 FROM (
   SELECT '护肤品' AS name, 'beauty_skincare' AS code, '["护肤","面霜","精华","面膜","洗面奶","爽肤水","乳液"]' AS keywords, 1 AS sort_order
@@ -179,7 +179,7 @@ FROM (
 CROSS JOIN (SELECT id FROM ai_cs_kb_category WHERE code = 'beauty_care' AND deleted = 0 LIMIT 1) AS p;
 
 -- 6.5 家居生活（parent=home_life）下 5 个二级
-INSERT INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
+INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
 SELECT name, MD5(name), code, keywords, 1, p.id, sort_order, 'manual', 0, NOW(), NOW()
 FROM (
   SELECT '家具' AS name, 'home_furniture' AS code, '["沙发","床","衣柜","餐桌","椅子","书桌","茶几"]' AS keywords, 1 AS sort_order
@@ -191,7 +191,7 @@ FROM (
 CROSS JOIN (SELECT id FROM ai_cs_kb_category WHERE code = 'home_life' AND deleted = 0 LIMIT 1) AS p;
 
 -- 6.6 母婴用品（parent=baby_mom）下 5 个二级
-INSERT INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
+INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
 SELECT name, MD5(name), code, keywords, 1, p.id, sort_order, 'manual', 0, NOW(), NOW()
 FROM (
   SELECT '奶粉辅食' AS name, 'baby_formula' AS code, '["奶粉","辅食","米粉","果泥","奶粉段","配方奶"]' AS keywords, 1 AS sort_order
@@ -203,7 +203,7 @@ FROM (
 CROSS JOIN (SELECT id FROM ai_cs_kb_category WHERE code = 'baby_mom' AND deleted = 0 LIMIT 1) AS p;
 
 -- 6.7 运动户外（parent=sports_outdoor）下 5 个二级
-INSERT INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
+INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
 SELECT name, MD5(name), code, keywords, 1, p.id, sort_order, 'manual', 0, NOW(), NOW()
 FROM (
   SELECT '运动器材' AS name, 'sports_equipment' AS code, '["哑铃","跑步机","瑜伽","健身","杠铃","拉力器"]' AS keywords, 1 AS sort_order
@@ -215,7 +215,7 @@ FROM (
 CROSS JOIN (SELECT id FROM ai_cs_kb_category WHERE code = 'sports_outdoor' AND deleted = 0 LIMIT 1) AS p;
 
 -- 6.8 图书教材（parent=books）下 5 个二级
-INSERT INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
+INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
 SELECT name, MD5(name), code, keywords, 1, p.id, sort_order, 'manual', 0, NOW(), NOW()
 FROM (
   SELECT '教材教辅' AS name, 'books_textbook' AS code, '["教材","教辅","课本","练习册","试卷","参考书"]' AS keywords, 1 AS sort_order
@@ -227,7 +227,7 @@ FROM (
 CROSS JOIN (SELECT id FROM ai_cs_kb_category WHERE code = 'books' AND deleted = 0 LIMIT 1) AS p;
 
 -- 6.9 艺术品收藏（parent=art_collection）下 5 个二级
-INSERT INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
+INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
 SELECT name, MD5(name), code, keywords, 1, p.id, sort_order, 'manual', 0, NOW(), NOW()
 FROM (
   SELECT '字画书法' AS name, 'art_calligraphy' AS code, '["字画","书法","国画","油画","水墨","篆刻"]' AS keywords, 1 AS sort_order
@@ -239,7 +239,7 @@ FROM (
 CROSS JOIN (SELECT id FROM ai_cs_kb_category WHERE code = 'art_collection' AND deleted = 0 LIMIT 1) AS p;
 
 -- 6.10 宠物用品（parent=pet_supplies）下 5 个二级
-INSERT INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
+INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
 SELECT name, MD5(name), code, keywords, 1, p.id, sort_order, 'manual', 0, NOW(), NOW()
 FROM (
   SELECT '宠物食品' AS name, 'pet_food' AS code, '["猫粮","狗粮","零食","罐头","主粮","幼猫","成猫"]' AS keywords, 1 AS sort_order
@@ -251,7 +251,7 @@ FROM (
 CROSS JOIN (SELECT id FROM ai_cs_kb_category WHERE code = 'pet_supplies' AND deleted = 0 LIMIT 1) AS p;
 
 -- 6.11 汽车用品（parent=auto_items）下 5 个二级
-INSERT INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
+INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
 SELECT name, MD5(name), code, keywords, 1, p.id, sort_order, 'manual', 0, NOW(), NOW()
 FROM (
   SELECT '汽车装饰' AS name, 'auto_decor' AS code, '["脚垫","座套","香水","挂件","方向盘套","贴纸"]' AS keywords, 1 AS sort_order
@@ -263,7 +263,7 @@ FROM (
 CROSS JOIN (SELECT id FROM ai_cs_kb_category WHERE code = 'auto_items' AND deleted = 0 LIMIT 1) AS p;
 
 -- 6.12 手工DIY（parent=handcraft）下 5 个二级
-INSERT INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
+INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
 SELECT name, MD5(name), code, keywords, 1, p.id, sort_order, 'manual', 0, NOW(), NOW()
 FROM (
   SELECT '手工材料' AS name, 'handcraft_materials' AS code, '["毛线","布料","串珠","粘土","颜料","画笔"]' AS keywords, 1 AS sort_order
@@ -275,7 +275,7 @@ FROM (
 CROSS JOIN (SELECT id FROM ai_cs_kb_category WHERE code = 'handcraft' AND deleted = 0 LIMIT 1) AS p;
 
 -- 6.13 虚拟货源（parent=virtual_goods）下 6 个二级
-INSERT INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
+INSERT IGNORE INTO ai_cs_kb_category (name, name_hash, code, keywords, is_system, parent_id, sort_order, source, deleted, created_time, updated_time)
 SELECT name, MD5(name), code, keywords, 1, p.id, sort_order, 'manual', 0, NOW(), NOW()
 FROM (
   SELECT '软件安装包' AS name, 'virtual_software' AS code, '["安装包","破解","激活","软件","Windows","Office"]' AS keywords, 1 AS sort_order

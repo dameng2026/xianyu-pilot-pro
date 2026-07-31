@@ -38,7 +38,7 @@
 -- ----------------------------------------------------------------------------
 -- 1. digital_phone（手机）- 30 条
 -- ----------------------------------------------------------------------------
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -85,7 +85,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ----------------------------------------------------------------------------
 -- 2. digital_computer（电脑平板）- 30 条
 -- ----------------------------------------------------------------------------
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -132,7 +132,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ----------------------------------------------------------------------------
 -- 3. digital_camera（相机摄影）- 30 条
 -- ----------------------------------------------------------------------------
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -179,7 +179,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ----------------------------------------------------------------------------
 -- 4. digital_audio（音频设备）- 30 条
 -- ----------------------------------------------------------------------------
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -226,7 +226,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ----------------------------------------------------------------------------
 -- 5. digital_appliance_home（家用电器）- 30 条
 -- ----------------------------------------------------------------------------
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,
@@ -273,7 +273,7 @@ JOIN ai_cs_kb_category c ON c.code = q.code AND c.deleted = 0 AND c.parent_id IS
 -- ----------------------------------------------------------------------------
 -- 6. digital_smart（智能设备）- 30 条
 -- ----------------------------------------------------------------------------
-INSERT INTO ai_cs_learned_kb (
+INSERT IGNORE INTO ai_cs_learned_kb (
     category_id, question, answer, tags, source_summary,
     content_hash, score, review_status, enabled, vector_indexed,
     source_count, source_conv_ids, learn_batch_id, sensitive_filtered,

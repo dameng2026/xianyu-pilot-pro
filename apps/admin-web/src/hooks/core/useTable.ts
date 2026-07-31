@@ -342,7 +342,12 @@ function useTableImpl<TApiFn extends (params: any) => Promise<any>>(
         }
       }
 
-      const response = await apiFn(requestParams)
+      // 传递 AbortController.signal 给 apiFn，使 cancelRequest 真正能取消底层 axios 请求
+      // 注意：requestParams 类型可能不含 signal 字段，此处用类型断言扩展
+      const response = await apiFn({
+        ...requestParams,
+        signal: currentController.signal,
+      } as TParams)
 
       // 检查请求是否被取消
       if (currentController.signal.aborted) {

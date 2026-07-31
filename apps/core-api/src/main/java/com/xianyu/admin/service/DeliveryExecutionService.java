@@ -147,18 +147,45 @@ public class DeliveryExecutionService {
                 throw new BizException(409, "订单缺少可用的闲鱼账号，无法发货");
             }
 
-            // === 重复发货最后防线：检查该订单是否已有成功的发货记录 ===
+            // === 重复发货最后防线：检查该订单是否已有成功/近期失败的发货记录 ===
             // 背景：用户反馈一个订单发了7张卡密，根因是确认发货失败导致 status=3 →
             // retryFailedDeliveries 重置 → 再次认领新卡密。此处防止任何路径的重复发货。
+            //
+            // 去重规则（与 project_memory.md 硬约束一致）：
+            // 1. status IN (1,2) 的成功记录：永久去重（id<>? 排除当前记录）
+            // 2. status=3 的失败记录：1 小时窗口内去重，避免闲鱼 WS 周期性推送付款消息触发
+            //    "WS 推送 → 发货失败 → 不去重 → 闲鱼再推送 → 再失败" 死循环
+            //    （2026-07-28 事故：30+ 分钟内产生 220+ 条失败记录）
             Integer existingSuccessCount = jdbcTemplate.queryForObject(
                     "SELECT COUNT(*) FROM delivery_record " +
-                            "WHERE tenant_id=? AND order_id=? AND deleted=0 AND status=2 " +
-                            "AND id<>? LIMIT 1",
+                            "WHERE tenant_id=? AND order_id=? AND deleted=0 " +
+                            "AND ((status IN (1,2) AND id<>?) " +
+                            "     OR (status=3 AND created_time >= DATE_SUB(NOW(), INTERVAL 1 HOUR))) " +
+                            "LIMIT 1",
                     Integer.class, tenantId, orderId, recordId);
             if (existingSuccessCount != null && existingSuccessCount > 0) {
-                log.warn("重复发货最后防线拦截: tenantId={} orderId={} recordId={}（该订单已有成功发货记录，跳过）",
+                log.warn("重复发货最后防线拦截: tenantId={} orderId={} recordId={}（已有成功发货记录或近1小时失败记录，跳过）",
                         tenantId, orderId, recordId);
                 // 直接将当前记录标记为成功（已通过其他记录发货），避免后续重试
+                jdbcTemplate.update(
+                        "UPDATE delivery_record SET status=2, delivery_status='success', " +
+                                "error_message=NULL, fail_reason=NULL, " +
+                                "updated_time=NOW() WHERE id=? AND tenant_id=?",
+                        recordId, tenantId);
+                return;
+            }
+
+            // 第二道防线：xianyu_trade_order.order_status=3（已发货）强校验
+            // 即使 delivery_record 无记录，只要订单已被标记为已发货就跳过
+            // （防止 delivery_record 与订单状态不一致时重复发货）
+            Integer alreadyShippedCount = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM xianyu_trade_order " +
+                            "WHERE tenant_id=? AND external_order_id=? AND deleted=0 " +
+                            "AND order_status=3 LIMIT 1",
+                    Integer.class, tenantId, orderId);
+            if (alreadyShippedCount != null && alreadyShippedCount > 0) {
+                log.warn("重复发货最后防线拦截（订单已发货）: tenantId={} orderId={} recordId={}（xianyu_trade_order.order_status=3）",
+                        tenantId, orderId, recordId);
                 jdbcTemplate.update(
                         "UPDATE delivery_record SET status=2, delivery_status='success', " +
                                 "error_message=NULL, fail_reason=NULL, " +

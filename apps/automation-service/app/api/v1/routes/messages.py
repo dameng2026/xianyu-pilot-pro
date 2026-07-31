@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import math
 from fastapi import APIRouter, Depends, Query
@@ -252,16 +253,36 @@ async def batch_query_avatars(
     if not account_id or not queries:
         return ResultObject.success({"items": []})
 
+    # 性能优化：原 for 循环串行调用闲鱼 API，N 个查询 = N × (远程HTTP + DB UPDATE) 串行等待。
+    # 改为 Semaphore(4) 并发 + 单次 5 秒超时，参考 _hydrate_online_conversation_avatars 的并发模式。
+    cids = [str(q.get("cid") or q.get("sid") or "").strip() for q in queries]
+    cids = [c for c in cids if c]
+    if not cids:
+        return ResultObject.success({"items": []})
+
+    semaphore = asyncio.Semaphore(4)
+
+    async def _fetch_one(cid: str) -> dict[str, str]:
+        async with semaphore:
+            try:
+                # 单次远程查询加 5 秒超时，避免闲鱼 API 慢响应卡死整批
+                info = await asyncio.wait_for(
+                    _fetch_remote_conversation_user_info(int(account_id), cid),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("查询头像超时 cid=%s accountId=%s", cid, account_id)
+                return {}
+            except Exception as exc:
+                logger.warning("批量查询头像失败 cid=%s errorType=%s", cid, type(exc).__name__)
+                return {}
+        return info
+
+    # 并发拉取所有头像信息
+    infos = await asyncio.gather(*(_fetch_one(cid) for cid in cids))
+
     items = []
-    for q in queries:
-        cid = str(q.get("cid") or q.get("sid") or "").strip()
-        if not cid:
-            continue
-        try:
-            info = await _fetch_remote_conversation_user_info(int(account_id), cid)
-        except Exception as exc:
-            logger.warning("批量查询头像失败 errorType=%s", type(exc).__name__)
-            info = {}
+    for cid, info in zip(cids, infos):
         avatar = info.get("avatar") or ""
         nick = info.get("nick") or ""
         if avatar or nick:

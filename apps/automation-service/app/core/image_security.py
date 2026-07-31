@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 from dataclasses import dataclass
 
 import httpx
@@ -24,6 +25,15 @@ _FORMAT_METADATA = {
     "WEBP": (".webp", "image/webp"),
 }
 _ALLOWED_MEDIA_TYPES = {metadata[1] for metadata in _FORMAT_METADATA.values()}
+
+# 自动转 WebP 开关：上传 JPEG/PNG 时自动转为 WebP 以减小体积（约减少 30-50%）。
+# 通过环境变量 UPLOAD_AUTO_WEBP=false 可关闭（默认开启）。
+# GIF 不转换以保留动图；WebP 不需要再转；转换后体积反而变大的也保留原格式。
+_AUTO_WEBP_ENABLED = os.getenv("UPLOAD_AUTO_WEBP", "true").lower() in ("1", "true", "yes", "on")
+# WebP 质量：85 在视觉无损与体积之间取得良好平衡（参考 Pillow 官方推荐）
+_WEBP_QUALITY = int(os.getenv("UPLOAD_WEBP_QUALITY", "85") or 85)
+# 仅对大于此体积的图片做转换，过小的图片转换收益有限且可能反而变大
+_WEBP_MIN_SOURCE_BYTES = 50 * 1024  # 50KB
 
 
 @dataclass(frozen=True)
@@ -73,6 +83,59 @@ def validate_image_bytes(
         media_type=detected_media_type,
         width=width,
         height=height,
+    )
+
+
+def maybe_convert_to_webp(image: ValidatedImage) -> ValidatedImage:
+    """将 JPEG/PNG 静态图自动转为 WebP 以减小体积；其余格式原样返回。
+
+    转换条件（全部满足才转）：
+    1. 全局开关 UPLOAD_AUTO_WEBP=true（默认开启）
+    2. 源格式为 JPEG 或 PNG（GIF 保留动图、WebP 已是目标格式）
+    3. 源体积 > 50KB（过小图片转换收益有限）
+    4. 转换后体积严格更小（否则保留原格式）
+
+    返回新的 ValidatedImage（content/extension/media_type/digest 都更新）。
+    任何转换异常都不阻断上传，回退返回原图。
+    """
+    if not _AUTO_WEBP_ENABLED:
+        return image
+    source_format = None
+    for fmt, (_, _) in _FORMAT_METADATA.items():
+        # 通过 media_type 反查 format
+        if image.media_type == _FORMAT_METADATA[fmt][1]:
+            source_format = fmt
+            break
+    if source_format not in ("JPEG", "PNG"):
+        return image
+    if len(image.content) <= _WEBP_MIN_SOURCE_BYTES:
+        return image
+
+    try:
+        with Image.open(io.BytesIO(image.content)) as img:
+            # PNG 可能含 alpha 通道，转 WebP 时保留透明度
+            buffer = io.BytesIO()
+            save_kwargs: dict = {"format": "WEBP", "quality": _WEBP_QUALITY, "method": 4}
+            if img.mode in ("RGBA", "LA", "P"):
+                # P 模式（调色板）需要先转 RGBA 才能正确处理透明度
+                if img.mode == "P":
+                    img = img.convert("RGBA")
+                save_kwargs["lossless"] = False
+            img.save(buffer, **save_kwargs)
+            webp_bytes = buffer.getvalue()
+    except (Image.DecompressionBombError, UnidentifiedImageError, OSError, ValueError):
+        return image
+
+    # 转换后体积反而变大（小图或已高度压缩），保留原格式
+    if len(webp_bytes) >= len(image.content):
+        return image
+
+    return ValidatedImage(
+        content=webp_bytes,
+        extension=".webp",
+        media_type="image/webp",
+        width=image.width,
+        height=image.height,
     )
 
 
@@ -138,5 +201,6 @@ __all__ = [
     "MAX_IMAGE_PIXELS",
     "ValidatedImage",
     "download_public_image",
+    "maybe_convert_to_webp",
     "validate_image_bytes",
 ]

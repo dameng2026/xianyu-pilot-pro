@@ -5,6 +5,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -173,7 +175,10 @@ public class FeatureSwitchService {
      *
      * 兜底策略：即使读取存储配置出现任何未预期异常，也降级为默认配置返回，
      * 避免用户端「功能对比」页面因后端 5xx 错误而显示加载失败。
+     *
+     * 缓存：结果缓存到 featureSwitches，saveConfig 后失效。
      */
+    @Cacheable(value = "featureSwitches", key = "'all'")
     public List<Map<String, Object>> listSwitches() {
         Map<String, Map<String, Object>> stored;
         try {
@@ -426,6 +431,7 @@ public class FeatureSwitchService {
      * 管理端：保存功能开关配置（整体覆盖）。
      */
     @Transactional
+    @CacheEvict(value = "featureSwitches", allEntries = true)
     public void saveConfig(List<Map<String, Object>> features) {
         if (features == null) throw new BizException(400, "功能开关配置不能为空");
         Map<String, Map<String, Object>> normalized = normalizeConfig(features);

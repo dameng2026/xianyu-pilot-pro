@@ -424,8 +424,10 @@ public class DeliveryGoodsConfigService {
             } else {
                 Long sourceId = nullablePositiveLong(timingConfig.get("sourceId"), "发货正文来源无效");
                 String content = text(timingConfig.get("content"));
-                if (sourceId == null && content.isBlank()) {
-                    throw new BizException(422, "启用文本发货前请填写发货正文或选择正文来源");
+                boolean hasSegments = hasNonEmptySegments(timingConfig.get("segments"));
+                // V1.66: 文本发货启用时，content / sourceId / segments 三者至少有一个非空
+                if (sourceId == null && content.isBlank() && !hasSegments) {
+                    throw new BizException(422, "启用文本发货前请填写发货正文、多条正文或选择正文来源");
                 }
                 if (sourceId != null) {
                     requireOwnedReference("delivery_text_source", tenantId, sourceId, "发货正文来源不存在或不可用");
@@ -433,6 +435,81 @@ public class DeliveryGoodsConfigService {
             }
         }
         config.put(patch.timing(), timingConfig);
+    }
+
+    /**
+     * 判断 segments 字段是否为非空数组。
+     */
+    private boolean hasNonEmptySegments(Object segments) {
+        if (segments instanceof List<?> list) {
+            return !list.isEmpty();
+        }
+        return false;
+    }
+
+    /**
+     * 规范化 segments 字段用于写入 config_json.payDelivery.segments。
+     * 校验规则与 DeliveryTextSourceService.serializeSegments 一致：
+     *   - null → null（清空旧值）
+     *   - 必须是数组，最多 20 条
+     *   - 每个 segment: type ∈ {text, image}，text/image 互斥
+     * 返回 List 形式（由 objectMapper 序列化为 JSON 数组存入 config_json）。
+     */
+    private List<Map<String, Object>> normalizeSegmentsForConfig(Object raw) {
+        if (raw == null) return null;
+        if (!(raw instanceof List<?> rawList)) {
+            throw new BizException(422, "正文配置格式错误，应为数组");
+        }
+        if (rawList.isEmpty()) return null;
+        if (rawList.size() > 20) {
+            throw new BizException(422, "正文条数过多，最多支持 20 条");
+        }
+        List<Map<String, Object>> normalized = new ArrayList<>(rawList.size());
+        for (int i = 0; i < rawList.size(); i++) {
+            Object item = rawList.get(i);
+            if (!(item instanceof Map<?, ?> rawMap)) {
+                throw new BizException(422, "第 " + (i + 1) + " 条正文格式错误，应为对象");
+            }
+            Object typeVal = rawMap.get("type");
+            String type = text(typeVal != null ? typeVal : "text").toLowerCase();
+            String content = text(rawMap.get("content"));
+            String imageUrl = text(rawMap.get("imageUrl"));
+            if ("image".equals(type)) {
+                if (imageUrl.isBlank()) {
+                    throw new BizException(422, "第 " + (i + 1) + " 条正文为图片类型，必须上传图片");
+                }
+                if (!content.isBlank()) {
+                    throw new BizException(422, "第 " + (i + 1) + " 条正文为图片类型，不能同时填写文本（每条只能文本或图片二选一）");
+                }
+                if (imageUrl.length() > 500) {
+                    throw new BizException(422, "第 " + (i + 1) + " 条正文图片地址过长");
+                }
+            } else {
+                if (!"text".equals(type)) {
+                    throw new BizException(422, "第 " + (i + 1) + " 条正文类型无效，仅支持 text 或 image");
+                }
+                if (content.isBlank()) {
+                    throw new BizException(422, "第 " + (i + 1) + " 条正文内容不能为空");
+                }
+                if (!imageUrl.isBlank()) {
+                    throw new BizException(422, "第 " + (i + 1) + " 条正文为文本类型，不能同时上传图片（每条只能文本或图片二选一）");
+                }
+                if (content.length() > 5000) {
+                    throw new BizException(422, "第 " + (i + 1) + " 条正文内容超过 5000 字符");
+                }
+            }
+            Map<String, Object> seg = new LinkedHashMap<>();
+            seg.put("type", type);
+            if ("image".equals(type)) {
+                seg.put("imageUrl", imageUrl);
+                Object assetId = rawMap.get("assetId");
+                if (assetId != null) seg.put("assetId", assetId);
+            } else {
+                seg.put("content", content);
+            }
+            normalized.add(seg);
+        }
+        return normalized;
     }
 
     private ConfigPatch parsePatch(Map<String, Object> raw) {
@@ -461,6 +538,10 @@ public class DeliveryGoodsConfigService {
         putString(values, raw, "header", 2_000);
         putString(values, raw, "content", 20_000);
         putString(values, raw, "footer", 2_000);
+        // V1.66: 多条正文 + 图片发货（每条 segment 为 text 或 image 二选一）
+        if (raw.containsKey("segments")) {
+            values.put("segments", normalizeSegmentsForConfig(raw.get("segments")));
+        }
         if (raw.containsKey("segmentSend")) values.put("segmentSend", intFlag(raw.get("segmentSend"), 0));
         if (raw.containsKey("autoDisableOnLowStock")) {
             values.put("autoDisableOnLowStock", intFlag(raw.get("autoDisableOnLowStock"), 0));

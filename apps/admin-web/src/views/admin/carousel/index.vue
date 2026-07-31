@@ -369,7 +369,7 @@ async function handleSave() {
     }
 
     ElMessage.success('轮播配置保存成功')
-    Object.assign(form, buildUnifiedCarouselConfig([saved]))
+    // 保存后直接从服务端重载，避免本地 Object.assign 与 loadConfig 两次赋值导致闪烁
     await loadConfig()
   } catch (e: any) {
     ElMessage.error(e.message || '保存失败')

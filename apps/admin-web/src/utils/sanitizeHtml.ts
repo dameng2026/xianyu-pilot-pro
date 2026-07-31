@@ -8,7 +8,10 @@ const SAFE_URL_PATTERN = /^(https?:|mailto:|tel:|data:image\/(png|gif|jpeg|jpg|w
 export function sanitizeHtml(raw: string | null | undefined): string {
   const html = String(raw || '')
   if (typeof window === 'undefined' || typeof window.DOMParser === 'undefined') {
-    return html.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+    // SSR 环境：移除所有受限标签（含内容），与浏览器端 BLOCKED_TAGS 策略对齐
+    return html
+      .replace(/<(script|iframe|object|embed|link|meta|base|form|input|button|textarea|select|option)[\s\S]*?>[\s\S]*?<\/\1>/gi, '')
+      .replace(/<(script|iframe|object|embed|link|meta|base|input|button|textarea|select|option)[^>]*>/gi, '')
   }
 
   const parser = new DOMParser()

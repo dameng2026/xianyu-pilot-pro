@@ -8,6 +8,8 @@ import com.xianyu.admin.common.PageUtils;
 import com.xianyu.admin.security.UserContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -810,6 +812,14 @@ public class AiBillingService {
         return 0;
     }
 
+    /**
+     * 同步模型配置到 ai_model_price_config 表。
+     *
+     * 缓存：模型配置写入后，清空 modelConfig cache（供 ModelConfigService 读取使用）。
+     * 注意：本方法可能被同类的 normalizeAndSyncAllModelConfigs 调用，self-invocation 下 @CacheEvict 不生效；
+     * 调用方需通过 Spring 代理调用本方法（外部 Controller 调用是走代理的）。
+     */
+    @CacheEvict(value = "modelConfig", allEntries = true)
     public Map<String, Object> normalizeAndSyncModelConfig(String moduleKey, Map<String, Object> config) {
         if (!isModelConfigModule(moduleKey) || config == null) return config;
         try {
@@ -853,7 +863,10 @@ public class AiBillingService {
     /**
      * 读取通用模型三档定价配置。
      * 若某档在表中不存在，使用默认值 3。
+     *
+     * 缓存：按 moduleKey 缓存到 tierConfig；saveTierConfig 后失效。
      */
+    @Cacheable(value = "tierConfig", key = "#moduleKey", condition = "#moduleKey != null")
     public com.xianyu.admin.dto.TierPriceConfigDTO getTierConfig(String moduleKey) {
         if (!StringUtils.hasText(moduleKey)) moduleKey = "model-config-general";
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
@@ -886,8 +899,12 @@ public class AiBillingService {
     /**
      * 保存通用模型三档定价配置。
      * 使用 UPSERT 语义：记录存在则更新，不存在则插入。
+     *
+     * 缓存：写入成功后清空整个 tierConfig cache（allEntries=true），
+     * 因为可能影响多个 moduleKey 的聚合视图。
      */
     @Transactional
+    @CacheEvict(value = "tierConfig", allEntries = true)
     public com.xianyu.admin.dto.TierPriceConfigDTO saveTierConfig(com.xianyu.admin.dto.TierPriceConfigDTO dto) {
         String moduleKey = StringUtils.hasText(dto.getModuleKey()) ? dto.getModuleKey() : "model-config-general";
         upsertTierPrice(moduleKey, 0, dto.getNormal());

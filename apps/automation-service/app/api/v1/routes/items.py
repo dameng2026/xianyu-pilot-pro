@@ -912,7 +912,11 @@ async def republish_item(
         tenant_id = int(req.get("tenantId") or req.get("tenant_id") or req.get("_tenantId") or 0)
         if not tenant_id:
             return ResultObject.failed("缺少租户上下文")
-        external_goods_id = str(req.get("itemId") or req.get("item_id") or "").strip()
+        # 兼容前端 xyGoodsId / xy_goods_id 与文档示例 itemId / item_id 两种命名
+        external_goods_id = str(
+            req.get("itemId") or req.get("item_id")
+            or req.get("xyGoodsId") or req.get("xy_goods_id") or ""
+        ).strip()
         if not external_goods_id:
             return ResultObject.failed("缺少参数 itemId")
 

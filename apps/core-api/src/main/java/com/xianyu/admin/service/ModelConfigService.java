@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xianyu.admin.common.BizException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -18,6 +19,11 @@ import java.util.Map;
  * Reads admin model configuration from admin_module_record.
  * Model configuration is maintained in admin-web -> 模型配置 and is the source of truth
  * for frontend AI rewrite and image generation feature switches.
+ *
+ * 缓存策略：
+ * - 所有读取方法的结果缓存到 modelConfig，按方法名/参数作 key 隔离
+ * - 写操作在 AiBillingService.normalizeAndSyncModelConfig 中触发 @CacheEvict(allEntries=true)
+ * - 注意 self-invocation：getXxx() 内部调用 getConfig() 不走代理，但 getXxx() 自身结果被缓存
  */
 @Service
 public class ModelConfigService {
@@ -38,6 +44,7 @@ public class ModelConfigService {
         this.sensitiveWordService = sensitiveWordService;
     }
 
+    @Cacheable(value = "modelConfig", key = "#moduleKey", condition = "#moduleKey != null")
     public Map<String, Object> getConfig(String moduleKey) {
         try {
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(
@@ -62,10 +69,12 @@ public class ModelConfigService {
         }
     }
 
+    @Cacheable(value = "modelConfig", key = "'general'")
     public Map<String, Object> getGeneralConfig() {
         return getConfig(GENERAL);
     }
 
+    @Cacheable(value = "modelConfig", key = "'image'")
     public Map<String, Object> getImageConfig() {
         Map<String, Object> image = getConfig(IMAGE);
         Map<String, Object> general = getGeneralConfig();
@@ -87,11 +96,13 @@ public class ModelConfigService {
         return true;
     }
 
+    @Cacheable(value = "modelConfig", key = "'general_text_configured'")
     public boolean isGeneralTextConfigured() {
         Map<String, Object> cfg = getGeneralConfig();
         return isEnabled(cfg) && hasText(first(cfg, "baseUrl")) && hasText(first(cfg, "apiKey")) && hasText(first(cfg, "defaultModel", "modelName", "model"));
     }
 
+    @Cacheable(value = "modelConfig", key = "'image_configured'")
     public boolean isImageConfigured() {
         Map<String, Object> cfg = getImageConfig();
         return isEnabled(cfg) && hasText(first(cfg, "baseUrl")) && hasText(first(cfg, "apiKey")) && hasText(first(cfg, "modelName", "defaultModel", "model"));
@@ -107,7 +118,11 @@ public class ModelConfigService {
      *
      * 必含词仅来自通用模型配置的「polishKeywords」。
      * 前台用户不可见、不可改。返回可直接拼接到 system prompt 的字符串；无任何限制时返回空字符串。
+     *
+     * 缓存：结果缓存到 modelConfig key='polish_restriction'。
+     * 注意：敏感词变更不会触发 @CacheEvict，依赖 5min TTL 自然收敛。
      */
+    @Cacheable(value = "modelConfig", key = "'polish_restriction'")
     public String buildPolishRestriction() {
         Map<String, Object> cfg = getGeneralConfig();
         // 默认禁止词始终生效
@@ -159,6 +174,7 @@ public class ModelConfigService {
         return sb.toString().trim();
     }
 
+    @Cacheable(value = "modelConfig", key = "'all_images'")
     public List<Map<String, Object>> getAllImageConfigs() {
         List<Map<String, Object>> configs = new ArrayList<>();
         List<String> keys = List.of(IMAGE, IMAGE_2, IMAGE_3);
@@ -173,6 +189,7 @@ public class ModelConfigService {
         return configs;
     }
 
+    @Cacheable(value = "modelConfig", key = "'enabled_images'")
     public List<Map<String, Object>> getEnabledImageConfigs() {
         List<Map<String, Object>> all = getAllImageConfigs();
         List<Map<String, Object>> enabled = new ArrayList<>();
@@ -184,6 +201,7 @@ public class ModelConfigService {
         return enabled;
     }
 
+    @Cacheable(value = "modelConfig", key = "'image_by_key_' + #modelKey", condition = "#modelKey != null")
     public Map<String, Object> getImageConfigByKey(String modelKey) {
         if (!List.of(IMAGE, IMAGE_2, IMAGE_3).contains(modelKey)) {
             return getImageConfig();
@@ -195,6 +213,7 @@ public class ModelConfigService {
         return cfg;
     }
 
+    @Cacheable(value = "modelConfig", key = "'image_prompts'")
     public List<Map<String, Object>> getImagePromptConfigs() {
         try {
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(
@@ -224,6 +243,7 @@ public class ModelConfigService {
         }
     }
 
+    @Cacheable(value = "modelConfig", key = "'enabled_image_prompts'")
     public List<Map<String, Object>> getEnabledImagePromptConfigs() {
         List<Map<String, Object>> enabled = new ArrayList<>();
         for (Map<String, Object> cfg : getImagePromptConfigs()) {

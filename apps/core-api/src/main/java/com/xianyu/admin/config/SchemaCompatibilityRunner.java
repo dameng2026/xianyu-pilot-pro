@@ -59,6 +59,7 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
         ensureMiscTables();
         ensureOpenSourceBridgeTables();
         ensureMallTables();
+        ensureSupplyTables();
         ensureAiCsTables();
         ensureRateTables();
         ensureRefundTables();
@@ -2465,6 +2466,69 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
     }
 
     /**
+     * 供货中心表（V1.67/V1.68）：供货商品 / 通用审核记录。
+     * supply_product 存储供货商提交的文本/卡密货源，audit_record 记录通用审核流转。
+     */
+    private void ensureSupplyTables() {
+        createTable("""
+                CREATE TABLE IF NOT EXISTS supply_product (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    tenant_id BIGINT NOT NULL,
+                    seller_id BIGINT NOT NULL COMMENT '供货商用户ID',
+                    product_type VARCHAR(10) NOT NULL DEFAULT 'text' COMMENT 'text=文本货源, card=卡密货源',
+                    title VARCHAR(200) NOT NULL,
+                    subtitle VARCHAR(200) DEFAULT '',
+                    content TEXT COMMENT '商品描述/正文',
+                    delivery_content TEXT COMMENT '文本货源的发货内容',
+                    cover_url VARCHAR(500) DEFAULT '',
+                    images_json JSON COMMENT '商品图片数组',
+                    category VARCHAR(50) DEFAULT '' COMMENT 'AI分类',
+                    price_cent BIGINT NOT NULL DEFAULT 0 COMMENT '售价(分)',
+                    stock INT NOT NULL DEFAULT -1 COMMENT '库存(-1=无限,文本货源默认-1)',
+                    card_group_id BIGINT NULL COMMENT '卡密货源关联的 card_group.id',
+                    audit_status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/rejected/approved',
+                    audit_reason VARCHAR(500) DEFAULT '' COMMENT '驳回原因',
+                    audit_at DATETIME NULL,
+                    auditor_id BIGINT NULL,
+                    status TINYINT NOT NULL DEFAULT 0 COMMENT '0=下架,1=上架(仅 audit_status=approved 时可上架)',
+                    weight INT NOT NULL DEFAULT 0 COMMENT '展示权重(越大越靠前,后台可调)',
+                    bought_count INT NOT NULL DEFAULT 0 COMMENT '销量',
+                    rating_avg DECIMAL(3,2) DEFAULT 5.00 COMMENT '平均评分',
+                    rating_count INT DEFAULT 0,
+                    sort_order INT DEFAULT 0,
+                    commission_rate DECIMAL(5,4) DEFAULT 0.0500 COMMENT '单品抽佣率(默认5%),0=用全局配置',
+                    created_time DATETIME,
+                    updated_time DATETIME,
+                    deleted TINYINT NOT NULL DEFAULT 0,
+                    INDEX idx_supply_seller(seller_id, deleted, audit_status),
+                    INDEX idx_supply_status(audit_status, status, deleted),
+                    INDEX idx_supply_category(category, status, deleted),
+                    INDEX idx_supply_card_group(card_group_id),
+                    INDEX idx_supply_weight(weight, status, deleted)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='供货商品表'
+                """, "supply_product");
+
+        createTable("""
+                CREATE TABLE IF NOT EXISTS audit_record (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    tenant_id BIGINT NOT NULL,
+                    module_key VARCHAR(40) NOT NULL COMMENT 'supply_product/other_module',
+                    business_id BIGINT NOT NULL COMMENT '业务记录ID(如 supply_product.id)',
+                    submitter_id BIGINT NOT NULL,
+                    auditor_id BIGINT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/approved/rejected',
+                    reason VARCHAR(500) DEFAULT '' COMMENT '驳回原因或通过备注',
+                    snapshot_json JSON COMMENT '提交时数据快照',
+                    submitted_at DATETIME,
+                    audited_at DATETIME,
+                    INDEX idx_audit_module(module_key, status),
+                    INDEX idx_audit_submitter(submitter_id, status),
+                    INDEX idx_audit_auditor(auditor_id, status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='通用审核记录'
+                """, "audit_record");
+    }
+
+    /**
      * 增长合伙人系统表（V1.65）：代理等级配置 / 邀请码 / 推荐关系 / 奖励记录 / 余额 / 提现申请。
      * 同时为 sys_user 增加 balance（现金余额，分）与 referrer_id（直接推荐人）两列。
      */
@@ -2647,6 +2711,8 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
         executeQuietly("UPDATE billing_plan SET price_year_cent = price_cent WHERE period_type = 'year' AND price_cent > 0 AND price_year_cent = 0 AND deleted = 0");
 
         addColumnIfMissing("mall_product", "copy", "TEXT NULL");
+        addColumnIfMissing("mall_product", "weight", "INT NOT NULL DEFAULT 0 COMMENT '展示权重(越大越靠前)'");
+        addColumnIfMissing("card_group", "linked_supply_product_id", "BIGINT NULL COMMENT '关联的供货商品ID'");
 
         // 售整自动上架功能字段（V1.38）
         addColumnIfMissing("xianyu_goods", "auto_relist_enabled", "TINYINT NOT NULL DEFAULT 0 COMMENT '售整自动上架开关：0关 1开'");
@@ -2874,6 +2940,8 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
         addColumnIfMissing("delivery_text_source", "content", "TEXT NULL");
         addColumnIfMissing("delivery_text_source", "remark", "VARCHAR(500) NULL");
         addColumnIfMissing("delivery_text_source", "deleted", "TINYINT DEFAULT 0");
+        // V1.66: 多条正文 + 图片发货（每条 segment 为 text 或 image 二选一，空则回退 content 单条发送）
+        addColumnIfMissing("delivery_text_source", "segments", "JSON NULL COMMENT '多条正文配置（JSON 数组，每条 type=text/image 二选一，空则回退 content 单条发送）'");
         addColumnIfMissing("card_group", "description", "TEXT NULL");
         addColumnIfMissing("card_group", "card_prefix", "VARCHAR(120) NULL");
         addColumnIfMissing("card_group", "password_prefix", "VARCHAR(120) NULL");

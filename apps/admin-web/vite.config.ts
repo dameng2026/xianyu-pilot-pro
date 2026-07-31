@@ -8,8 +8,10 @@ import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import ElementPlus from 'unplugin-element-plus/vite'
 import tailwindcss from '@tailwindcss/vite'
 import viteCompression from 'vite-plugin-compression'
+// Bundle 分析工具：通过 --mode analyze 启用，生成 stats.html 用于分析产物体积分布
+import { visualizer } from 'rollup-plugin-visualizer'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
@@ -118,7 +120,26 @@ export default defineConfig({
       threshold: 10240,
       deleteOriginFile: false,
     }),
-  ],
+    // Pre-compress assets to .br at build time for nginx `brotli_static on`.
+    // Brotli yields 10-20% smaller payloads than gzip; modern browsers support it.
+    // Server Nginx must be compiled with ngx_brotli (see deploy/nginx/brotli.conf).
+    viteCompression({
+      algorithm: 'brotliCompress',
+      ext: '.br',
+      threshold: 10240,
+      deleteOriginFile: false,
+    }),
+    // Bundle 分析：仅在 --mode analyze 时启用，生成 stats.html 在 dist/ 下。
+    // 用法：npm run analyze
+    // 产物：dist/stats.html（用浏览器打开查看各 chunk 体积分布，定位可拆分的大依赖）
+    mode === 'analyze' && visualizer({
+      filename: 'dist/stats.html',
+      open: false,
+      gzipSize: true,
+      brotliSize: true,
+      template: 'treemap',
+    }),
+  ].filter(Boolean),
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
@@ -184,4 +205,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))

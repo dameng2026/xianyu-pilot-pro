@@ -977,7 +977,9 @@
       list.records = data.records || []
       list.total = data.total || 0
       // 从首条记录提取用户名/账号名提示
-      if (userIdFilter.value && list.records.length > 0) {
+      if (list.records.length > 0 && list.records[0].accountName) {
+        usernameHint.value = list.records[0].accountName || ''
+      } else {
         usernameHint.value = ''
       }
       listState.value = 'ready'

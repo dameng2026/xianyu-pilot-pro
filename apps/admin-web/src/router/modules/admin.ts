@@ -148,6 +148,16 @@ export const adminRoutes: AppRouteRecord[] = [
     ]
   },
   {
+    name: 'AdminSupply',
+    path: '/admin/supply',
+    component: '/index/index',
+    meta: { title: '供货管理', icon: 'ri:shield-star-line', roles: ADMIN_OPERATORS },
+    children: [
+      { path: 'audit', name: 'AdminSupplyAudit', component: '/admin/supply/audit/index', meta: { title: '审核工作台', icon: 'ri:check-double-line', roles: ADMIN_OPERATORS } as any },
+      { path: 'weight', name: 'AdminSupplyWeight', component: '/admin/supply/weight/index', meta: { title: '权重调整', icon: 'ri:scales-2-line', roles: ADMIN_OPERATORS } as any }
+    ]
+  },
+  {
     name: 'System',
     path: '/system',
     component: '/index/index',

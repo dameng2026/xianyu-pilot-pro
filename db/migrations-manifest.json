@@ -534,6 +534,30 @@
           "sha256": "2b8fc726b4da6c2a6beff085a26665ba6c1ceedda6e8b0232405685840bfb436",
           "risk": "expand",
           "rollback": "restore"
+        },
+        {
+          "version": "1.66",
+          "description": "add segments JSON column to delivery_text_source for multi-segment delivery (text/image per segment, mutually exclusive); backward compatible with existing content column",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.66__add_delivery_text_source_segments.sql",
+          "sha256": "06c245b46f5cd644fea7c2f050a51d837ada1ddac3d89ca9d584edbf682c228c",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.67",
+          "description": "create supply_product and audit_record tables for supply center; add linked_supply_product_id column to card_group",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.67__create_supply_product_tables.sql",
+          "sha256": "f9ff7d3e1e2103ee4bc93e9443c91a1368256074831c0c8829205527f4d558fa",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.68",
+          "description": "add weight column to mall_product for display ordering control",
+          "path": "apps/core-api/src/main/resources/db/migration/V1.68__add_mall_product_weight.sql",
+          "sha256": "17bf590b18fa3d1b98a58e5005e0252a24c062a33f46974839ea1c9607b62b3e",
+          "risk": "expand",
+          "rollback": "restore"
         }
       ],
       "quarantined": [
@@ -751,6 +775,22 @@
           "description": "auto rate scheduler: add schedule_hour column and execution log table",
           "path": "apps/automation-service/migrations/V1.25__add_auto_rate_schedule_and_logs.sql",
           "sha256": "f73d43e845180d457cd5ea0545a2e4e0d1ac8033ee91d5f4d9951084464b2566",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.26",
+          "description": "add message service indexes for conversation list and context message queries",
+          "path": "apps/automation-service/migrations/V1.26__add_message_service_indexes.sql",
+          "sha256": "5cfef55b87f5d80e6584eda694e3e6571ccfd096d058c43719ea39a0c929fd8e",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.27",
+          "description": "fix V1.25 silent-failed schema objects on MySQL 8.0/8.4 (schedule_hour column, idx_xyaarc_enabled_hour index, card_group.sku_property_key, xianyu_auto_rate_log table)",
+          "path": "apps/automation-service/migrations/V1.27__fix_v1_25_silent_failed_schema.sql",
+          "sha256": "eed7789e6c3fdb8952c6b5b6eae845951d2adcb954a958278d05aaee25acbfc2",
           "risk": "expand",
           "rollback": "restore"
         }

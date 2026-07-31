@@ -33,10 +33,10 @@ public class StartupSecurityGuard implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         if (!isProductionLike()) return;
-        // The guard is opt-in to avoid breaking existing deployments that have not
-        // yet migrated to the strict security configuration. Set
-        // XIANYU_SECURITY_GUARD_ENABLED=true to enforce all checks.
-        if (!Boolean.parseBoolean(property("xianyu.security-guard.enabled", "false"))) {
+        // 生产环境默认启用安全检查（fail-closed），避免遗漏配置导致弱 token/种子初始化等事故。
+        // 如需显式关闭，设置 XIANYU_SECURITY_GUARD_ENABLED=false（不推荐）。
+        boolean defaultEnabled = true;
+        if (!Boolean.parseBoolean(property("xianyu.security-guard.enabled", String.valueOf(defaultEnabled)))) {
             return;
         }
 

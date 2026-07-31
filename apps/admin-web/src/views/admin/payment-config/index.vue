@@ -279,19 +279,49 @@
       await ElMessageBox.confirm(
         `确认将订单 ${row.orderNo} 强制标记为已支付？\n\n此操作通常用于：\n• 本地开发环境易支付回调无法到达本机\n• 生产环境回调丢失的订单补救\n\n标记后将自动触发权益发放（如商城货源入库、Token 充值等）。`,
         '强制标记已支付',
-        { type: 'warning', confirmButtonText: '确认标记', cancelButtonText: '取消' }
+        { type: 'warning', confirmButtonText: '继续', cancelButtonText: '取消' }
       )
     } catch {
       return
     }
-    orderForcePaying.value[row.orderNo] = true
+    // 二次验证：要求管理员输入订单号后 4 位作为"类型以确认"二次校验
+    // 防止误操作或被盗 session 的管理员随意标记订单为已支付（涉及资金流）
+    const expectedSuffix = String(row.orderNo).slice(-4)
     try {
-      await forceMarkPaidOrder(row.orderNo, '管理员手动标记')
-      await loadOrders()
-    } catch (error: any) {
-      ElMessage.error(error?.message || '强制标记已支付失败')
-    } finally {
-      orderForcePaying.value[row.orderNo] = false
+      const { value } = await ElMessageBox.prompt(
+        `请输入订单号末 4 位以确认强制标记操作（订单号：${row.orderNo}）`,
+        '二次确认',
+        {
+          type: 'warning',
+          confirmButtonText: '确认标记',
+          cancelButtonText: '取消',
+          inputPlaceholder: `请输入末 4 位：${expectedSuffix}`,
+          inputValidator: (input: string) => {
+            if (!input) return '请输入订单号末 4 位'
+            if (String(input).trim() !== expectedSuffix) {
+              return `输入与订单号末 4 位不匹配（期望：${expectedSuffix}）`
+            }
+            return true
+          },
+        }
+      )
+      // 验证通过后，remark 中追加"二次确认通过"标识，便于后端审计
+      const confirmToken = String(value).trim()
+      orderForcePaying.value[row.orderNo] = true
+      try {
+        await forceMarkPaidOrder(
+          row.orderNo,
+          `管理员手动标记（二次确认通过，末4位=${confirmToken}）`
+        )
+        await loadOrders()
+      } catch (error: any) {
+        ElMessage.error(error?.message || '强制标记已支付失败')
+      } finally {
+        orderForcePaying.value[row.orderNo] = false
+      }
+    } catch {
+      // 用户取消二次确认
+      return
     }
   }
 

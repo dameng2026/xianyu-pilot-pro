@@ -416,15 +416,36 @@
 
     <!-- 新增/编辑用户 KB 弹窗 -->
     <div v-if="formVisible" class="kb-modal-overlay" @click.self="formVisible=false">
-      <div class="kb-modal">
+      <div class="kb-modal kb-modal-wide">
         <div class="kb-modal-header">
           <h3>{{ editingId ? '编辑知识库' : '新增我的知识库' }}</h3>
           <button class="kb-modal-close" @click="formVisible=false">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
+
+        <!-- 模式切换 Tab（仅新建时显示，编辑模式只允许 custom） -->
+        <div v-if="!editingId" class="kb-form-tabs">
+          <button :class="['kb-form-tab', {active: formMode === 'custom'}]" @click="formMode='custom'">
+            <span class="tab-emoji">✏️</span>
+            <span class="tab-label">自定义</span>
+            <span class="tab-desc">手动填写问答</span>
+          </button>
+          <button :class="['kb-form-tab', {active: formMode === 'file'}]" @click="formMode='file'">
+            <span class="tab-emoji">📂</span>
+            <span class="tab-label">文件上传</span>
+            <span class="tab-desc">AI 提取问答</span>
+          </button>
+          <button :class="['kb-form-tab', {active: formMode === 'conversation'}]" @click="formMode='conversation'">
+            <span class="tab-emoji">💬</span>
+            <span class="tab-label">会话提取</span>
+            <span class="tab-desc">从聊天记录提取</span>
+          </button>
+        </div>
+
         <div class="kb-modal-body">
-          <div class="kb-form">
+          <!-- ========== 模式 1：自定义 ========== -->
+          <div v-if="formMode === 'custom'" class="kb-form">
             <div class="form-group">
               <label>问题（最多 100 字）<span class="required">*</span></label>
               <input v-model="form.title" maxlength="100" placeholder="必填，如：这本书是正版吗？" />
@@ -470,12 +491,358 @@
               <input v-model="form.tags" maxlength="100" placeholder="可选，如：正版,售后,退款">
             </div>
           </div>
+
+          <!-- ========== 模式 2：文件上传 ========== -->
+          <div v-else-if="formMode === 'file'" class="kb-form">
+            <div class="mode-tip">
+              <span class="mode-tip-icon">📄</span>
+              <div>
+                <div class="mode-tip-title">上传文件，AI 自动提取问答</div>
+                <div class="mode-tip-desc">
+                  支持 {{ SUPPORTED_FILE_EXTS.join(' / ') }}（单文件 ≤ 10MB）。
+                  AI 会从文件中识别客服场景的高价值问答对，提取后可编辑再保存。
+                </div>
+              </div>
+            </div>
+
+            <!-- 文件类型选择器：决定 AI 使用哪种提取策略 -->
+            <div class="file-type-selector">
+              <label class="file-type-label">
+                <span class="file-type-label-title">📁 文件类型</span>
+                <span class="file-type-label-hint">选择匹配类型可显著提升提取质量与速度</span>
+              </label>
+              <div class="file-type-options">
+                <button
+                  v-for="opt in FILE_TYPE_OPTIONS"
+                  :key="opt.value"
+                  type="button"
+                  :class="['file-type-chip', { active: selectedFileType === opt.value }]"
+                  :title="opt.desc"
+                  @click="selectedFileType = opt.value"
+                >
+                  <span class="chip-icon">{{
+                    opt.value === 'auto' ? '🤖' :
+                    opt.value === 'chat_records' ? '💬' :
+                    opt.value === 'product_docs' ? '📦' :
+                    opt.value === 'company_docs' ? '🏢' : '📄'
+                  }}</span>
+                  <span class="chip-text">{{ opt.label }}</span>
+                </button>
+              </div>
+              <p class="file-type-desc">
+                {{ FILE_TYPE_OPTIONS.find(t => t.value === selectedFileType)?.desc || '' }}
+              </p>
+            </div>
+
+            <!-- 拖拽上传区 -->
+            <div
+              :class="['file-dropzone', { 'is-dragging': isDragging }]"
+              @click="triggerFileInput"
+              @drop="handleDrop"
+              @dragover="handleDragOver"
+              @dragleave="handleDragLeave"
+            >
+              <input
+                ref="fileInputRef"
+                type="file"
+                :accept="SUPPORTED_FILE_EXTS.join(',')"
+                multiple
+                hidden
+                @change="handleFileInputChange"
+              >
+              <div class="dropzone-icon">⬆️</div>
+              <div class="dropzone-text">
+                <b>点击上传</b> 或将文件拖拽到此处
+              </div>
+              <div class="dropzone-hint">
+                支持格式：{{ SUPPORTED_FILE_EXTS.join(' / ') }}
+              </div>
+            </div>
+
+            <!-- 已选文件列表 -->
+            <div v-if="uploadedFiles.length > 0" class="file-list">
+              <div v-for="(f, idx) in uploadedFiles" :key="idx" class="file-item">
+                <span class="file-icon">📎</span>
+                <div class="file-info">
+                  <div class="file-name">{{ f.name }}</div>
+                  <div class="file-meta">{{ f.typeLabel }} · {{ formatFileSize(f.size) }}</div>
+                </div>
+                <button class="file-remove" @click.stop="removeFile(idx)" title="移除">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- 提取按钮 -->
+            <div v-if="uploadedFiles.length > 0 && extractedEntries.length === 0" class="extract-actions">
+              <button
+                class="btn-modal btn-primary"
+                :disabled="loading.extractFile"
+                @click="handleExtractFromFile"
+              >
+                <span v-if="loading.extractFile" class="btn-spinner"></span>
+                {{ loading.extractFile ? (extractStageText || '提取中...') : '🤖 AI 一键提取问答' }}
+              </button>
+            </div>
+
+            <!-- 提取进度提示 -->
+            <div v-if="loading.extractFile && extractStageText" class="extract-progress">
+              <div class="loading-spinner small"></div>
+              <span>{{ extractStageText }}</span>
+            </div>
+
+            <!-- 提取结果预览表格 -->
+            <div v-if="extractedEntries.length > 0" class="qa-preview">
+              <div class="qa-preview-header">
+                <div class="qa-preview-title">
+                  ✅ 已提取 <b>{{ extractedEntries.length }}</b> 条问答
+                  <span class="qa-preview-selected">（已选 {{ extractedEntries.filter(e => e.selected).length }} 条）</span>
+                </div>
+                <div class="qa-preview-actions">
+                  <button class="btn-link" @click="extractedEntries.forEach(e => e.selected = true)">全选</button>
+                  <button class="btn-link" @click="extractedEntries.forEach(e => e.selected = false)">全不选</button>
+                  <button class="btn-link danger" @click="removeUnselectedEntries('file')">移除未选</button>
+                </div>
+              </div>
+              <div class="qa-preview-table">
+                <div class="qa-row qa-row-head">
+                  <div class="qa-cell qa-cell-check">选</div>
+                  <div class="qa-cell qa-cell-q">问题</div>
+                  <div class="qa-cell qa-cell-a">回答</div>
+                  <div class="qa-cell qa-cell-op">操作</div>
+                </div>
+                <div v-for="entry in extractedEntries" :key="entry.id" class="qa-row">
+                  <div class="qa-cell qa-cell-check">
+                    <input type="checkbox" v-model="entry.selected">
+                  </div>
+                  <div class="qa-cell qa-cell-q">
+                    <textarea v-model="entry.title" rows="2" maxlength="100"></textarea>
+                  </div>
+                  <div class="qa-cell qa-cell-a">
+                    <textarea v-model="entry.content" rows="3" maxlength="5000"></textarea>
+                    <div v-if="entry.sourceSummary" class="qa-source">来源：{{ entry.sourceSummary }}</div>
+                  </div>
+                  <div class="qa-cell qa-cell-op">
+                    <button class="btn-link danger" @click="removeEntry(entry.id, 'file')">删除</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 批量分类/标签 -->
+              <div class="batch-form">
+                <div class="batch-form-title">为本次提取的问答统一设置分类与标签（可选）</div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>一级分类</label>
+                    <input v-model="batchForm.parentCategory" list="userParentCatList" maxlength="30" placeholder="可选，如：图书教材">
+                  </div>
+                  <div class="form-group">
+                    <label>二级分类</label>
+                    <input v-model="batchForm.childCategory" list="userChildCatList" maxlength="30" placeholder="可选，如：教材" :disabled="!batchForm.parentCategory">
+                  </div>
+                  <div class="form-group">
+                    <label>标签</label>
+                    <input v-model="batchForm.tags" maxlength="100" placeholder="逗号分隔，如：正版,售后">
+                  </div>
+                </div>
+                <p class="form-hint">💡 提取条目自带 AI 推荐的分类与标签，留空则使用条目原始值；填写则覆盖全部条目。</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- ========== 模式 3：会话提取 ========== -->
+          <div v-else-if="formMode === 'conversation'" class="kb-form">
+            <div class="mode-tip">
+              <span class="mode-tip-icon">💬</span>
+              <div>
+                <div class="mode-tip-title">从聊天记录提取问答</div>
+                <div class="mode-tip-desc">
+                  选择买家会话，AI 自动筛选高价值对话并提取问答对。可手动勾选，也可让 AI 一键推荐高价值会话。
+                </div>
+              </div>
+            </div>
+
+            <!-- 账号选择 -->
+            <div class="form-group">
+              <label>选择闲鱼账号<span class="required">*</span></label>
+              <select v-model="selectedAccountId" class="account-select">
+                <option :value="null" disabled>请选择账号</option>
+                <option v-for="acc in accountList" :key="acc.id" :value="acc.id">
+                  {{ acc.nickname }}（ID: {{ acc.id }}）
+                </option>
+              </select>
+            </div>
+
+            <!-- 会话列表表格 -->
+            <div v-if="conversationList.length > 0" class="conversation-toolbar">
+              <div class="conv-info">
+                共 {{ conversationList.length }} 个会话，已选 {{ selectedConversationSids.size }} 个
+              </div>
+              <div class="conv-actions">
+                <button class="btn-link" @click="selectAllConversations">
+                  {{ selectedConversationSids.size === conversationList.length ? '全不选' : '全选' }}
+                </button>
+                <button
+                  class="btn-modal btn-mini-btn"
+                  :disabled="loading.recommend || conversationList.length === 0"
+                  @click="handleAiRecommend(false)"
+                >
+                  <span v-if="loading.recommend" class="btn-spinner small"></span>
+                  {{ loading.recommend ? 'AI 推荐中...' : '🤖 AI 推荐高价值会话' }}
+                </button>
+                <!-- 失败后重试按钮 -->
+                <button
+                  v-if="recommendStage === 'error' && recommendRetryCount < MAX_RECOMMEND_RETRY && !loading.recommend"
+                  class="btn-modal btn-mini-btn btn-retry"
+                  @click="handleAiRecommend(true)"
+                  title="重试 AI 推荐"
+                >🔄 重试</button>
+              </div>
+            </div>
+
+            <!-- AI 推荐进度反馈（让用户感知长时间运行的任务状态） -->
+            <div v-if="loading.recommend && recommendStageText" class="recommend-progress">
+              <div class="loading-spinner small"></div>
+              <span>{{ recommendStageText }}</span>
+            </div>
+            <!-- AI 推荐失败提示（持久显示，直到下次操作） -->
+            <div v-else-if="recommendStage === 'error' && recommendStageText" class="recommend-progress is-error">
+              <span class="recommend-error-icon">⚠️</span>
+              <span>{{ recommendStageText }}</span>
+              <span v-if="recommendRetryCount < MAX_RECOMMEND_RETRY" class="recommend-error-hint">可点击"重试"按钮重新推荐</span>
+            </div>
+
+            <div v-if="conversationLoading && conversationList.length === 0" class="kb-loading">
+              <div class="loading-spinner"></div>
+              <span>加载会话列表中...</span>
+            </div>
+
+            <div v-else-if="conversationList.length > 0" class="conversation-table">
+              <div class="conv-row conv-row-head">
+                <div class="conv-cell conv-cell-check">选</div>
+                <div class="conv-cell conv-cell-peer">买家</div>
+                <div class="conv-cell conv-cell-goods">商品</div>
+                <div class="conv-cell conv-cell-last">最后消息</div>
+                <div class="conv-cell conv-cell-count">消息数</div>
+                <div class="conv-cell conv-cell-rec">AI 推荐</div>
+              </div>
+              <div
+                v-for="conv in conversationList"
+                :key="conv.sid"
+                :class="['conv-row', { 'is-selected': isConversationSelected(conv.sid) }]"
+                @click="toggleConversationSelection(conv.sid)"
+              >
+                <div class="conv-cell conv-cell-check" @click.stop>
+                  <input
+                    type="checkbox"
+                    :checked="isConversationSelected(conv.sid)"
+                    @change="toggleConversationSelection(conv.sid)"
+                  >
+                </div>
+                <div class="conv-cell conv-cell-peer">{{ conv.peerUserName || '未知买家' }}</div>
+                <div class="conv-cell conv-cell-goods" :title="conv.goodsTitle">{{ conv.goodsTitle || '-' }}</div>
+                <div class="conv-cell conv-cell-last" :title="conv.lastMessage">{{ (conv.lastMessage || '').slice(0, 50) }}</div>
+                <div class="conv-cell conv-cell-count">{{ conv.messageCount || 0 }}</div>
+                <div class="conv-cell conv-cell-rec">
+                  <span v-if="recommendMap[conv.sid]" class="rec-badge" :title="recommendMap[conv.sid].reason">
+                    ⭐ {{ recommendMap[conv.sid].estimatedValue }}
+                  </span>
+                  <span v-else class="rec-none">-</span>
+                </div>
+              </div>
+              <div v-if="conversationHasMore" class="conv-load-more">
+                <button class="btn-link" :disabled="conversationLoading" @click="loadMoreConversationsForKb">
+                  {{ conversationLoading ? '加载中...' : '加载更多会话' }}
+                </button>
+              </div>
+            </div>
+
+            <div v-else-if="selectedAccountId && !conversationLoading" class="empty-tip">
+              <span>📭 该账号暂无会话记录</span>
+            </div>
+
+            <!-- 提取按钮 -->
+            <div v-if="selectedConversationSids.size > 0 && conversationExtractEntries.length === 0" class="extract-actions">
+              <button
+                class="btn-modal btn-primary"
+                :disabled="loading.extractConversation"
+                @click="handleExtractFromConversations"
+              >
+                <span v-if="loading.extractConversation" class="btn-spinner"></span>
+                {{ loading.extractConversation ? '提取中...' : `🤖 一键提取知识（已选 ${selectedConversationSids.size} 个会话）` }}
+              </button>
+            </div>
+
+            <!-- 提取结果预览表格 -->
+            <div v-if="conversationExtractEntries.length > 0" class="qa-preview">
+              <div class="qa-preview-header">
+                <div class="qa-preview-title">
+                  ✅ 已提取 <b>{{ conversationExtractEntries.length }}</b> 条问答
+                  <span class="qa-preview-selected">（已选 {{ conversationExtractEntries.filter(e => e.selected).length }} 条）</span>
+                </div>
+                <div class="qa-preview-actions">
+                  <button class="btn-link" @click="conversationExtractEntries.forEach(e => e.selected = true)">全选</button>
+                  <button class="btn-link" @click="conversationExtractEntries.forEach(e => e.selected = false)">全不选</button>
+                  <button class="btn-link danger" @click="removeUnselectedEntries('conversation')">移除未选</button>
+                </div>
+              </div>
+              <div class="qa-preview-table">
+                <div class="qa-row qa-row-head">
+                  <div class="qa-cell qa-cell-check">选</div>
+                  <div class="qa-cell qa-cell-q">问题</div>
+                  <div class="qa-cell qa-cell-a">回答</div>
+                  <div class="qa-cell qa-cell-op">操作</div>
+                </div>
+                <div v-for="entry in conversationExtractEntries" :key="entry.id" class="qa-row">
+                  <div class="qa-cell qa-cell-check">
+                    <input type="checkbox" v-model="entry.selected">
+                  </div>
+                  <div class="qa-cell qa-cell-q">
+                    <textarea v-model="entry.title" rows="2" maxlength="100"></textarea>
+                  </div>
+                  <div class="qa-cell qa-cell-a">
+                    <textarea v-model="entry.content" rows="3" maxlength="5000"></textarea>
+                    <div v-if="entry.sourceSummary" class="qa-source">来源：{{ entry.sourceSummary }}</div>
+                  </div>
+                  <div class="qa-cell qa-cell-op">
+                    <button class="btn-link danger" @click="removeEntry(entry.id, 'conversation')">删除</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="batch-form">
+                <div class="batch-form-title">为本次提取的问答统一设置分类与标签（可选）</div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>一级分类</label>
+                    <input v-model="batchForm.parentCategory" list="userParentCatList" maxlength="30" placeholder="可选，如：售前咨询">
+                  </div>
+                  <div class="form-group">
+                    <label>二级分类</label>
+                    <input v-model="batchForm.childCategory" list="userChildCatList" maxlength="30" placeholder="可选" :disabled="!batchForm.parentCategory">
+                  </div>
+                  <div class="form-group">
+                    <label>标签</label>
+                    <input v-model="batchForm.tags" maxlength="100" placeholder="逗号分隔">
+                  </div>
+                </div>
+                <p class="form-hint">💡 提取条目自带 AI 推荐的分类与标签，留空则使用条目原始值；填写则覆盖全部条目。</p>
+              </div>
+            </div>
+          </div>
         </div>
+
         <div class="kb-modal-footer">
-          <button class="btn-modal" :disabled="loading.save" @click="formVisible=false">取消</button>
-          <button class="btn-modal btn-primary" :disabled="loading.save" @click="saveUserKb">
+          <button class="btn-modal" :disabled="loading.save || loading.batchSave" @click="formVisible=false">取消</button>
+          <!-- 自定义模式：单条保存 -->
+          <button v-if="formMode === 'custom'" class="btn-modal btn-primary" :disabled="loading.save" @click="saveUserKb">
             <span v-if="loading.save" class="btn-spinner"></span>
             {{ loading.save ? '保存中...' : '保存' }}
+          </button>
+          <!-- 文件/会话模式：批量保存 -->
+          <button v-else class="btn-modal btn-primary" :disabled="loading.batchSave || currentEntryCount === 0" @click="saveBatchKb">
+            <span v-if="loading.batchSave" class="btn-spinner"></span>
+            {{ loading.batchSave ? '保存中...' : `保存 ${currentEntryCount} 条知识` }}
           </button>
         </div>
       </div>
@@ -512,7 +879,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import {
   listLearnedKb, getLearnedKbDetail,
   listKbCategories, bindCategory, unbindCategory,
@@ -520,8 +887,12 @@ import {
   listLearnedKbByCategory,
   listUserKb, createUserKb, updateUserKb, deleteUserKb,
   listBindings, bindKbs, unbindKb,
-  submitFeedback
+  submitFeedback,
+  extractQaFromFile, extractQaFromConversations, recommendConversations, batchCreateUserKb
 } from '../../api/kbLearning.js'
+import { getLiteAccounts } from '../../api/accounts.js'
+import { onlineConversations } from '../../api/messages.js'
+import { ensureAiTokenBalance } from '../../utils/aiTokenGuard.js'
 
 const tab = ref('learned')
 const learnedList = ref([])
@@ -544,6 +915,54 @@ const editingId = ref(null)
 // 表单字段：parentCategory/childCategory 用于 UI，保存时拼装为 category 提交
 const form = reactive({ title: '', content: '', parentCategory: '', childCategory: '', tags: '' })
 
+// ===== 新建知识库弹窗 - 三种模式扩展 =====
+// formMode: 'custom' | 'file' | 'conversation'（编辑模式强制为 'custom'）
+const formMode = ref('custom')
+const SUPPORTED_FILE_EXTS = ['.md', '.txt', '.csv', '.xlsx', '.pptx', '.docx', '.pdf']
+const FILE_EXT_LABEL = {
+  '.md': 'Markdown', '.txt': '文本', '.csv': 'CSV 表格', '.xlsx': 'Excel 表格',
+  '.pptx': 'PPT 幻灯片', '.docx': 'Word 文档', '.pdf': 'PDF 文档'
+}
+
+// 文件上传模式状态
+const uploadedFiles = ref([])        // [{ file, name, size, ext, typeLabel }]
+const isDragging = ref(false)
+const fileInputRef = ref(null)
+const extractedEntries = ref([])     // 文件模式提取出的 Q&A 数组
+const extractStage = ref('')         // 'idle' | 'parsing' | 'extracting' | 'done' | 'error'
+const extractStageText = ref('')
+
+// 文件类型选择器：auto(自动检测) / chat_records / product_docs / company_docs / general
+const FILE_TYPE_OPTIONS = [
+  { value: 'auto', label: '自动检测', desc: 'AI 自动识别文件类型并选择最佳提取策略' },
+  { value: 'chat_records', label: '聊天记录', desc: '微信/QQ/闲鱼聊天导出，含时间戳与多轮对话' },
+  { value: 'product_docs', label: '商品资料', desc: '商品说明书、规格表、产品手册、详情页文案' },
+  { value: 'company_docs', label: '公司资料', desc: '售后政策、退换货规则、发货说明、服务流程' },
+  { value: 'general', label: '通用文本', desc: '不属于上述类型的普通文档' },
+]
+const selectedFileType = ref('auto')
+
+// 会话聊天提取模式状态
+const accountList = ref([])          // 闲鱼账号列表
+const selectedAccountId = ref(null)  // 当前选中的账号 ID
+const conversationList = ref([])     // 会话列表
+const conversationLoading = ref(false)
+const conversationHasMore = ref(false)
+const conversationCursor = ref(null)
+const selectedConversationSids = ref(new Set())  // 选中的会话 sid 集合（sid 总是存在且唯一）
+const recommendMap = ref({})         // sid → { reason, estimatedValue }
+const conversationExtractEntries = ref([])  // 会话模式提取出的 Q&A 数组
+
+// AI 推荐进度反馈与重试
+// recommendStage: 'idle' | 'filtering' | 'calling' | 'done' | 'error'
+const recommendStage = ref('idle')
+const recommendStageText = ref('')
+const recommendRetryCount = ref(0)   // 已重试次数
+const MAX_RECOMMEND_RETRY = 1        // 最大重试次数（避免重复扣费）
+
+// 公共：默认分类/标签（应用于所有提取出的条目）
+const batchForm = reactive({ parentCategory: '', childCategory: '', tags: '' })
+
 const feedbackVisible = ref(false)
 const feedbackContent = ref('')
 
@@ -562,6 +981,12 @@ const loading = reactive({
   save: false,
   remove: null,
   feedback: false,
+  // 新增的三种模式相关 loading
+  extractFile: false,
+  extractConversation: false,
+  recommend: false,
+  conversations: false,
+  batchSave: false,
 })
 
 const toast = reactive({ visible: false, message: '', error: false })
@@ -919,6 +1344,11 @@ function openCreateUserKb() {
   form.parentCategory = ''
   form.childCategory = ''
   form.tags = ''
+  // 重置三种模式状态
+  formMode.value = 'custom'
+  resetFileUploadState()
+  resetConversationState()
+  resetBatchForm()
   formVisible.value = true
 }
 
@@ -936,8 +1366,501 @@ function editUserKb(item) {
     form.parentCategory = ''
     form.childCategory = ''
   }
+  // 编辑模式强制为自定义模式
+  formMode.value = 'custom'
+  resetFileUploadState()
+  resetConversationState()
+  resetBatchForm()
   formVisible.value = true
 }
+
+// ===== 三种模式扩展：辅助方法 =====
+function resetFileUploadState() {
+  uploadedFiles.value = []
+  extractedEntries.value = []
+  extractStage.value = ''
+  extractStageText.value = ''
+  isDragging.value = false
+  selectedFileType.value = 'auto'
+}
+
+function resetConversationState() {
+  conversationList.value = []
+  conversationCursor.value = null
+  conversationHasMore.value = false
+  selectedConversationSids.value = new Set()
+  recommendMap.value = {}
+  conversationExtractEntries.value = []
+  selectedAccountId.value = null
+  recommendStage.value = 'idle'
+  recommendStageText.value = ''
+  recommendRetryCount.value = 0
+}
+
+function resetBatchForm() {
+  batchForm.parentCategory = ''
+  batchForm.childCategory = ''
+  batchForm.tags = ''
+}
+
+function getFileExt(name) {
+  if (!name || !name.includes('.')) return ''
+  return '.' + name.split('.').pop().toLowerCase()
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return '0B'
+  if (bytes < 1024) return bytes + 'B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'KB'
+  return (bytes / 1024 / 1024).toFixed(2) + 'MB'
+}
+
+// ===== 文件上传模式 =====
+function triggerFileInput() {
+  if (!fileInputRef.value) return
+  fileInputRef.value.click()
+}
+
+function handleFileInputChange(e) {
+  const files = Array.from(e.target.files || [])
+  addFiles(files)
+  // 清空 input 以便重复选择同一文件
+  e.target.value = ''
+}
+
+function handleDrop(e) {
+  e.preventDefault()
+  isDragging.value = false
+  const files = Array.from(e.dataTransfer?.files || [])
+  addFiles(files)
+}
+
+function handleDragOver(e) {
+  e.preventDefault()
+  isDragging.value = true
+}
+
+function handleDragLeave(e) {
+  e.preventDefault()
+  // 仅当离开整个 dropzone 时才取消高亮
+  if (e.currentTarget === e.target) {
+    isDragging.value = false
+  }
+}
+
+function addFiles(files) {
+  for (const file of files) {
+    const ext = getFileExt(file.name)
+    if (!SUPPORTED_FILE_EXTS.includes(ext)) {
+      showToast(`不支持的文件格式：${ext || '无扩展名'}（仅支持 ${SUPPORTED_FILE_EXTS.join('/')}）`, true)
+      continue
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      showToast(`文件 ${file.name} 超过 10MB 限制`, true)
+      continue
+    }
+    // 去重：同名文件不再添加
+    if (uploadedFiles.value.some(f => f.name === file.name && f.size === file.size)) {
+      continue
+    }
+    uploadedFiles.value.push({
+      file,
+      name: file.name,
+      size: file.size,
+      ext,
+      typeLabel: FILE_EXT_LABEL[ext] || '未知'
+    })
+  }
+  // 新增文件后清空之前的提取结果
+  if (extractedEntries.value.length > 0) {
+    extractedEntries.value = []
+    extractStage.value = ''
+  }
+}
+
+function removeFile(idx) {
+  uploadedFiles.value.splice(idx, 1)
+  if (uploadedFiles.value.length === 0) {
+    extractedEntries.value = []
+    extractStage.value = ''
+  }
+}
+
+async function handleExtractFromFile() {
+  if (uploadedFiles.value.length === 0) {
+    showToast('请先选择文件', true)
+    return
+  }
+  // Token 余额预检
+  if (!(await ensureAiTokenBalance())) return
+
+  // 目前只支持单文件提取（多文件需要后端改造，且 prompt 容易超限）
+  // 若用户选择了多个文件，提示只提取第一个
+  if (uploadedFiles.value.length > 1) {
+    showToast('提示：当前仅支持单文件提取，将只处理第一个文件', false)
+  }
+  const target = uploadedFiles.value[0]
+  loading.extractFile = true
+  extractStage.value = 'parsing'
+  // 根据是否需要先做类型检测给出不同提示
+  const typeLabel = FILE_TYPE_OPTIONS.find(t => t.value === selectedFileType.value)?.label || '自动检测'
+  if (selectedFileType.value === 'auto') {
+    extractStageText.value = `正在解析文件 → AI 识别文件类型 → 提取问答（${typeLabel}）...`
+  } else {
+    extractStageText.value = `正在解析文件并使用「${typeLabel}」策略提取问答...`
+  }
+  try {
+    const result = await extractQaFromFile(target.file, selectedFileType.value)
+    // request 拦截器返回完整 {code,msg,data} 结构，实际 payload 在 result.data 中
+    const resultData = result?.data ?? result
+    const entries = resultData?.entries || []
+    const detectedType = resultData?.contentCategory || selectedFileType.value
+    extractedEntries.value = entries.map((e, idx) => ({
+      id: 'file-' + Date.now() + '-' + idx,
+      title: e.title || '',
+      content: e.content || '',
+      category: e.category || '',
+      tags: e.tags || '',
+      sourceSummary: e.source_summary || target.name,
+      selected: true
+    }))
+    extractStage.value = 'done'
+    const detectedLabel = FILE_TYPE_OPTIONS.find(t => t.value === detectedType)?.label || detectedType
+    extractStageText.value = `已提取 ${extractedEntries.value.length} 条 Q&A（识别类型：${detectedLabel}）`
+    if (extractedEntries.value.length === 0) {
+      showToast('AI 未能从文件中提取到有效知识，请尝试其他文件或手动选择文件类型', true)
+    } else {
+      showToast(`成功提取 ${extractedEntries.value.length} 条 Q&A，可在下方编辑后保存`)
+    }
+  } catch (e) {
+    extractStage.value = 'error'
+    extractStageText.value = ''
+    const errMsg = e?.message || '未知错误'
+    // 超时单独给出更友好的提示
+    if (e?.timeout || /timeout/i.test(errMsg)) {
+      showToast('AI 提取超时，请尝试选择具体文件类型（如聊天记录/商品资料）以加速处理，或稍后重试', true)
+    } else {
+      showToast('文件提取失败：' + errMsg, true)
+    }
+  } finally {
+    loading.extractFile = false
+  }
+}
+
+// ===== 会话聊天提取模式 =====
+async function loadAccountsForKb() {
+  try {
+    const result = await getLiteAccounts({ current: 1, size: 100 })
+    const records = result?.data?.records || result?.records || []
+    accountList.value = records.map(r => ({
+      id: r.id,
+      nickname: r.nickname || r.username || `账号${r.id}`,
+      avatar: r.avatar || ''
+    }))
+    // 默认选中第一个账号（便于测试"小龙菜菜"）
+    if (accountList.value.length > 0 && !selectedAccountId.value) {
+      selectedAccountId.value = accountList.value[0].id
+      await loadConversationsForKb()
+    }
+  } catch (e) {
+    showToast('加载账号列表失败：' + (e?.message || '未知错误'), true)
+  }
+}
+
+async function loadConversationsForKb() {
+  if (!selectedAccountId.value) {
+    showToast('请先选择账号', true)
+    return
+  }
+  loading.conversations = true
+  conversationLoading.value = true
+  try {
+    const result = await onlineConversations(selectedAccountId.value, {
+      cursor: conversationCursor.value,
+      pageSize: 100
+    })
+    // request 拦截器返回完整 {code,msg,data} 结构，实际 payload 在 result.data 中
+    const resultData = result?.data ?? result
+    const newConvs = resultData?.conversations || []
+    if (conversationCursor.value) {
+      conversationList.value = conversationList.value.concat(newConvs)
+    } else {
+      conversationList.value = newConvs
+    }
+    conversationHasMore.value = !!resultData?.hasMore
+    conversationCursor.value = resultData?.nextCursor || null
+  } catch (e) {
+    showToast('加载会话列表失败：' + (e?.message || '未知错误'), true)
+  } finally {
+    loading.conversations = false
+    conversationLoading.value = false
+  }
+}
+
+async function loadMoreConversationsForKb() {
+  if (!conversationHasMore.value || conversationLoading.value) return
+  await loadConversationsForKb()
+}
+
+function toggleConversationSelection(sid) {
+  const sidStr = String(sid || '')
+  if (!sidStr) return
+  const newSet = new Set(selectedConversationSids.value)
+  if (newSet.has(sidStr)) {
+    newSet.delete(sidStr)
+  } else {
+    newSet.add(sidStr)
+  }
+  selectedConversationSids.value = newSet
+}
+
+function isConversationSelected(sid) {
+  return selectedConversationSids.value.has(String(sid || ''))
+}
+
+function selectAllConversations() {
+  if (selectedConversationSids.value.size === conversationList.value.length) {
+    selectedConversationSids.value = new Set()
+  } else {
+    selectedConversationSids.value = new Set(conversationList.value.map(c => String(c.sid || '')))
+  }
+}
+
+async function handleAiRecommend(isRetry = false) {
+  if (conversationList.value.length === 0) {
+    showToast('请先加载会话列表', true)
+    return
+  }
+  // 重试计数控制（避免无限重试重复扣费）
+  if (isRetry) {
+    if (recommendRetryCount.value >= MAX_RECOMMEND_RETRY) {
+      showToast(`已重试 ${MAX_RECOMMEND_RETRY} 次仍失败，请稍后再试或手动勾选会话`, true)
+      return
+    }
+    recommendRetryCount.value += 1
+  } else {
+    recommendRetryCount.value = 0
+  }
+  if (!(await ensureAiTokenBalance())) return
+  loading.recommend = true
+  // 进度提示：让用户感知到 AI 在工作（每批 30 秒以内，按会话数估算批次数）
+  const totalConvs = conversationList.value.length
+  const estimatedBatches = Math.max(1, Math.ceil(Math.min(totalConvs, 100) / 20))
+  recommendStage.value = 'filtering'
+  recommendStageText.value = `正在筛选 ${totalConvs} 个会话，预计分 ${estimatedBatches} 批处理...`
+  // 进度模拟：让用户看到"工作中"的反馈（实际后端是串行处理，无法实时返回进度）
+  let progressTimer = null
+  if (totalConvs > 30) {
+    let elapsed = 0
+    progressTimer = setInterval(() => {
+      elapsed += 1
+      // 后端分批处理，每批约 15-30 秒，给出阶段性提示
+      const stage = Math.min(estimatedBatches, Math.floor(elapsed / 15) + 1)
+      recommendStageText.value = `AI 正在分析第 ${stage}/${estimatedBatches} 批会话（已耗时 ${elapsed}s）...`
+    }, 1000)
+  }
+  try {
+    const payload = {
+      accountId: selectedAccountId.value,
+      conversations: conversationList.value.map(c => ({
+        sid: c.sid,
+        conversationId: c.conversationId,
+        peerUserName: c.peerUserName,
+        goodsTitle: c.goodsTitle,
+        lastMessage: c.lastMessage,
+        messageCount: c.messageCount,
+        peerUserId: c.peerUserId
+      }))
+    }
+    const result = await recommendConversations(payload)
+    // request 拦截器返回完整 {code,msg,data} 结构，实际 payload 在 result.data 中
+    const resultData = result?.data ?? result
+    const recs = resultData?.recommendations || []
+    const newMap = {}
+    const newSet = new Set()
+    for (const rec of recs) {
+      const sidStr = String(rec.sid || '')
+      if (!sidStr) continue
+      newMap[sidStr] = {
+        reason: rec.reason || '',
+        estimatedValue: rec.estimatedValue || 0
+      }
+      newSet.add(sidStr)
+    }
+    recommendMap.value = newMap
+    selectedConversationSids.value = newSet
+    recommendStage.value = 'done'
+    recommendStageText.value = `已推荐 ${recs.length} 个高价值会话`
+    // 透过后端返回的统计信息让用户感知筛选过程
+    const stats = resultData || {}
+    const skipped = stats.skippedLowValue || 0
+    const filtered = stats.filteredCount || totalConvs
+    const batchCount = stats.batchCount || estimatedBatches
+    if (recs.length > 0) {
+      const skipHint = skipped > 0 ? `（已过滤 ${skipped} 个低价值会话，分 ${batchCount} 批处理）` : ''
+      showToast(`AI 推荐 ${recs.length} 个高价值会话，已自动勾选${skipHint}`)
+    } else {
+      recommendStage.value = 'error'
+      recommendStageText.value = 'AI 未找到高价值会话'
+      showToast('AI 未在当前会话中找到高价值内容，可尝试手动勾选或加载更多会话', true)
+    }
+  } catch (e) {
+    recommendStage.value = 'error'
+    const errMsg = e?.message || '未知错误'
+    if (e?.timeout || /timeout/i.test(errMsg)) {
+      recommendStageText.value = 'AI 推荐超时'
+      showToast('AI 推荐超时：会话数较多时处理时间较长，可点击"重试"或手动勾选会话', true)
+    } else if (e?.code === 402 || /余额/.test(errMsg)) {
+      recommendStageText.value = 'Token 余额不足'
+      showToast('Token 余额不足，请充值后再使用 AI 推荐', true)
+    } else {
+      recommendStageText.value = 'AI 推荐失败'
+      showToast('AI 推荐失败：' + errMsg + (recommendRetryCount.value < MAX_RECOMMEND_RETRY ? '，可点击重试' : ''), true)
+    }
+  } finally {
+    if (progressTimer) clearInterval(progressTimer)
+    loading.recommend = false
+  }
+}
+
+async function handleExtractFromConversations() {
+  if (selectedConversationSids.value.size === 0) {
+    showToast('请先选择会话', true)
+    return
+  }
+  if (!(await ensureAiTokenBalance())) return
+  loading.extractConversation = true
+  try {
+    const sids = Array.from(selectedConversationSids.value)
+    // 同时传会话元数据，避免后端二次拉取
+    const selectedConvs = conversationList.value
+      .filter(c => sids.includes(String(c.sid || '')))
+      .map(c => ({
+        sid: c.sid,
+        conversationId: c.conversationId,
+        peerUserName: c.peerUserName,
+        goodsTitle: c.goodsTitle,
+        peerUserId: c.peerUserId
+      }))
+    const payload = {
+      accountId: selectedAccountId.value,
+      sids: sids,
+      conversations: selectedConvs
+    }
+    const result = await extractQaFromConversations(payload)
+    // request 拦截器返回完整 {code,msg,data} 结构，实际 payload 在 result.data 中
+    const resultData = result?.data ?? result
+    const entries = resultData?.entries || []
+    conversationExtractEntries.value = entries.map((e, idx) => ({
+      id: 'conv-' + Date.now() + '-' + idx,
+      title: e.title || '',
+      content: e.content || '',
+      category: e.category || '',
+      tags: e.tags || '',
+      sourceSummary: e.source_summary || '',
+      selected: true
+    }))
+    if (conversationExtractEntries.value.length === 0) {
+      showToast('AI 未能从所选会话中提取到有效知识', true)
+    } else {
+      showToast(`成功提取 ${conversationExtractEntries.value.length} 条 Q&A，可在下方编辑后保存`)
+    }
+  } catch (e) {
+    showToast('会话提取失败：' + (e?.message || '未知错误'), true)
+  } finally {
+    loading.extractConversation = false
+  }
+}
+
+// ===== Q&A 预览表格 =====
+function removeEntry(entryId, source = 'file') {
+  const list = source === 'conversation' ? conversationExtractEntries : extractedEntries
+  const idx = list.value.findIndex(e => e.id === entryId)
+  if (idx >= 0) list.value.splice(idx, 1)
+}
+
+function removeUnselectedEntries(source = 'file') {
+  const list = source === 'conversation' ? conversationExtractEntries : extractedEntries
+  list.value = list.value.filter(e => e.selected)
+}
+
+// 当前模式的可保存条目数
+const currentEntryCount = computed(() => {
+  if (formMode.value === 'file') {
+    return extractedEntries.value.filter(e => e.selected).length
+  }
+  if (formMode.value === 'conversation') {
+    return conversationExtractEntries.value.filter(e => e.selected).length
+  }
+  return 0
+})
+
+// 拼装公共分类
+const batchCategoryText = computed(() => {
+  const parent = (batchForm.parentCategory || '').trim()
+  const child = (batchForm.childCategory || '').trim()
+  if (parent && child) return `${parent}/${child}`
+  if (parent) return parent
+  return ''
+})
+
+// ===== 批量保存（文件/会话模式） =====
+async function saveBatchKb() {
+  let entries = []
+  if (formMode.value === 'file') {
+    entries = extractedEntries.value.filter(e => e.selected && e.title && e.content)
+  } else if (formMode.value === 'conversation') {
+    entries = conversationExtractEntries.value.filter(e => e.selected && e.title && e.content)
+  }
+  if (entries.length === 0) {
+    showToast('没有可保存的条目', true)
+    return
+  }
+  loading.batchSave = true
+  try {
+    const payload = {
+      entries: entries.map(e => ({
+        title: e.title,
+        content: e.content,
+        category: e.category || '',
+        tags: e.tags || ''
+      })),
+      defaultCategory: batchCategoryText.value,
+      defaultTags: (batchForm.tags || '').trim()
+    }
+    const result = await batchCreateUserKb(payload)
+    // request 拦截器返回完整 {code,msg,data} 结构，实际 payload 在 result.data 中
+    const resultData = result?.data ?? result
+    const count = resultData?.count || 0
+    const skipped = resultData?.skipped || 0
+    formVisible.value = false
+    await loadUserKb()
+    showToast(`已创建 ${count} 条知识库${skipped > 0 ? `（跳过 ${skipped} 条空数据）` : ''}`)
+  } catch (e) {
+    showToast('批量保存失败：' + (e?.message || '未知错误'), true)
+  } finally {
+    loading.batchSave = false
+  }
+}
+
+// 切换到会话模式时懒加载账号列表
+watch(formMode, async (newMode) => {
+  if (newMode === 'conversation' && accountList.value.length === 0) {
+    await loadAccountsForKb()
+  }
+})
+
+// 账号切换时重置会话列表并重新加载（保留 selectedAccountId）
+watch(selectedAccountId, async (newId, oldId) => {
+  if (!newId || newId === oldId) return
+  conversationList.value = []
+  conversationCursor.value = null
+  conversationHasMore.value = false
+  selectedConversationSids.value = new Set()
+  recommendMap.value = {}
+  conversationExtractEntries.value = []
+  await loadConversationsForKb()
+})
 
 async function saveUserKb() {
   const title = (form.title || '').trim()
@@ -2113,5 +3036,639 @@ onMounted(async () => {
   .kb-filter { width: 100%; }
   .kb-filter input { min-width: 0; flex: 1; }
   .form-row { grid-template-columns: 1fr; }
+  .kb-form-tabs { flex-direction: column; }
+  .qa-preview-table { overflow-x: auto; }
+  .conversation-table { overflow-x: auto; }
+}
+
+/* ===== 三模式弹窗扩展样式 ===== */
+.kb-modal-wide {
+  width: min(960px, 92vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.kb-modal-wide .kb-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+
+/* 模式切换 Tab */
+.kb-form-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 24px 0;
+  background: #fafbff;
+  border-bottom: 1px solid #e8edf5;
+}
+
+.kb-form-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: #6b7a99;
+}
+
+.kb-form-tab:hover {
+  background: #f0f4ff;
+  color: #4a6cf7;
+}
+
+.kb-form-tab.active {
+  background: #fff;
+  border-color: #e8edf5;
+  border-bottom-color: #4a6cf7;
+  color: #4a6cf7;
+}
+
+.kb-form-tab .tab-emoji {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.kb-form-tab .tab-label {
+  font-size: 14px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.kb-form-tab .tab-desc {
+  font-size: 11px;
+  color: #9ba8bd;
+}
+
+.kb-form-tab.active .tab-desc {
+  color: #6b7a99;
+}
+
+/* 模式提示 */
+.mode-tip {
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, #f5f9ff 0%, #eef3ff 100%);
+  border-radius: 10px;
+  border: 1px solid #d9e3ff;
+  margin-bottom: 16px;
+}
+
+.mode-tip-icon {
+  font-size: 24px;
+  line-height: 1.4;
+}
+
+.mode-tip-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #2b3a55;
+  margin-bottom: 4px;
+}
+
+.mode-tip-desc {
+  font-size: 12px;
+  color: #6b7a99;
+  line-height: 1.6;
+}
+
+/* 文件拖拽上传区 */
+.file-dropzone {
+  border: 2px dashed #c5d2e8;
+  border-radius: 12px;
+  padding: 32px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: #fafbff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-dropzone:hover {
+  border-color: #4a6cf7;
+  background: #f5f9ff;
+}
+
+.file-dropzone.is-dragging {
+  border-color: #4a6cf7;
+  background: #eaf0ff;
+  transform: scale(1.01);
+}
+
+.dropzone-icon {
+  font-size: 36px;
+  line-height: 1;
+}
+
+.dropzone-text {
+  font-size: 14px;
+  color: #2b3a55;
+}
+
+.dropzone-text b {
+  color: #4a6cf7;
+}
+
+.dropzone-hint {
+  font-size: 11px;
+  color: #9ba8bd;
+  margin-top: 4px;
+}
+
+/* 已选文件列表 */
+.file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #f7faff;
+  border: 1px solid #e3eaf5;
+  border-radius: 8px;
+}
+
+.file-icon {
+  font-size: 18px;
+}
+
+.file-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-name {
+  font-size: 13px;
+  color: #2b3a55;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-meta {
+  font-size: 11px;
+  color: #9ba8bd;
+  margin-top: 2px;
+}
+
+.file-remove {
+  background: transparent;
+  border: none;
+  color: #b3bccd;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+}
+
+.file-remove:hover {
+  color: #ef4444;
+  background: #fee;
+}
+
+/* 提取按钮区 */
+.extract-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 18px;
+}
+
+.extract-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 12px;
+  padding: 10px;
+  background: #f5f9ff;
+  border-radius: 8px;
+  color: #4a6cf7;
+  font-size: 13px;
+}
+
+/* 文件类型选择器 */
+.file-type-selector {
+  margin: 14px 0 16px;
+  padding: 14px 16px;
+  background: #f8fafd;
+  border: 1px solid #e3eaf5;
+  border-radius: 10px;
+}
+
+.file-type-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+
+.file-type-label-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.file-type-label-hint {
+  font-size: 12px;
+  color: #8a94a6;
+}
+
+.file-type-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.file-type-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: 1px solid #dce3ee;
+  background: #fff;
+  border-radius: 16px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #5a6478;
+  transition: all 0.18s ease;
+  font-family: inherit;
+}
+
+.file-type-chip:hover {
+  border-color: #4a6cf7;
+  color: #4a6cf7;
+  background: #f5f9ff;
+}
+
+.file-type-chip.active {
+  background: linear-gradient(135deg, #4a6cf7, #6b8aff);
+  border-color: #4a6cf7;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(74, 108, 247, 0.25);
+}
+
+.file-type-chip .chip-icon {
+  font-size: 14px;
+}
+
+.file-type-desc {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #8a94a6;
+  line-height: 1.5;
+}
+
+/* AI 推荐进度反馈 */
+.recommend-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-start;
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: #f5f9ff;
+  border-radius: 8px;
+  color: #4a6cf7;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.recommend-progress.is-error {
+  background: #fff5f5;
+  color: #d64545;
+  border: 1px solid #ffd6d6;
+}
+
+.recommend-error-icon {
+  font-size: 14px;
+}
+
+.recommend-error-hint {
+  color: #8a94a6;
+  font-size: 12px;
+}
+
+.btn-retry {
+  background: #fff5f5 !important;
+  color: #d64545 !important;
+  border: 1px solid #ffd6d6 !important;
+}
+
+.btn-retry:hover {
+  background: #ffe8e8 !important;
+  border-color: #d64545 !important;
+}
+
+/* Q&A 预览表格 */
+.qa-preview {
+  margin-top: 18px;
+  border: 1px solid #e3eaf5;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.qa-preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #f5f9ff;
+  border-bottom: 1px solid #e3eaf5;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.qa-preview-title {
+  font-size: 14px;
+  color: #2b3a55;
+}
+
+.qa-preview-title b {
+  color: #4a6cf7;
+  font-size: 16px;
+}
+
+.qa-preview-selected {
+  font-size: 12px;
+  color: #6b7a99;
+  margin-left: 4px;
+}
+
+.qa-preview-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.qa-preview-table {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.qa-row {
+  display: grid;
+  grid-template-columns: 40px 1fr 1.5fr 70px;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #f0f4fa;
+  align-items: start;
+}
+
+.qa-row:last-child {
+  border-bottom: none;
+}
+
+.qa-row-head {
+  background: #fafbff;
+  font-size: 12px;
+  color: #6b7a99;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.qa-cell {
+  font-size: 13px;
+  color: #2b3a55;
+}
+
+.qa-cell-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 6px;
+}
+
+.qa-cell-q textarea,
+.qa-cell-a textarea {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+  color: #2b3a55;
+  background: transparent;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.qa-cell-q textarea:focus,
+.qa-cell-a textarea:focus {
+  border-color: #4a6cf7;
+  background: #fff;
+  outline: none;
+}
+
+.qa-source {
+  font-size: 11px;
+  color: #9ba8bd;
+  margin-top: 4px;
+  font-style: italic;
+}
+
+.qa-cell-op {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 6px;
+}
+
+/* 批量分类表单 */
+.batch-form {
+  padding: 14px 16px;
+  background: #fafbff;
+  border-top: 1px solid #e3eaf5;
+}
+
+.batch-form-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #2b3a55;
+  margin-bottom: 10px;
+}
+
+/* 账号选择 */
+.account-select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #d9e0ec;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #2b3a55;
+  background: #fff;
+  cursor: pointer;
+}
+
+.account-select:focus {
+  outline: none;
+  border-color: #4a6cf7;
+}
+
+/* 会话工具栏 */
+.conversation-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: #fafbff;
+  border: 1px solid #e3eaf5;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.conv-info {
+  font-size: 13px;
+  color: #6b7a99;
+}
+
+.conv-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.btn-mini-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  background: #4a6cf7;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-mini-btn:hover:not(:disabled) {
+  background: #3a5ae0;
+}
+
+.btn-mini-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 会话表格 */
+.conversation-table {
+  border: 1px solid #e3eaf5;
+  border-radius: 8px;
+  overflow: hidden;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.conv-row {
+  display: grid;
+  grid-template-columns: 40px 100px 1.5fr 2fr 70px 80px;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #f0f4fa;
+  align-items: center;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.conv-row:last-child {
+  border-bottom: none;
+}
+
+.conv-row:hover {
+  background: #f5f9ff;
+}
+
+.conv-row.is-selected {
+  background: #eaf0ff;
+}
+
+.conv-row-head {
+  background: #fafbff;
+  font-size: 12px;
+  color: #6b7a99;
+  font-weight: 600;
+  cursor: default;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.conv-row-head:hover {
+  background: #fafbff;
+}
+
+.conv-cell {
+  font-size: 13px;
+  color: #2b3a55;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conv-cell-check {
+  display: flex;
+  justify-content: center;
+}
+
+.conv-cell-peer {
+  font-weight: 500;
+}
+
+.conv-cell-last {
+  color: #6b7a99;
+  font-size: 12px;
+}
+
+.conv-cell-count {
+  text-align: center;
+  color: #6b7a99;
+}
+
+.rec-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  background: linear-gradient(135deg, #ffd86b, #ffa726);
+  color: #fff;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.rec-none {
+  color: #c5d2e8;
+  text-align: center;
+}
+
+.conv-load-more {
+  padding: 10px;
+  text-align: center;
+  background: #fafbff;
+}
+
+.empty-tip {
+  padding: 40px 20px;
+  text-align: center;
+  color: #9ba8bd;
+  font-size: 14px;
 }
 </style>

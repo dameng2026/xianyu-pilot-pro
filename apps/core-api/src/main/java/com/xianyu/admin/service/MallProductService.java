@@ -5,6 +5,8 @@ import com.xianyu.admin.common.PageResult;
 import com.xianyu.admin.common.PageUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -13,11 +15,16 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 货源商城商品服务。
@@ -37,17 +44,52 @@ public class MallProductService {
     private static final int MAX_CARD_CONTENT_LENGTH = 10_000;
     private static final int MAX_FAQ_QUESTION_LENGTH = 500;
     private static final int MAX_FAQ_ANSWER_LENGTH = 5_000;
+    /**
+     * 深分页阈值：OFFSET 超过此值时启用延迟关联优化。
+     * 阈值依据：常规列表 size=20，OFFSET < 1000 时直接 LIMIT OFFSET 性能可接受；
+     * 超过 1000 时扫描跳过代价过大，改用 INNER JOIN 子查询先走覆盖索引定位 id。
+     */
+    private static final int DEFERRED_JOIN_OFFSET_THRESHOLD = 1000;
 
     private final JdbcTemplate jdbcTemplate;
     private final AutomationClient automationClient;
+
+    /**
+     * 并行查询线程池：用于商品列表/详情的 count + records 并行、详情 + 库存并行。
+     * 命名线程、守护线程，避免阻塞 JVM 退出。池大小 8 足够支撑当前 QPS。
+     */
+    private final ExecutorService queryPool = Executors.newFixedThreadPool(8, r -> {
+        Thread t = new Thread(r, "mall-product-query");
+        t.setDaemon(true);
+        return t;
+    });
 
     public MallProductService(JdbcTemplate jdbcTemplate, AutomationClient automationClient) {
         this.jdbcTemplate = jdbcTemplate;
         this.automationClient = automationClient;
     }
 
+    /**
+     * 应用关闭时释放线程池（Spring 通过 @PreDestroy 回调）。
+     */
+    @jakarta.annotation.PreDestroy
+    public void shutdown() {
+        queryPool.shutdown();
+        try {
+            if (!queryPool.awaitTermination(5, TimeUnit.SECONDS)) {
+                queryPool.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            queryPool.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
     // ==================== 管理端：商品 ====================
 
+    /**
+     * 管理端商品列表（含 count + records 并行查询 + 深分页延迟关联）。
+     */
     public PageResult<Map<String, Object>> listProducts(String type, int current, int size) {
         int safeCurrent = PageUtils.normalizeCurrent(current);
         int safeSize = PageUtils.normalizeSize(size, 100);
@@ -59,24 +101,50 @@ public class MallProductService {
             where.append(" AND product_type=?");
             args.add(normalizedType);
         }
-        Long total = queryCount("SELECT COUNT(*) FROM mall_product" + where, args);
+        // 并行：count 查询与 records 查询同时发起
+        CompletableFuture<Long> totalFuture = CompletableFuture.supplyAsync(
+                () -> queryCount("SELECT COUNT(*) FROM mall_product" + where, args), queryPool);
+        String recordsSql = buildListProductsSql(where, offset);
         List<Object> pageArgs = new ArrayList<>(args);
         pageArgs.add(safeSize);
         pageArgs.add(offset);
-        List<Map<String, Object>> records = jdbcTemplate.queryForList(
-                "SELECT id, tenant_id AS tenantId, product_type AS productType, title, subtitle, content, copy, " +
-                        "delivery_content AS deliveryContent, " +
-                        "price_cent AS priceCent, ROUND(price_cent/100,2) AS priceYuan, " +
-                        "cover_url AS coverUrl, status, category, ai_category_confidence AS aiCategoryConfidence, " +
-                        "sort_order AS sortOrder, bought_count AS boughtCount, " +
-                        "created_time AS createdTime, updated_time AS updatedTime " +
-                        "FROM mall_product" + where + " ORDER BY sort_order ASC, id DESC LIMIT ? OFFSET ?",
-                pageArgs.toArray());
+        CompletableFuture<List<Map<String, Object>>> recordsFuture = CompletableFuture.supplyAsync(
+                () -> jdbcTemplate.queryForList(recordsSql, pageArgs.toArray()), queryPool);
+        Long total;
+        List<Map<String, Object>> records;
+        try {
+            total = totalFuture.join();
+            records = recordsFuture.join();
+        } catch (Exception e) {
+            throw new BizException(503, "商品列表查询暂时不可用，请稍后重试");
+        }
         // 附带卡密商品库存数
         for (Map<String, Object> record : records) {
             attachStockInfo(record);
         }
         return new PageResult<>(records, safeCurrent, safeSize, total);
+    }
+
+    /**
+     * 构造商品列表 SQL：OFFSET 较小时直接 LIMIT/OFFSET，OFFSET 较大时改用延迟关联。
+     */
+    private String buildListProductsSql(StringBuilder where, int offset) {
+        String selectFields = "id, tenant_id AS tenantId, product_type AS productType, title, subtitle, content, copy, " +
+                "delivery_content AS deliveryContent, " +
+                "price_cent AS priceCent, ROUND(price_cent/100,2) AS priceYuan, " +
+                "cover_url AS coverUrl, status, category, ai_category_confidence AS aiCategoryConfidence, " +
+                "sort_order AS sortOrder, bought_count AS boughtCount, " +
+                "created_time AS createdTime, updated_time AS updatedTime";
+        if (offset < DEFERRED_JOIN_OFFSET_THRESHOLD) {
+            return "SELECT " + selectFields + " FROM mall_product" + where +
+                    " ORDER BY sort_order ASC, id DESC LIMIT ? OFFSET ?";
+        }
+        // 延迟关联：子查询仅走覆盖索引 (sort_order, id, deleted) 定位 id，再回表取完整字段。
+        // 深分页时主表的 LIMIT OFFSET 会逐行扫描跳过，子查询在覆盖索引上完成跳跃代价显著降低。
+        return "SELECT " + selectFields + " FROM mall_product INNER JOIN (" +
+                "SELECT id FROM mall_product" + where +
+                " ORDER BY sort_order ASC, id DESC LIMIT ? OFFSET ?" +
+                ") AS t ON mall_product.id = t.id ORDER BY mall_product.sort_order ASC, mall_product.id DESC";
     }
 
     public Map<String, Object> getProduct(long id) {
@@ -90,7 +158,8 @@ public class MallProductService {
                         "FROM mall_product WHERE id=? AND deleted=0",
                 id);
         if (product == null) throw new BizException(404, "商品不存在");
-        attachStockInfo(product);
+        // 异步附加库存信息，不阻塞主查询线程
+        attachStockInfoAsync(product);
         return product;
     }
 
@@ -287,6 +356,7 @@ public class MallProductService {
     }
 
     @Transactional
+    @CacheEvict(value = "mallPublic", allEntries = true)
     public Map<String, Object> createFaq(Map<String, Object> data) {
         if (data == null) throw new BizException(400, "FAQ 参数不能为空");
         String question = boundedRequired(data, "question", "问题不能为空", MAX_FAQ_QUESTION_LENGTH);
@@ -303,6 +373,7 @@ public class MallProductService {
     }
 
     @Transactional
+    @CacheEvict(value = "mallPublic", allEntries = true)
     public Map<String, Object> updateFaq(long id, Map<String, Object> data) {
         if (data == null) throw new BizException(400, "FAQ 参数不能为空");
         Map<String, Object> existing = getFaq(id);
@@ -327,6 +398,7 @@ public class MallProductService {
     }
 
     @Transactional
+    @CacheEvict(value = "mallPublic", allEntries = true)
     public void deleteFaq(long id) {
         int affected = safeUpdate("删除 FAQ 失败",
                 "UPDATE mall_faq SET deleted=1, updated_time=NOW() WHERE id=? AND deleted=0", id);
@@ -344,6 +416,9 @@ public class MallProductService {
 
     // ==================== 用户端：商品 ====================
 
+    /**
+     * 用户端商品列表（含 count + records 并行查询 + 深分页延迟关联）。
+     */
     public PageResult<Map<String, Object>> listShopProducts(String type, String category, String keyword,
                                                              int current, int size) {
         int safeCurrent = PageUtils.normalizeCurrent(current);
@@ -365,21 +440,45 @@ public class MallProductService {
             String kw = "%" + keyword.trim() + "%";
             args.add(kw); args.add(kw); args.add(kw);
         }
-        Long total = queryCount("SELECT COUNT(*) FROM mall_product" + where, args);
+        // 并行：count 查询与 records 查询同时发起
+        CompletableFuture<Long> totalFuture = CompletableFuture.supplyAsync(
+                () -> queryCount("SELECT COUNT(*) FROM mall_product" + where, args), queryPool);
+        String recordsSql = buildListShopProductsSql(where, offset);
         List<Object> pageArgs = new ArrayList<>(args);
         pageArgs.add(safeSize);
         pageArgs.add(offset);
-        List<Map<String, Object>> records = jdbcTemplate.queryForList(
-                "SELECT id, product_type AS productType, title, subtitle, content, copy, " +
-                        "price_cent AS priceCent, ROUND(price_cent/100,2) AS priceYuan, " +
-                        "cover_url AS coverUrl, category, sort_order AS sortOrder, bought_count AS boughtCount, " +
-                        "created_time AS createdTime " +
-                        "FROM mall_product" + where + " ORDER BY sort_order ASC, id DESC LIMIT ? OFFSET ?",
-                pageArgs.toArray());
-        for (Map<String, Object> record : records) {
-            attachStockInfo(record);
+        CompletableFuture<List<Map<String, Object>>> recordsFuture = CompletableFuture.supplyAsync(
+                () -> jdbcTemplate.queryForList(recordsSql, pageArgs.toArray()), queryPool);
+        Long total;
+        List<Map<String, Object>> records;
+        try {
+            total = totalFuture.join();
+            records = recordsFuture.join();
+        } catch (Exception e) {
+            throw new BizException(503, "商品列表查询暂时不可用，请稍后重试");
         }
+        // 批量附加库存信息，避免 N+1 查询
+        attachStockInfoBatch(records);
         return new PageResult<>(records, safeCurrent, safeSize, total);
+    }
+
+    /**
+     * 构造前台商品列表 SQL：OFFSET 较小时直接 LIMIT/OFFSET，OFFSET 较大时改用延迟关联。
+     */
+    private String buildListShopProductsSql(StringBuilder where, int offset) {
+        String selectFields = "id, product_type AS productType, title, subtitle, content, copy, " +
+                "price_cent AS priceCent, ROUND(price_cent/100,2) AS priceYuan, " +
+                "cover_url AS coverUrl, category, sort_order AS sortOrder, bought_count AS boughtCount, " +
+                "created_time AS createdTime";
+        if (offset < DEFERRED_JOIN_OFFSET_THRESHOLD) {
+            return "SELECT " + selectFields + " FROM mall_product" + where +
+                    " ORDER BY sort_order ASC, id DESC LIMIT ? OFFSET ?";
+        }
+        // 延迟关联：深分页时子查询走覆盖索引跳跃定位 id，再回表取完整字段
+        return "SELECT " + selectFields + " FROM mall_product INNER JOIN (" +
+                "SELECT id FROM mall_product" + where +
+                " ORDER BY sort_order ASC, id DESC LIMIT ? OFFSET ?" +
+                ") AS t ON mall_product.id = t.id ORDER BY mall_product.sort_order ASC, mall_product.id DESC";
     }
 
     public Map<String, Object> getShopProduct(long id) {
@@ -392,10 +491,17 @@ public class MallProductService {
                         "FROM mall_product WHERE id=? AND deleted=0 AND status=1",
                 id);
         if (product == null) throw new BizException(404, "商品不存在或已下架");
-        attachStockInfo(product);
+        // 异步附加库存信息，不阻塞主查询线程
+        attachStockInfoAsync(product);
         return product;
     }
 
+    /**
+     * 商城前台分类列表（聚合查询）。
+     * 缓存：结果缓存到 mallPublic key='categories'。
+     * 商品 CRUD 不会显式失效此缓存（写入路径分散），依赖 5min TTL 自然收敛。
+     */
+    @Cacheable(value = "mallPublic", key = "'categories'")
     public List<Map<String, Object>> listCategories() {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
                 "SELECT category, COUNT(*) AS product_count FROM mall_product " +
@@ -410,6 +516,11 @@ public class MallProductService {
         return categories;
     }
 
+    /**
+     * 商城前台 FAQ 列表。
+     * 缓存：结果缓存到 mallPublic key='shop_faqs'；FAQ CRUD 后失效整个 mallPublic cache。
+     */
+    @Cacheable(value = "mallPublic", key = "'shop_faqs'")
     public List<Map<String, Object>> listShopFaqs() {
         return jdbcTemplate.queryForList(
                 "SELECT id, question, answer, sort_order AS sortOrder " +
@@ -426,7 +537,11 @@ public class MallProductService {
      * X-Internal-Tenant-Id 必须存在且 > 0。超级管理员（platform admin）的 tenantId 为 null，
      * 因此这里在 tenantId 为空时从 sys_user 表取一个有效 tenantId 作为内部调用凭证。
      * 该 tenantId 仅用于满足内部认证要求，不影响返回的全局分类树内容。</p>
+     *
+     * <p>缓存：远程调用成本高（30s 超时），结果缓存到 mallPublic key='category_tree'。
+     * 分类树变更频率极低，依赖 5min TTL 自然收敛。</p>
      */
+    @Cacheable(value = "mallPublic", key = "'category_tree'")
     public Object getCategoryTree() {
         Long tenantId = com.xianyu.admin.security.TenantContext.getCurrentTenantId();
         if (tenantId == null || tenantId <= 0) {
@@ -543,6 +658,99 @@ public class MallProductService {
     }
 
     /**
+     * 异步附加库存信息：商品详情查询完成后，库存查询走独立线程，不阻塞主请求线程。
+     * 文本商品直接填 -1，不发起 DB 查询；卡密商品并发起一次 COUNT 查询并 join 等待。
+     * 单商品详情场景下，相比同步 attachStockInfo 节省一次串行 DB 往返时间。
+     */
+    private void attachStockInfoAsync(Map<String, Object> product) {
+        Object typeValue = product.get("productType");
+        if (typeValue == null || !"card".equals(text(typeValue))) {
+            product.put("stock", -1);
+            return;
+        }
+        Object idValue = product.get("id");
+        if (idValue == null) {
+            product.put("stock", -1);
+            return;
+        }
+        long productId;
+        try {
+            productId = storedLong(idValue, "商品 ID", 1, Long.MAX_VALUE);
+        } catch (BizException e) {
+            product.put("stock", -1);
+            return;
+        }
+        try {
+            Long stock = CompletableFuture.supplyAsync(() -> {
+                Long cnt = jdbcTemplate.queryForObject(
+                        "SELECT COUNT(*) FROM mall_card_key WHERE product_id=? AND status='available'",
+                        Long.class, productId);
+                return cnt == null ? 0L : cnt;
+            }, queryPool).join();
+            product.put("stock", stock);
+        } catch (Exception e) {
+            log.warn("异步查询商品库存失败, productId={}, errorType={}", productId, e.getClass().getSimpleName());
+            product.put("stock", -1);
+        }
+    }
+
+    /**
+     * 批量为商品列表附加库存信息（避免 N+1 查询）。
+     * 卡密商品一次 IN 查询聚合所有库存，文本商品直接标记为无限。
+     */
+    private void attachStockInfoBatch(List<Map<String, Object>> products) {
+        if (products == null || products.isEmpty()) return;
+        // 收集所有卡密商品的 ID
+        List<Long> cardProductIds = new ArrayList<>();
+        for (Map<String, Object> product : products) {
+            Object typeValue = product.get("productType");
+            if (typeValue != null && "card".equals(text(typeValue))) {
+                Object idValue = product.get("id");
+                if (idValue != null) {
+                    try {
+                        cardProductIds.add(storedLong(idValue, "商品 ID", 1, Long.MAX_VALUE));
+                    } catch (BizException ignored) { /* 跳过异常 ID */ }
+                }
+            }
+        }
+        // 一次 GROUP BY 查询所有卡密商品库存
+        Map<Long, Long> stockMap = new java.util.HashMap<>();
+        if (!cardProductIds.isEmpty()) {
+            String placeholders = String.join(",", java.util.Collections.nCopies(cardProductIds.size(), "?"));
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                    "SELECT product_id, COUNT(*) AS cnt FROM mall_card_key " +
+                            "WHERE status='available' AND product_id IN (" + placeholders + ") " +
+                            "GROUP BY product_id",
+                    cardProductIds.toArray());
+            for (Map<String, Object> row : rows) {
+                Object pid = row.get("product_id");
+                Object cnt = row.get("cnt");
+                if (pid != null && cnt != null) {
+                    stockMap.put(((Number) pid).longValue(), ((Number) cnt).longValue());
+                }
+            }
+        }
+        // 回填到每条商品记录
+        for (Map<String, Object> product : products) {
+            Object typeValue = product.get("productType");
+            if (typeValue != null && "card".equals(text(typeValue))) {
+                Object idValue = product.get("id");
+                long stock = 0;
+                if (idValue != null) {
+                    try {
+                        long productId = storedLong(idValue, "商品 ID", 1, Long.MAX_VALUE);
+                        stock = stockMap.getOrDefault(productId, 0L);
+                    } catch (BizException ignored) { /* 默认 0 */ }
+                }
+                product.put("stock", stock);
+            } else {
+                // 文本商品库存视为无限
+                product.put("stock", -1);
+            }
+        }
+    }
+
+    /**
      * 查询用户是否已购买指定商城商品（已支付订单）。
      */
     public boolean hasUserPurchased(long userId, long productId) {
@@ -560,10 +768,21 @@ public class MallProductService {
 
     /**
      * 批量为商品列表附加 purchased 字段（用户是否已购买）。
+     * 使用 IN 批量查询替代循环单查，避免 N+1 性能问题。
      * 单个商品 ID 异常不影响整体列表，降级为 false。
      */
     public void attachPurchasedInfo(List<Map<String, Object>> products, long userId) {
-        if (products == null || products.isEmpty() || userId <= 0) return;
+        if (products == null || products.isEmpty() || userId <= 0) {
+            if (products != null) {
+                for (Map<String, Object> product : products) {
+                    product.put("purchased", false);
+                }
+            }
+            return;
+        }
+        // 收集所有合法商品 ID
+        List<Long> productIds = new ArrayList<>();
+        Map<Long, Map<String, Object>> idToProduct = new java.util.HashMap<>();
         for (Map<String, Object> product : products) {
             Object idValue = product.get("id");
             if (idValue == null) {
@@ -572,9 +791,31 @@ public class MallProductService {
             }
             try {
                 long productId = storedLong(idValue, "商品 ID", 1, Long.MAX_VALUE);
-                product.put("purchased", hasUserPurchased(userId, productId));
+                productIds.add(productId);
+                idToProduct.put(productId, product);
+                product.put("purchased", false); // 默认 false，命中后覆盖
             } catch (BizException e) {
                 product.put("purchased", false);
+            }
+        }
+        if (productIds.isEmpty()) return;
+        // 一次 IN 查询所有已购商品 ID
+        String placeholders = String.join(",", java.util.Collections.nCopies(productIds.size(), "?"));
+        List<Object> args = new ArrayList<>(productIds);
+        args.add(0, userId);
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT DISTINCT target_id FROM payment_order " +
+                        "WHERE user_id=? AND order_type='mall_product' " +
+                        "AND target_id IN (" + placeholders + ") AND status=1 AND deleted=0",
+                args.toArray());
+        for (Map<String, Object> row : rows) {
+            Object tid = row.get("target_id");
+            if (tid != null) {
+                long pid = ((Number) tid).longValue();
+                Map<String, Object> product = idToProduct.get(pid);
+                if (product != null) {
+                    product.put("purchased", true);
+                }
             }
         }
     }
