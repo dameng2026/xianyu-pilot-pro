@@ -26,7 +26,7 @@ public interface XianyuTradeOrderMapper {
             "<if test='buyerId != null and buyerId != \"\"'>" +
             "  AND (buyer_id = #{buyerId} OR buyer_id = CONCAT(#{buyerId}, '@goofish')) " +
             "</if>" +
-            "ORDER BY created_time DESC " +
+            "ORDER BY ${orderClause} " +
             "LIMIT #{offset}, #{limit}" +
             "</script>")
     List<XianyuTradeOrder> list(@Param("tenantId") Long tenantId,
@@ -35,7 +35,8 @@ public interface XianyuTradeOrderMapper {
                                 @Param("status") Integer status,
                                 @Param("buyerId") String buyerId,
                                 @Param("offset") int offset,
-                                @Param("limit") int limit);
+                                @Param("limit") int limit,
+                                @Param("orderClause") String orderClause);
 
     @Select("<script>" +
             "SELECT COUNT(*) FROM xianyu_trade_order " +

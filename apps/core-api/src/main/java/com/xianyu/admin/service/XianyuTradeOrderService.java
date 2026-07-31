@@ -46,17 +46,47 @@ public class XianyuTradeOrderService {
     }
 
     /**
+     * 排序字段白名单：前端 sortField 值 → 实际 SQL 排序列表达式
+     * 仅允许白名单内的列参与排序，避免 SQL 注入
+     */
+    private static final Map<String, String> SORT_FIELD_WHITELIST = Map.of(
+            "createdAt", "created_time",
+            "orderStatus", "order_status",
+            "buyerName", "buyer_name",
+            "totalAmount", "total_amount"
+    );
+
+    /**
+     * 根据前端传入的 sortField / sortOrder 构造安全的 ORDER BY 子句
+     * 默认：created_time DESC（保持原有默认行为）
+     */
+    private String buildOrderClause(String sortField, String sortOrder) {
+        String column = SORT_FIELD_WHITELIST.get(sortField);
+        if (column == null) {
+            return "created_time DESC";
+        }
+        boolean asc = "asc".equalsIgnoreCase(sortOrder);
+        // 订单状态按业务语义排序：待付款→已付款→待发货→已发货→已完成→已关闭
+        if ("order_status".equals(column)) {
+            return column + (asc ? " ASC" : " DESC") + ", created_time DESC";
+        }
+        return column + (asc ? " ASC" : " DESC");
+    }
+
+    /**
      * 分页查询订单列表
      */
     public PageResult<XianyuTradeOrderVO> page(Long tenantId, Long accountId, String keyword, Integer status, String buyerId,
-                                                 int current, int size) {
+                                                 int current, int size, String sortField, String sortOrder) {
         int safeCurrent = PageUtils.normalizeCurrent(current);
         int safeSize = PageUtils.normalizeSize(size);
         int offset = (safeCurrent - 1) * safeSize;
         int limit = safeSize;
 
+        String orderClause = buildOrderClause(sortField, sortOrder);
+
         int total = orderMapper.count(tenantId, accountId, keyword, status, buyerId);
-        List<XianyuTradeOrder> list = orderMapper.list(tenantId, accountId, keyword, status, buyerId, offset, limit);
+        List<XianyuTradeOrder> list = orderMapper.list(tenantId, accountId, keyword, status, buyerId, offset, limit, orderClause);
 
         List<XianyuTradeOrderVO> records = list.stream()
                 .map(this::toVO)

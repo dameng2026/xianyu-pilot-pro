@@ -18,8 +18,10 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -94,14 +96,14 @@ class XianyuTradeOrderServiceTest {
         order.setOrderStatus(3);
 
         when(orderMapper.count(1L, null, null, null, null)).thenReturn(1);
-        when(orderMapper.list(1L, null, null, null, null, 0, 20)).thenReturn(List.of(order));
+        when(orderMapper.list(eq(1L), isNull(), isNull(), isNull(), isNull(), eq(0), eq(20), anyString())).thenReturn(List.of(order));
         when(jdbcTemplate.queryForList(contains("FROM xianyu_trade_order_item"), eq(1L), eq(101L)))
                 .thenReturn(List.of(
                         Map.of("order_id", 101L, "goods_title", "Pack A", "goods_count", 2),
                         Map.of("order_id", 101L, "goods_title", "Pack B", "goods_count", 1)
                 ));
 
-        PageResult<XianyuTradeOrderVO> result = service.page(1L, null, null, null, null, 1, 20);
+        PageResult<XianyuTradeOrderVO> result = service.page(1L, null, null, null, null, 1, 20, null, null);
 
         assertEquals("Pack A x2 / Pack B x1", result.getRecords().get(0).getItemSummary());
         assertEquals(3, result.getRecords().get(0).getQuantityTotal());

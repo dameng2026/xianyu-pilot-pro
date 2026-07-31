@@ -33,6 +33,8 @@ public class XianyuTradeOrderController {
 
     /**
      * 分页查询订单列表
+     * 支持排序：sortField（createdAt/orderStatus/buyerName/totalAmount）+ sortOrder（asc/desc）
+     * sortField 不传或不在白名单内时使用默认排序：created_time DESC
      */
     @GetMapping
     public Result<PageResult<XianyuTradeOrderVO>> page(
@@ -42,12 +44,15 @@ public class XianyuTradeOrderController {
             @RequestParam(required = false) String buyerId,
             @RequestParam(defaultValue = "1") int current,
             @RequestParam(defaultValue = "10") int size,
-            @RequestParam(defaultValue = "false") boolean sync) {
+            @RequestParam(defaultValue = "false") boolean sync,
+            @RequestParam(required = false) String sortField,
+            @RequestParam(required = false) String sortOrder) {
         Long tenantId = TenantContext.getCurrentTenantId();
         if (sync) {
             throw new BizException(410, "GET 订单列表不再执行同步；请先调用 POST /api/orders/sync，再刷新列表");
         }
-        PageResult<XianyuTradeOrderVO> result = orderService.page(tenantId, accountId, keyword, status, buyerId, current, size);
+        PageResult<XianyuTradeOrderVO> result = orderService.page(tenantId, accountId, keyword, status, buyerId,
+                current, size, sortField, sortOrder);
         return Result.ok(result);
     }
 
