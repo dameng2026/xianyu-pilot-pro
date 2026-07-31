@@ -134,12 +134,17 @@ export function buildOrdersQuery(query) {
   const status = String(query?.status ?? '').trim()
   const current = Number(query?.current || 1) || 1
   const shouldSync = query?.sync === true
+  const sortField = String(query?.sortField || '').trim()
+  const sortOrder = String(query?.sortOrder || '').trim().toLowerCase()
   const payload = {
     accountId: accountId ? Number(accountId) : undefined,
     keyword: query?.keyword || undefined,
     status: status === '' ? undefined : Number(status),
     current,
-    size: Number(query?.size || 20) || 20
+    size: Number(query?.size || 20) || 20,
+    // 排序参数：sortField 必须在白名单内后端才会生效，否则后端使用默认排序
+    sortField: sortField || undefined,
+    sortOrder: sortOrder === 'asc' || sortOrder === 'desc' ? sortOrder : undefined
   }
   if (accountId && shouldSync) {
     payload.sync = true
