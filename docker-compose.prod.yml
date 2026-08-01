@@ -200,6 +200,10 @@ services:
       COOKIE_CRYPTO_SECRET: ${COOKIE_CRYPTO_SECRET:?COOKIE_CRYPTO_SECRET must be set}
       CORS_ALLOWED_ORIGINS: ${CRAWLER_CORS_ALLOWED_ORIGINS:?CRAWLER_CORS_ALLOWED_ORIGINS must be set}
       SCHEMA_RUNTIME_MUTATIONS_ENABLED: "false"
+    # 2026-08-01 热部署 volume mount：用于在不重建镜像的情况下更新滑块求解脚本
+    # 原因：容器 read_only: true 阻止 docker cp，需要 volume mount 覆盖文件
+    volumes:
+      - /home/ubuntu/project/hot-deploy/sliderSolve.py:/app/sliderSolve.py:ro
     logging:
       driver: json-file
       options:

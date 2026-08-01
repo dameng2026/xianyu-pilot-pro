@@ -30,12 +30,16 @@ RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd6
     apt-get update && apt-get install -y --no-install-recommends \
         xvfb \
         xauth \
+        xdotool \
         python3 \
         python3-pip \
         python3-venv \
         /tmp/chrome.deb \
     && rm -rf /var/lib/apt/lists/* /tmp/chrome.deb \
-    && python3 -m pip install --no-cache-dir --break-system-packages patchright
+    && python3 -m pip install --no-cache-dir --break-system-packages \
+        -i https://pypi.tuna.tsinghua.edu.cn/simple \
+        --trusted-host pypi.tuna.tsinghua.edu.cn \
+        patchright
 
 COPY --from=build --chown=pwuser:pwuser /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=pwuser:pwuser /app/node_modules ./node_modules
@@ -62,5 +66,8 @@ USER pwuser
 
 # 用 xvfb-run 包装启动命令，自动启动 Xvfb 虚拟显示器并设置 DISPLAY 环境变量
 # -a: 自动选择可用的 display number，避免冲突
-# -s: 传给 Xvfb 的参数，-screen 0 1280x800x24 提供足够分辨率供 Chrome 渲染
-CMD ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24 -ac", "node", "dist/server.js"]
+# -s: 传给 Xvfb 的参数，-screen 0 1920x1080x24 提供足够分辨率供 Chrome 渲染
+# 2026-08-01 优化：屏幕从 1280x800 增大到 1920x1080，配合 xdotool 系统级鼠标拖动
+# 原因：sliderSolve.py 的 WINDOW_WIDTH=1366，原 Xvfb 1280 宽度不够，浏览器窗口超出屏幕，
+#       xdotool 无法操作屏幕外区域。1920x1080 完全包含 1366x768 浏览器窗口。
+CMD ["xvfb-run", "-a", "-s", "-screen 0 1920x1080x24 -ac", "node", "dist/server.js"]

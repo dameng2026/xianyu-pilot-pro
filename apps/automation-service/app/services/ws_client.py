@@ -1244,7 +1244,40 @@ class XianyuWebSocketClient:
         """获取/刷新 accessToken。如果 DB 中的 _m_h5_tk 过期，自动从 cookie 提取并更新 DB。
         如果 cookie 中的 _m_h5_tk 也已过期，尝试调用 refresh_m_h5_tk 刷新令牌。
         遇到滑块验证时自动更新 cookie_status 为 0（失效）。
+
+        2026-08-02 强化：WS 重连前先尝试用缓存的 x5sec 免滑块恢复连接。
+        - 调用 Token API 之前，先查询 x5sec Redis 缓存
+        - 命中缓存则注入 x5sec 到 cookie，再用注入后的 cookie 调用 Token API
+        - 如果注入 x5sec 后 Token API 成功，跳过滑块求解，直接恢复 WS 连接
+        - 如果注入 x5sec 后 Token API 仍返回 captcha，清除失效的 x5sec 缓存，再触发滑块求解
         """
+        # === x5sec 缓存免滑块恢复 ===
+        # 场景：WS 掉线后，如果之前求解过滑块，x5sec 已缓存（TTL 6 小时），
+        #       直接注入 x5sec 到 cookie 调用 Token API，跳过滑块求解。
+        # 这能将 WS 恢复时间从 60-200 秒（滑块求解）降到 1-3 秒（Token API 调用）。
+        original_cookie_str = self.cookie_str
+        x5sec_injected = False
+        injected_x5sec_value = None
+        try:
+            from .x5sec_cache_client import get_cached_x5sec, cookie_has_x5sec, inject_x5sec_into_cookie
+            if not cookie_has_x5sec(self.cookie_str):
+                cached_x5sec = get_cached_x5sec(self.cookie_str)
+                if cached_x5sec:
+                    enhanced_cookie = inject_x5sec_into_cookie(self.cookie_str, cached_x5sec)
+                    if enhanced_cookie and enhanced_cookie != self.cookie_str:
+                        logger.info(
+                            "WS Token 获取: accountId=%d x5sec 缓存命中，注入 x5sec 后调用 Token API（免滑块）",
+                            self.account_id,
+                        )
+                        self.cookie_str = enhanced_cookie
+                        x5sec_injected = True
+                        injected_x5sec_value = cached_x5sec
+        except Exception as exc:
+            log_service_failure(
+                logger, exc, operation="inject_x5sec_before_token_refresh",
+                tenant_id=self.tenant_id, account_id=self.account_id, level=logging.DEBUG,
+            )
+
         access_token, effective_m_h5_tk, error_type, refreshed_cookie = await asyncio.to_thread(
             get_ws_token_with_refreshed_m_h5_tk, self.cookie_str, self.m_h5_tk
         )
@@ -1264,9 +1297,20 @@ class XianyuWebSocketClient:
                     self.account_id,
                 )
             # 如果 cookie 被刷新了（含新的 _m_h5_tk），更新 DB 中的 cookie
+            # 注意：如果注入了 x5sec，refresh_m_h5_tk 返回的 refreshed_cookie 可能不含 x5sec
+            #       所以需要保留注入的 x5sec，避免 x5sec 丢失
             if refreshed_cookie and refreshed_cookie != self.cookie_str:
+                if x5sec_injected and injected_x5sec_value:
+                    # 保留 x5sec：将注入的 x5sec 合并到 refreshed_cookie
+                    from .x5sec_cache_client import cookie_has_x5sec, inject_x5sec_into_cookie
+                    if not cookie_has_x5sec(refreshed_cookie):
+                        refreshed_cookie = inject_x5sec_into_cookie(refreshed_cookie, injected_x5sec_value)
                 self.cookie_str = refreshed_cookie
                 await self._update_cookie_in_db(refreshed_cookie)
+            elif x5sec_injected:
+                # 注入了 x5sec 但 cookie 未被刷新，需要把注入 x5sec 后的 cookie 写回 DB
+                # 这样下次 WS 重连时 cookie 中已含 x5sec，无需再查缓存
+                await self._update_cookie_in_db(self.cookie_str)
             await self._restore_cookie_status_if_needed()
             return True
 
@@ -1277,6 +1321,23 @@ class XianyuWebSocketClient:
         # 改为只触发滑块求解，由求解器内部通过 hasLogin / page.head 二次验证判断 Cookie 是否真的失效。
         # 只有求解器确认 Cookie 失效时才更新 cookie_status=0（在 captcha_solver.py 中处理）。
         if error_type == "captcha":
+            # 2026-08-02 强化：如果注入了 x5sec 但 Token API 仍返回 captcha，说明 x5sec 已失效
+            # 主动清除 Redis 中的 x5sec 缓存，避免后续继续用失效的 x5sec
+            if x5sec_injected:
+                try:
+                    from .x5sec_cache_client import evict_cached_x5sec
+                    evict_cached_x5sec(original_cookie_str)
+                    logger.info(
+                        "WS Token 获取: accountId=%d 注入 x5sec 后仍触发滑块验证，已清除失效的 x5sec 缓存",
+                        self.account_id,
+                    )
+                except Exception as exc:
+                    log_service_failure(
+                        logger, exc, operation="evict_x5sec_on_captcha",
+                        tenant_id=self.tenant_id, account_id=self.account_id, level=logging.DEBUG,
+                    )
+                # 恢复原始 cookie（不含失效的 x5sec），避免影响后续滑块求解
+                self.cookie_str = original_cookie_str
             logger.warning(
                 "WS Token 获取遇到滑块验证（Cookie 可能仍有效，等待求解器二次验证）: accountId=%d",
                 self.account_id
@@ -1296,6 +1357,9 @@ class XianyuWebSocketClient:
                 "WS Token 获取失败（Cookie 已过期）: accountId=%d",
                 self.account_id
             )
+            # 恢复原始 cookie（如果注入了 x5sec），避免影响后续滑块求解
+            if x5sec_injected:
+                self.cookie_str = original_cookie_str
             await self._update_cookie_status(0, "COOKIE_EXPIRED", "Cookie 已过期，请重新登录闲鱼账号")
             # 自动触发滑块求解：Session 过期场景下闲鱼可能要求重新过滑块，
             # 求解器内部会通过 Token API 二次验证判断 Cookie 是否真的可用，

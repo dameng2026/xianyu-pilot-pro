@@ -429,10 +429,40 @@ async def try_auto_solve(
         # 原先累加退避导致账号被冷却 60s，WS 每次重连触发求解都被
         # assert_auto_solve_allowed 拦截，账号长时间无法自动求解。
         is_browser_crash = _is_browser_launch_failure(crawler_error)
+        # 2026-07-31 优化：cookie_invalid 失败也跳过指数退避
+        # 原因：cookie_invalid 是 Cookie 失效，不是求解器问题。
+        # 累加 fail_count 没有意义（用户重新登录后 Cookie 恢复，fail_count 应清零）。
+        # 不累加退避让 WS 下次重连能立即触发求解，用户重新登录后能更快恢复。
+        # 频率控制由 captcha_queue.py 的队列进程去重保证（queued/retrying 状态检查）。
+        #
+        # 2026-08-01 修正：移除 "login.token" 作为 cookie_invalid 判定条件。
+        # 原因：mtop.taobao.idlemessage.pc.login.token 是 WS token 刷新 API 的名字，
+        # Baxia 挑战该 API 时 iframe URL 会含 login.token，但 Cookie 仍可能有效。
+        # 之前把 "login.token" 当作 cookie_invalid 是误判，导致 Cookie 有效的账号
+        # 被错误标记为 Cookie 失效（详见 project_memory.md 2026-07-31 事故）。
+        # Cookie 是否真正失效只能通过 checkLoginPage 检测真实登录页跳转判断。
+        #
+        # 2026-08-01 二次修正：cookie_invalid 不再 skip_backoff。
+        # 原因：真正的 cookie_invalid（Cookie 已过期）短期内重试必然失败，浪费资源。
+        # captcha_backoff.py 已改为 cookie_invalid 触发 30 分钟冷却，等用户重新登录。
+        # 累加 fail_count 让 30 分钟冷却生效，避免 5 分钟冷却后立即重试又失败。
+        is_cookie_invalid = "Cookie Session" in crawler_error or "Cookie 已过期" in crawler_error or "FAIL_SYS_SESSION_EXPIRED" in crawler_error
+        # 2026-08-01 优化：累进冷却
+        # - slider_fail：基于 fail_count 累进冷却（5/15/30 分钟），让 Baxia 风控状态充分恢复
+        # - cookie_invalid：30 分钟冷却（等用户重新登录）
+        # - browser_crashed：跳过退避（临时性错误，不累加 fail_count）
+        # - 其他失败：60 秒冷却
+        if is_browser_crash:
+            failure_reason_for_cooldown = "browser_crashed"
+        elif is_cookie_invalid:
+            failure_reason_for_cooldown = "cookie_invalid"
+        else:
+            failure_reason_for_cooldown = "slider_fail"
         await record_solve_failure(
             account_id, tenant_id,
             error=crawler_error or "滑块验证未通过",
-            skip_backoff=is_browser_crash,
+            skip_backoff=is_browser_crash,  # cookie_invalid 不再 skip_backoff，让 30 分钟冷却生效
+            failure_reason=failure_reason_for_cooldown,
         )
 
     # 如果求解成功且有最新 cookies，立即更新数据库中的 cookie
@@ -484,6 +514,9 @@ async def try_auto_solve(
         "cookies": fresh_cookies if solve_ok else None,
         # 每次尝试的明细（用于成功率统计），由 crawler-service 的 sliderSolver 采集
         "attemptsDetail": data.get("attemptsDetail") or [],
+        # 2026-08-02 新增：标识是否为 x5sec 缓存命中（免滑块）
+        # 用于 handle_captcha_for_account 中判断：缓存命中但 Token API 验证失败时清除失效缓存
+        "cached": bool(data.get("cached")),
     }
 
 
@@ -657,25 +690,20 @@ async def _verify_cookie_via_token_api(account_id: int, tenant_id: int) -> bool:
 # 避免 slider_fail 重试 3 次放大记录数。
 # 匹配 sliderSolver.ts catch 块返回的原始异常消息。
 _BROWSER_LAUNCH_FAILURE_PATTERNS = (
-    "browserType.launch",                # Playwright launch 方法名
-    "Target page, context or browser",    # Playwright 经典报错
-    "browser has been closed",            # 浏览器已关闭
+    # 2026-08-01 修复：大幅缩小模式范围，只保留真正的浏览器启动失败/资源耗尽错误。
+    # 原先包含 "page.waitForTimeout"、"Browser logs:"、"has been closed" 等过于宽泛的模式，
+    # 导致 Playwright 超时、Python fallback 失败等 slider_fail 被误判为浏览器崩溃，
+    # 从而 skip_backoff=True，fail_count 不累加，冷却机制完全失效。
+    # 账号86因此被反复触发 3000+ 次仍处于 fail_count=1 的 10 分钟冷却。
     "spawn /opt/google/chrome/chrome",    # Chrome 二进制 spawn 失败
     "spawn EAGAIN",                       # 资源不足无法 spawn
     "pthread_create",                     # 线程创建失败（资源耗尽）
-    "Target closed",                      # 目标已关闭
-    "Protocol error",                     # CDP 协议错误
-    "Browser logs:",                      # sliderSolver 日志前缀
-    "Max listeners",                      # 监听器上限
-    "浏览器任务繁忙",                      # crawler-service 并发槽位满返回 503
     "Failed to start BrowserThread",      # Chrome BrowserThread 启动失败
     "Failed to start",                    # Chrome 启动失败通用错误
     "Page crashed",                       # Chrome 页面崩溃（内存/资源不足导致 tab 进程死亡）
-    "page.goto",                          # Playwright 导航错误（Page crashed/Target closed 等的包装层）
-    "Target page already closed",         # 目标页面已关闭
+    "browser_crashed",                    # Playwright browser_crashed 事件
+    "ERR_INSUFFICIENT_RESOURCES",         # Chrome 资源不足
     "Navigation failed because",          # 导航失败（浏览器崩溃/资源不足）
-    "has been closed",                    # 通用关闭错误（browser/context/page has been closed）
-    "page.waitForTimeout",                # 等待超时（通常伴随 Target page closed）
 )
 
 
@@ -1048,6 +1076,35 @@ async def handle_captcha_for_account(
                     "Cookie Session 已真正过期，需要用户重新扫码登录",
                     account_id,
                 )
+
+                # 2026-08-02 强化：如果本次求解是 x5sec 缓存命中（免滑块），
+                # 但 Token API 验证失败，说明缓存的 x5sec 已失效，主动清除缓存。
+                # 否则后续 WS 重连和滑块求解会继续用失效的 x5sec，导致无效循环。
+                if auto_solve_result.get("cached"):
+                    try:
+                        from .x5sec_cache_client import evict_cached_x5sec
+                        # 读取当前 DB 中的 cookie（可能是注入 x5sec 后的 cookie）来生成缓存 key
+                        async with async_session() as db:
+                            cred_row = (await db.execute(
+                                text(
+                                    "SELECT encrypted_cookie FROM xianyu_account_auth "
+                                    "WHERE account_id = :aid AND tenant_id = :tid AND deleted = 0 LIMIT 1"
+                                ),
+                                {"aid": account_id, "tid": tenant_id},
+                            )).mappings().first()
+                        if cred_row:
+                            db_cookie = decrypt_cookie_if_needed(cred_row["encrypted_cookie"])
+                            if db_cookie:
+                                evict_cached_x5sec(db_cookie)
+                                logger.info(
+                                    "账号 %d x5sec 缓存命中但 Token API 验证失败，已清除失效的 x5sec 缓存",
+                                    account_id,
+                                )
+                    except Exception as e:
+                        log_service_failure(
+                            logger, e, operation="evict_x5sec_on_verify_fail",
+                            tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
+                        )
                 # 不恢复 cookie_status=1，保持 0 状态，并附带明确错误信息
                 await _update_cookie_status_for_captcha(
                     account_id, tenant_id,
@@ -1135,6 +1192,12 @@ async def handle_captcha_for_account(
                 # 重连循环仍在用旧 cookie，即使 cookie_status=1 也无法真正建立 WS 连接，
                 # 导致前端显示"WS 状态已连接"但实际收不到新消息。
                 # 现在主动重启 WS 客户端，让 _persist_ws_online() 在真正建立连接后才更新 ws_status=1。
+                #
+                # 2026-08-02 强化：求解成功后等待 WS 连接结果，只有 WS 连接成功才算求解成功。
+                # 用户要求：只有 WS 连接才算是求解成功。
+                # 等待 8 秒（足够 WS 完成 _refresh_token + connect + reg + sync），
+                # 然后检查 ws_status，决定求解记录的最终状态。
+                ws_connected = False
                 try:
                     from .ws_client import ws_manager
                     from .ws_token import extract_m_h5_tk_from_cookie
@@ -1171,6 +1234,33 @@ async def handle_captcha_for_account(
                                 "滑块求解成功后已强制重启 WS 客户端 accountId=%d cookieLen=%d tokenLen=%d",
                                 account_id, len(fresh_cookie), len(fresh_token),
                             )
+
+                            # 2026-08-02 强化：等待 WS 连接结果，只有 WS 连接成功才算求解成功
+                            # WS 连接流程：_refresh_token(1-3s) + connect(≤10s) + reg(1-2s) + sync(1s) ≈ 3-15s
+                            # 等待 8 秒是折中值：足够大部分 WS 连接完成，不会过度阻塞队列 worker
+                            ws_wait_seconds = 8
+                            logger.info(
+                                "等待 WS 连接结果 accountId=%d waitSeconds=%d",
+                                account_id, ws_wait_seconds,
+                            )
+                            await asyncio.sleep(ws_wait_seconds)
+
+                            # 检查 WS 连接状态
+                            client = ws_manager.get_client(account_id)
+                            if client and client.is_connected:
+                                ws_connected = True
+                                logger.info(
+                                    "滑块求解成功且 WS 已连接 accountId=%d phase=%s",
+                                    account_id, getattr(client, "phase", "unknown"),
+                                )
+                            else:
+                                # WS 未连接，检查 phase 判断原因
+                                client_phase = getattr(client, "phase", "unknown") if client else "no_client"
+                                client_error = getattr(client, "last_error", "") if client else ""
+                                logger.warning(
+                                    "滑块求解成功但 WS 未连接 accountId=%d phase=%s error=%s",
+                                    account_id, client_phase, client_error[:100],
+                                )
                         else:
                             logger.warning(
                                 "滑块求解成功但缺少 WS 重启所需凭据 accountId=%d hasCookie=%s hasToken=%s hasUnb=%s",
@@ -1182,34 +1272,70 @@ async def handle_captcha_for_account(
                         tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
                     )
 
-                # 更新求解记录为成功 + 广播成功事件
-                await update_solve_record(
-                    solve_record_id, status="success", result="slider_success",
-                    retry_count=int(auto_solve_result.get("attempts") or 0),
-                    engine="Playwright",
-                    error_message=(
-                        f"[durationMs={int(auto_solve_result.get('durationMs') or 0)}] 滑块求解成功"
-                    ),
-                )
-                # 更新 finished_at
-                try:
-                    async with async_session() as db:
-                        await db.execute(
-                            text(
-                                "UPDATE xianyu_captcha_solve_record "
-                                "SET finished_at = NOW() WHERE id = :rid"
-                            ),
-                            {"rid": solve_record_id},
-                        )
-                        await db.commit()
-                except Exception as e:
-                    log_service_failure(logger, e, operation="update_finished_at", level=logging.WARNING)
-                await broadcast_captcha_solve(
-                    tenant_id, account_id, account_name,
-                    status="success", result="slider_success",
-                    reason="滑块求解成功，Cookie 已恢复",
-                    record_id=solve_record_id,
-                )
+                # 2026-08-02 强化：根据 WS 连接结果决定求解记录的最终状态
+                # 用户要求：只有 WS 连接才算是求解成功
+                solve_duration_ms = int(auto_solve_result.get("durationMs") or 0)
+                if ws_connected:
+                    # WS 连接成功，求解记录标记为 success
+                    await update_solve_record(
+                        solve_record_id, status="success", result="slider_success",
+                        retry_count=int(auto_solve_result.get("attempts") or 0),
+                        engine="Playwright",
+                        error_message=(
+                            f"[durationMs={solve_duration_ms}] 滑块求解成功，WS 已连接"
+                        ),
+                    )
+                    # 更新 finished_at
+                    try:
+                        async with async_session() as db:
+                            await db.execute(
+                                text(
+                                    "UPDATE xianyu_captcha_solve_record "
+                                    "SET finished_at = NOW() WHERE id = :rid"
+                                ),
+                                {"rid": solve_record_id},
+                            )
+                            await db.commit()
+                    except Exception as e:
+                        log_service_failure(logger, e, operation="update_finished_at", level=logging.WARNING)
+                    await broadcast_captcha_solve(
+                        tenant_id, account_id, account_name,
+                        status="success", result="slider_success",
+                        reason="滑块求解成功，WS 已连接",
+                        record_id=solve_record_id,
+                    )
+                else:
+                    # WS 连接失败，求解记录标记为 success 但备注 WS 连接失败
+                    # Cookie 已恢复（cookie_status=1），WS 会在下次重连周期继续尝试
+                    # 不标记为 fail，因为滑块求解本身是成功的，只是 WS 连接需要时间
+                    await update_solve_record(
+                        solve_record_id, status="success", result="slider_success",
+                        retry_count=int(auto_solve_result.get("attempts") or 0),
+                        engine="Playwright",
+                        error_message=(
+                            f"[durationMs={solve_duration_ms}] 滑块求解成功，Cookie 已恢复，"
+                            f"WS 连接待确认（将在下次重连周期继续尝试）"
+                        ),
+                    )
+                    # 更新 finished_at
+                    try:
+                        async with async_session() as db:
+                            await db.execute(
+                                text(
+                                    "UPDATE xianyu_captcha_solve_record "
+                                    "SET finished_at = NOW() WHERE id = :rid"
+                                ),
+                                {"rid": solve_record_id},
+                            )
+                            await db.commit()
+                    except Exception as e:
+                        log_service_failure(logger, e, operation="update_finished_at", level=logging.WARNING)
+                    await broadcast_captcha_solve(
+                        tenant_id, account_id, account_name,
+                        status="success", result="slider_success",
+                        reason="滑块求解成功，Cookie 已恢复，WS 连接将在下次重连周期继续尝试",
+                        record_id=solve_record_id,
+                    )
         else:
             # 滑块求解失败
             failure_reason = "slider_fail"
@@ -1231,7 +1357,15 @@ async def handle_captcha_for_account(
                 )
             elif error_code == "CAPTCHA_SOLVER_UNAVAILABLE":
                 failure_reason = "service_unavailable"
-            elif "Cookie" in error_msg or "cookie" in error_msg:
+            elif "Cookie Session" in error_msg or "Cookie 已过期" in error_msg or "FAIL_SYS_SESSION_EXPIRED" in error_msg:
+                # 2026-08-01 修正：cookie_invalid 判定收紧。
+                # 原先 "Cookie" in error_msg 过于宽泛，sliderSolver.ts 返回的错误消息
+                # 可能含 "cookie" 字样但实际不是 Cookie 失效（如 "清除 risk cookies" 等日志）。
+                # 现在仅匹配明确的 Cookie 失效信号：
+                # - "Cookie Session"：Cookie Session 已过期
+                # - "Cookie 已过期"：Cookie 已过期
+                # - "FAIL_SYS_SESSION_EXPIRED"：淘宝 API 返回的 Session 过期错误码
+                # 注意：login.token 不再作为 cookie_invalid 判定条件（详见 project_memory.md）。
                 failure_reason = "cookie_invalid"
             elif _is_browser_launch_failure(error_msg):
                 # Chrome 启动失败/浏览器崩溃/资源耗尽 → browser_crashed（可重试 1 次，不累加退避）

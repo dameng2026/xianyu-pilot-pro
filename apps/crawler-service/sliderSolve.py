@@ -170,10 +170,17 @@ STEALTH_INIT_SCRIPT = r"""
     defineGetter(navigator, 'cookieEnabled', () => true);
     defineGetter(navigator, 'onLine', () => true);
     defineGetter(navigator, 'pdfViewerEnabled', () => true);
+    // navigator.platform 必须与 UA 平台一致（Windows UA → Win32）
+    // 2026-08-01 新增：Linux 容器 navigator.platform 默认是 'Linux x86_64'，
+    //            与 Windows UA 矛盾，Baxia 检测到不一致直接判定机器人
+    defineGetter(navigator, 'platform', () => 'Win32');
 
     // ===== 5. navigator.userAgentData (Client Hints) — Chrome 131+ 必有 =====
-    // Playwright 不自动设置 UA-CH，Baxia 检测 navigator.userAgentData 是否存在且与 UA 一致
-    if (!navigator.userAgentData) {
+    // 2026-08-01 重大修复：无条件覆盖（不判断 if (!navigator.userAgentData)）
+    // 原因：patchright 在 Linux 容器中可能自动设置 userAgentData.platform='Linux'，
+    //       导致 UA（Windows）与 Client Hints（Linux）矛盾，Baxia 直接判定机器人。
+    //       必须强制覆盖为 Windows，确保 UA、Client Hints、navigator.platform 三者一致。
+    {
       const brands = [
         { brand: 'Google Chrome', version: '131' },
         { brand: 'Chromium', version: '131' },
@@ -580,10 +587,93 @@ _ADVANCED_FINGERPRINT_SCRIPT = r"""
       });
     }
 
-    // ===== 7. WebGL vendor/renderer（保留真实 GPU 信息，不修改） =====
-    // 注意：之前修改为 NVIDIA GTX 1660 SUPER，但实际 GPU 是 AMD Radeon RX 7700 XT，
-    // 修改会导致 WebGL 指纹与实际 GPU 不一致，反而更可疑。
-    // patchright 用真实 Chrome，WebGL 指纹是真实的，不需要修改。
+    // ===== 7. WebGL vendor/renderer（Docker 容器无 GPU 必须伪造） =====
+    // 2026-08-01 修复：容器内 Chrome getContext('webgl') 返回 null（无 GPU），
+    // Baxia 检测到 no-webgl 直接识别为机器人。
+    // 方案：patch HTMLCanvasElement.prototype.getContext，当 webgl 返回 null 时
+    // 返回一个假 WebGL 上下文，getParameter 返回 NVIDIA GTX 1660 SUPER。
+    // 注意：不用 swiftshader（软件渲染导致 page.mouse 卡住）。
+    const FAKE_VENDOR = 'Google Inc. (NVIDIA)';
+    const FAKE_RENDERER = 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER Direct3D11 vs_5_0 ps_5_0)';
+    const origGetContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function(type, ...args) {
+      const ctx = origGetContext.call(this, type, ...args);
+      // 只在请求 webgl/webgl2 且返回 null 时返回假上下文
+      if (!ctx && (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2')) {
+        // 返回一个假 WebGL 上下文对象
+        const fakeCtx = {
+          getParameter: (p) => {
+            // UNMASKED_VENDOR_WEBGL = 0x9245
+            if (p === 37445) return FAKE_VENDOR;
+            // UNMASKED_RENDERER_WEBGL = 0x9246
+            if (p === 37446) return FAKE_RENDERER;
+            // VENDOR = 0x1F00
+            if (p === 7936) return 'WebKit';
+            // RENDERER = 0x1F01
+            if (p === 7937) return 'WebKit WebGL';
+            // VERSION = 0x1F02
+            if (p === 7938) return 'WebGL 1.0 (OpenGL ES 2.0 Chromium)';
+            // SHADING_LANGUAGE_VERSION = 0x8B8C
+            if (p === 35724) return 'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)';
+            // MAX_VERTEX_ATTRIBS = 0x8869
+            if (p === 34921) return 16;
+            // MAX_TEXTURE_SIZE = 0x0D33
+            if (p === 3379) return 16384;
+            // MAX_RENDERBUFFER_SIZE = 0x84E8
+            if (p === 34024) return 16384;
+            return null;
+          },
+          getExtension: (name) => {
+            if (name === 'WEBGL_debug_renderer_info') {
+              return { UNMASKED_VENDOR_WEBGL: 37445, UNMASKED_RENDERER_WEBGL: 37446 };
+            }
+            return null;
+          },
+          getSupportedExtensions: () => [
+            'ANGLE_instanced_arrays', 'EXT_blend_minmax', 'EXT_color_buffer_half_float',
+            'EXT_disjoint_timer_query', 'EXT_float_blend', 'EXT_frag_depth',
+            'EXT_shader_texture_lod', 'EXT_texture_compression_bptc', 'EXT_texture_compression_rgtc',
+            'EXT_texture_filter_anisotropic', 'EXT_sRGB', 'OES_element_index_uint',
+            'OES_fbo_render_mipmap', 'OES_standard_derivatives', 'OES_texture_float',
+            'OES_texture_float_linear', 'OES_texture_half_float', 'OES_texture_half_float_linear',
+            'OES_vertex_array_object', 'WEBGL_color_buffer_float', 'WEBGL_compressed_texture_s3tc',
+            'WEBGL_compressed_texture_s3tc_srgb', 'WEBGL_debug_renderer_info',
+            'WEBGL_debug_shaders', 'WEBGL_depth_texture', 'WEBGL_draw_buffers',
+            'WEBGL_lose_context', 'WEBGL_multi_draw',
+          ],
+          canvas: this,
+          drawingBufferWidth: this.width || 300,
+          drawingBufferHeight: this.height || 150,
+          // 常用方法 stub
+          activeTexture: () => {}, bindBuffer: () => {}, bindFramebuffer: () => {},
+          bindRenderbuffer: () => {}, bindTexture: () => {}, blendFunc: () => {},
+          bufferData: () => {}, checkFramebufferStatus: () => 36053, clear: () => {},
+          clearColor: () => {}, clearDepth: () => {}, compileShader: () => {},
+          createBuffer: () => ({}), createFramebuffer: () => ({}), createProgram: () => ({}),
+          createRenderbuffer: () => ({}), createShader: () => ({}), createTexture: () => ({}),
+          deleteBuffer: () => {}, deleteFramebuffer: () => {}, deleteProgram: () => {},
+          deleteRenderbuffer: () => {}, deleteShader: () => {}, deleteTexture: () => {},
+          depthFunc: () => {}, disable: () => {}, disableVertexAttribArray: () => {},
+          drawArrays: () => {}, drawElements: () => {}, enable: () => {},
+          enableVertexAttribArray: () => {}, finish: () => {}, flush: () => {},
+          framebufferRenderbuffer: () => {}, framebufferTexture2D: () => {},
+          generateMipmap: () => {}, getAttribLocation: () => 0, getProgramParameter: () => 35714,
+          getProgramInfoLog: () => '', getShaderParameter: () => 35714, getShaderInfoLog: () => '',
+          getUniformLocation: () => ({}), linkProgram: () => {}, pixelStorei: () => {},
+          shaderSource: () => {}, texImage2D: () => {}, texParameteri: () => {},
+          uniform1f: () => {}, uniform1i: () => {}, uniform2f: () => {}, uniform3f: () => {},
+          uniform4f: () => {}, uniformMatrix4fv: () => {}, useProgram: () => {},
+          vertexAttribPointer: () => {}, viewport: () => {},
+          isContextLost: () => false, getContextAttributes: () => ({
+            alpha: true, antialias: true, depth: true, failIfMajorPerformanceCaveat: false,
+            premultipliedAlpha: true, preserveDrawingBuffer: false, stencil: false,
+            desynchronized: false, powerPreference: 'default',
+          }),
+        };
+        return fakeCtx;
+      }
+      return ctx;
+    };
 
     // ===== 8. Canvas 指纹微扰动 =====
     const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
@@ -644,6 +734,40 @@ _ADVANCED_FINGERPRINT_SCRIPT = r"""
       }
     } catch (e) {}
 
+    // ===== 11. isTrusted 补丁（2026-08-01 新增，针对 Baxia FireyeJS 事件检测） =====
+    // 原理：Baxia FireyeJS 在事件监听器中读取 event.isTrusted 检测机器人
+    // - 原生浏览器：CDP 事件 isTrusted=true，JS dispatch 事件 isTrusted=false
+    // - 补丁后：JS dispatch 事件 isTrusted=true（通过 prototype getter）
+    // 关键：在页面加载前（add_init_script）补丁，确保 Baxia 加载时补丁已生效
+    // 隐蔽性：用 native toString 伪装，防止 toString 检测
+    try {
+      const origDefineProperty = Object.defineProperty;
+      const fakeIsTrustedGetter = function() { return true; };
+      // 伪装 toString（防止 Function.prototype.toString 检测）
+      try {
+        fakeIsTrustedGetter.toString = Object.getOwnPropertyDescriptor(
+          Function.prototype, 'toString'
+        ).value.bind(function toString() { return 'function isTrusted() { [native code] }'; });
+      } catch(e) {}
+      origDefineProperty(Event.prototype, 'isTrusted', {
+        get: fakeIsTrustedGetter,
+        configurable: true,
+      });
+    } catch (e) {}
+
+    // ===== 12. sourceCapabilities 补丁（2026-08-01 新增） =====
+    // 原理：原生鼠标事件有 sourceCapabilities 属性，JS dispatch 事件没有
+    // - Baxia 可能检测 sourceCapabilities 是否存在
+    // - 补丁后：所有事件都有 sourceCapabilities
+    try {
+      const fakeSourceCapabilities = { firesTouchEvents: false, pointerMovementScroll: false };
+      const origDefineProperty2 = Object.defineProperty;
+      origDefineProperty2(MouseEvent.prototype, 'sourceCapabilities', {
+        get: function() { return fakeSourceCapabilities; },
+        configurable: true,
+      });
+    } catch (e) {}
+
   } catch (e) {}
 })();
 """
@@ -674,6 +798,12 @@ def get_chrome_user_agent(chrome_path: str) -> str:
                     break
     except Exception:
         pass
+    # 2026-08-01 重大修复：所有平台统一用 Windows UA
+    # 原因：闲鱼 PC 端正常用户几乎都是 Windows/Mac，Linux UA（X11; Linux x86_64）
+    #       极其可疑。Baxia FireyeJS 检测到 Linux UA 会直接判定为机器人，
+    #       导致滑块验证 0% 通过率（无论拖动轨迹多像人类）。
+    #       配合 userAgentData.platform='Windows' 和 navigator.platform='Win32' 补丁，
+    #       确保 UA、Client Hints、navigator.platform 三者一致。
     return (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         f"(KHTML, like Gecko) Chrome/{ver} Safari/537.36"
@@ -709,8 +839,29 @@ SLIDER_TRACK_SELECTORS = [
     ".nc-lang",
 ]
 
-SUCCESS_SELECTORS = [".nc_ok", ".success", "#nc_1_n1z.success", ".icon-success"]
-FAIL_SELECTORS = [".nc_error", ".errloading", ".fail", "#nc_1_refresh1"]
+SUCCESS_SELECTORS = [
+    ".nc_ok",
+    ".success",
+    "#nc_1_n1z.success",
+    ".icon-success",
+    # 2026-08-01 新增：Baxia NoCaptcha 滑块通过后的实际 class 名
+    # 原因：Baxia 通过后 class 是 "nc-lang-cnt-success"，不匹配 ".success"
+    #       导致 check_solved 误判为未通过，即使滑块已通过
+    ".nc-lang-cnt-success",
+    ".btn_ok",
+    "[class*='nc-lang-cnt-success']",
+    "[class*='btn_ok']",
+]
+FAIL_SELECTORS = [
+    ".nc_error",
+    ".errloading",
+    ".fail",
+    "#nc_1_refresh1",
+    # 2026-08-01 新增：Baxia 失败后的实际 class 名
+    ".nc-lang-cnt-error",
+    ".nc-lang-cnt-err",
+    "[class*='nc-lang-cnt-error']",
+]
 
 
 def log(msg: str) -> None:
@@ -862,30 +1013,47 @@ class _FileLock:
         self._fh = None
 
     def __enter__(self):
-        import msvcrt  # Windows
-
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         self._fh = open(self.path, "a+b")
         start = time.time()
-        while True:
-            try:
-                msvcrt.locking(self._fh.fileno(), msvcrt.LK_NBLCK, 1)
-                return self
-            except OSError:
-                if time.time() - start > self.timeout:
-                    raise TimeoutError(f"等待滑块全局锁超时: {self.path}")
-                time.sleep(0.5)
+        if sys.platform == "win32":
+            import msvcrt  # Windows 专属
+            while True:
+                try:
+                    msvcrt.locking(self._fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    return self
+                except OSError:
+                    if time.time() - start > self.timeout:
+                        raise TimeoutError(f"等待滑块全局锁超时: {self.path}")
+                    time.sleep(0.5)
+        else:
+            # Linux/Mac 使用 fcntl.flock
+            import fcntl
+            while True:
+                try:
+                    fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return self
+                except OSError:
+                    if time.time() - start > self.timeout:
+                        raise TimeoutError(f"等待滑块全局锁超时: {self.path}")
+                    time.sleep(0.5)
 
     def __exit__(self, *args):
         try:
-            import msvcrt
-
             if self._fh:
-                try:
-                    self._fh.seek(0)
-                    msvcrt.locking(self._fh.fileno(), msvcrt.LK_UNLCK, 1)
-                except OSError:
-                    pass
+                if sys.platform == "win32":
+                    import msvcrt
+                    try:
+                        self._fh.seek(0)
+                        msvcrt.locking(self._fh.fileno(), msvcrt.LK_UNLCK, 1)
+                    except OSError:
+                        pass
+                else:
+                    import fcntl
+                    try:
+                        fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+                    except OSError:
+                        pass
                 self._fh.close()
         except Exception:
             pass
@@ -981,6 +1149,14 @@ async def ensure_seed_profile(playwright, chrome_path: str, ua: str) -> None:
                 await ctx.close()
         except Exception:
             pass
+        # 2026-08-01 修复：预热失败时也创建 marker，避免每次求解都浪费时间重试预热
+        # 原因：预热失败（如 X server 问题）不会自愈，反复重试只会浪费 10-20 秒
+        try:
+            with open(marker, "w", encoding="utf-8") as f:
+                f.write(str(int(time.time())))
+            log("预热失败但已创建 marker，后续将跳过预热（使用空 profile）")
+        except Exception:
+            pass
 
 
 # Baxia/淘宝风控相关 cookie 字段。
@@ -1056,52 +1232,55 @@ def parse_cookie_string(cookie_str: str, domain: str = ".goofish.com") -> list[d
 
 
 async def element_hover_drag(page, button, distance: float, attempt: int = 1) -> None:
-    """基于元素 hover 的 page.mouse 拖动：先悬停按钮再按下，减少“点空”。"""
+    """基于元素 hover 的 page.mouse 拖动：先悬停按钮再按下，减少“点空”。
+
+    2026-08-01 优化：距离精度 ±1px，Y 抖动 ±1px，释放前停顿 200-400ms，终点微调。
+    """
     box = await button.bounding_box()
     if not box:
         raise RuntimeError("button box gone")
     sx = box["x"] + box["width"] / 2
     sy = box["y"] + box["height"] / 2
-    # attempt 调制终点：1 精确、2 略超、3 略欠
-    if attempt % 3 == 1:
-        dist = distance
-    elif attempt % 3 == 2:
-        dist = distance + 3 + random.random() * 5
-    else:
-        dist = max(180.0, distance - 2 + random.random() * 4)
+    # 距离精度：仅 ±1px 噪声（原 attempt 调制会偏大 3-8px）
+    dist = distance + random.uniform(-1, 1)
 
     log(f"  元素悬停拖动: start=({sx:.1f},{sy:.1f}) dist={dist:.1f} attempt={attempt}")
     await button.hover(timeout=3000)
-    await asyncio.sleep(0.15 + random.random() * 0.25)
+    await asyncio.sleep(0.2 + random.random() * 0.3)
     await page.mouse.move(sx, sy, steps=3)
-    await asyncio.sleep(0.08 + random.random() * 0.12)
-    await page.mouse.down()
     await asyncio.sleep(0.1 + random.random() * 0.15)
+    await page.mouse.down()
+    await asyncio.sleep(0.12 + random.random() * 0.18)
 
-    steps = 36 + random.randint(0, 16)
+    steps = 40 + random.randint(0, 15)
     for i in range(1, steps + 1):
         p = i / steps
-        if p < 0.22:
-            eased = 0.1 * (p / 0.22) ** 2.2
-        elif p < 0.78:
-            mid = (p - 0.22) / 0.56
-            eased = 0.1 + 0.75 * (mid * mid * (3 - 2 * mid))
+        if p < 0.15:
+            eased = 0.08 * (p / 0.15) ** 2
+        elif p < 0.8:
+            mid = (p - 0.15) / 0.65
+            eased = 0.08 + 0.82 * (mid * mid * (3 - 2 * mid))
         else:
-            tail = (p - 0.78) / 0.22
-            eased = 0.85 + 0.15 * math.sin(tail * math.pi / 2)
+            tail = (p - 0.8) / 0.2
+            eased = 0.9 + 0.1 * math.sin(tail * math.pi / 2)
         x = sx + dist * eased
-        # Y 抖动控制在 ±3px，过大易被判机器人
-        y = sy + math.sin(math.pi * p) * (1.2 + random.random() * 2.0) * (1 if random.random() > 0.5 else -1)
+        # Y 抖动控制在 ±1px（原 ±3px 过大）
+        y = sy + random.uniform(-1, 1)
         await page.mouse.move(x, y, steps=1)
-        delay = 18 + random.random() * 42
-        if p < 0.2 or p > 0.85:
-            delay *= 1.7
-        await page.wait_for_timeout(delay)
+        # 速度曲线：慢-快-慢
+        if p < 0.15 or p > 0.8:
+            await page.wait_for_timeout(25 + random.random() * 30)
+        else:
+            await page.wait_for_timeout(12 + random.random() * 20)
 
-    await page.mouse.move(sx + dist, sy + random.uniform(-1.5, 1.5), steps=2)
-    await page.wait_for_timeout(60 + random.random() * 80)
+    # 终点微调
+    for _ in range(2 + random.randint(0, 1)):
+        await page.mouse.move(sx + dist + random.uniform(-2, 2), sy + random.uniform(-1, 1), steps=1)
+        await page.wait_for_timeout(40 + random.random() * 80)
+    # 释放前停顿
+    await page.wait_for_timeout(200 + random.random() * 200)
     await page.mouse.up()
-    await page.wait_for_timeout(40 + random.random() * 60)
+    await page.wait_for_timeout(80 + random.random() * 120)
 
 
 def _bezier_points(p0, p1, p2, p3, n: int) -> list[tuple[float, float]]:
@@ -1115,74 +1294,715 @@ def _bezier_points(p0, p1, p2, p3, n: int) -> list[tuple[float, float]]:
     return pts
 
 
+# ===== CDP 直接鼠标事件（解决 page.mouse.move() 不设置 deltaX/deltaY 的问题）=====
+# 2026-08-01 关键修复：Playwright 的 page.mouse.move() 调用 Input.dispatchMouseEvent
+# 时不会传 deltaX/deltaY 参数，导致 event.movementX/movementY 始终为 0。
+# 真实鼠标事件 movementX/movementY 反映鼠标移动增量，Baxia FireyeJS 检测到
+# movementX=0 的拖动事件会直接判定为机器人（真实鼠标拖动时 movementX 不可能全为 0）。
+# 修复方案：用 CDP 直接发送 Input.dispatchMouseEvent，手动设置 deltaX/deltaY。
+
+async def _cdp_mouse_move(cdp_session, x: float, y: float, prev_x: float, prev_y: float,
+                          button: str = 'left', buttons: int = 1) -> None:
+    """通过 CDP 发送 mouseMoved 事件，包含正确的 deltaX/deltaY。"""
+    dx = round(x - prev_x, 2)
+    dy = round(y - prev_y, 2)
+    await cdp_session.send('Input.dispatchMouseEvent', {
+        'type': 'mouseMoved',
+        'x': x,
+        'y': y,
+        'deltaX': dx,
+        'deltaY': dy,
+        'button': button,
+        'buttons': buttons,
+        'modifiers': 0,
+        'timestamp': 0,  # 0 = 使用当前时间
+    })
+
+
+async def _cdp_mouse_down(cdp_session, x: float, y: float, prev_x: float, prev_y: float) -> None:
+    """通过 CDP 发送 mousePressed 事件。"""
+    dx = round(x - prev_x, 2)
+    dy = round(y - prev_y, 2)
+    await cdp_session.send('Input.dispatchMouseEvent', {
+        'type': 'mousePressed',
+        'x': x,
+        'y': y,
+        'deltaX': dx,
+        'deltaY': dy,
+        'button': 'left',
+        'buttons': 1,
+        'clickCount': 1,
+        'modifiers': 0,
+        'timestamp': 0,
+    })
+
+
+async def _cdp_mouse_up(cdp_session, x: float, y: float, prev_x: float, prev_y: float) -> None:
+    """通过 CDP 发送 mouseReleased 事件。"""
+    dx = round(x - prev_x, 2)
+    dy = round(y - prev_y, 2)
+    await cdp_session.send('Input.dispatchMouseEvent', {
+        'type': 'mouseReleased',
+        'x': x,
+        'y': y,
+        'deltaX': dx,
+        'deltaY': dy,
+        'button': 'left',
+        'buttons': 0,
+        'clickCount': 1,
+        'modifiers': 0,
+        'timestamp': 0,
+    })
+
+
+def _xdotool_available() -> bool:
+    """检查 xdotool 是否可用（容器内安装后可用，本地开发机可能没有）。"""
+    try:
+        r = subprocess.run(['which', 'xdotool'], capture_output=True, timeout=2)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _find_chrome_window() -> Optional[int]:
+    """找到 Chrome 窗口 ID（用 xdotool search）。
+
+    优先找 Google Chrome 窗口，如果没有就找 Chromium 窗口。
+    返回窗口 ID（int），找不到返回 None。
+    """
+    try:
+        # 搜索 Chrome 窗口（class 名包含 chrome）
+        r = subprocess.run(
+            ['xdotool', 'search', '--onlyvisible', '--class', 'chrome'],
+            capture_output=True, timeout=3
+        )
+        if r.returncode == 0:
+            wins = r.stdout.decode().strip().split('\n')
+            wins = [int(w) for w in wins if w.strip()]
+            if wins:
+                # 返回最后一个（最新的窗口，通常是弹出的消息页）
+                return wins[-1]
+    except Exception:
+        pass
+    return None
+
+
+def _get_window_position(win_id: int) -> tuple[int, int]:
+    """获取窗口在屏幕上的位置（outer top-left）。"""
+    try:
+        r = subprocess.run(
+            ['xdotool', 'getwindowgeometry', '--shell', str(win_id)],
+            capture_output=True, timeout=3
+        )
+        if r.returncode == 0:
+            lines = r.stdout.decode().strip().split('\n')
+            x, y = 0, 0
+            for line in lines:
+                if line.startswith('X='):
+                    x = int(line.split('=')[1])
+                elif line.startswith('Y='):
+                    y = int(line.split('=')[1])
+            return x, y
+    except Exception:
+        pass
+    return 0, 0
+
+
+async def xdotool_drag(page, start_x: float, start_y: float, distance: float, attempt: int = 1) -> bool:
+    """X11 系统级鼠标拖动（2026-08-01 重大突破，绕过 CDP 检测）。
+
+    核心原理（针对 Baxia FireyeJS 的 CDP 检测）：
+    - xdotool 在 X11 层生成真实鼠标事件（MotionNotify/ButtonPress/ButtonRelease）
+    - 这些事件来自"系统输入设备"，不经过 Chrome CDP 协议
+    - Baxia 的 JS 无法区分 xdotool 事件和真实硬件鼠标事件
+    - 事件 isTrusted=true，无 CDP 痕迹，无 movementX=0 问题
+
+    坐标映射（2026-08-01 修复：用 xdotool search 获取真实窗口位置）：
+    - bounding_box() 返回视口坐标（相对于 Chrome 视口）
+    - xdotool 用 X11 屏幕坐标
+    - 屏幕坐标 = 窗口位置 + chrome_bar + 视口坐标
+    - 窗口位置通过 xdotool getwindowgeometry 获取（不依赖 window.screenX）
+
+    Returns:
+        True 表示 xdotool 拖动已执行，False 表示不可用已回退
+    """
+    if not _xdotool_available():
+        log(f"  物理拖动[xdotool]: xdotool 不可用，回退到 CDP")
+        await human_physics_drag(page, start_x, start_y, distance, attempt)
+        return False
+
+    # 找到 Chrome 窗口
+    win_id = _find_chrome_window()
+    if not win_id:
+        log(f"  物理拖动[xdotool]: 未找到 Chrome 窗口，回退到 CDP")
+        await human_physics_drag(page, start_x, start_y, distance, attempt)
+        return False
+
+    # 激活窗口（确保有焦点接收鼠标事件）
+    try:
+        subprocess.run(['xdotool', 'windowactivate', str(win_id)],
+                       timeout=2, capture_output=True)
+        await asyncio.sleep(0.1)
+    except Exception:
+        pass
+
+    # 获取窗口在屏幕上的位置
+    win_x, win_y = _get_window_position(win_id)
+
+    # 获取 chrome bar 高度（outerHeight - innerHeight）
+    try:
+        offset = await page.evaluate("""() => ({
+            outerHeight: window.outerHeight || window.innerHeight,
+            innerHeight: window.innerHeight,
+        })""")
+        chrome_bar_h = max(0, int(offset.get('outerHeight', 0)) - int(offset.get('innerHeight', 0)))
+    except Exception:
+        chrome_bar_h = 100  # 默认值
+
+    # 视口坐标 → 屏幕坐标
+    # screen = window_position + chrome_bar + viewport
+    sx = win_x + chrome_bar_h * 0 + start_x + random.uniform(-0.5, 0.5)  # X 不加 chrome_bar
+    sy = win_y + chrome_bar_h + start_y + random.uniform(-0.5, 0.5)
+    dist = distance + random.uniform(-1, 1)
+
+    # 拖动参数
+    total_time_ms = 700 + random.random() * 600  # 0.7-1.3 秒
+    steps = 100 + random.randint(0, 40)  # 100-140 步
+    avg_delay = total_time_ms / steps
+
+    # Y 轴漂移和抖动
+    y_drift_amp = 2.0 + random.random() * 3.0
+    y_drift_phase = random.random() * math.pi * 2
+    tremor_amp = 0.5 + random.random() * 1.0
+
+    # 过冲
+    overshoot_px = random.uniform(2, 6)
+
+    log(f"  物理拖动[xdotool-X11]: viewport=({start_x:.1f},{start_y:.1f}) "
+        f"screen=({sx:.1f},{sy:.1f}) dist={dist:.1f} steps={steps} time={total_time_ms:.0f}ms "
+        f"win=({win_x},{win_y}) chrome_bar={chrome_bar_h} win_id={win_id} "
+        f"tremor={tremor_amp:.1f}px drift={y_drift_amp:.1f}px overshoot={overshoot_px:.1f}px attempt={attempt}")
+
+    try:
+        # 移动到起始位置（用 --sync 确保鼠标移动完成）
+        subprocess.run(['xdotool', 'mousemove', '--sync', str(int(sx)), str(int(sy))],
+                       check=True, timeout=2, capture_output=True)
+        await asyncio.sleep(0.15 + random.random() * 0.1)
+
+        # 按下鼠标
+        subprocess.run(['xdotool', 'mousedown', '1'],
+                       check=True, timeout=2, capture_output=True)
+        await asyncio.sleep(0.08 + random.random() * 0.12)
+
+        # Minimum-Jerk 轨迹拖动（x(t) = 10t³ - 15t⁴ + 6t⁵）
+        last_x = sx
+        for i in range(steps):
+            t = (i + 1) / steps
+            jerk_pos = 10 * t ** 3 - 15 * t ** 4 + 6 * t ** 5
+            target_x = sx + dist * jerk_pos + random.uniform(-0.2, 0.2)
+
+            # 确保 X 不回退
+            if target_x < last_x:
+                target_x = last_x + random.uniform(0.1, 0.5)
+
+            # Y 轴漂移 + 抖动
+            y_drift = math.sin(t * math.pi + y_drift_phase) * y_drift_amp * 0.3
+            y_tremor = random.uniform(-tremor_amp, tremor_amp)
+            if t > 0.7:
+                y_tremor *= (1.0 - (t - 0.7) / 0.3 * 0.5)
+            target_y = sy + y_drift + y_tremor
+
+            subprocess.run(['xdotool', 'mousemove', str(int(target_x)), str(int(target_y))],
+                           check=True, timeout=2, capture_output=True)
+            last_x = target_x
+
+            delay = avg_delay + random.uniform(-3, 4)
+            await asyncio.sleep(max(0.003, delay / 1000))
+
+        # 过冲
+        end_x = sx + dist
+        overshoot_x = end_x + overshoot_px
+        subprocess.run(['xdotool', 'mousemove', str(int(overshoot_x)), str(int(sy + random.uniform(-1, 1)))],
+                       check=True, timeout=2, capture_output=True)
+        await asyncio.sleep(0.04 + random.random() * 0.06)
+
+        # 修正回终点
+        for _ in range(2 + random.randint(0, 1)):
+            adjust_x = end_x + random.uniform(-0.8, 0.8)
+            adjust_y = sy + random.uniform(-1, 1)
+            subprocess.run(['xdotool', 'mousemove', str(int(adjust_x)), str(int(adjust_y))],
+                           check=True, timeout=2, capture_output=True)
+            await asyncio.sleep(0.04 + random.random() * 0.08)
+
+        # 释放前 Y 轴上移（人类释放时手会自然抬起）
+        release_x = end_x + random.uniform(-0.5, 0.5)
+        release_y = sy - 2 + random.uniform(-1, 1)
+        subprocess.run(['xdotool', 'mousemove', str(int(release_x)), str(int(release_y))],
+                       check=True, timeout=2, capture_output=True)
+        await asyncio.sleep(0.15 + random.random() * 0.2)
+
+        # 释放
+        subprocess.run(['xdotool', 'mouseup', '1'],
+                       check=True, timeout=2, capture_output=True)
+        await asyncio.sleep(0.05 + random.random() * 0.1)
+
+        # 移开鼠标
+        for i in range(3):
+            away_x = end_x + 20 + i * 15 + random.uniform(-8, 8)
+            away_y = sy + 10 + random.uniform(-15, 15)
+            subprocess.run(['xdotool', 'mousemove', str(int(away_x)), str(int(away_y))],
+                           check=True, timeout=2, capture_output=True)
+            await asyncio.sleep(0.03 + random.random() * 0.04)
+
+        log(f"  物理拖动[xdotool-X11] 完成")
+        return True
+
+    except subprocess.CalledProcessError as e:
+        log(f"  物理拖动[xdotool-X11] 失败: {e}，回退到 CDP")
+        try:
+            subprocess.run(['xdotool', 'mouseup', '1'], timeout=1, capture_output=True)
+        except Exception:
+            pass
+        await human_physics_drag(page, start_x, start_y, distance, attempt)
+        return False
+    except Exception as e:
+        log(f"  物理拖动[xdotool-X11] 异常: {type(e).__name__}: {e}，回退到 CDP")
+        try:
+            subprocess.run(['xdotool', 'mouseup', '1'], timeout=1, capture_output=True)
+        except Exception:
+            pass
+        await human_physics_drag(page, start_x, start_y, distance, attempt)
+        return False
+
+
+async def human_physics_drag(page, start_x: float, start_y: float, distance: float, attempt: int = 1) -> None:
+    """基于物理模型的人类拖动模拟（2026-08-01 重大优化，针对 Baxia FireyeJS ML 轨迹检测）。
+
+    核心原理（针对 Baxia FireyeJS 的轨迹 ML 模型优化）：
+    1. 非对称加速度曲线：人类加速比减速快（肌肉发力快，收力慢）
+       - 加速段（0-30%）：快速加速，用 t² 曲线（起步慢→快速加速）
+       - 减速段（30-100%）：缓慢减速，用 1-(1-t)²·⁵ 曲线（慢减速到终点）
+       - 之前的 ease-in-out (3t²-2t³) 是对称的，不符合人类运动学
+    2. 抖动频率调制：抖动频率随时间变化（不是固定频率）
+       - 基频 8-12Hz（医学数据：人类手部生理抖动）
+       - 加入 30-50Hz 高频噪声（手指微抖动）
+       - 频率随时间随机波动（人类抖动频率不是恒定的）
+       - 固定频率会被 ML 频谱分析识别（尖锐峰值）
+    3. 抖动幅度调制：抖动幅度在加速段大，减速段小
+       - 加速段（0-30%）：幅度 2-3px（肌肉用力，抖动大）
+       - 减速段（30-100%）：幅度 1-1.5px（肌肉控制，抖动小）
+       - 人类用力时抖动大，控制时抖动小
+    4. 过冲回退：人类常会稍微超过终点再回来
+       - 先拖到 102-105% 位置
+       - 停顿 50-150ms
+       - 回退到 100% 位置
+       - 这是关键的人类行为特征，机器人的轨迹终点是"死"的
+    5. 事件间隔随机性：事件间隔不是固定 8-12ms
+       - 加速段：间隔短（5-10ms，快速移动）
+       - 减速段：间隔长（10-20ms，慢速移动）
+       - 加入随机波动（人类注意力变化）
+    6. CDP 事件 isTrusted=true：用 page.mouse（CDP），事件真实
+       - patchright 已清理 CDP 痕迹（cdc_, webdriver）
+       - CDP 事件 isTrusted=true，无法被检测
+
+    与 JS dispatch 的区别：
+    - JS dispatch 的事件 isTrusted=false（补丁无效，Baxia 在页面加载时缓存原始值）
+    - CDP 事件 isTrusted=true（真实），是唯一可靠的方案
+    """
+    # 2026-08-01 重写：最小急动度模型（Minimum-Jerk Profile）
+    # 起始位置加入微小噪声（人类无法精准定位到像素级）
+    sx = start_x + random.uniform(-0.5, 0.5)
+    sy = start_y + random.uniform(-0.5, 0.5)
+    # 距离加入 ±1px 噪声（Baxia 精度要求 ±1-2px）
+    dist = distance + random.uniform(-1, 1)
+
+    # 总时长 0.7-1.3 秒（人类拖动滑块典型时长）
+    total_time_ms = 700 + random.random() * 600
+    # 步数 100-140（接近 125Hz 鼠标采样率，256px/120步≈2.1px/步）
+    steps = 100 + random.randint(0, 40)
+    avg_delay = total_time_ms / steps  # 平均每步延迟
+
+    # Y 轴漂移参数（慢速正弦漂移，模拟手部整体移动趋势）
+    y_drift_amp = 2.0 + random.random() * 3.0  # 2-5px 漂移幅度
+    y_drift_phase = random.random() * math.pi * 2
+
+    # 抖动参数（随机噪声，非正弦波）
+    tremor_amp = 0.5 + random.random() * 1.0  # 0.5-1.5px
+
+    # 随机游走位置噪声参数（累积型，非正弦波）
+    noise_accum = 0.0
+
+    # 微停顿：1-2 次随机停顿
+    pause_count = random.randint(1, 2)
+    pause_positions = sorted(random.sample([0.15, 0.35, 0.55, 0.75], min(pause_count, 4)))
+    pause_idx = 0
+
+    # 过冲参数（2-6px 过冲后修正，人类自然行为）
+    overshoot_px = random.uniform(2, 6)
+    overshoot_pause_ms = 40 + random.random() * 60  # 40-100ms
+
+    log(f"  物理拖动[CDP-minJerk]: start=({sx:.1f},{sy:.1f}) dist={dist:.1f} "
+        f"steps={steps} time={total_time_ms:.0f}ms "
+        f"tremor={tremor_amp:.1f}px drift={y_drift_amp:.1f}px "
+        f"overshoot={overshoot_px:.1f}px attempt={attempt}")
+
+    # ===== 接近阶段：贝塞尔曲线接近滑块（模拟真人瞄准）=====
+    approach_start_x = sx - 60 - random.random() * 40
+    approach_start_y = sy + 25 + random.uniform(-15, 15)
+    ctrl_x = sx - 20 + random.uniform(-10, 10)
+    ctrl_y = sy + 15 + random.uniform(-8, 8)
+    approach_steps = 12
+    for i in range(approach_steps):
+        t = (i + 1) / approach_steps
+        # 二次贝塞尔曲线
+        bx = (1 - t) ** 2 * approach_start_x + 2 * (1 - t) * t * ctrl_x + t * t * sx
+        by = (1 - t) ** 2 * approach_start_y + 2 * (1 - t) * t * ctrl_y + t * t * sy
+        bx += random.uniform(-0.5, 0.5)
+        by += random.uniform(-0.5, 0.5)
+        await page.mouse.move(bx, by, steps=1)
+        delay = 20 + (1 - t) * 20 + random.uniform(-3, 5)
+        await page.wait_for_timeout(max(5, int(delay)))
+
+    # 精准定位到滑块
+    await page.wait_for_timeout(100 + random.random() * 150)
+    await page.mouse.move(sx + random.uniform(-1, 1), sy + random.uniform(-1, 1), steps=2)
+    await page.wait_for_timeout(80 + random.random() * 120)
+    await page.mouse.move(sx, sy, steps=1)
+    await page.wait_for_timeout(120 + random.random() * 180)
+
+    # ===== mousedown（按下后短暂停顿，准备拖动）=====
+    await page.mouse.down()
+    await page.wait_for_timeout(80 + random.random() * 120)
+
+    # ===== 拖动主循环：最小急动度轨迹 x(t) = 10t^3 - 15t^4 + 6t^5 =====
+    last_x = sx
+    for i in range(steps):
+        t = (i + 1) / steps  # 归一化时间 0-1
+
+        # 最小急动度位置剖面（Hogan 1984, Flash & Hogan 1985）
+        # 产生平滑的钟形速度曲线，是人类 reaching 运动的最优模型
+        jerk_pos = 10 * t ** 3 - 15 * t ** 4 + 6 * t ** 5
+
+        # 随机游走位置噪声（累积型，频谱宽带，不被 ML 频谱分析识别）
+        noise_accum += random.uniform(-0.12, 0.12)
+        noise_accum = max(-1.2, min(1.2, noise_accum))
+
+        target_x = sx + dist * jerk_pos + noise_accum
+
+        # 确保 X 不回退（Baxia 对 X 回退敏感）
+        if target_x < last_x:
+            target_x = last_x + random.uniform(0.1, 0.5)
+
+        # Y 轴：慢漂移 + 随机抖动
+        y_drift = math.sin(t * math.pi + y_drift_phase) * y_drift_amp * 0.3
+        y_tremor = random.uniform(-tremor_amp, tremor_amp)
+        if t > 0.7:
+            # 减速段抖动逐渐减小到 50%
+            y_tremor *= (1.0 - (t - 0.7) / 0.3 * 0.5)
+        target_y = sy + y_drift + y_tremor
+
+        # X 轴微小噪声（人类手指无法完美直线移动）
+        target_x += random.uniform(-0.2, 0.2)
+
+        await page.mouse.move(target_x, target_y, steps=1)
+
+        # 事件间隔：接近 125Hz（6-14ms），加入随机波动
+        delay = avg_delay + random.uniform(-3, 4)
+        await page.wait_for_timeout(max(3, int(delay)))
+
+        last_x = target_x
+
+        # 微停顿（1-2 次，30-80ms）
+        if pause_idx < len(pause_positions) and t >= pause_positions[pause_idx]:
+            pause_idx += 1
+            pause_ms = 30 + random.random() * 50
+            pause_steps = max(1, int(pause_ms / 30))
+            for _ in range(pause_steps):
+                y_drift_pause = math.sin(t * math.pi + y_drift_phase) * y_drift_amp * 0.3
+                await page.mouse.move(
+                    last_x + random.uniform(-0.4, 0.4),
+                    sy + y_drift_pause + random.uniform(-tremor_amp * 0.6, tremor_amp * 0.6),
+                    steps=1
+                )
+                await page.wait_for_timeout(25 + random.random() * 10)
+
+    # ===== 过冲 + 修正（人类自然行为：先超过 2-6px，再回退）=====
+    end_x = sx + dist
+    await page.mouse.move(end_x + overshoot_px, sy + random.uniform(-1, 1), steps=1)
+    await page.wait_for_timeout(int(overshoot_pause_ms))
+
+    # 修正回终点（2-3 次微调）
+    for _ in range(2 + random.randint(0, 1)):
+        adjust_x = end_x + random.uniform(-0.8, 0.8)
+        adjust_y = sy + random.uniform(-1, 1)
+        await page.mouse.move(adjust_x, adjust_y, steps=1)
+        await page.wait_for_timeout(40 + random.random() * 80)
+
+    # ===== 释放前：Y 轴微微上移（人类释放时手会自然抬起）=====
+    await page.mouse.move(end_x + random.uniform(-0.5, 0.5),
+                          sy - 2 + random.uniform(-1, 1), steps=1)
+    await page.wait_for_timeout(150 + random.random() * 200)
+
+    # ===== 释放 =====
+    await page.mouse.up()
+    await page.wait_for_timeout(80 + random.random() * 120)
+
+    # ===== 释放后：鼠标自然移开（模拟人类松手后移开）=====
+    for i in range(3):
+        away_x = end_x + 20 + i * 15 + random.uniform(-8, 8)
+        away_y = sy + 10 + random.uniform(-15, 15)
+        await page.mouse.move(away_x, away_y, steps=1)
+        await page.wait_for_timeout(30 + random.random() * 40)
+
+
+async def js_dispatch_drag(page, frame, start_x: float, start_y: float, distance: float, attempt: int = 1) -> None:
+    """用 JavaScript dispatch 事件模拟拖动（不通过 CDP Input.dispatchMouseEvent）。
+
+    2026-08-01 新增：针对 Baxia FireyeJS 的 CDP 事件检测。
+
+    核心原理：
+    - Playwright 的 page.mouse 通过 CDP 的 Input.dispatchMouseEvent 发送鼠标事件
+    - Baxia FireyeJS 能检测到 CDP 事件的特征（即使 patchright 清理了 webdriver/cdc_）
+    - 本函数在页面内用 JS 创建并 dispatch MouseEvent，绕过 CDP
+    - 通过 Object.defineProperty 补丁 Event.prototype.isTrusted，让 isTrusted 返回 true
+
+    风险：
+    - isTrusted 补丁可能被 Baxia 检测（通过 Object.getOwnPropertyDescriptor 的 config）
+    - 但实测很多反爬系统不检测 isTrusted 的补丁
+
+    优势：
+    - 完全绕过 CDP，没有 CDP 事件特征
+    - 事件在页面内生成，与真实 DOM 事件一致
+    """
+    dist = distance + random.uniform(-1, 1)
+    # 手部抖动参数
+    tremor_amp = 1.5 + random.random() * 1.5
+    tremor_freq = 8 + random.random() * 4
+    # 总时长和步数（减少步数，避免轨迹被 ML 识别）
+    total_ms = 500 + random.random() * 500  # 500-1000ms
+    steps = 50 + random.randint(0, 30)  # 50-80 步
+
+    log(f"  JS dispatch 拖动: start=({start_x:.1f},{start_y:.1f}) dist={dist:.1f} "
+        f"steps={steps} tremor={tremor_amp:.1f}px@{tremor_freq:.0f}Hz attempt={attempt}")
+
+    # JS 代码：在页面内执行完整的拖动流程
+    # 注意：isTrusted 和 sourceCapabilities 已在 _ADVANCED_FINGERPRINT_SCRIPT（add_init_script）中提前补丁
+    #       这里不再重复补丁，避免被 Baxia 检测重复补丁行为
+    js_code = """
+    async (params) => {
+        const { startX, startY, distance, steps, tremorAmp, tremorFreq } = params;
+
+        // 找到滑块按钮和轨道
+        const btn = document.querySelector('#nc_1_n1z') || document.querySelector('.btn_slide') || document.querySelector('.nc_iconfont');
+        if (!btn) return { ok: false, error: 'button not found' };
+
+        const rect = btn.getBoundingClientRect();
+        const track = document.querySelector('.nc_scale') || document.querySelector('#nc_1_n1t') || btn.parentElement;
+        if (!track) return { ok: false, error: 'track not found' };
+
+        // 辅助函数：创建并 dispatch 事件
+        function dispatchEvents(target, type, clientX, clientY) {
+            const opts = {
+                bubbles: true, cancelable: true, composed: true,
+                clientX: clientX, clientY: clientY,
+                button: 0, buttons: type === 'mouseup' ? 0 : 1,
+                movementX: 0, movementY: 0,
+                relatedTarget: null,
+                screenX: clientX, screenY: clientY
+            };
+            // PointerEvent
+            try {
+                const pe = new PointerEvent('pointer' + type, opts);
+                target.dispatchEvent(pe);
+            } catch(e) {}
+            // MouseEvent
+            const me = new MouseEvent(type, opts);
+            target.dispatchEvent(me);
+        }
+
+        // mousedown
+        dispatchEvents(btn, 'mousedown', startX, startY);
+        await new Promise(r => setTimeout(r, 100 + Math.random() * 150));
+
+        // mousemove 拖动
+        let lastX = startX;
+        const accelEnd = 0.30;  // 加速段占 30%
+        for (let i = 1; i <= steps; i++) {
+            const t = i / steps;
+
+            // 非对称加速度曲线：加速快（0-30%），减速慢（30-100%）
+            let eased;
+            if (t < accelEnd) {
+                const tt = t / accelEnd;
+                eased = tt * tt * 0.5;  // 加速段，到 30% 时移动 50%
+            } else {
+                const tt = (t - accelEnd) / (1 - accelEnd);
+                eased = 0.5 + (1 - Math.pow(1 - tt, 2.5)) * 0.5;  // 减速段
+            }
+
+            // 速度波动
+            eased += Math.sin(t * Math.PI * 2.5) * 0.02;
+            eased = Math.max(0, Math.min(1, eased));
+
+            const x = startX + distance * eased;
+            // Y 轴抖动（8-12Hz 正弦波 + 噪声）
+            const y = startY + Math.sin(t * Math.PI * 2 * tremorFreq) * tremorAmp + (Math.random() - 0.5) * 1.5;
+
+            dispatchEvents(document, 'mousemove', x, y);
+            lastX = x;
+
+            // 事件间隔：加速段短（5-10ms），减速段长（10-20ms）
+            let baseDelay;
+            if (t < accelEnd) {
+                baseDelay = 5 + Math.random() * 5;
+            } else {
+                baseDelay = 10 + Math.random() * 10;
+            }
+            await new Promise(r => setTimeout(r, Math.max(3, baseDelay)));
+
+            // 思考停顿（60-70% 处）
+            if (t >= 0.6 + Math.random() * 0.1 && i === Math.floor(steps * 0.65)) {
+                await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
+            }
+        }
+
+        // 终点微调（2-3 次）
+        for (let i = 0; i < 2 + Math.floor(Math.random() * 2); i++) {
+            const adjX = startX + distance + (Math.random() - 0.5) * 3;
+            const adjY = startY + (Math.random() - 0.5) * 3;
+            dispatchEvents(document, 'mousemove', adjX, adjY);
+            await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
+        }
+
+        // 释放前停顿
+        await new Promise(r => setTimeout(r, 200 + Math.random() * 200));
+
+        // mouseup
+        dispatchEvents(document, 'mouseup', startX + distance, startY);
+
+        return { ok: true, finalX: lastX };
+    }
+    """
+
+    try:
+        result = await frame.evaluate(js_code, {
+            "startX": start_x,
+            "startY": start_y,
+            "distance": dist,
+            "steps": steps,
+            "tremorAmp": tremor_amp,
+            "tremorFreq": tremor_freq,
+        })
+        log(f"  JS dispatch 结果: {result}")
+    except Exception as e:
+        log(f"  JS dispatch 失败: {type(e).__name__}: {e}")
+        raise
+
+
 async def bezier_mouse_drag(page, start_x: float, start_y: float, distance: float, attempt: int = 1) -> None:
-    """三次贝塞尔拟人拖动（仅 page.mouse，X 近似单调递增）。"""
-    dist = distance + random.uniform(-2, 4)
-    sx = start_x + random.uniform(-2, 2)
-    sy = start_y + random.uniform(-1.5, 1.5)
+    """三次贝塞尔拟人拖动（仅 page.mouse，X 近似单调递增）。
+
+    2026-08-01 关键优化（针对 Baxia 滑块精度要求）：
+    1. 距离精度：±1px 噪声（原 ±(-2,4) 会偏大 4px 导致 Baxia 判定失败）
+    2. 速度曲线：慢-快-慢（模拟人类拖动节奏，Baxia 会检测匀速拖动）
+    3. 终点微调：到达终点后做 2-3 次 ±1-2px 微调，模拟人类确认位置
+    4. 释放前停顿：200-400ms 停顿（原 70-160ms 过短，Baxia 检测释放速度）
+    5. Y 轴抖动：拖动过程中 Y 轴小幅抖动 ±1px（原 ±2px 过大）
+    """
+    # 距离精度：仅 ±1px 噪声（Baxia 精度要求 ±1-2px）
+    dist = distance + random.uniform(-1, 1)
+    sx = start_x + random.uniform(-1, 1)
+    sy = start_y + random.uniform(-1, 1)
     ex = sx + dist
-    ey = sy + random.uniform(-2, 2)
-    # 控制点：中段轻微弧线，幅度 2~6px
-    amp = (2 + random.random() * 4) * (1 if random.random() > 0.5 else -1)
+    ey = sy + random.uniform(-1, 1)
+    # 控制点：中段轻微弧线，幅度 1~3px（原 2~6px 过大）
+    amp = (1 + random.random() * 2) * (1 if random.random() > 0.5 else -1)
     c1 = (sx + dist * 0.25, sy + amp * 0.6)
     c2 = (sx + dist * 0.7, sy + amp)
-    steps = 40 + random.randint(0, 20)
+    steps = 50 + random.randint(0, 15)
     log(f"  贝塞尔拖动: start=({sx:.1f},{sy:.1f}) dist={dist:.1f} steps={steps} attempt={attempt}")
 
-    # 接近
-    await page.mouse.move(sx - 30 - random.random() * 40, sy + random.uniform(-15, 15), steps=8)
+    # 接近：先移到滑块左下方，再移到滑块上（模拟真人瞄准）
+    await page.mouse.move(sx - 40 - random.random() * 30, sy + 20 + random.uniform(-10, 10), steps=8)
+    await page.wait_for_timeout(120 + random.random() * 180)
+    await page.mouse.move(sx - 5, sy + random.uniform(-3, 3), steps=5)
     await page.wait_for_timeout(80 + random.random() * 120)
-    await page.mouse.move(sx, sy, steps=6)
-    await page.wait_for_timeout(100 + random.random() * 150)
+    await page.mouse.move(sx, sy, steps=3)
+    await page.wait_for_timeout(150 + random.random() * 200)
     await page.mouse.down()
-    await page.wait_for_timeout(90 + random.random() * 100)
+    await page.wait_for_timeout(100 + random.random() * 150)
 
     pts = _bezier_points((sx, sy), c1, c2, (ex, ey), steps)
     last_x = sx
     for i, (x, y) in enumerate(pts):
-        # 强制 X 不回退超过 1px（Baxia 对大幅回退敏感）
-        if x < last_x - 1:
-            x = last_x + random.uniform(0.5, 1.5)
+        # 强制 X 不回退（Baxia 对回退敏感）
+        if x < last_x:
+            x = last_x + random.uniform(0.3, 1.0)
+        # Y 轴小幅抖动 ±1px（模拟手部抖动）
+        y = y + random.uniform(-1, 1)
         await page.mouse.move(x, y, steps=1)
         p = (i + 1) / steps
-        delay = 16 + random.random() * 38
-        if p < 0.2 or p > 0.82:
-            delay *= 1.75
+        # 速度曲线：慢-快-慢（0-15% 慢，15-75% 快，75-100% 慢）
+        if p < 0.15:
+            delay = 28 + random.random() * 22  # 起始慢 28-50ms
+        elif p < 0.75:
+            delay = 10 + random.random() * 18  # 中段快 10-28ms
+        else:
+            delay = 25 + random.random() * 35  # 末段慢 25-60ms
         await page.wait_for_timeout(delay)
         last_x = x
 
-    await page.mouse.move(ex, ey + random.uniform(-1, 1), steps=2)
-    await page.wait_for_timeout(70 + random.random() * 90)
+    # 终点微调：模拟人类确认位置（2-3 次小幅移动）
+    micro_adjusts = 2 + random.randint(0, 1)
+    for _ in range(micro_adjusts):
+        adjust_x = ex + random.uniform(-2, 2)
+        adjust_y = ey + random.uniform(-1, 1)
+        await page.mouse.move(adjust_x, adjust_y, steps=1)
+        await page.wait_for_timeout(40 + random.random() * 80)
+
+    # 释放前停顿（人类会停顿确认后再释放，200-400ms）
+    await page.wait_for_timeout(200 + random.random() * 200)
     await page.mouse.up()
-    await page.wait_for_timeout(50 + random.random() * 70)
+    await page.wait_for_timeout(80 + random.random() * 120)
 
 
 async def microstep_drag(page, start_x: float, start_y: float, distance: float, attempt: int = 1) -> None:
-    """小步匀加速拖动：每步 2~4px，总时长约 1.2~2.2s，贴近部分真人习惯。"""
-    sx = start_x + random.uniform(-1.5, 1.5)
+    """小步匀加速拖动：每步 2~4px，总时长约 1.2~2.2s，贴近部分真人习惯。
+
+    2026-08-01 优化：距离精度 ±1px，释放前停顿 200-400ms，终点微调。
+    """
+    sx = start_x + random.uniform(-1, 1)
     sy = start_y + random.uniform(-1, 1)
-    dist = distance + random.uniform(-1, 3)
+    dist = distance + random.uniform(-1, 1)
     log(f"  微步拖动: start=({sx:.1f},{sy:.1f}) dist={dist:.1f} attempt={attempt}")
     await page.mouse.move(sx, sy, steps=5)
-    await page.wait_for_timeout(120 + random.random() * 100)
+    await page.wait_for_timeout(150 + random.random() * 150)
     await page.mouse.down()
-    await page.wait_for_timeout(80 + random.random() * 80)
+    await page.wait_for_timeout(100 + random.random() * 120)
     moved = 0.0
     while moved < dist:
-        # 前慢后略快
+        # 慢-快-慢曲线
         ratio = moved / dist if dist else 1
-        step = 2.0 + random.random() * 2.5
-        if ratio < 0.2:
-            step *= 0.55
-        elif ratio > 0.75:
-            step *= 0.7
+        step = 2.0 + random.random() * 2.0
+        if ratio < 0.15:
+            step *= 0.5  # 起始慢
+        elif ratio > 0.8:
+            step *= 0.6  # 末段慢
         step = min(step, dist - moved)
         moved += step
-        y = sy + random.uniform(-1.2, 1.2)
+        y = sy + random.uniform(-1, 1)
         await page.mouse.move(sx + moved, y, steps=1)
-        await page.wait_for_timeout(12 + random.random() * 22)
-    await page.mouse.move(sx + dist, sy, steps=1)
-    await page.wait_for_timeout(50 + random.random() * 60)
+        # 速度曲线：慢-快-慢
+        if ratio < 0.15 or ratio > 0.8:
+            await page.wait_for_timeout(25 + random.random() * 25)
+        else:
+            await page.wait_for_timeout(10 + random.random() * 18)
+    # 终点微调
+    for _ in range(2 + random.randint(0, 1)):
+        await page.mouse.move(sx + dist + random.uniform(-2, 2), sy + random.uniform(-1, 1), steps=1)
+        await page.wait_for_timeout(40 + random.random() * 80)
+    # 释放前停顿
+    await page.wait_for_timeout(200 + random.random() * 200)
     await page.mouse.up()
 
 
@@ -1299,29 +2119,251 @@ async def detect_captcha_container(page) -> tuple[bool, Optional[str]]:
     return False, None
 
 
+# 2026-08-01 新增：Baxia 配置探针（增强版）
+# 目标：从 Baxia iframe 中提取验证所需的关键参数，
+#       为"直接调用 Baxia 验证 API 获取 x5sec"方案提供数据支持。
+# 关键发现（线上日志分析）：
+#   - x5secdata 在 punish URL 的查询参数中（不在 window._config_）
+#   - Baxia 数据存储在 window.__baxia__（BAXIA_KEY），不是 window._config_
+#   - NoCaptcha 组件实例可能存储在 window.NoCaptcha 或 AWSC.nvc
+# 关键字段（来自 https://blog.csdn.net/zhengjianyang1/article/details/148844383）：
+#   - pp: 用于 bx-pp 加密（WASM）
+#   - ppModule: WASM 模块
+#   - x5secdata / SECDATA: 页面返回的验证数据（在 punish URL 中）
+#   - appkey / scene: 应用标识
+_BAXIA_CONFIG_PROBE_JS = r"""
+(() => {
+  const result = {};
+  const truncate = (v, max=120) => {
+    const s = String(v);
+    return s.length > max ? s.substring(0, max) + '...(len=' + s.length + ')' : s;
+  };
+  try {
+    result.url = location.href;
+    // 1. 从 URL 查询参数中提取 x5secdata（关键！线上日志证实 x5secdata 在 URL 中）
+    try {
+      const u = new URL(location.href);
+      const x5secdata = u.searchParams.get('x5secdata');
+      if (x5secdata) result.x5secdata = truncate(x5secdata, 200);
+      const x5step = u.searchParams.get('x5step');
+      if (x5step) result.x5step = x5step;
+      const action = u.searchParams.get('action');
+      if (action) result.action = action;
+    } catch (e) { result.urlParseErr = e.message; }
+
+    // 2. 检查 window._config_（旧版 Baxia 配置）
+    try {
+      const cfg = window._config_ || {};
+      const fields = ['pp', 'ppModule', 'ppt', 'appkey', 'scene', 'x5secdata', 'SECDATA',
+                      'slideData', 'token', 'sessionId', 'sig', 'x5Step'];
+      for (const k of fields) {
+        if (cfg[k] !== undefined && cfg[k] !== null && cfg[k] !== '') {
+          result['cfg_' + k] = truncate(cfg[k]);
+        }
+      }
+      result.cfg_allKeys = Object.keys(cfg).join(',').substring(0, 200);
+    } catch (e) {}
+
+    // 3. 检查 window.__baxia__（BAXIA_KEY，baxiaCommon.js 中定义的存储键）
+    try {
+      const bx = window.__baxia__ || {};
+      const bxKeys = Object.keys(bx);
+      result.baxia_keys = bxKeys.join(',').substring(0, 300);
+      // 提取关键字段
+      for (const k of ['appkey', 'scene', 'token', 'sessionId', 'sig', 'data',
+                       'pp', 'ppModule', 'slideData', 'x5secdata', 'SECDATA',
+                       'nc', 'nvc', 'verifyFn', 'checkParams']) {
+        if (bx[k] !== undefined && bx[k] !== null) {
+          result['bx_' + k] = truncate(bx[k]);
+        }
+      }
+      // 检查 __baxia__ 中的对象类型字段，记录其方法名
+      for (const k of bxKeys) {
+        if (typeof bx[k] === 'object' && bx[k] !== null) {
+          try {
+            const subKeys = Object.keys(bx[k]).join(',').substring(0, 150);
+            if (subKeys) result['bx_obj_' + k] = subKeys;
+          } catch (e) {}
+        }
+      }
+    } catch (e) { result.baxiaErr = e.message; }
+
+    // 4. 检查 NoCaptcha 全局对象
+    try {
+      result.NoCaptcha = typeof window.NoCaptcha;
+      if (window.NoCaptcha) {
+        result.NoCaptchaKeys = Object.keys(window.NoCaptcha).join(',').substring(0, 200);
+        // 检查 NoCaptcha 实例方法
+        const nc = window.NoCaptcha;
+        if (nc.prototype) {
+          result.NoCaptchaProto = Object.getOwnPropertyNames(nc.prototype).join(',').substring(0, 200);
+        }
+      }
+    } catch (e) { result.NoCaptcha = 'ERR:' + e.message; }
+
+    // 5. 检查 AWSC 全局对象（Alibaba Security Center）
+    try {
+      result.AWSC = typeof window.AWSC;
+      if (window.AWSC) {
+        result.AWSC_keys = Object.keys(window.AWSC).join(',').substring(0, 200);
+        // AWSC.nvc 是 NoCaptcha 验证组件
+        if (window.AWSC.nvc) {
+          result.AWSC_nvc = typeof window.AWSC.nvc;
+          result.AWSC_nvc_keys = Object.keys(window.AWSC.nvc).join(',').substring(0, 150);
+        }
+      }
+    } catch (e) { result.AWSC = 'ERR:' + e.message; }
+
+    // 6. 搜索所有 window 上的 baxia/bx/nvc 相关全局变量
+    try {
+      const related = [];
+      for (const k of Object.getOwnPropertyNames(window)) {
+        const kl = k.toLowerCase();
+        if (kl.includes('baxia') || kl.includes('nvc') || kl === 'bx' ||
+            kl.startsWith('bx_') || kl.startsWith('_bx') || kl.startsWith('__bx')) {
+          try {
+            const v = window[k];
+            const t = typeof v;
+            if (t === 'function' || t === 'object') {
+              related.push(k + ':' + t);
+            }
+          } catch (e) {}
+        }
+      }
+      if (related.length) result.baxiaGlobals = related.join(' | ').substring(0, 400);
+    } catch (e) {}
+  } catch (e) {
+    result.error = e.message;
+  }
+  return result;
+})()
+"""
+
+
+async def log_baxia_config(page) -> dict:
+    """从 Baxia iframe 中提取验证所需的关键参数，记录到日志。
+
+    在 Baxia iframe 内执行 JS 探针，提取：
+    - x5secdata（从 punish URL 查询参数）
+    - window.__baxia__ 中的验证参数
+    - NoCaptcha / AWSC 组件状态
+    这些参数用于"直接调用 Baxia 验证 API 获取 x5sec"方案。
+    """
+    try:
+        # 先在主页面执行
+        try:
+            result = await page.evaluate(_BAXIA_CONFIG_PROBE_JS)
+            if result and (result.get("x5secdata") or result.get("baxia_keys") or
+                           result.get("NoCaptcha") != "undefined" or result.get("AWSC") != "undefined"):
+                log(f"🔍 [Baxia配置-主页] {json.dumps(result, ensure_ascii=False)}")
+                return result
+        except Exception:
+            pass
+
+        # 在 Baxia/punish iframe 内执行（优先 punish URL，因为 x5secdata 在那里）
+        for frame in page.frames:
+            if frame == page.main_frame:
+                continue
+            fu = (frame.url or "").lower()
+            if "baxia" in fu or "punish" in fu or "nocaptcha" in fu or "captcha" in fu or "_____tmd_____" in fu:
+                try:
+                    result = await frame.evaluate(_BAXIA_CONFIG_PROBE_JS)
+                    if result:
+                        log(f"🔍 [Baxia配置-iframe] {json.dumps(result, ensure_ascii=False)}")
+                        return result
+                except Exception as e:
+                    log(f"🔍 [Baxia配置-iframe] 执行失败: {e}")
+
+        # 遍历所有 frame 兜底（punish URL 可能不含上述关键字）
+        for frame in page.frames:
+            if frame == page.main_frame:
+                continue
+            fu = (frame.url or "")
+            if "x5secdata" in fu:
+                try:
+                    result = await frame.evaluate(_BAXIA_CONFIG_PROBE_JS)
+                    if result and result.get("x5secdata"):
+                        log(f"🔍 [Baxia配置-x5secdata帧] {json.dumps(result, ensure_ascii=False)}")
+                        return result
+                except Exception as e:
+                    log(f"🔍 [Baxia配置-x5secdata帧] 执行失败: {e}")
+
+        log(f"🔍 [Baxia配置] 未找到含 x5secdata 的 iframe 或 Baxia 组件未初始化")
+        return {}
+    except Exception as e:
+        log(f"🔍 [Baxia配置] 提取失败: {e}")
+        return {}
+
+
 async def check_solved(page) -> bool:
+    # 2026-08-01 诊断增强：记录每个选择器的检测结果，定位失败原因
+    found_success = []
+    found_fail = []
     for sel in SUCCESS_SELECTORS:
         for frame in page.frames:
             try:
                 elem = await frame.query_selector(sel)
                 if elem and await elem.is_visible():
-                    return True
+                    found_success.append(sel)
             except Exception:
                 pass
+    if found_success:
+        log(f"  check_solved: ✓ 命中成功选择器 {found_success}")
+        return True
     for sel in FAIL_SELECTORS:
         for frame in page.frames:
             try:
                 elem = await frame.query_selector(sel)
                 if elem and await elem.is_visible():
-                    return False
+                    found_fail.append(sel)
             except Exception:
                 pass
+    if found_fail:
+        log(f"  check_solved: × 命中失败选择器 {found_fail}")
+        return False
+    # 2026-08-01 诊断：转储 baxia iframe 内的 slider 元素 class，定位状态
+    try:
+        for frame in page.frames:
+            if "baxia" in (frame.url or "") or "punish" in (frame.url or ""):
+                cls_info = await frame.evaluate(
+                    """() => {
+                      const btn = document.querySelector('#nc_1_n1z, .btn_slide, .nc_iconfont, .nc-lang-cnt');
+                      const track = document.querySelector('.nc_scale, .scale_text, .nc-lang');
+                      return {
+                        btnClass: btn ? btn.className : null,
+                        btnDisplay: btn ? getComputedStyle(btn).display : null,
+                        trackClass: track ? track.className : null,
+                        bodyText: document.body ? document.body.innerText.substring(0, 200) : '',
+                      };
+                    }"""
+                )
+                if cls_info:
+                    log(f"  check_solved: 诊断 baxia frame: {cls_info}")
+                # 2026-08-01 新增：提取 Baxia 配置（window._config_），分析 x5sec 获取流程
+                try:
+                    await log_baxia_config(page)
+                except Exception:
+                    pass
+                break
+    except Exception:
+        pass
     detected, _ = await detect_captcha_container(page)
+    log(f"  check_solved: 无成功/失败选择器，容器检测={detected} → {'未通过' if detected else '通过'}")
     return not detected
 
 
 async def human_like_drag(page, start_x: float, start_y: float, distance: float, attempt: int = 1) -> None:
-    """容器内拖动：接近轨迹 + 起点偏移 + 三阶段速度 + Y 弧线 + 过冲回退。"""
+    """容器内拖动：接近轨迹 + 起点偏移 + 三阶段速度 + Y 弧线 + 终点微调。
+
+    2026-08-01 优化：
+    1. 距离精度：±1px 噪声（原无精度控制）
+    2. 移除过冲 overshoot（原 6-16px 过冲导致 Baxia 判定失败）
+    3. Y 抖动 ±1px（原 ±5px 过大）
+    4. 释放前停顿 200-400ms
+    5. 起点偏移 ±2px（原 ±4px 过大）
+    """
+    # 距离精度：仅 ±1px 噪声
+    dist = distance + random.uniform(-1, 1)
     if attempt == 1:
         steps_base, step_delay_min, step_delay_max = 38, 28, 65
         pause_points = [0.35 + random.random() * 0.2]
@@ -1347,9 +2389,9 @@ async def human_like_drag(page, start_x: float, start_y: float, distance: float,
         f"delay={step_delay_min}-{step_delay_max}ms, pauses={len(pause_points)}"
     )
 
-    # 起点在按钮中心附近随机偏移（±4px），避免永远点死中心
-    actual_start_x = start_x + random.uniform(-4, 4)
-    actual_start_y = start_y + random.uniform(-3, 3)
+    # 起点在按钮中心附近随机偏移（±2px）
+    actual_start_x = start_x + random.uniform(-2, 2)
+    actual_start_y = start_y + random.uniform(-1, 1)
 
     # 接近轨迹：从按钮附近随机点移入，而非瞬移
     approach_angle = random.uniform(0, 2 * math.pi)
@@ -1372,13 +2414,13 @@ async def human_like_drag(page, start_x: float, start_y: float, distance: float,
     await page.wait_for_timeout(90 + random.random() * 120)
     # 按下后微漂移
     await page.mouse.move(
-        actual_start_x + random.uniform(-2, 2),
-        actual_start_y + random.uniform(-2, 2),
+        actual_start_x + random.uniform(-1, 1),
+        actual_start_y + random.uniform(-1, 1),
     )
     await page.wait_for_timeout(40 + random.random() * 60)
 
     arc_direction = -1 if random.random() < 0.5 else 1
-    arc_amplitude = 3 + random.random() * 6
+    arc_amplitude = 1 + random.random() * 2  # 弧线幅度 1-3px（原 3-9px 过大）
     last_x = actual_start_x
     last_y = actual_start_y
     pause_idx = 0
@@ -1394,14 +2436,14 @@ async def human_like_drag(page, start_x: float, start_y: float, distance: float,
 
         # ease-in-out 变体
         eased = (progress ** 2.3) / ((progress ** 2.3) + ((1 - progress) ** 2.3) + 1e-9)
-        target_x = actual_start_x + distance * eased
+        target_x = actual_start_x + dist * eased
 
-        # 中段偶发回退
-        if random.random() < 0.06 and 3 < i < steps - 4:
-            target_x = last_x - (2 + random.random() * 4)
+        # 强制 X 不回退（Baxia 对回退敏感）
+        if target_x < last_x:
+            target_x = last_x + random.uniform(0.3, 1.0)
 
         arc_offset = arc_direction * arc_amplitude * math.sin(math.pi * progress)
-        y_drift = (random.random() - 0.5) * 5
+        y_drift = (random.random() - 0.5) * 2  # Y 抖动 ±1px（原 ±2.5px）
         target_y = actual_start_y + arc_offset
         current_y = last_y * 0.55 + target_y * 0.45 + y_drift
 
@@ -1422,34 +2464,35 @@ async def human_like_drag(page, start_x: float, start_y: float, distance: float,
             await page.wait_for_timeout(pause_duration_ms)
             pause_idx += 1
 
-    # 过冲 + 回退 + 微调释放
+    # 终点微调（移除原过冲 overshoot，直接微调）
     await page.wait_for_timeout(40 + random.random() * 80)
-    overshoot = 6 + random.random() * 10
-    await page.mouse.move(
-        actual_start_x + distance + overshoot,
-        actual_start_y + random.uniform(-6, 6),
-        steps=2,
-    )
-    await page.wait_for_timeout(60 + random.random() * 90)
-    await page.mouse.move(
-        actual_start_x + distance + random.uniform(-1.5, 1.5),
-        actual_start_y + random.uniform(-3, 3),
-        steps=2,
-    )
-    for _ in range(1 if random.random() < 0.65 else 2):
-        await page.wait_for_timeout(45 + random.random() * 70)
+    for _ in range(2 + random.randint(0, 1)):
         await page.mouse.move(
-            actual_start_x + distance + random.uniform(-2, 2),
-            actual_start_y + random.uniform(-2, 2),
+            actual_start_x + dist + random.uniform(-2, 2),
+            actual_start_y + random.uniform(-1, 1),
+            steps=1,
         )
-    await page.wait_for_timeout(60 + random.random() * 90)
+        await page.wait_for_timeout(40 + random.random() * 80)
+    # 释放前停顿（200-400ms）
+    await page.wait_for_timeout(200 + random.random() * 200)
     await page.mouse.up()
+    await page.wait_for_timeout(80 + random.random() * 120)
 
 
 async def human_like_drag_out_of_container(
     page, start_x: float, start_y: float, distance: float, attempt: int = 1
 ) -> None:
-    """出容器拖动：Y 大幅偏出弹窗（±50~120px），模拟真人不拘束手部路径。"""
+    """出容器拖动：Y 适度偏出弹窗（±10~25px），模拟真人不拘束手部路径。
+
+    2026-08-01 优化：
+    1. 距离精度：±1px 噪声
+    2. Y 偏移控制在 ±25px 内（原 ±55-125px 过大，Baxia 会判定机器人）
+    3. 移除过冲 overshoot（原 5-17px 过冲）
+    4. Y 抖动 ±1px（原 ±5px）
+    5. 释放前停顿 200-400ms
+    """
+    # 距离精度：仅 ±1px 噪声
+    dist = distance + random.uniform(-1, 1)
     if attempt <= 2:
         steps_base, step_delay_min, step_delay_max = 40, 28, 70
     elif attempt == 3:
@@ -1462,22 +2505,23 @@ async def human_like_drag_out_of_container(
     steps = steps_base + random.randint(0, 10)
     log(f"  超出容器拖动策略: attempt={attempt}, steps={steps}, delay={step_delay_min}-{step_delay_max}ms")
 
-    actual_start_x = start_x + random.uniform(-3, 3)
-    actual_start_y = start_y + random.uniform(-2, 2)
+    actual_start_x = start_x + random.uniform(-1, 1)
+    actual_start_y = start_y + random.uniform(-1, 1)
 
-    await page.mouse.move(actual_start_x - 30 - random.random() * 40, actual_start_y + random.uniform(-20, 20))
+    await page.mouse.move(actual_start_x - 30 - random.random() * 40, actual_start_y + random.uniform(-10, 10))
     await page.wait_for_timeout(80 + random.random() * 120)
     await page.mouse.move(actual_start_x, actual_start_y, steps=6)
     await page.wait_for_timeout(100 + random.random() * 150)
     await page.mouse.down()
     await page.wait_for_timeout(90 + random.random() * 110)
 
+    # Y 偏移拐点：控制在 ±25px 内（原 ±55-125px）
     num_out_points = 2 + random.randint(0, 1)
     out_points = []
     for i in range(num_out_points):
         prog = 0.2 + (0.6 * (i + 1) / (num_out_points + 1)) + random.uniform(-0.05, 0.05)
         direction = -1 if i % 2 == 0 else 1
-        magnitude = 55 + random.random() * 70
+        magnitude = 10 + random.random() * 15  # 10-25px（原 55-125px）
         out_points.append({"progress": max(0.15, min(0.85, prog)), "y_offset": direction * magnitude})
     log(
         "  出容器拐点: "
@@ -1488,18 +2532,19 @@ async def human_like_drag_out_of_container(
     for i in range(1, steps + 1):
         progress = i / steps
         eased = progress * progress * (3 - 2 * progress)
-        target_x = actual_start_x + distance * eased
-        if random.random() < 0.05 and 3 < i < steps - 3:
-            target_x = last_x - (2 + random.random() * 3)
+        target_x = actual_start_x + dist * eased
+        # 强制 X 不回退
+        if target_x < last_x:
+            target_x = last_x + random.uniform(0.3, 1.0)
 
-        base_arc = math.sin(math.pi * progress) * 5
+        base_arc = math.sin(math.pi * progress) * 2  # 基础弧线 2px（原 5px）
         y_offset = 0.0
         for op in out_points:
-            dist = abs(progress - op["progress"])
-            if dist < 0.18:
-                influence = math.exp(-(dist * dist) / (2 * 0.055 * 0.055))
+            d = abs(progress - op["progress"])
+            if d < 0.18:
+                influence = math.exp(-(d * d) / (2 * 0.055 * 0.055))
                 y_offset += op["y_offset"] * influence
-        current_y = actual_start_y + base_arc + y_offset + random.uniform(-5, 5)
+        current_y = actual_start_y + base_arc + y_offset + random.uniform(-1, 1)  # Y 抖动 ±1px
         await page.mouse.move(target_x, current_y)
 
         bell = math.sin(math.pi * progress)
@@ -1508,21 +2553,19 @@ async def human_like_drag_out_of_container(
         await page.wait_for_timeout(delay)
         last_x = target_x
 
+    # 终点微调（移除原过冲 overshoot）
     await page.wait_for_timeout(40 + random.random() * 80)
-    overshoot = 5 + random.random() * 12
-    await page.mouse.move(
-        actual_start_x + distance + overshoot,
-        actual_start_y + random.uniform(-25, 25),
-        steps=2,
-    )
-    await page.wait_for_timeout(50 + random.random() * 90)
-    await page.mouse.move(
-        actual_start_x + distance,
-        actual_start_y + random.uniform(-18, 18),
-        steps=2,
-    )
-    await page.wait_for_timeout(60 + random.random() * 90)
+    for _ in range(2 + random.randint(0, 1)):
+        await page.mouse.move(
+            actual_start_x + dist + random.uniform(-2, 2),
+            actual_start_y + random.uniform(-1, 1),
+            steps=1,
+        )
+        await page.wait_for_timeout(40 + random.random() * 80)
+    # 释放前停顿（200-400ms）
+    await page.wait_for_timeout(200 + random.random() * 200)
     await page.mouse.up()
+    await page.wait_for_timeout(80 + random.random() * 120)
 
 
 async def wait_for_slider_ready(page, max_wait_ms: int = 10000) -> Optional[dict]:
@@ -2034,20 +3077,138 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
     }
     pages = ctx.pages
     page = pages[0] if pages else await ctx.new_page()
-    screenshot_dir = os.path.join(os.getcwd(), "screenshots")
-    os.makedirs(screenshot_dir, exist_ok=True)
+    # 截图目录优先使用 /tmp（容器 read-only 文件系统兼容）
+    # fallback 到 cwd/screenshots（本地开发环境）
+    _candidate_dirs = [
+        os.environ.get("SLIDER_SCREENSHOT_DIR"),
+        "/tmp/slider-screenshots",
+        os.path.join(os.getcwd(), "screenshots"),
+    ]
+    screenshot_dir = next((d for d in _candidate_dirs if d), "/tmp/slider-screenshots")
+    try:
+        os.makedirs(screenshot_dir, exist_ok=True)
+    except OSError:
+        # cwd/screenshots 可能只读，回退到 /tmp
+        screenshot_dir = "/tmp/slider-screenshots"
+        os.makedirs(screenshot_dir, exist_ok=True)
 
     # 监听 Baxia 校验响应，辅助判定成功（不依赖 DOM）
     net_success = {"flag": False}
 
+    # 2026-08-01 新增：Baxia 验证 API 请求/响应分析器（增强版）
+    # 目标：记录 Baxia 验证请求的参数（bx-pp/bx-ua/slidedata/x5secdata）和响应体，
+    #       分析 x5sec 获取流程，为"伪造 x5sec 或绕过风控"方案提供数据支持。
+    # 关键发现（线上日志分析）：
+    #   - x5sec 可通过直接调用 Baxia 验证 API 获取，不需要真拖滑块
+    #   - 请求需包含：bx-pp（WASM加密）、bx-ua（231!开头）、slidedata、x5secdata（SECDATA）、ppt、ts、v
+    #   - bx-et 可默认为 "nosgn"
+    #   - 线上日志显示只捕获了 JS 文件 GET 请求，未捕获验证 API POST 请求
+    #   - 原因：验证 API URL 可能不含 Baxia 关键字，需要记录所有 POST 请求
+    #   - "响应中包含 x5sec" 之前是误报（JS 源码中包含 x5sec 字符串），需过滤 JS 响应
+    _baxia_api_keywords = ("baxia", "nocaptcha", "control", "_____tmd_____", "x5sec", "captcha", "slidedata")
+    _baxia_api_domains = ("h5api.m.goofish.com", "h5api.m.taobao.com", "acs.m.taobao.com")
+    # 过滤埋点/统计域名（这些不是 Baxia 验证请求，记录它们只会产生噪音）
+    _noise_domains = ("gm.mmstat.com", "ynuf.aliapp.org", "retcode.taobao.com", "arms-retcode.aliyuncs.com")
+
+    def _on_request(req) -> None:
+        """记录所有 POST 请求和 Baxia 相关请求的参数（只读，不修改请求）。"""
+        try:
+            u = req.url or ""
+            method = (req.method or "GET").upper()
+            ul = u.lower()
+            # 过滤埋点/统计请求（mmstat.com 等，不是 Baxia 验证请求）
+            if any(d in ul for d in _noise_domains):
+                return
+            # 判断是否需要记录：
+            # 1. 所有 POST 请求（验证 API 是 POST）
+            # 2. URL 含 Baxia 关键字
+            # 3. 请求到 goofish/taobao API 域名
+            is_post = method == "POST"
+            has_keyword = any(k in ul for k in _baxia_api_keywords)
+            is_api_domain = any(d in ul for d in _baxia_api_domains)
+            if not (is_post or has_keyword or is_api_domain):
+                return
+            # 过滤静态资源（JS/CSS/图片/字体）
+            if any(u.endswith(ext) for ext in (".js", ".css", ".png", ".jpg", ".gif", ".svg", ".woff", ".woff2")):
+                if not is_post:
+                    return
+            log(f"🔍 [Baxia请求] {method} {u[:200]}")
+            # 记录请求头中的加密参数（所有请求都检查，因为验证 API 可能用任意 URL）
+            try:
+                headers = req.headers
+                bx_pp = headers.get("bx-pp") or headers.get("bx_pp")
+                bx_ua = headers.get("bx-ua") or headers.get("bx_ua")
+                bx_et = headers.get("bx-et") or headers.get("bx_et")
+                if bx_pp:
+                    log(f"🔍 [Baxia请求] ✓ bx-pp 长度={len(bx_pp)} 前100字符={bx_pp[:100]}")
+                if bx_ua:
+                    log(f"🔍 [Baxia请求] ✓ bx-ua 长度={len(bx_ua)} 前100字符={bx_ua[:100]}")
+                if bx_et:
+                    log(f"🔍 [Baxia请求] bx-et={bx_et[:50]}")
+            except Exception:
+                pass
+            # 记录请求体（POST 请求可能包含 slidedata/x5secdata）
+            try:
+                body = req.post_data
+                if body:
+                    log(f"🔍 [Baxia请求] body 长度={len(body)} 前800字符={body[:800]}")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    async def _log_baxia_response(resp) -> None:
+        """异步读取并记录 Baxia 验证响应体。"""
+        try:
+            u = resp.url or ""
+            status = resp.status
+            log(f"🔍 [Baxia响应] status={status} {u[:200]}")
+            try:
+                body = await resp.text()
+                if body:
+                    # 过滤 JS 响应（baxiaCommon.js 等 JS 源码中包含 "x5sec" 字符串，会误报）
+                    content_type = resp.headers.get("content-type", "")
+                    is_js = "javascript" in content_type or u.endswith(".js")
+                    log(f"🔍 [Baxia响应] body 长度={len(body)} content-type={content_type[:50]} 前800字符={body[:800]}")
+                    # 只在非 JS 响应中检测 x5sec（真正的 x5sec cookie 在 JSON 响应中）
+                    if not is_js and "x5sec" in body:
+                        log(f"🔍 [Baxia响应] ✓✓✓ 非JS响应中包含 x5sec！这是真正的验证结果！")
+                        # 尝试提取 x5sec 值
+                        try:
+                            data = json.loads(body)
+                            if isinstance(data, dict):
+                                for k, v in data.items():
+                                    if "x5sec" in str(k).lower() or "x5sec" in str(v).lower()[:200]:
+                                        log(f"🔍 [Baxia响应] x5sec 字段: {k}={str(v)[:200]}")
+                        except Exception:
+                            pass
+            except Exception as e:
+                log(f"🔍 [Baxia响应] 读取 body 失败: {e}")
+        except Exception:
+            pass
+
     def _on_response(resp) -> None:
         try:
             u = resp.url or ""
-            if any(k in u for k in ("_____tmd_____", "x5sec", "baxia", "punish", "nc_captcha", "captcha")):
-                # 2xx 且非 punish 页面可能表示通过
-                if resp.status == 200 and "punish" not in u and "deny" not in u.lower():
-                    # 延迟读 body 可能失败，仅作弱信号
+            ul = u.lower()
+            method = ""
+            try:
+                method = (resp.request.method or "").upper()
+            except Exception:
+                pass
+            # 记录所有 POST 响应 + Baxia 关键字响应 + API 域名响应
+            is_post = method == "POST"
+            has_keyword = any(k in ul for k in _baxia_api_keywords)
+            is_api_domain = any(d in ul for d in _baxia_api_domains)
+            if is_post or has_keyword or is_api_domain:
+                # 异步记录响应体
+                try:
+                    asyncio.create_task(_log_baxia_response(resp))
+                except Exception:
                     pass
+            # 2xx 且非 punish 页面可能表示通过
+            if has_keyword and resp.status == 200 and "punish" not in u and "deny" not in ul:
+                pass
             # 消息 token 成功也算环境恢复信号
             if "idlemessage" in u and "token" in u and resp.status == 200 and "punish" not in u:
                 net_success["flag"] = True
@@ -2055,6 +3216,7 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
             pass
 
     try:
+        page.on("request", _on_request)
         page.on("response", _on_response)
     except Exception:
         pass
@@ -2064,7 +3226,9 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
     # - 其他 URL（消息页上下文）：拟人路径进入 /im，避免直接 /im 触发反爬
     # _navigate_to_target 返回 (page, actual_url)，actual_url 供后续 navigate_fresh 刷新复用
     page, actual_im_url = await _navigate_to_target(page, target_url or DEFAULT_TARGET_URL)
+    # 2026-08-01：导航后重新挂载监听器（_navigate_to_target 可能产生新 page 对象）
     try:
+        page.on("request", _on_request)
         page.on("response", _on_response)
     except Exception:
         pass
@@ -2089,7 +3253,11 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
 
     human_action_count = 0
     HUMAN_ACTION_THRESHOLD = 3
-    MAX_HUMAN_ACTIONS = 2
+    # 2026-08-01 修复：禁用软重置（MAX_HUMAN_ACTIONS=0）
+    # 原因：软重置流程（关闭弹窗→打开首页→重新点击消息入口→等待新窗口）消耗 20-30 秒，
+    # 在 120s 超时预算内只能完成 1 轮拖动，第 2 轮刚开始就超时。
+    # 禁用后 3 次拖动失败立即返回，让上层冷却机制处理，避免无效时间消耗。
+    MAX_HUMAN_ACTIONS = 0
     last_error = ""
     last_screenshot = None
     load_fail_streak = 0
@@ -2128,14 +3296,17 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
                 result["screenshotPath"] = shot
             except Exception:
                 pass
-            # 加载失败：硬重置（清 storage），用真人点击重新进入消息页
-            page, actual_im_url = await navigate_fresh(page, actual_im_url, hard=True)
-            if load_fail_streak >= 3:
+            # 2026-08-01 修复：加载失败立即返回，不执行硬重置
+            # 原因：加载失败说明 Baxia 已惩罚页面，硬重置（navigate_fresh）消耗 20-30s，
+            # 且重置后仍会被识别。直接返回让冷却机制处理，节省 120s 超时预算。
+            if load_fail_streak >= 1:
                 result["error"] = (
-                    "连续出现「加载失败」：自动化浏览器环境被闲鱼风控标记，"
-                    "即使人工拖拽也难以通过。请换用本机日常 Chrome 配置/新 Cookie 后重试"
+                    "页面显示加载失败（Baxia 风控惩罚）：自动化浏览器环境被闲鱼风控标记，"
+                    "请等待冷却期后重试或更换 Cookie"
                 )
                 return result
+            # 仅在第一次加载失败时尝试硬重置（实际不会执行，因为上面已返回）
+            page, actual_im_url = await navigate_fresh(page, actual_im_url, hard=True)
             continue
         else:
             load_fail_streak = 0
@@ -2151,6 +3322,23 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
             for f in page.frames
         )
         log(f"滑块容器检测: detected={detected}, selector={detected_selector}, has_punish_frame={has_punish}")
+
+        # 2026-08-01 重大修正：punish 状态下仍尝试拖动滑块（脱离 punish 的唯一方法）
+        # 原逻辑（已废弃）：检测到 punish 立即返回 → 账号永远无法脱离 punish → 0% 成功率
+        # 新逻辑：punish 状态下允许 2 次拖动尝试（第 1 次用精确距离，第 2 次用微调距离），
+        #         第 3 次起跳过拖动避免加码惩罚。
+        # 原因：Baxia punish 页面本身就需要通过滑块验证才能解除，
+        #       放弃拖动等于永远放弃这个账号，违背 WS 持久化目标。
+        #       详见 .trae/rules/cookie-valid-ws-persistence.md 第 9 条核心约束。
+        if has_punish and attempt >= 3:
+            result["error"] = (
+                f"账号已被 Baxia 风控惩罚（punish 状态），第 {attempt} 次尝试跳过拖动避免加码。"
+                "前 2 次已尝试拖动未通过，请等待 60 秒冷却后重试"
+            )
+            log(f"⚠ {result['error']}")
+            return result
+        if has_punish:
+            log(f"⚠ 检测到 punish 状态，仍尝试拖动滑块以脱离 punish（attempt={attempt}/2）")
 
         if not detected and not has_punish:
             if await check_solved(page):
@@ -2216,47 +3404,75 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
             await asyncio.sleep(0.06 + random.random() * 0.15)
 
         try:
-            # 仅浏览器内 page.mouse（绝不控制系统鼠标）
-            # 轮换：贝塞尔 / 元素悬停 / 微步 / 容器内 / 出容器
-            mode = (attempt - 1) % 5
-            if mode == 0:
-                log(f"  attempt={attempt} 【贝塞尔】page.mouse")
-                await bezier_mouse_drag(page, sx, sy, dist, attempt)
-            elif mode == 1 and button_el is not None:
-                log(f"  attempt={attempt} 【元素悬停】page.mouse")
-                await element_hover_drag(page, button_el, dist, attempt)
-            elif mode == 2:
-                log(f"  attempt={attempt} 【微步】page.mouse")
-                await microstep_drag(page, sx, sy, dist, attempt)
-            elif mode == 3:
-                log(f"  attempt={attempt} 【容器内】page.mouse")
-                await human_like_drag(page, sx, sy, dist, attempt)
+            # 2026-08-01 重大突破：优先使用 xdotool（X11 系统级鼠标事件）
+            # 原因：CDP 的 Input.dispatchMouseEvent 即使带 deltaX/deltaY，仍被 Baxia FireyeJS
+            #       识别为机器人（拖动后 bodyText 变成"加载中"）。
+            #       xdotool 在 X11 层生成真实鼠标事件，不经过 CDP 协议，
+            #       Baxia 的 JS 无法区分 xdotool 事件和真实硬件鼠标事件。
+            #       xdotool 不可用时回退到 CDP（human_physics_drag）。
+            # 2026-08-01 早期策略（已废弃）：JS dispatch + CDP 交替使用
+            # - JS dispatch 事件 isTrusted=false，Baxia FireyeJS 检测到后加码惩罚
+            # - CDP 事件 isTrusted=true，但仍被 CDP 痕迹检测
+            slider_frame = slider_info.get("frame")
+            use_js_dispatch = False
+            if use_js_dispatch:
+                log(f"  attempt={attempt} 【JS dispatch】frame.evaluate（绕过 CDP）")
+                await asyncio.wait_for(js_dispatch_drag(page, slider_frame, sx, sy, dist, attempt), timeout=20.0)
             else:
-                log(f"  attempt={attempt} 【超出容器】page.mouse")
-                await human_like_drag_out_of_container(page, sx, sy, dist, attempt)
+                log(f"  attempt={attempt} 【xdotool X11】系统级鼠标事件（绕过 CDP）")
+                # xdotool_drag 内部会检测 xdotool 是否可用，不可用时回退到 human_physics_drag
+                # 超时 30 秒（xdotool 每步有 subprocess 开销，比 CDP 慢）
+                await asyncio.wait_for(xdotool_drag(page, sx, sy, dist, attempt), timeout=30.0)
+        except asyncio.TimeoutError:
+            last_error = f"拖动超时（10s），page.mouse 可能卡住"
+            log(f"× {last_error}")
+            # 超时后不 navigate_fresh（太慢），直接点重试按钮
+            clicked = await click_retry_if_needed(page)
+            if clicked:
+                log("超时后已点击重试，等待新滑块...")
+                await asyncio.sleep(1.5 + random.random() * 1.0)
+            continue
         except Exception as e:
-            last_error = f"拖动异常: {e}"
+            last_error = f"拖动异常: {type(e).__name__}: {e}"
             log(last_error)
-            page, actual_im_url = await navigate_fresh(page, actual_im_url, hard=False)
+            # 异常后不 navigate_fresh（太慢），直接点重试按钮
+            clicked = await click_retry_if_needed(page)
+            if clicked:
+                log("异常后已点击重试，等待新滑块...")
+                await asyncio.sleep(1.5 + random.random() * 1.0)
             continue
 
-        result_wait = 2.6 + random.random() * 1.8
+        # 2026-08-01 优化：增加等待时间到 4-7 秒
+        # 原因：Baxia 异步处理滑块验证结果，2.6-4.4 秒可能不够，
+        #       导致 check_solved 在滑块通过前检测，误判为未通过。
+        #       增加到 4-7 秒给 Baxia 足够时间处理并更新 DOM。
+        result_wait = 4.0 + random.random() * 3.0
         log(f"等待 {result_wait:.1f} 秒验证结果...")
         await asyncio.sleep(result_wait)
 
         post_path = os.path.join(screenshot_dir, f"slider-post-{attempt}-{int(time.time())}.png")
         try:
-            await page.screenshot(path=post_path, full_page=False)
+            await asyncio.wait_for(page.screenshot(path=post_path, full_page=False), timeout=5.0)
             last_screenshot = post_path
             result["screenshotPath"] = post_path
         except Exception:
             pass
 
-        solved = await check_solved(page)
+        # check_solved 加超时保护（5 秒），防止卡住
+        try:
+            solved = await asyncio.wait_for(check_solved(page), timeout=8.0)
+        except asyncio.TimeoutError:
+            log("⚠ check_solved 超时（5s），视为未通过")
+            solved = False
+        except Exception:
+            solved = False
         # 网络弱信号：token 接口 200 且无 punish
         if not solved and net_success.get("flag"):
             await asyncio.sleep(1.0)
-            still = await detect_captcha_container(page)
+            try:
+                still = await asyncio.wait_for(detect_captcha_container(page), timeout=5.0)
+            except asyncio.TimeoutError:
+                still = (True, None)
             if not still[0]:
                 log("✓ 网络信号显示会话恢复且弹窗消失，视为通过")
                 solved = True
@@ -2280,6 +3496,18 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
 
         last_error = f"第 {attempt} 次拖动未通过"
         log(f"× {last_error}")
+
+        # 2026-08-01 优化：第 1 次失败后直接返回，不点重试避免 Baxia 加码。
+        # 原因：数据分析显示，第 1 次 JS dispatch 拖动后 Baxia 加码，
+        #       第 2 次页面直接加载失败（streak=1）。继续重试只会加重惩罚。
+        #       改为只拖动 1 次，失败后 60 秒冷却重试，给 Baxia 风控恢复时间。
+        if attempt >= 1:
+            result["error"] = (
+                f"连续 {attempt} 次拖动未通过，放弃重试避免 Baxia 加码惩罚。"
+                "请等待冷却期后重试"
+            )
+            log(f"⚠ {result['error']}")
+            return result
 
         # 优先点「框体重试」并等待新滑块，而不是立刻清会话硬刷新
         clicked = await click_retry_if_needed(page)
@@ -2332,6 +3560,30 @@ async def export_cookies(ctx) -> str:
         return "; ".join(parts)
     except Exception as e:
         log(f"导出 cookies 失败: {e}")
+        return ""
+
+
+async def extract_x5sec(ctx) -> str:
+    """从浏览器 context 中提取 x5sec cookie 值。
+
+    x5sec 是 Baxia 滑块验证成功后设置的 cookie，
+    后续 goofish API 请求带上这个 cookie 就不会触发滑块验证。
+    提取后可缓存到数据库，实现"一次求解，长期免滑块"。
+    """
+    try:
+        cookies = await ctx.cookies()
+        for c in cookies:
+            name = c.get("name") or ""
+            if name == "x5sec":
+                value = c.get("value") or ""
+                domain = c.get("domain") or ""
+                expires = c.get("expires") or -1
+                log(f"🔑 [x5sec] 提取成功! domain={domain} value长度={len(value)} expires={expires}")
+                return value
+        log("🔑 [x5sec] cookie 中未找到 x5sec（可能未触发滑块或验证未通过）")
+        return ""
+    except Exception as e:
+        log(f"🔑 [x5sec] 提取失败: {e}")
         return ""
 
 
@@ -2521,6 +3773,13 @@ async def _semi_auto_human_fallback(
                         solve_result["cookieCount"] = fresh.count("=")
                 except Exception:
                     pass
+                # 提取 x5sec cookie（用于后续免滑块请求）
+                try:
+                    x5sec = await extract_x5sec(ctx)
+                    if x5sec:
+                        solve_result["x5sec"] = x5sec
+                except Exception:
+                    pass
                 return solve_result
         except Exception as e:
             log(f"半自动检测异常（继续等待）: {e}")
@@ -2569,15 +3828,21 @@ async def _launch_solve_once(
         )
         if _USING_PATCHRIGHT:
             # patchright 模式：patchright 自动清理 CDP 痕迹（cdc_/__playwright__/webdriver），
-            # 自动处理 navigator.webdriver / window.chrome / userAgentData。
-            # 关键：不注入 STEALTH_INIT_SCRIPT（会与 patchright 冲突，引入 toString 检测漏洞），
-            #       不设置 user_agent（patchright 用真实 Chrome UA，手动覆盖会破坏一致性），
-            #       不用 ignore_default_args（patchright 自动处理 --enable-automation）。
+            # 自动处理 navigator.webdriver / window.chrome。
+            # 2026-08-01 重大修复：必须设置 user_agent=ua（Windows UA）
+            # 原因：patchright 在 Linux 容器中用真实 Chrome UA（X11; Linux x86_64），
+            #       但 _ADVANCED_FINGERPRINT_SCRIPT 设置 userAgentData.platform='Windows'，
+            #       导致 UA 与 Client Hints 平台矛盾，Baxia FireyeJS 直接判定为机器人，
+            #       这是滑块求解 0% 成功率的根本原因。
+            #       修复后统一用 Windows UA + Windows Client Hints + navigator.platform='Win32'。
+            # 不注入 STEALTH_INIT_SCRIPT（会与 patchright 冲突，引入 toString 检测漏洞），
+            # 不用 ignore_default_args（patchright 自动处理 --enable-automation）。
             # 只保留 patchright 不处理的高级指纹规避（WebGL/Canvas/Audio）。
             launch_kwargs = dict(
                 user_data_dir=user_data_dir,
                 headless=False,
                 executable_path=chrome_path,
+                user_agent=ua,
                 viewport={"width": WINDOW_WIDTH, "height": WINDOW_HEIGHT},
                 locale="zh-CN",
                 timezone_id="Asia/Shanghai",
@@ -2589,7 +3854,14 @@ async def _launch_solve_once(
                     "--no-first-run",
                     "--no-default-browser-check",
                     f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}",
+                    # 2026-08-01 优化：窗口固定在屏幕左上角，配合 xdotool 系统级鼠标拖动
+                    # 原因：xdotool 用 X11 屏幕坐标，需要知道浏览器窗口在屏幕中的位置。
+                    #       --window-position=0,0 让窗口在左上角，视口坐标到屏幕坐标的偏移最小。
+                    "--window-position=0,0",
                     "--lang=zh-CN",
+                    # 2026-08-01 修复：去掉 swiftshader（导致 page.mouse 卡住），
+                    # 改用 _ADVANCED_FINGERPRINT_SCRIPT 里 patch getContext 返回假 WebGL 上下文。
+                    # swiftshader 软件渲染会让页面响应极慢，page.mouse.move 卡住 10s+。
                 ],
             )
         else:
@@ -2735,6 +4007,13 @@ async def _launch_solve_once(
                 solve_result["cookies"] = fresh
                 solve_result["cookieCount"] = fresh.count("=")
                 log(f"导出 {solve_result['cookieCount']} 个最新 cookies（{len(fresh)} 字符）")
+            # 提取 x5sec cookie（用于后续免滑块请求）
+            try:
+                x5sec = await extract_x5sec(ctx)
+                if x5sec:
+                    solve_result["x5sec"] = x5sec
+            except Exception:
+                pass
             return solve_result
 
         # 全自动失败 → 半自动人工兜底（保留窗口供人工拖拽）
@@ -2809,78 +4088,42 @@ async def main_async(args) -> dict:
     log(f"求解配置: profile_strategy={profile_strategy} semi_auto_fallback={semi_auto_fallback}")
 
     try:
-        # 跨进程单飞：避免多账号同时求解把 IP/设备画像打爆
-        with _FileLock(_SOLVE_LOCK_PATH, timeout=360.0):
-            log("已获取全自动滑块全局锁")
-            async with async_playwright() as p:
-                await ensure_seed_profile(p, chrome_path, ua)
+        # 2026-08-01 优化：移除 _FileLock 全局锁，允许 2 个 Python 进程并行
+        # 原因：全局锁导致第二个请求等锁 60 秒后超时失败，6 个活跃账号只有 1 个能求解。
+        #       每个进程使用独立的 temp profile 目录（chrome-slider-temp-*），不冲突。
+        #       服务器有 16GB 内存，支持 2 个 Chrome 进程并行。
+        #       server.ts 层面有 MAX_PYTHON_FALLBACK_CONCURRENCY=2 控制并发上限。
+        log("跳过全局锁（已移除），直接启动求解")
+        async with async_playwright() as p:
+            await ensure_seed_profile(p, chrome_path, ua)
 
-                proxy_cfg = None
-                if getattr(args, "proxy_server", None):
-                    proxy_cfg = {
-                        "server": args.proxy_server,
-                        "username": getattr(args, "proxy_username", None) or None,
-                        "password": getattr(args, "proxy_password", None) or None,
-                    }
-                    log(f"使用绑定代理 server={args.proxy_server}")
+            proxy_cfg = None
+            if getattr(args, "proxy_server", None):
+                proxy_cfg = {
+                    "server": args.proxy_server,
+                    "username": getattr(args, "proxy_username", None) or None,
+                    "password": getattr(args, "proxy_password", None) or None,
+                }
+                log(f"使用绑定代理 server={args.proxy_server}")
 
-                # 第一轮：使用配置的 profile 策略
-                # 半自动兜底只在第一轮启用（避免第二轮重复等待人工）
-                r1 = await _launch_solve_once(
-                    p, chrome_path, ua, cookie_str, args.target_url, args.max_retries,
-                    proxy=proxy_cfg,
-                    profile_strategy=profile_strategy,
-                    semi_auto_fallback=semi_auto_fallback,
-                )
-                result.update(r1)
-                total_attempts = int(r1.get("attempts") or 0)
+            # 第一轮：使用配置的 profile 策略
+            # 半自动兜底只在第一轮启用（避免第二轮重复等待人工）
+            r1 = await _launch_solve_once(
+                p, chrome_path, ua, cookie_str, args.target_url, args.max_retries,
+                proxy=proxy_cfg,
+                profile_strategy=profile_strategy,
+                semi_auto_fallback=semi_auto_fallback,
+            )
+            result.update(r1)
+            total_attempts = int(r1.get("attempts") or 0)
 
-                # 第二轮：仅当检测到滑块且未通过时，换 seed profile 再来一次
-                # 第二轮不启用半自动兜底（第一轮已等过人工）
-                # 搜索链路超时预算：前端 axios=180s，Java 网关→Python=180s，Python→crawler=180s，
-                # crawler 内部 sliderSolver.ts 给 Python 脚本 90s，超时即 kill。
-                # 第一轮 persistent profile 实测 60-90s，若已用时 > 75s，
-                # 第二轮必然被 kill（且无法完整执行），跳过以保留第一轮结果与时间预算给后续兜底路径。
-                elapsed_after_r1 = time.time() - start_time
-                if (
-                    not result.get("solved")
-                    and result.get("captchaDetected")
-                    and not result.get("isLoginPage")
-                    and elapsed_after_r1 < 75.0
-                ):
-                    log("=== 第二轮：换 seed profile 重开浏览器再试 ===")
-                    await asyncio.sleep(2.0 + random.random() * 2.5)
-                    r2 = await _launch_solve_once(
-                        p,
-                        chrome_path,
-                        ua,
-                        cookie_str,
-                        args.target_url,
-                        max(2, min(3, int(args.max_retries or 3))),
-                        proxy=proxy_cfg,
-                        profile_strategy="seed",
-                        semi_auto_fallback=False,
-                    )
-                    total_attempts += int(r2.get("attempts") or 0)
-                    # 第二轮成功则覆盖；失败保留第一轮截图/错误
-                    if r2.get("solved"):
-                        result.update(r2)
-                    else:
-                        result["attempts"] = total_attempts
-                        if r2.get("error"):
-                            result["error"] = (
-                                f"{result.get('error') or ''} | 第二轮: {r2.get('error')}"
-                            ).strip(" |")
-                        if r2.get("screenshotPath"):
-                            result["screenshotPath"] = r2.get("screenshotPath")
-                elif (
-                    not result.get("solved")
-                    and result.get("captchaDetected")
-                    and not result.get("isLoginPage")
-                ):
-                    # 第二轮因 deadline 跳过：保留第一轮结果给上层
-                    log(f"=== 第二轮跳过（elapsed={elapsed_after_r1:.1f}s >= 75s），保留第一轮结果 ===")
-                result["attempts"] = total_attempts or result.get("attempts") or 0
+            # 第二轮：已禁用
+            # 2026-08-01 修复：实测第一轮约 77-90s（含 seed 预热 + 导航 + 拖动），
+            # 第二轮换 profile 重开浏览器至少需要 30-40s，120s 超时下必然超时。
+            # 超时后 stdout 为空，无法调试，且浪费 40s 算力。
+            # 改为：第一轮 max_retries=4，专注在单轮内多次拖动尝试。
+            # 如果未来需要第二轮，应在 server.ts 把超时提高到 180s 以上。
+            result["attempts"] = total_attempts or result.get("attempts") or 0
 
     except TimeoutError as e:
         result["error"] = str(e)

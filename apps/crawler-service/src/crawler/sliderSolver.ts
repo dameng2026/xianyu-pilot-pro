@@ -54,6 +54,7 @@ export interface SlideSolveResult {
   durationMs: number;
   cookies?: string;           // 求解成功后的最新 cookies（Baxia 验证通过后服务器下发新 token，需更新数据库）
   attemptsDetail?: SlideSolveAttemptDetail[]; // 每次尝试的明细（用于成功率统计）
+  x5sec?: string;             // Baxia 验证成功后的 x5sec cookie 值（用于缓存复用，实现免滑块请求）
 }
 
 /** 单次 attempt 的明细记录（用于成功率统计） */
@@ -544,34 +545,38 @@ export async function humanLikeDrag(
 
   switch (attempt) {
     case 1:
-      // 标准速度：30-40步，20-50ms间隔，总时长约 0.8-1.8秒
-      stepsBase = 30;
-      stepDelayMin = 20;
-      stepDelayMax = 50;
-      break;
-    case 2:
-      // 中速：35-45步，30-70ms间隔，无停顿，总时长约 1.2-2.5秒
-      stepsBase = 35;
+      // 标准速度（真人模拟）：50-65步，30-70ms间隔 + 1个中间停顿，总时长约 2-3.5秒
+      // 2026-07-31 优化：原 30步/20-50ms/1秒 太快，Baxia 通过拖动速度识别为机器人
+      // 真人拖动滑块通常 2-4 秒，含 1-2 个微停顿（犹豫/调整力度）
+      stepsBase = 50;
       stepDelayMin = 30;
       stepDelayMax = 70;
+      pausePoints = [pausePoint];
+      break;
+    case 2:
+      // 中慢速：55-70步，40-80ms间隔 + 1个中间停顿，总时长约 2.5-4.5秒
+      stepsBase = 55;
+      stepDelayMin = 40;
+      stepDelayMax = 80;
+      pausePoints = [pausePoint];
       break;
     case 3:
-      // 较快：25-35步，15-40ms间隔，无停顿，总时长约 0.5-1.2秒
-      stepsBase = 25;
-      stepDelayMin = 15;
-      stepDelayMax = 40;
+      // 标准速度：45-60步，25-60ms间隔，无停顿，总时长约 1.5-3秒
+      stepsBase = 45;
+      stepDelayMin = 25;
+      stepDelayMax = 60;
       break;
     case 4:
-      // 慢速：40-50步，40-90ms间隔 + 中间停顿0.3秒，总时长约 2-4秒
-      stepsBase = 40;
-      stepDelayMin = 40;
-      stepDelayMax = 90;
-      pausePoints = [pausePoint];
+      // 慢速：60-75步，50-100ms间隔 + 2个中间停顿，总时长约 4-6秒
+      stepsBase = 60;
+      stepDelayMin = 50;
+      stepDelayMax = 100;
+      pausePoints = [pausePoint, 0.6 + Math.random() * 0.2];
       break;
     default:
       // attempt >= 5: 随机策略组合（不设停顿，避免太慢）
-      stepsBase = 30 + Math.floor(Math.random() * 15);
-      stepDelayMin = 20 + Math.floor(Math.random() * 30);
+      stepsBase = 40 + Math.floor(Math.random() * 20);
+      stepDelayMin = 30 + Math.floor(Math.random() * 30);
       stepDelayMax = stepDelayMin + 30 + Math.floor(Math.random() * 40);
       pausePoints = [];
       break;
@@ -877,9 +882,25 @@ export async function checkSolved(page: Page, frame: any): Promise<boolean> {
     }
   }
 
-  // 滑块弹窗消失也视为通过
-  const stillHasCaptcha = await detectCaptcha(page);
-  return !stillHasCaptcha.detected;
+  // 关键修复（2026-07-31 事故）：Baxia 验证中的等待逻辑
+  // 原先拖动后只等待 2 秒就检测，但 Baxia 验证可能需要 3-5 秒。
+  // 如果滑块弹窗仍在（验证中），原先直接返回 false（未通过），
+  // 然后 checkClickToRetry 误判为失败（因为 .nc-lang-cnt 可见），
+  // 进入重试循环，5 次重试全部浪费在"验证中"状态。
+  // 修复后：如果滑块弹窗仍在，等待 3 秒后再次检测，最多重试 3 次（共 9 秒）。
+  for (let waitRound = 0; waitRound < 3; waitRound++) {
+    const stillHasCaptcha = await detectCaptcha(page);
+    if (!stillHasCaptcha.detected) {
+      // 滑块弹窗消失，视为通过
+      return true;
+    }
+    // 等待 3 秒后再次检测
+    if (waitRound < 2) {
+      await page.waitForTimeout(3000);
+    }
+  }
+  // 3 次检测后滑块弹窗仍在，判定为未通过
+  return false;
 }
 
 // ============================================================
@@ -964,11 +985,15 @@ async function checkClickToRetry(
   frame: any
 ): Promise<{ needsClick: boolean; retryTarget?: any }> {
   // 1. 检测失败/重试标识元素（Baxia 标准类名）
+  // 关键修复（2026-07-31 事故）：移除 .nc-lang-cnt
+  // .nc-lang-cnt 是滑块按钮本身的容器（在 getSliderInfo 的 buttonSelectors 中也包含它），
+  // 不是失败标识。原先把它放在 retrySelectors 中，导致每次拖动后只要滑块按钮还在
+  // （Baxia 验证中），就会误判为"检测到失败提示"，进入重试循环，5 次重试全部浪费。
+  // 修复后：只有明确的失败标识（.nc_error/.errloading/#nc_1_refresh1/.fail）才触发重试。
   const retrySelectors = [
     '.nc_error',
     '.errloading',
     '#nc_1_refresh1',
-    '.nc-lang-cnt',
     '.fail',
   ];
 
@@ -986,6 +1011,7 @@ async function checkClickToRetry(
       try {
         const elem = await f.$(sel);
         if (elem && await elem.isVisible()) {
+          console.log(`[SliderSolver] checkClickToRetry 命中选择器: ${sel}`);
           return { needsClick: true, retryTarget: elem };
         }
       } catch { /* ignore */ }
@@ -993,19 +1019,27 @@ async function checkClickToRetry(
   }
 
   // 2. 检测"验证失败，点击框体重试"文本
+  // 关键修复（2026-07-31 事故）：收紧文本匹配，避免误判
+  // 原先的正则 /error:/ 会匹配到 URL 参数、JS 错误信息等非失败文本，
+  // /请重试/ 会匹配到"请稍后重试"等非滑块失败的提示。
+  // 修复后：只匹配明确的滑块验证失败文本，且要求文本长度较短（<200字符），
+  // 避免匹配到页面正文中的无关内容。
   for (const f of searchFrames) {
     if (!f) continue;
     try {
       const hasRetryText = await f.evaluate(() => {
         const text = document.body ? document.body.innerText : '';
+        // 只在文本较短（<200字符）时检测，避免匹配到页面正文
+        if (text.length > 200) return false;
         // 覆盖多种失败提示文本：
         // - "验证失败，点击框体重试(error:HxnXjf)"
         // - "滑块加载失败"
-        // - "加载失败，请重试"
         // - "滑动失败"
-        return /验证失败|点击框体重试|点击重试|请重试|error:|滑块加载失败|加载失败|滑动失败|验证未通过/i.test(text);
+        // - "验证未通过"
+        return /验证失败.*点击框体重试|点击框体重试|滑块加载失败|滑动失败|验证未通过/i.test(text);
       }).catch(() => false);
       if (hasRetryText) {
+        console.log(`[SliderSolver] checkClickToRetry 命中失败文本`);
         // 找到可点击的弹窗容器
         for (const sel of ['#nc_1', '.nc_wrapper', '#baxia-dialog', '.nc-lang-cnt', '.slide-verify']) {
           try {
@@ -1054,6 +1088,54 @@ async function clickRetryToResetSlider(page: Page, frame: any, target: any): Pro
 }
 
 /**
+ * 检测页面是否存在 Baxia punish URL 的 frame。
+ *
+ * punish URL 表示账号已被 Baxia 风控惩罚，典型特征：
+ *   - URL 包含 "_____tmd_____" 或 "punish"
+ *   - 常见来源：mtop.taobao.idlemessage.pc.login.token 接口返回 punish 页
+ *
+ * 重要纠错（2026-07-31 事故复盘）：
+ *   此前将 "punish URL 含 login.token" 误判为 cookie_invalid，导致 0% 成功率。
+ *   实际上 mtop.taobao.idlemessage.pc.login.token 是 WS token 刷新 API 的名字，
+ *   每次打开 goofish.com/im 都会调用它。Baxia 挑战该 API 时 iframe URL 会含 login.token，
+ *   但这并不代表 Cookie 失效——首页和消息页仍能正常加载（Cookie 有效）。
+ *
+ * 当前策略（2026-07-31 修正）：
+ *   - punish URL（含 _____tmd_____ 或 punish）：统一视为 account_punished（可拖动，限制重试）
+ *     不再因 URL 含 login.token 而误判为 cookie_invalid
+ *   - cookie_invalid：仅由 checkLoginPage 检测真实登录页跳转（login.taobao.com 等）
+ *
+ * @returns {punished, reason, frameUrl} 检测结果
+ */
+async function checkPunishedFrame(page: Page): Promise<{
+  punished: boolean;
+  reason: 'cookie_invalid' | 'account_punished';
+  frameUrl?: string;
+}> {
+  try {
+    const frames = page.frames();
+    for (const frame of frames) {
+      try {
+        const frameUrl = frame.url();
+        if (!frameUrl) continue;
+        // 检测 punish URL（含 _____tmd_____ 或 punish 关键字）
+        // 统一视为 account_punished：Baxia 挑战 WS token API（login.token）时 Cookie 仍可能有效，
+        // 拖动滑块有机会通过（Baxia 会重新评估会话状态）。
+        if (isPunishUrl(frameUrl)) {
+          console.warn(`[SliderSolver] 检测到 Baxia punish URL，账号被风控惩罚（可拖动尝试）: ${frameUrl.substring(0, 150)}`);
+          return { punished: true, reason: 'account_punished', frameUrl };
+        }
+      } catch {
+        // frame 可能已销毁，忽略
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return { punished: false, reason: 'account_punished' };
+}
+
+/**
  * 检测页面是否已跳转到登录页（Cookie Session 过期）
  *
  * 闲鱼消息页在 Cookie 过期时会通过 JS 路由跳转到登录页，
@@ -1079,23 +1161,16 @@ async function checkLoginPage(page: Page): Promise<boolean> {
   } catch {
     // ignore
   }
-  // 3. 关键修复：检测 iframe 内的 login.token 接口 URL
-  // Cookie 失效时，闲鱼 SPA 主页面 URL 仍是 /im（不会被重定向到登录页），
-  // 但 iframe 会加载 mtop.taobao.idlemessage.pc.login.token 接口刷新 token，
-  // 该接口因风控返回 punish 页（URL 含 login.token + _____tmd_____/punish）。
-  // 原先只检测主页面 URL，导致 Cookie 失效时误判为"已通过验证"。
+  // 3. 检测 login.taobao.com 等登录域 iframe（Cookie 真正失效时会跳转登录页）
+  // 注意：不再因 iframe URL 含 login.token 而判定 Cookie 失效——
+  // mtop.taobao.idlemessage.pc.login.token 是 WS token 刷新 API 名字，
+  // Baxia 挑战该 API 时 iframe URL 会含 login.token，但 Cookie 仍可能有效。
   try {
     const frames = page.frames();
     for (const frame of frames) {
       try {
         const frameUrl = frame.url();
         if (!frameUrl) continue;
-        // 检测 login.token 接口 URL（Cookie 失效时的 token 刷新接口）
-        if (/login\.token|mtop\.taobao\.idlemessage\.pc\.login/i.test(frameUrl)) {
-          console.warn(`[SliderSolver] 检测到 login.token iframe URL，Cookie Session 已失效: ${frameUrl.substring(0, 150)}`);
-          return true;
-        }
-        // 检测 login.taobao.com 等登录域（iframe 内的重定向）
         if (/login\.taobao\.com|login\.goofish\.com|\/uiLogin\b/i.test(frameUrl)) {
           console.warn(`[SliderSolver] 检测到登录页 iframe URL: ${frameUrl.substring(0, 150)}`);
           return true;
@@ -1919,8 +1994,24 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
         console.warn(`[SliderSolver] 持久化 Chrome 启动失败，回退: ${safeErrorType(e)} | message=${e?.message || 'N/A'} | stack=${e?.stack?.split('\n').slice(0, 5).join(' | ') || 'N/A'}`);
         if (browser) { await browser.close().catch(() => {}); browser = null; }
         context = null;
-        // 关键修复：方案A失败后清理 userDataDir，避免磁盘残留累积
+        // 2026-08-01 修复：方案A失败时必须 pkill Chrome 进程，否则 Chrome 成为孤儿进程累积
+        // 原先只删 userDataDir 目录，但 launchPersistentContext 失败时 Chrome 进程已启动，
+        // Playwright 连接断开后 Chrome 子进程被 init 收养（PPID=1），pkill -f userDataDir 才能杀掉
         if (userDataDirForCleanup) {
+          try {
+            const { execSync } = await import('child_process');
+            execSync(`pkill -9 -f '${userDataDirForCleanup}' 2>/dev/null || true`, { stdio: 'ignore', timeout: 5000 });
+            if (process.platform !== 'win32' && process.platform !== 'darwin') {
+              const orphanOutput = execSync(
+                "ps -eo pid,ppid,cmd --no-headers | grep '/opt/google/chrome/chrome' | grep -v grep | awk '$2==1{print $1}'",
+                { encoding: 'utf-8', timeout: 5000 },
+              );
+              const orphanPids = orphanOutput.trim().split('\n').map((s: string) => Number(s.trim())).filter((n: number) => n >= 100);
+              for (const pid of orphanPids) {
+                try { process.kill(pid, 'SIGKILL'); } catch { /* 进程已退出，忽略 */ }
+              }
+            }
+          } catch { /* ignore */ }
           try { await fs.rm(userDataDirForCleanup, { recursive: true, force: true }); } catch { /* ignore */ }
           userDataDirForCleanup = null;
         }
@@ -2142,10 +2233,17 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
     // 真人行动模拟：连续失败 N 次后触发"关闭弹窗→刷新页面→冷静期→重新尝试"
     // 用户反馈：连续滑动失败后，真人会点击叉号关闭弹窗→刷新页面→等待页面加载完成不操作→再次滑动，成功率大幅提升
     // 关键：真人行动必须优先于场景5的纯刷新，否则会被"刷新/连接中断"弹窗检测抢先触发，跳过点击叉号步骤
-    const HUMAN_ACTION_THRESHOLD = 3;  // 连续失败 3 次后触发
-    const MAX_HUMAN_ACTIONS = 2;       // 最多触发 2 次真人行动
+    // 2026-07-31 优化：HUMAN_ACTION_THRESHOLD 从 3 降到 2，MAX_HUMAN_ACTIONS 从 2 增到 3
+    // 2026-08-01 优化：MAX_HUMAN_ACTIONS 从 3 降回 2
+    // 2026-08-01 三次优化：MAX_HUMAN_ACTIONS 从 2 降到 1
+    // 2026-08-01 四次优化：punish 状态下允许 4 次拖动（原 3 次）
+    // 原因：punish 状态下允许 4 次拖动，冷静期 10-15 秒。
+    // 4 次拖动 + 1 次真人行动（含冷静期）= ~140-150s，在 170s 整体超时内留有余量。
+    // 真人行动主要在第 2 次失败后触发，让第 3-4 次拖动在刷新后的新会话中进行。
+    const HUMAN_ACTION_THRESHOLD = 2;  // 连续失败 2 次后触发（原 3）
+    const MAX_HUMAN_ACTIONS = 1;       // 最多触发 1 次真人行动（punish 状态下 4 次拖动 + 1 次冷静期）
     let humanActionCount = 0;
-    // 真人行动刷新后的冷静期标志：刷新完成后不立即操作，等待 3-7 秒让 Baxia 检测状态自然重置
+    // 真人行动刷新后的冷静期标志：刷新完成后不立即操作，等待 15-25 秒让 Baxia 检测状态自然重置
     let needCooldownAfterHumanAction = false;
 
     // 使用 while 循环，让场景4(下载消息失败)和场景5(刷新小弹窗)的刷新重试
@@ -2216,11 +2314,19 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
         }
       }
 
-      // 真人行动冷静期：刷新完成后不立即操作，等待 3-7 秒让 Baxia 检测状态自然重置
+      // 真人行动冷静期：刷新完成后不立即操作，等待 7-11 秒让 Baxia 检测状态自然重置
       // 用户反馈：等待页面刷新完成后不进行任何操作，最后滑动滑块，成功率大幅提升
+      // 2026-07-31 优化：从 3-7 秒增加到 8-15 秒
+      // 2026-08-01 优化：从 8-15 秒增加到 20-40 秒，但又导致 170s 超时
+      // 2026-08-01 二次优化：从 20-40 秒调整到 15-25 秒，但 3 次拖动 + 1 次冷静期仍达 133-171s
+      // 2026-08-01 三次优化：从 15-25 秒调整到 10-15 秒
+      // 2026-08-01 五次优化：从 10-15 秒调整到 7-11 秒
+      // 原因：新增拖动前真人行为模拟（每次 2-4 秒 × 4 次 = 8-16 秒），
+      //       需要缩短冷静期给行为模拟留出时间余量。
+      //       4 次拖动 + 行为模拟 + 7-11 秒冷静期 = ~130-150s，在 170s 超时内留有余量。
       if (needCooldownAfterHumanAction) {
         needCooldownAfterHumanAction = false;
-        const cooldownMs = 3000 + Math.floor(Math.random() * 4000);  // 3-7 秒
+        const cooldownMs = 7000 + Math.floor(Math.random() * 4000);  // 7-11 秒
         console.log(`[SliderSolver] 真人行动：页面刷新完成，等待 ${cooldownMs}ms 冷静期（不进行任何操作）...`);
         await page.waitForTimeout(cooldownMs);
         console.log(`[SliderSolver] 冷静期结束，开始检测滑块`);
@@ -2301,6 +2407,36 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
 
       console.log(`[SliderSolver] 检测到滑块: selector=${detected.selector}`);
       const frame = detected.iframe || page.mainFrame();
+
+      // === punish URL 处理（2026-07-31 修正 + 2026-08-01 优化） ===
+      // 重要纠错：此前将 "punish URL 含 login.token" 误判为 cookie_invalid 立即快速失败，
+      // 导致 Cookie 有效的账号（首页和消息页都能正常加载）被错误标记为 Cookie 失效，
+      // 今日成功率 0%。
+      //
+      // 真相：mtop.taobao.idlemessage.pc.login.token 是 WS token 刷新 API 的名字，
+      // Baxia 挑战该 API 时 iframe URL 会含 login.token，但这并不代表 Cookie 失效。
+      // Cookie 是否失效只能通过 checkLoginPage 检测真实登录页跳转来判断。
+      //
+      // 当前策略（2026-08-01 六次优化）：所有 punish URL 统一视为 account_punished（可拖动，限制 2 次重试）。
+      // 原先 4 次拖动，但 Playwright 的 CDP 事件被 FireyeJS 识别为机器人，4 次都失败。
+      // 现在改为 2 次拖动，快速失败后交给 Python patchright fallback（自动清理 CDP 痕迹）。
+      // 2 次拖动 + 1 次冷静期 = ~40-60s，在 80s Playwright 超时内留有余量。
+      // 数据分析显示：Playwright 成功的账号通常是第 1-2 次拖动就通过，2 次足够。
+      // Cookie 真正失效时 2 次失败已足够确认，避免浪费时间。
+      const punishInfo = await checkPunishedFrame(page);
+      if (punishInfo.punished) {
+        // 2026-08-01 优化：检测到 punish 状态时直接快速失败，不拖动
+        // 原因：Playwright CDP 事件被 FireyeJS 识别为机器人，punish 状态下拖动 100% 失败。
+        //       快速失败后交给 Python patchright fallback（有独立的反检测能力）。
+        //       节省 10 秒 Playwright 拖动时间，给 Python fallback 更多时间。
+        console.warn(`[SliderSolver] 账号被 Baxia 风控惩罚（punish 状态），跳过 Playwright 拖动，直接交给 Python fallback`);
+        lastError = '账号被 Baxia 风控惩罚（punish 状态），跳过 Playwright 拖动';
+        attemptsDetail.push({
+          attemptNo: attempt, solveScheme: 'playwright', dragMethod: 'none', speedStrategy: 'none',
+          success: false, durationMs: 0, errorMessage: 'account_punished_skip_drag',
+        });
+        break;
+      }
 
       // === 调试：打印所有 frame 的 HTML 结构和截图 ===
       if (attempt === 1) {
@@ -2396,8 +2532,32 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       console.log(`[SliderSolver] 开始拖动滑块: startX=${startX}, distance=${trackWidth}, attempt=${attempt}`);
       // 拖动前截图（视觉复盘）
       await saveDebugScreenshot(page, `slider-pre-${attempt}`);
-      // 阅读弹窗的短暂停顿
-      await page.waitForTimeout(400 + Math.random() * 700);
+      // === 拖动前真人行为模拟（2026-08-01 优化） ===
+      // 问题：从日志看，拖动后立即出现 .errloading，FireyeJS 在拖动过程中就判定为机器人。
+      // 原因：FireyeJS 不仅分析拖动轨迹，还分析拖动前的鼠标行为。
+      //       机器人特征：页面加载后鼠标完全静止，直到拖动时才突然移动。
+      //       真人特征：看到滑块后鼠标会在页面上移动、滚动页面、犹豫一下再拖动。
+      // 优化：拖动前模拟真人浏览行为（鼠标移动 + 页面滚动 + 犹豫停顿），
+      //       让 FireyeJS 收到更多"真人"行为数据，降低机器人判定概率。
+      try {
+        // 1. 在页面上随机移动鼠标 2-3 次（模拟真人看到滑块后鼠标的随机移动）
+        const viewportWidth = page.viewportSize()?.width || 1280;
+        const viewportHeight = page.viewportSize()?.height || 720;
+        for (let m = 0; m < 2 + Math.floor(Math.random() * 2); m++) {
+          const rx = 100 + Math.random() * (viewportWidth - 200);
+          const ry = 100 + Math.random() * (viewportHeight - 200);
+          await page.mouse.move(rx, ry, { steps: 3 + Math.floor(Math.random() * 5) });
+          await page.waitForTimeout(200 + Math.random() * 400);
+        }
+        // 2. 鼠标移动到滑块附近（但不是直接到滑块中心）
+        await page.mouse.move(startX + (Math.random() - 0.5) * 60, startY + (Math.random() - 0.5) * 40, { steps: 5 });
+        await page.waitForTimeout(300 + Math.random() * 500);
+        // 3. 阅读弹窗的停顿（真人看到滑块后会停留 1-2 秒阅读弹窗内容）
+        await page.waitForTimeout(800 + Math.random() * 1200);
+      } catch (e) {
+        // 行为模拟失败不影响拖动流程
+        console.log(`[SliderSolver] 拖动前行为模拟失败（可忽略）: ${safeErrorType(e)}`);
+      }
       // === 成功率统计：记录本次 attempt 的方案/方法/策略 ===
       const attemptStartTime = Date.now();
       const dragMethod = attempt % 2 === 0 ? 'out_container' : 'in_container';
@@ -2431,7 +2591,10 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
       }
 
       // 等待验证结果
-      await page.waitForTimeout(2000 + Math.random() * 1200);
+      // 关键修复（2026-07-31 事故）：从 2 秒增加到 3 秒
+      // Baxia punish 场景下验证可能需要 3-5 秒，2 秒不够。
+      // 配合 checkSolved 中的 3 次等待重试（每次 3 秒），总共最多 12 秒验证时间。
+      await page.waitForTimeout(3000 + Math.random() * 1500);
       // 拖动后截图
       const postShot = await saveDebugScreenshot(page, `slider-post-${attempt}`);
       if (postShot) screenshotPath = postShot;
@@ -2504,7 +2667,13 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
         console.log(`[SliderSolver] 检测到失败提示，点击弹窗触发新滑块 (${clickRetryCount}/${MAX_CLICK_RETRIES})`);
         await clickRetryToResetSlider(page, ownerFrame || frame, retryCheck.retryTarget);
         // 等待新滑块加载（点击后弹窗会重新加载，可能伴随转圈动画，需足够等待）
-        await page.waitForTimeout(2500);
+        // 2026-08-01 优化：从 2.5 秒增加到 5-8 秒，但又调整到 3-5 秒
+        // 原因：Baxia 拖动失败后会进入"惩罚态评估期"，立即重试会被判定为机器人连续操作。
+        // 3-5 秒等待让 Baxia 重新评估会话状态，同时避免总耗时超过 170s 整体超时。
+        // 4 次 drag Attempts + 2 次冷静期（15-25s）+ 2 次失败等待（3-5s）= ~124-144s，在 170s 内。
+        const retryWaitMs = 3000 + Math.floor(Math.random() * 2000);  // 3-5 秒
+        console.log(`[SliderSolver] 拖动失败后等待 ${retryWaitMs}ms 让 Baxia 重新评估会话状态...`);
+        await page.waitForTimeout(retryWaitMs);
 
         // 场景5：点击重试后检测"刷新页面"小弹窗（多次失败后会出现）
         if (await checkRefreshDialog(page)) {

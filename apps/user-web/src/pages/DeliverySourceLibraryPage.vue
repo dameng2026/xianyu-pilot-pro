@@ -1166,15 +1166,19 @@ async function analyzeSource(row) {
     selected.value = { ...(selected.value || {}), ...data.source }
     configuredGoods.value = data.configuredGoods
     recommendedGoods.value = data.candidates
-    goodsView.value = 'recommend'
     recommendedHint.value = data.message || (data.aiEnabled === true
       ? 'AI 已根据标题、正文和备注给出匹配候选。'
       : 'AI 当前未启用，已使用本地规则给出匹配候选。')
     selectedGoodsIds.value = normalizedRecommendedGoods.value
       .filter(rowItem => !rowItem.configured)
       .map(rowItem => rowItem.id)
-    if (!recommendedGoods.value.length) {
-      success.value = recommendedHint.value || '暂未匹配到适合的商品'
+    // 有推荐商品时显示推荐视图；无推荐时回退到"全部商品"视图，
+    // 确保用户始终能看到与商品管理一致的最新商品列表。
+    if (data.candidates.length > 0) {
+      goodsView.value = 'recommend'
+    } else {
+      goodsView.value = 'all'
+      success.value = recommendedHint.value || '暂未匹配到适合的商品，已展示全部商品供手动配置'
     }
   } catch (e) {
     recommendedGoods.value = []

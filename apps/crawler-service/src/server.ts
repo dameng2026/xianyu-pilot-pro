@@ -1,6 +1,10 @@
-import express, { type NextFunction, type Request, type Response } from 'express';
+﻿import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
+import { spawn } from 'child_process';
+import path from 'path';
+import os from 'os';
+import fs from 'fs';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { parseGoofishStoreUrl } from './crawler/parseGoofishStoreUrl.js';
 import { closeQueue, goofishCrawlQueue } from './queue/index.js';
@@ -12,6 +16,7 @@ import { resolveStoreUserId } from './crawler/goofish.js';
 import { solveGoofishSlider, isHeadedDisplayAvailable, type SlideSolveResult } from './crawler/sliderSolver.js';
 import { captureQrCodeOnly, completeQrLoginSession } from './crawler/qrLoginSolver.js';
 import { processRegistry, processMonitor } from './crawler/processRegistry.js';
+import { cacheX5sec, getCachedX5sec, evictCachedX5sec, injectX5secIntoCookie, cookieHasX5sec, closeX5secCache } from './x5secCache.js';
 import {
   isCorsOriginAllowed,
   isProductionLike,
@@ -25,6 +30,246 @@ import {
   safeErrorType,
   toPublicCrawlerError,
 } from './policy.js';
+
+// ============================================================
+// Python patchright 滑块求解 fallback
+// ============================================================
+// 2026-08-01 优化：Playwright 的 CDP 鼠标事件被 Baxia FireyeJS 识别为机器人
+// （拖动后立即出现 .errloading），即使轨迹模拟再像真人也无法通过。
+// patchright 是 Playwright 的反检测分支，自动清理 CDP 痕迹（cdc_/__playwright__/Runtime.enable），
+// 从根本上解决 Baxia 通过 CDP 协议识别 Playwright 控制的问题。
+//
+// 策略：当 Playwright 求解失败且失败原因是 slider_fail（非 cookie_invalid）时，
+// 调用 Python sliderSolve.py 重试。Python 有独立的 120s 超时。
+const PYTHON_SOLVER_SCRIPT = process.env.PYTHON_SOLVER_SCRIPT || '/app/sliderSolve.py';
+const PYTHON_BINARY = process.env.PYTHON_BINARY || 'python3';
+// 2026-08-01 优化：Python fallback 超时从 120s 增加到 155s
+// 原因：Playwright 超时从 50s 降到 10s，Python fallback 获得更多时间。
+//       实测 Python 脚本启动+Chrome启动+导航+检测滑块需要约 30-40s，
+//       155s 给拖动阶段留 100s+（足够 2 次拖动+验证+冷却）。
+// 总时间预算：Playwright 10s + Python 155s = 165s（在 170s 整体超时以内）
+const PYTHON_FALLBACK_TIMEOUT_MS = 155_000;  // 155 秒（Python 独立超时）
+
+// 2026-08-01 优化：Python fallback 全局并发控制
+// 2026-08-01 二次优化：移除全局锁，允许 2 个并发（匹配 SOLVE_WORKER_CONCURRENCY=2）
+// 原因：全局锁导致第二个请求直接失败，6 个活跃账号只有 1 个能求解。
+//       服务器有 16GB 内存，完全支持 2 个 Chrome 进程并行。
+//       Python 脚本的 _FileLock 已移除（每个进程用独立 temp 目录，不冲突）。
+let pythonFallbackRunning = 0;  // 当前运行的 Python fallback 数量
+const MAX_PYTHON_FALLBACK_CONCURRENCY = 2;  // 最大并发数
+
+interface PythonSolveResult {
+  ok: boolean;
+  solved: boolean;
+  captchaDetected: boolean;
+  attempts: number;
+  error?: string;
+  durationMs: number;
+  cookies?: string;
+  x5sec?: string;
+}
+
+async function solveWithPythonPatchright(params: {
+  cookieStr: string;
+  targetUrl?: string;
+  proxy?: { server: string; username?: string; password?: string };
+  maxRetries?: number;
+}): Promise<PythonSolveResult> {
+  const startTime = Date.now();
+  const { cookieStr, targetUrl, proxy, maxRetries } = params;
+
+  // 2026-08-01 优化：允许 2 个 Python fallback 并发（原全局锁已移除）
+  // 原因：全局锁导致第二个请求直接失败，6 个活跃账号只有 1 个能求解。
+  //       服务器有 16GB 内存，完全支持 2 个 Chrome 进程并行。
+  if (pythonFallbackRunning >= MAX_PYTHON_FALLBACK_CONCURRENCY) {
+    console.log(`[SliderSolver-Python] 已有 ${pythonFallbackRunning} 个 Python fallback 在运行，跳过本次（避免资源耗尽）`);
+    return {
+      ok: false, solved: false, captchaDetected: false, attempts: 0,
+      error: `Python fallback 已有 ${pythonFallbackRunning} 个实例在运行，跳过本次`,
+      durationMs: Date.now() - startTime,
+    };
+  }
+  pythonFallbackRunning++;
+
+  // 写入临时 cookie 文件
+  const tmpDir = os.tmpdir();
+  const cookieFile = path.join(tmpDir, `slider-cookie-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.txt`);
+  try {
+    fs.writeFileSync(cookieFile, cookieStr, { mode: 0o600 });
+  } catch (e: any) {
+    pythonFallbackRunning--;
+    return {
+      ok: false, solved: false, captchaDetected: false, attempts: 0,
+      error: `Python fallback: 写入 cookie 文件失败: ${safeErrorType(e)}`,
+      durationMs: Date.now() - startTime,
+    };
+  }
+
+  const args = [
+    PYTHON_SOLVER_SCRIPT,
+    '--cookie-file', cookieFile,
+    // 2026-08-01 优化：max-retries 设为 1
+    // 原因：sliderSolve.py 内部 attempt>=1 即返回（只拖动 1 次）。
+    //       减少重试次数避免 Baxia 加码惩罚（每次拖动失败都会加重风控）。
+    //       第 1 次失败后直接返回，不点重试按钮，避免触发加码。
+    '--max-retries', String(Math.max(1, Math.min(maxRetries || 1, 1))),
+    // 2026-08-01 修复：用 temp 而不是 seed
+    // 原因：seed 策略每次求解都 copytree 克隆 90MB+ profile 到 /tmp，
+    // 容器 /tmp 是 tmpfs 只有 512MB，几次求解就塞满导致 [Errno 28] No space left on device。
+    // temp 策略创建空目录，不克隆，实测也能通过指纹探针（patchright + WebGL patch 足够）。
+    '--profile-strategy', 'temp',
+  ];
+  if (targetUrl) {
+    args.push('--target-url', targetUrl);
+  }
+  if (proxy?.server) {
+    args.push('--proxy-server', proxy.server);
+    if (proxy.username) args.push('--proxy-username', proxy.username);
+    if (proxy.password) args.push('--proxy-password', proxy.password);
+  }
+
+  console.log(`[SliderSolver-Python] 启动 Python patchright 求解: ${PYTHON_BINARY} ${args.join(' ').replace(cookieFile, '<cookie-file>')}`);
+
+  return new Promise<PythonSolveResult>((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let resolved = false;
+    // 2026-08-01 修复：detached: true 让 Python 成为进程组组长，
+    // 这样超时时可以用 process.kill(-pid) kill 整个进程组（包括 Chrome 子进程）。
+    // 原先 child.kill('SIGKILL') 只 kill Python 主进程，Chrome 子进程变孤儿积累。
+    const child = spawn(PYTHON_BINARY, args, {
+      cwd: '/app',
+      detached: true,
+      // 2026-08-01 修复：显式设置 stdio，确保 stdout/stderr 是 pipe
+      // 原因：detached: true 时默认 stdio 可能不正确，导致 child.stdout 为 null
+      // 或 data 事件不触发，Python 输出无法被捕获。
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        DISPLAY: process.env.DISPLAY || ':99',
+        // 2026-08-01 优化：禁用 Python 输出缓冲，确保日志实时输出到 stdout/stderr
+        // 原因：server.ts 通过 spawn pipe 捕获 stdout，但 Python 默认块缓冲，
+        // 导致日志在超时时还未刷新到 pipe，stdout 为空无法调试。
+        PYTHONUNBUFFERED: '1',
+        PYTHONIOENCODING: 'utf-8',
+      },
+    });
+    // 2026-08-01 调试：打印 child.pid 和 stdout/stderr 状态
+    console.log(`[SliderSolver-Python] spawn 完成 pid=${child.pid} stdout=${child.stdout ? 'pipe' : 'null'} stderr=${child.stderr ? 'pipe' : 'null'}`);
+
+    const timeoutId = setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      // 2026-08-01 修复：kill 整个进程组（Python + Chrome 子进程），避免孤儿 Chrome 积累
+      try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch {}
+      try { child.kill('SIGKILL'); } catch {}
+      try { fs.unlinkSync(cookieFile); } catch {}
+      // 2026-08-01 优化：超时时也打印 stderr，用于调试 Python 脚本卡在哪一步
+      if (stderr) {
+        const stderrLines = stderr.split('\n').filter(l => l.trim()).slice(-15);
+        console.log(`[SliderSolver-Python] 超时 stderr（最后15行）:\n${stderrLines.join('\n')}`);
+      }
+      if (stdout) {
+        const stdoutLines = stdout.split('\n').filter(l => l.trim()).slice(-5);
+        console.log(`[SliderSolver-Python] 超时 stdout（最后5行）:\n${stdoutLines.join('\n')}`);
+      }
+      resolve({
+        ok: false, solved: false, captchaDetected: false, attempts: 0,
+        error: `Python fallback 超时（${PYTHON_FALLBACK_TIMEOUT_MS / 1000}秒）`,
+        durationMs: Date.now() - startTime,
+      });
+    }, PYTHON_FALLBACK_TIMEOUT_MS);
+    timeoutId.unref?.();
+
+    child.stdout.on('data', (data: Buffer) => {
+      const text = data.toString();
+      stdout += text;
+      // 2026-08-01 调试：实时转发 stdout，确认 data 事件是否触发
+      const firstLine = text.split('\n')[0]?.substring(0, 120);
+      console.log(`[SliderSolver-Python] stdout>> ${firstLine}`);
+    });
+    child.stderr.on('data', (data: Buffer) => {
+      const text = data.toString();
+      stderr += text;
+      // 2026-08-01 调试：实时转发 stderr
+      const firstLine = text.split('\n')[0]?.substring(0, 120);
+      console.log(`[SliderSolver-Python] stderr>> ${firstLine}`);
+    });
+
+    child.on('close', (code: number) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeoutId);
+      // 2026-08-01 修复：Python 退出后 kill 进程组，清理可能残留的 Chrome 子进程
+      try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch {}
+      try { fs.unlinkSync(cookieFile); } catch {}
+
+      const durationMs = Date.now() - startTime;
+      // 2026-08-01 优化：Python 脚本的 log 函数输出到 stdout（不是 stderr），
+      // 所以需要同时打印 stdout 和 stderr 用于调试
+      if (stdout) {
+        const stdoutLines = stdout.split('\n').filter(l => l.trim()).slice(-15);
+        console.log(`[SliderSolver-Python] stdout（最后15行）:\n${stdoutLines.join('\n')}`);
+      }
+      if (stderr) {
+        const stderrLines = stderr.split('\n').filter(l => l.trim()).slice(-10);
+        console.log(`[SliderSolver-Python] stderr（最后10行）:\n${stderrLines.join('\n')}`);
+      }
+
+      if (code !== 0) {
+        // 2026-08-01 优化：错误信息同时包含 stdout 和 stderr 的最后几行
+        const lastStdout = stdout.split('\n').filter(l => l.trim()).slice(-3).join(' ');
+        const lastStderr = stderr.split('\n').filter(l => l.trim()).slice(-3).join(' ');
+        const errorDetail = (lastStderr || lastStdout || '').substring(0, 200);
+        resolve({
+          ok: false, solved: false, captchaDetected: false, attempts: 0,
+          error: `Python fallback 退出码 ${code}: ${errorDetail}`,
+          durationMs,
+        });
+        return;
+      }
+
+      // 从 stdout 提取最后一行 JSON（Python 脚本可能输出多行，最后一行是结果）
+      const lines = stdout.split('\n').filter(l => l.trim());
+      const lastLine = lines[lines.length - 1];
+      try {
+        const result = JSON.parse(lastLine);
+        resolve({
+          ok: !!result.ok,
+          solved: !!result.solved,
+          captchaDetected: !!result.captchaDetected,
+          attempts: result.attempts || 0,
+          error: result.error,
+          durationMs,
+          cookies: result.cookies,
+          x5sec: result.x5sec,
+        });
+      } catch (e: any) {
+        resolve({
+          ok: false, solved: false, captchaDetected: false, attempts: 0,
+          error: `Python fallback 解析输出失败: ${safeErrorType(e)} stdout=${lastLine.substring(0, 200)}`,
+          durationMs,
+        });
+      }
+    });
+
+    child.on('error', (e: Error) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeoutId);
+      try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch {}
+      try { fs.unlinkSync(cookieFile); } catch {}
+      resolve({
+        ok: false, solved: false, captchaDetected: false, attempts: 0,
+        error: `Python fallback 启动失败: ${safeErrorType(e)}`,
+        durationMs: Date.now() - startTime,
+      });
+    });
+  }).finally(() => {
+    // 2026-08-01 优化：无论 Python fallback 成功/失败/超时，都释放全局锁
+    pythonFallbackRunning--;
+  });
+}
 
 const app = express();
 app.disable('x-powered-by');
@@ -335,6 +580,20 @@ async function handleGoofishSearch(req: Request, res: Response, rawInput: Record
   try {
     const tenantId = tenantIdFrom(req);
     console.log(`[SearchCrawler] requestId=${(req as RequestWithTrace).requestId} tenantId=${tenantId} page=${input.page} pageSize=${input.pageSize} hasCookie=${!!input.cookie}`);
+
+    // 2026-08-01 优化：注入缓存的 x5sec（如果有），绕过 Baxia 风控
+    if (input.cookie && !cookieHasX5sec(input.cookie)) {
+      try {
+        const cachedX5sec = await getCachedX5sec(input.cookie);
+        if (cachedX5sec) {
+          input.cookie = injectX5secIntoCookie(input.cookie, cachedX5sec);
+          console.log(`[SearchCrawler] requestId=${(req as RequestWithTrace).requestId} ✓ 注入缓存 x5sec（免滑块）`);
+        }
+      } catch (e: any) {
+        console.warn(`[SearchCrawler] x5sec 注入失败（降级为原始 cookie）: ${e?.message || e}`);
+      }
+    }
+
     const releaseBrowser = tryAcquireBrowserSlot(tenantId);
     if (!releaseBrowser) return browserCapacityUnavailable(res);
     try {
@@ -388,6 +647,20 @@ app.post('/api/goofish/item-detail', async (req, res) => {
     }
 
     console.log(`[ItemDetailCrawler] requestId=${(req as RequestWithTrace).requestId} tenantId=${tenantId} itemId=${itemId} hasCookie=${!!cookieStr}`);
+
+    // 2026-08-01 优化：注入缓存的 x5sec（如果有），绕过 Baxia 风控
+    if (cookieStr && !cookieHasX5sec(cookieStr)) {
+      try {
+        const cachedX5sec = await getCachedX5sec(cookieStr);
+        if (cachedX5sec) {
+          cookieStr = injectX5secIntoCookie(cookieStr, cachedX5sec);
+          console.log(`[ItemDetailCrawler] requestId=${(req as RequestWithTrace).requestId} ✓ 注入缓存 x5sec（免滑块）`);
+        }
+      } catch (e: any) {
+        console.warn(`[ItemDetailCrawler] x5sec 注入失败（降级为原始 cookie）: ${e?.message || e}`);
+      }
+    }
+
     const releaseBrowser = tryAcquireBrowserSlot(tenantId);
     if (!releaseBrowser) return browserCapacityUnavailable(res);
     try {
@@ -434,8 +707,20 @@ app.post('/api/import/goofish', async (req, res) => {
         error: e.message,
       });
     }
-
     let { userId, normalizedUrl } = parseResult;
+
+    // 2026-08-01 优化：注入缓存的 x5sec（如果有），绕过 Baxia 风控
+    if (cookie && !cookieHasX5sec(cookie)) {
+      try {
+        const cachedX5sec = await getCachedX5sec(cookie);
+        if (cachedX5sec) {
+          cookie = injectX5secIntoCookie(cookie, cachedX5sec);
+          console.log(`[ImportCrawler] requestId=${(req as RequestWithTrace).requestId} ✓ 注入缓存 x5sec（免滑块）`);
+        }
+      } catch (e: any) {
+        console.warn(`[ImportCrawler] x5sec 注入失败（降级为原始 cookie）: ${e?.message || e}`);
+      }
+    }
 
     // 当 URL 中没有 userId 参数（如首页分享链接 https://www.goofish.com/?spm=...），
     // 通过浏览器实际访问页面解析出店铺 userId，再提交爬取任务。
@@ -774,6 +1059,33 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
     const resolvedHeadless = productionLike
       ? (isHeadedDisplayAvailable() ? false : true)  // 生产环境：有显示器（Xvfb）就用有头模式，否则 headless
       : (typeof headless === 'boolean' ? headless : undefined);
+
+    // 2026-08-01 优化：先查 x5sec 缓存，命中则直接返回（跳过滑块求解，实现免滑块）
+    // 场景：同一账号短时间内多次触发风控时，第一次求解成功后 x5sec 已缓存，
+    //       后续请求直接返回缓存的 x5sec，无需再启动 Chrome 拖动滑块。
+    if (!cookieHasX5sec(cookieStr)) {
+      try {
+        const cachedX5sec = await getCachedX5sec(cookieStr);
+        if (cachedX5sec) {
+          const requestId = (req as RequestWithTrace).requestId;
+          const enhancedCookie = injectX5secIntoCookie(cookieStr, cachedX5sec);
+          console.log(`[SliderSolver] requestId=${requestId} ✓ x5sec 缓存命中，跳过滑块求解（免滑块）`);
+          return res.status(200).json({
+            ok: true,
+            solved: true,
+            captchaDetected: false,
+            attempts: 0,
+            durationMs: 0,
+            cookies: enhancedCookie,
+            x5sec: cachedX5sec,
+            cached: true,
+          });
+        }
+      } catch (e: any) {
+        console.warn(`[SliderSolver] x5sec 缓存查询失败（降级为正常求解）: ${e?.message || e}`);
+      }
+    }
+
     let safeTargetUrl;
     try {
       safeTargetUrl = normalizeGoofishTargetUrl(targetUrl);
@@ -810,25 +1122,36 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
     // 但 crawler-service 内部仍在卡着（BrowserSlot 5 分钟超时才释放槽位）。
     // 修复：用 Promise.race 添加整体超时，170 秒后返回超时响应，释放槽位。
     // solveGoofishSlider 在后台继续执行，其 finally 块最终会清理浏览器资源。
+    //
+    // 2026-08-01 优化：Playwright 失败后启用 Python patchright fallback。
+    // 整体超时 170s 拆分：Playwright 10s + Python fallback 160s = 170s
+    // 2026-08-01 优化：Playwright 超时从 50s 降到 10s。
+    // 原因：数据分析显示 Playwright 的 CDP 事件被 FireyeJS 识别为机器人，
+    //       拖动 100% 失败。50s 内 2 次拖动不仅浪费时间，还触发 Baxia 风控，
+    //       导致 Python fallback 启动时账号已是 punish 状态。
+    //       降到 10s 只做快速检测（页面加载 + 滑块检测），不拖动，
+    //       把时间留给 Python patchright fallback（真正有效的方案）。
+    //       如果 Playwright 10s 内检测到无需验证（check_solved），直接返回成功。
     const SOLVE_OVERALL_TIMEOUT_MS = 170_000;
+    const PLAYWRIGHT_TIMEOUT_MS = 10_000;  // Playwright 10s 仅做快速检测
     const requestId = (req as RequestWithTrace).requestId;
 
-    const result = await (async () => {
+    // 第一阶段：Playwright 求解（80s 超时）
+    const playwrightResult = await (async () => {
       let solveTimeoutId: NodeJS.Timeout | undefined;
       try {
         const timeoutPromise = new Promise<SlideSolveResult>((resolve) => {
           solveTimeoutId = setTimeout(() => {
-            console.warn(`[SliderSolver] requestId=${requestId} 整体超时 ${SOLVE_OVERALL_TIMEOUT_MS}ms，返回超时响应`);
+            console.warn(`[SliderSolver] requestId=${requestId} Playwright 超时 ${PLAYWRIGHT_TIMEOUT_MS}ms`);
             resolve({
               ok: false,
               solved: false,
               captchaDetected: false,
               attempts: 0,
-              error: `滑块求解整体超时（${SOLVE_OVERALL_TIMEOUT_MS / 1000}秒），浏览器启动或页面操作卡住，可能资源耗尽或网络异常`,
-              durationMs: SOLVE_OVERALL_TIMEOUT_MS,
+              error: `Playwright 求解超时（${PLAYWRIGHT_TIMEOUT_MS / 1000}秒）`,
+              durationMs: PLAYWRIGHT_TIMEOUT_MS,
             });
-          }, SOLVE_OVERALL_TIMEOUT_MS);
-          // unref 让定时器不阻止进程退出
+          }, PLAYWRIGHT_TIMEOUT_MS);
           solveTimeoutId.unref?.();
         });
         return await Promise.race([
@@ -839,24 +1162,124 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
             maxRetries: Math.max(1, Math.min(Number(maxRetries) || 5, 5)),
             timeoutMs: Math.max(5000, Math.min(Number(timeoutMs) || 30000, 180000)),
             proxy: safeProxy,
-            // profile 策略：persistent（默认持久化，累积历史降低风控）/ seed / temp
             profileStrategy: (profileStrategy === 'seed' || profileStrategy === 'temp') ? profileStrategy : 'persistent',
-            // 半自动人工兜底：全自动失败后保留窗口供人工拖拽
-            semiAutoFallback: semiAutoFallback === true,
+            semiAutoFallback: false,  // Python fallback 阶段不启用半自动兜底
           }),
           timeoutPromise,
         ]);
       } finally {
         if (solveTimeoutId) clearTimeout(solveTimeoutId);
         releaseBrowser();
+        // 2026-08-01 修复：Promise.race 超时后 solveGoofishSlider 在后台继续运行，
+        // Chrome 进程不被清理导致累积（16个 Chrome 进程 → OOM → browser_crashed）。
+        // 主动 pkill Playwright 的 chrome-slider-warm-* 目录的 Chrome 进程。
+        // Python fallback 用不同的 userDataDir（chrome-slider-temp-*），不受影响。
+        try {
+          const { execSync } = await import('child_process');
+          execSync(`pkill -9 -f 'chrome-slider-warm-' 2>/dev/null || true`, { stdio: 'ignore', timeout: 5000 });
+          // 清理孤儿 Chrome 子进程（PPID=1 的 /opt/google/chrome/chrome 进程）
+          if (process.platform !== 'win32' && process.platform !== 'darwin') {
+            const orphanOutput = execSync(
+              "ps -eo pid,ppid,cmd --no-headers | grep '/opt/google/chrome/chrome' | grep -v grep | awk '$2==1{print $1}'",
+              { encoding: 'utf-8', timeout: 5000 },
+            );
+            const orphanPids = orphanOutput.trim().split('\n').map((s: string) => Number(s.trim())).filter((n: number) => n >= 100);
+            for (const pid of orphanPids) {
+              try { process.kill(pid, 'SIGKILL'); } catch { /* 进程已退出，忽略 */ }
+            }
+          }
+          console.log(`[SliderSolver] requestId=${requestId} Playwright 超时后已清理 Chrome 进程`);
+        } catch { /* ignore */ }
       }
     })();
+
+    let result: SlideSolveResult = playwrightResult;
+    // 如果 Playwright 求解成功，从 cookies 中解析 x5sec（用于缓存复用）
+    if (result.solved && result.cookies) {
+      const x5secMatch = result.cookies.match(/(?:^|;\s*)x5sec=([^;]+)/);
+      if (x5secMatch) {
+        result.x5sec = x5secMatch[1];
+        console.log(`[SliderSolver] requestId=${requestId} ✓ 从 Playwright cookies 中提取到 x5sec (长度=${x5secMatch[1].length})`);
+      }
+    }
+
+    // 第二阶段：Python patchright fallback
+    // 触发条件：Playwright 求解失败，且失败原因不是 cookie_invalid（Cookie 失效时 Python 也救不了）
+    // 排除：cookie_invalid / account_inactive / account_disabled / precheck_rejected
+    const isCookieInvalid = playwrightResult.error && (
+      playwrightResult.error.includes('Cookie Session') ||
+      playwrightResult.error.includes('Cookie 已过期') ||
+      playwrightResult.error.includes('FAIL_SYS_SESSION_EXPIRED')
+    );
+    const shouldUsePythonFallback = !playwrightResult.ok && !playwrightResult.solved && !isCookieInvalid;
+
+    if (shouldUsePythonFallback) {
+      console.log(`[SliderSolver] requestId=${requestId} Playwright 失败（非 Cookie 失效），启动 Python patchright fallback`);
+      console.log(`[SliderSolver] Playwright 失败原因: ${playwrightResult.error?.substring(0, 150)}`);
+
+      const pythonResult = await solveWithPythonPatchright({
+        cookieStr,
+        targetUrl: safeTargetUrl,
+        proxy: safeProxy,
+        maxRetries: 3,  // 2026-08-01 优化：3 次拖动（punish 状态 2 次 + 非 punish 1 次）
+      });
+
+      console.log(`[SliderSolver-Python] 结果: solved=${pythonResult.solved} ok=${pythonResult.ok} duration=${pythonResult.durationMs}ms error=${pythonResult.error?.substring(0, 100)}`);
+
+      if (pythonResult.solved) {
+        // Python 求解成功，使用 Python 结果
+        result = {
+          ok: true,
+          solved: true,
+          captchaDetected: pythonResult.captchaDetected,
+          attempts: playwrightResult.attempts + pythonResult.attempts,
+          durationMs: playwrightResult.durationMs + pythonResult.durationMs,
+          cookies: pythonResult.cookies,
+          x5sec: pythonResult.x5sec,
+        };
+        // 如果获取到 x5sec，记录日志（用于调试缓存复用方案）
+        if (pythonResult.x5sec) {
+          console.log(`[SliderSolver] requestId=${requestId} ✓ 获取到 x5sec (长度=${pythonResult.x5sec.length})，可缓存用于后续免滑块请求`);
+        }
+      } else {
+        // Python 也失败，合并错误信息
+        result = {
+          ok: false,
+          solved: false,
+          captchaDetected: playwrightResult.captchaDetected || pythonResult.captchaDetected,
+          attempts: playwrightResult.attempts + pythonResult.attempts,
+          error: `Playwright: ${playwrightResult.error?.substring(0, 100)} | Python: ${pythonResult.error?.substring(0, 100)}`,
+          durationMs: playwrightResult.durationMs + pythonResult.durationMs,
+        };
+      }
+    }
 
     // 注意：滑块求解接口不复用 toPublicCrawlerError 改写规则。
     // 该改写规则仅适用于采集类接口（搜索/详情/店铺爬取），用于告诉用户"采集被风控，先去验证"。
     // 滑块求解本身就是验证流程，套用该规则会出现"求解失败 → 请先完成验证"的自相矛盾提示，
     // 且会掩盖真实的失败原因（如"未找到滑块按钮"、"Cookie Session 已过期"等）。
     // 这里直接返回原始 error 字段，由前端根据 failureReason 分类展示。
+
+    // 2026-08-01 优化：求解成功后缓存 x5sec，后续请求可直接复用（免滑块）
+    if (result.solved && result.x5sec) {
+      try {
+        await cacheX5sec(cookieStr, result.x5sec);
+      } catch (e: any) {
+        console.warn(`[SliderSolver] requestId=${(req as RequestWithTrace).requestId} x5sec 缓存写入失败: ${e?.message || e}`);
+      }
+    } else if (result.solved && result.cookies) {
+      // 如果 result.x5sec 为空但 cookies 中包含 x5sec，尝试从 cookies 提取并缓存
+      const x5secMatch = result.cookies.match(/(?:^|;\s*)x5sec=([^;]+)/);
+      if (x5secMatch && x5secMatch[1]) {
+        result.x5sec = x5secMatch[1];
+        try {
+          await cacheX5sec(cookieStr, result.x5sec);
+        } catch (e: any) {
+          console.warn(`[SliderSolver] requestId=${(req as RequestWithTrace).requestId} x5sec 缓存写入失败: ${e?.message || e}`);
+        }
+      }
+    }
+
     const response = {
       ...result,
       ...(productionLike ? { screenshotPath: undefined } : {}),
@@ -873,6 +1296,53 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
       attempts: 0,
       durationMs: 0,
     });
+  }
+});
+
+// ---- POST /api/goofish/x5sec-cache ----  x5sec 缓存管理（查询/清除）
+// 用于调试和手动管理 x5sec 缓存：
+// - GET: 查询 cookie 对应的缓存 x5sec（不返回明文，只返回长度和前10字符）
+// - DELETE: 清除 cookie 对应的 x5sec 缓存（下次请求会重新触发滑块求解）
+app.post('/api/goofish/x5sec-cache', async (req, res) => {
+  try {
+    const action = String(req.body?.action || 'get').toLowerCase();
+    let cookieStr: string;
+    try {
+      cookieStr = normalizeCookieInput(req.body?.cookie);
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error instanceof Error ? error.message : 'Cookie is invalid' });
+    }
+
+    if (action === 'get') {
+      const cached = await getCachedX5sec(cookieStr);
+      const hasInCookie = cookieHasX5sec(cookieStr);
+      return res.json({
+        ok: true,
+        cached: !!cached,
+        cachedLength: cached?.length || 0,
+        cachedPreview: cached ? cached.substring(0, 10) + '...' : null,
+        inCookie: hasInCookie,
+      });
+    } else if (action === 'inject') {
+      // 2026-08-02 新增：返回注入 x5sec 后的 cookie，供 automation-service WS 重连前使用
+      if (cookieHasX5sec(cookieStr)) {
+        return res.json({ ok: true, injected: false, reason: 'cookie_already_has_x5sec', cookie: cookieStr });
+      }
+      const cached = await getCachedX5sec(cookieStr);
+      if (!cached) {
+        return res.json({ ok: true, injected: false, reason: 'cache_miss', cookie: cookieStr });
+      }
+      const enhancedCookie = injectX5secIntoCookie(cookieStr, cached);
+      console.log(`[X5secCache] inject 请求命中缓存，返回注入后的 cookie (长度=${enhancedCookie.length})`);;
+      return res.json({ ok: true, injected: true, reason: 'cache_hit', cookie: enhancedCookie, x5sec: cached, x5secLength: cached.length });
+    } else if (action === 'evict' || action === 'delete') {
+      await evictCachedX5sec(cookieStr);
+      return res.json({ ok: true, evicted: true });
+    } else {
+      return res.status(400).json({ ok: false, error: `未知的 action: ${action}（支持: get, inject, evict）` });
+    }
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: safeErrorType(e) });
   }
 });
 
@@ -1283,7 +1753,7 @@ async function start() {
     const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()));
     await closeAllQrLoginSessions();
     await serverClosed;
-    await Promise.allSettled([closeQueue(), closePool()]);
+    await Promise.allSettled([closeQueue(), closePool(), closeX5secCache()]);
     clearTimeout(forcedExit);
   };
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
@@ -1292,6 +1762,6 @@ async function start() {
 
 start().catch(async (error) => {
   console.error(`[Server] operation=start errorType=${safeErrorType(error)}`);
-  await Promise.allSettled([closeAllQrLoginSessions(), closeQueue(), closePool()]);
+  await Promise.allSettled([closeAllQrLoginSessions(), closeQueue(), closePool(), closeX5secCache()]);
   process.exitCode = 1;
 });

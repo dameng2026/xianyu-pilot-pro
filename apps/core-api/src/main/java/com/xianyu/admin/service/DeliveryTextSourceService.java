@@ -172,6 +172,8 @@ public class DeliveryTextSourceService {
     }
 
     public List<Map<String, Object>> candidateGoods(Long tenantId) {
+        // 与商品管理页面（XianyuGoodsMapper.list）保持一致：排除账号已软删除的商品，
+        // 避免货源库页面显示商品管理页面已不可见的"旧数据"。
         return jdbcTemplate.queryForList(
                 "SELECT g.id, g.account_id AS accountId, g.external_goods_id AS externalGoodsId, g.title, g.description, " +
                         "g.detail_info AS detailInfo, g.category, g.price, g.cover_pic AS coverPic, g.image_url AS imageUrl, g.status, " +
@@ -179,7 +181,9 @@ public class DeliveryTextSourceService {
                         "a.remark AS accountRemark, a.external_uid AS accountExternalUid " +
                         "FROM xianyu_goods g " +
                         "LEFT JOIN xianyu_account a ON a.id=g.account_id AND a.deleted=0 " +
-                        "WHERE g.tenant_id=? AND g.deleted=0 ORDER BY g.updated_time DESC, g.id DESC",
+                        "WHERE g.tenant_id=? AND g.deleted=0 " +
+                        "AND NOT EXISTS (SELECT 1 FROM xianyu_account acc WHERE acc.tenant_id=g.tenant_id AND acc.id=g.account_id AND acc.deleted=1) " +
+                        "ORDER BY g.updated_time DESC, g.id DESC",
                 tenantId
         ).stream().map(this::normalizeGoodsRow).toList();
     }

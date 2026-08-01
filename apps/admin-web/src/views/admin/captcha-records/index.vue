@@ -463,7 +463,7 @@
           <template #header>
             <div class="table-header">
               <span>按求解方案聚合</span>
-              <span class="muted small">python_script=Python脚本 / playwright=Playwright CDP</span>
+              <span class="muted small">python_script=Python脚本 / playwright=Playwright CDP / x5sec=免滑块(缓存命中)</span>
             </div>
           </template>
           <ElTable v-loading="attemptStatsLoading" :data="attemptStats.bySolveScheme" border stripe>
@@ -892,7 +892,8 @@
     if (!dim) return '—'
     const map: Record<string, string> = {
       python_script: 'Python 脚本',
-      playwright: 'Playwright CDP'
+      playwright: 'Playwright CDP',
+      x5sec: 'x5sec 免滑块'
     }
     return map[dim] || dim
   }

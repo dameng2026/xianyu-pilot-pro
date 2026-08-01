@@ -1250,6 +1250,13 @@ public class AiBillingService {
             if (estimatedCharge > 0) return estimatedCharge;
             throw new BizException(503, "通用模型按次计费结果为零，请检查通用模型 perCallPrice 配置");
         }
+        // 生图模型按后台配置的 tokens_per_image 扣费：场景定价不得覆盖模型配置的单价。
+        // 若允许 sellChargeTokens 覆盖，则场景配置的 sell_tokens_per_image 会绕过后台模型配置，
+        // 导致用户被扣 12 token（场景配置）而非 10 token（后台模型配置）。
+        if ("image".equals(estimate.get("modelType"))) {
+            long estimatedCharge = number(estimate.get("chargeTokens"));
+            if (estimatedCharge > 0) return estimatedCharge;
+        }
         long sellChargeTokens = number(sell == null ? null : sell.get("sellChargeTokens"));
         if (sellChargeTokens > 0) {
             return sellChargeTokens;
