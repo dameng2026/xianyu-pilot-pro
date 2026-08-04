@@ -441,6 +441,21 @@ public class UserProfileService {
                 }
                 plan.put("startTime", null);
                 plan.put("endTime", null);
+                // 手动等级覆盖优先于订阅，但充值/到期时间仍以真实订阅为准
+                try {
+                    List<Map<String, Object>> subs = jdbcTemplate.queryForList(
+                            "SELECT s.start_time, s.end_time FROM billing_subscription s " +
+                                    "WHERE s.user_id=? AND s.status=1 AND s.target_type='user_account' " +
+                                    "AND (s.end_time IS NULL OR s.end_time>=NOW()) " +
+                                    "ORDER BY COALESCE(s.end_time, '9999-12-31') DESC LIMIT 1",
+                            userId);
+                    if (!subs.isEmpty()) {
+                        plan.put("startTime", subs.get(0).get("start_time"));
+                        plan.put("endTime", subs.get(0).get("end_time"));
+                    }
+                } catch (Exception ignored) {
+                    // 订阅表缺失等异常不阻塞手动等级展示
+                }
                 return plan;
             }
         } catch (DataAccessException e) {

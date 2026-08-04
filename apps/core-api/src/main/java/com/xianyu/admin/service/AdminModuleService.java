@@ -359,8 +359,10 @@ public class AdminModuleService {
                     row.put("userLevel", code);
                     row.put("userLevelName", overrideLevel == 3 ? "VIP（单店版）" : (overrideLevel >= 2 ? "SVP" : "VIP"));
                     row.put("planName", overrideLevel == 3 ? "VIP（单店版） (手动)" : (overrideLevel >= 2 ? "SVP (手动)" : "VIP (手动)"));
-                    row.put("planStartTime", null);
-                    row.put("planEndTime", null);
+                    // 手动等级覆盖优先，但充值/到期时间仍展示真实订阅时间
+                    Map<String, Object> sub = byUser.get(uid);
+                    row.put("planStartTime", sub == null ? null : sub.get("planStartTime"));
+                    row.put("planEndTime", sub == null ? null : sub.get("planEndTime"));
                 } else {
                     Map<String, Object> p = byUser.get(uid);
                     if (p != null) {
