@@ -332,12 +332,20 @@ public class AdminModuleService {
             }
 
             List<Map<String, Object>> plans = jdbcTemplate.query(
-                    "SELECT s.user_id, p.plan_code, p.plan_name FROM billing_subscription s " +
+                    "SELECT s.user_id, p.plan_code, p.plan_name, s.start_time, s.end_time FROM billing_subscription s " +
                             "JOIN billing_plan p ON p.id=s.plan_id AND p.deleted=0 " +
                             "WHERE s.user_id IN (" + placeholders + ") AND s.status=1 " +
                             "AND (s.end_time IS NULL OR s.end_time >= NOW()) " +
                             "ORDER BY s.user_id, s.end_time DESC, s.id DESC",
-                    (rs, rn) -> Map.of("userId", rs.getLong("user_id"), "planCode", normalizeUserLevel(rs.getString("plan_code")), "planName", rs.getString("plan_name")),
+                    (rs, rn) -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("userId", rs.getLong("user_id"));
+                        m.put("planCode", normalizeUserLevel(rs.getString("plan_code")));
+                        m.put("planName", rs.getString("plan_name"));
+                        m.put("planStartTime", rs.getTimestamp("start_time"));
+                        m.put("planEndTime", rs.getTimestamp("end_time"));
+                        return m;
+                    },
                     ids.toArray()
             );
             Map<Long, Map<String, Object>> byUser = new LinkedHashMap<>();
@@ -351,6 +359,8 @@ public class AdminModuleService {
                     row.put("userLevel", code);
                     row.put("userLevelName", overrideLevel == 3 ? "VIP（单店版）" : (overrideLevel >= 2 ? "SVP" : "VIP"));
                     row.put("planName", overrideLevel == 3 ? "VIP（单店版） (手动)" : (overrideLevel >= 2 ? "SVP (手动)" : "VIP (手动)"));
+                    row.put("planStartTime", null);
+                    row.put("planEndTime", null);
                 } else {
                     Map<String, Object> p = byUser.get(uid);
                     if (p != null) {
@@ -358,6 +368,8 @@ public class AdminModuleService {
                         row.put("userLevel", level);
                         row.put("userLevelName", "svp".equals(level) ? "SVP" : "vip-single".equals(level) ? "VIP（单店版）" : "vip".equals(level) ? "VIP" : "普通用户");
                         row.put("planName", p.get("planName"));
+                        row.put("planStartTime", p.get("planStartTime"));
+                        row.put("planEndTime", p.get("planEndTime"));
                     }
                 }
             }

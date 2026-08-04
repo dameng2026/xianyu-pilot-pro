@@ -474,7 +474,7 @@ public class SysUserService {
             } catch (Exception ignored) {}
 
             List<Map<String, Object>> plans = jdbcTemplate.query(
-                    "SELECT s.user_id, p.plan_code, p.plan_name, s.end_time " +
+                    "SELECT s.user_id, p.plan_code, p.plan_name, s.start_time, s.end_time " +
                             "FROM billing_subscription s " +
                             "JOIN billing_plan p ON p.id = s.plan_id AND p.deleted = 0 " +
                             "WHERE s.user_id IN (" + placeholders + ") AND s.status = 1 " +
@@ -485,6 +485,8 @@ public class SysUserService {
                         m.put("userId", rs.getLong("user_id"));
                         m.put("planCode", normalizeUserLevel(rs.getString("plan_code")));
                         m.put("planName", rs.getString("plan_name"));
+                        m.put("planStartTime", rs.getTimestamp("start_time"));
+                        m.put("planEndTime", rs.getTimestamp("end_time"));
                         return m;
                     },
                     ids.toArray()
@@ -503,6 +505,8 @@ public class SysUserService {
                     row.put("userLevel", code);
                     row.put("userLevelName", userLevelName(code));
                     row.put("planName", overrideLevel == 3 ? "VIP（单店版） (手动)" : (overrideLevel >= 2 ? "SVP (手动)" : "VIP (手动)"));
+                    row.put("planStartTime", null);
+                    row.put("planEndTime", null);
                 } else {
                     Map<String, Object> plan = first.get(uid);
                     if (plan != null) {
@@ -510,6 +514,8 @@ public class SysUserService {
                         row.put("userLevel", code);
                         row.put("userLevelName", userLevelName(code));
                         row.put("planName", plan.get("planName"));
+                        row.put("planStartTime", plan.get("planStartTime"));
+                        row.put("planEndTime", plan.get("planEndTime"));
                     }
                 }
             }

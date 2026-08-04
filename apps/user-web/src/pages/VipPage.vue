@@ -189,15 +189,7 @@
                 </tr>
               </thead>
               <tbody>
-                <template v-for="(group, gIdx) in memberCompareData" :key="'g'+gIdx">
-                  <tr class="vip-group-row">
-                    <td colspan="5">
-                      <span class="vip-feature-ico" aria-hidden="true">{{ group.icon }}</span>
-                      <span class="vip-group-label">{{ group.category }}</span>
-                      <span class="vip-group-count">{{ group.items.length }} 项</span>
-                    </td>
-                  </tr>
-                    <tr v-for="(item, iIdx) in group.items" :key="'i'+gIdx+'-'+iIdx" :class="['vip-feature-row', { 'vip-feature-row-alt': iIdx % 2 === 1, 'vip-store-limit-row': item.isStoreLimit }]">
+                <tr v-for="(item, iIdx) in memberCompareData" :key="item.key || iIdx" :class="['vip-feature-row', { 'vip-feature-row-alt': iIdx % 2 === 1, 'vip-store-limit-row': item.isStoreLimit }]">
                       <td class="vip-td-name">{{ item.name }}</td>
                       <template v-if="item.isStoreLimit">
                         <td class="vip-td-normal vip-store-limit-cell">{{ item.normalText }}</td>
@@ -232,7 +224,6 @@
                         </td>
                       </template>
                     </tr>
-                </template>
               </tbody>
             </table>
           </div>
@@ -253,6 +244,10 @@
             </div>
           </div>
           <div class="vip-profile-stat-grid">
+            <div>
+              <span>开通时间</span>
+              <b>{{ currentPlanStart }}</b>
+            </div>
             <div>
               <span>到期时间</span>
               <b>{{ currentPlanPeriod }}</b>
@@ -344,20 +339,6 @@ let countdownTimer = null
 const memberCompareFeatures = ref([])
 const memberComparisonLoading = ref(false)
 const memberComparisonError = ref('')
-
-/**
- * 功能分组定义，与后台 admin-web feature-switch/index.vue 的 GROUPS 常量保持一致。
- * 顺序即展示顺序；未匹配 group 的功能归入 "其他"。
- */
-const FEATURE_COMPARISON_GROUPS = [
-  { key: 'overview', label: '概览', icon: '📊' },
-  { key: 'account', label: '账号与商品', icon: '📦' },
-  { key: 'message', label: '消息与商机', icon: '💬' },
-  { key: 'automation', label: '自动化', icon: '⚙️' },
-  { key: 'system', label: '系统设置', icon: '🛠️' },
-  { key: 'hidden', label: '会员', icon: '👑' },
-  { key: 'misc', label: '其他', icon: '📂' }
-]
 
 const displayUserName = computed(() => props.user?.name || props.user?.username || props.user?.displayName || '当前用户')
 const defaultAvatarUrl = '/xya/chat_ui_assets/chat_ui_assets_023.png'
@@ -520,6 +501,17 @@ const currentPlanPeriod = computed(() => {
   return `${year}-${month}-${day}`
 })
 
+const currentPlanStart = computed(() => {
+  const startTime = props.user?.activePlan?.startTime
+  if (!startTime) return '未记录'
+  const date = new Date(startTime)
+  if (Number.isNaN(date.getTime())) return '未记录'
+  const year = date.getFullYear()
+  const month = `${date.getMonth() + 1}`.padStart(2, '0')
+  const day = `${date.getDate()}`.padStart(2, '0')
+  return `${year}-${month}-${day}`
+})
+
 // 当前权益描述：不再展示账号数/商品数等数量限制，改为展示套餐功能特性摘要
 const currentPlanQuota = computed(() => {
   const rawCurrentCode = props.user?.activePlan?.planCode || props.user?.planCode
@@ -533,17 +525,13 @@ const currentPlanQuota = computed(() => {
   return '以套餐配置为准'
 })
 
-/** 按分组聚合后的对比数据，用于表格渲染（与 ProfileCenterPage 一致） */
+/** 功能对比数据：店铺数量首行固定，其余功能按可用等级数全局自动排序（不可用排后） */
 const memberCompareData = computed(() => {
   const features = memberCompareFeatures.value
   if (!Array.isArray(features) || features.length === 0) return []
-  const buckets = new Map()
-  for (const g of FEATURE_COMPARISON_GROUPS) buckets.set(g.key, [])
-  features.forEach((f, index) => {
-    const g = String(f?.group || 'misc')
-    if (!buckets.has(g)) buckets.set(g, [])
+  const items = features.map((f, index) => {
     const isStoreLimit = f?.key === 'store-limit'
-    const item = {
+    return {
       key: f.key,
       name: f.title || f.key,
       isStoreLimit,
@@ -564,26 +552,15 @@ const memberCompareData = computed(() => {
       ].filter(v => v === '✓').length,
       order: index
     }
-    buckets.get(g).push(item)
   })
-  const result = []
-  for (const g of FEATURE_COMPARISON_GROUPS) {
-    const items = buckets.get(g.key) || []
-    if (items.length === 0) continue
-    items.sort((a, b) => {
-      // 店铺数量行固定在分组最前
-      if (a.isStoreLimit !== b.isStoreLimit) return a.isStoreLimit ? -1 : 1
-      // 可用等级少的排后面（不可用的统一往后排：0 个可用排最后，4 个可用排最前）
-      if (a.usableCount !== b.usableCount) return b.usableCount - a.usableCount
-      return a.order - b.order
-    })
-    result.push({
-      category: g.label,
-      icon: g.icon,
-      items
-    })
-  }
-  return result
+  items.sort((a, b) => {
+    // 店铺数量行固定在表格最前
+    if (a.isStoreLimit !== b.isStoreLimit) return a.isStoreLimit ? -1 : 1
+    // 可用等级少的排后面（不可用的统一往后排：0 个可用排最后，4 个可用排最前）
+    if (a.usableCount !== b.usableCount) return b.usableCount - a.usableCount
+    return a.order - b.order
+  })
+  return items
 })
 
 function boolToMark(value) {

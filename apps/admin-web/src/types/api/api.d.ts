@@ -102,6 +102,8 @@ declare namespace Api {
       planName?: string
       userLevel?: string          // "normal" | "vip-single" | "vip" | "svp"
       userLevelName?: string      // "普通用户" | "VIP（单店版）" | "VIP" | "SVP"
+      planStartTime?: string      // 会员充值/开通时间（来自有效订阅）
+      planEndTime?: string        // 会员到期时间（来自有效订阅）
       tokenBalance?: number
       xianyuAccountCount?: number | string
       status: string           // "正常" | "禁用"

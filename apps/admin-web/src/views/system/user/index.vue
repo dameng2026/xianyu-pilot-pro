@@ -177,6 +177,18 @@
           }
         },
         {
+          prop: 'planStartTime',
+          label: '会员开通',
+          width: 150,
+          formatter: (row: UserListItem) => formatDateTimeLocal(row.planStartTime)
+        },
+        {
+          prop: 'planEndTime',
+          label: '会员到期',
+          width: 150,
+          formatter: (row: UserListItem) => formatDateTimeLocal(row.planEndTime)
+        },
+        {
           prop: 'tokenBalance',
           label: 'Token 余额',
           width: 120,
