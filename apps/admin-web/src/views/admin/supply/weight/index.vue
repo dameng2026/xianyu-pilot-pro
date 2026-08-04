@@ -74,7 +74,7 @@
         <ElTableColumn label="商品信息" min-width="280">
           <template #default="{ row }">
             <div class="product-cell">
-              <div class="product-cover" :style="coverStyle(row)"></div>
+              <div class="product-cover" :style="coverStyle(row as SupplyShopProduct)"></div>
               <div class="product-info">
                 <div class="product-title">{{ row.title || '未命名商品' }}</div>
                 <div class="product-meta">
@@ -112,17 +112,17 @@
                 type="primary"
                 size="small"
                 :loading="savingId === row.id"
-                :disabled="!isWeightChanged(row)"
-                @click="saveWeight(row)"
+                :disabled="!isWeightChanged(row as SupplyShopProduct)"
+                @click="saveWeight(row as SupplyShopProduct)"
               >保存</ElButton>
             </div>
           </template>
         </ElTableColumn>
         <ElTableColumn label="批量调整" width="200" align="center">
           <template #default="{ row }">
-            <ElButton size="small" @click="quickAdjust(row, 0)">归零</ElButton>
-            <ElButton size="small" @click="quickAdjust(row, 10)">设为 10</ElButton>
-            <ElButton size="small" @click="quickAdjust(row, 100)">设为 100</ElButton>
+            <ElButton size="small" @click="quickAdjust(row as SupplyShopProduct, 0)">归零</ElButton>
+            <ElButton size="small" @click="quickAdjust(row as SupplyShopProduct, 10)">设为 10</ElButton>
+            <ElButton size="small" @click="quickAdjust(row as SupplyShopProduct, 100)">设为 100</ElButton>
           </template>
         </ElTableColumn>
       </ElTable>

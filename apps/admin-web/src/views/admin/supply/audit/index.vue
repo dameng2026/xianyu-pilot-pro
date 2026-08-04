@@ -79,14 +79,14 @@
         <ElTableColumn label="商品信息" min-width="260">
           <template #default="{ row }">
             <div class="product-cell">
-              <div class="product-cover" :style="coverStyle(row)"></div>
+              <div class="product-cover" :style="coverStyle(row as AuditRecord)"></div>
               <div class="product-info">
-                <div class="product-title">{{ productTitle(row) }}</div>
+                <div class="product-title">{{ productTitle(row as AuditRecord) }}</div>
                 <div class="product-meta">
-                  <ElTag v-if="productType(row)" :type="productTypeTagType(row)" size="small" effect="plain">
-                    {{ productType(row) === 'text' ? '文本' : '卡密' }}
+                  <ElTag v-if="productType(row as AuditRecord)" :type="productTypeTagType(row as AuditRecord)" size="small" effect="plain">
+                    {{ productType(row as AuditRecord) === 'text' ? '文本' : '卡密' }}
                   </ElTag>
-                  <span v-if="productPrice(row)" class="product-price">¥{{ productPrice(row) }}</span>
+                  <span v-if="productPrice(row as AuditRecord)" class="product-price">¥{{ productPrice(row as AuditRecord) }}</span>
                   <span class="product-id">#{{ row.business_id }}</span>
                 </div>
               </div>
@@ -121,10 +121,10 @@
         </ElTableColumn>
         <ElTableColumn label="操作" width="220" align="center" fixed="right">
           <template #default="{ row }">
-            <ElButton link type="primary" @click="openDetail(row)">查看</ElButton>
+            <ElButton link type="primary" @click="openDetail(row as AuditRecord)">查看</ElButton>
             <template v-if="tabState === 'pending'">
-              <ElButton link type="success" :loading="actingId === row.id" @click="handleApprove(row)">通过</ElButton>
-              <ElButton link type="danger" @click="openRejectDialog(row)">驳回</ElButton>
+              <ElButton link type="success" :loading="actingId === row.id" @click="handleApprove(row as AuditRecord)">通过</ElButton>
+              <ElButton link type="danger" @click="openRejectDialog(row as AuditRecord)">驳回</ElButton>
             </template>
           </template>
         </ElTableColumn>
