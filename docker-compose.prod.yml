@@ -161,21 +161,10 @@ services:
       PLAN_K_PERSIST_SAMPLES: "true"
       PLAN_K_SAMPLE_DIR: "/app/data/x5sec_samples"
       PLAN_K_ENABLED: "false"
-    # 2026-08-03 方案 K hot-deploy volume mount
-    # 包含之前已挂载的所有文件 + 新增 mtop_sign_research.py（方案 K 研究模块）
-    # 样本持久化目录挂载为可写（容器 read_only: true，需显式挂载可写目录）
+    # 2026-08-04：移除 hot-deploy 文件挂载——镜像已包含本次最新代码，hot-deploy 为旧热修文件，
+    # 保留会覆盖新代码且切换部署目录后挂载失效。保留 x5sec 样本持久化目录（方案 K 数据落盘，
+    # 目录不存在时 docker 自动创建）。
     volumes:
-      - /home/ubuntu/project/hot-deploy/automation/services/ws_token.py:/app/app/services/ws_token.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/captcha_solver.py:/app/app/services/captcha_solver.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/services/x5sec_cache_client.py:/app/app/services/x5sec_cache_client.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/services/captcha_queue.py:/app/app/services/captcha_queue.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/services/ws_client.py:/app/app/services/ws_client.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/services/ws_health_check.py:/app/app/services/ws_health_check.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/services/cookie_token_refresher.py:/app/app/services/cookie_token_refresher.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/services/xianyu_goods_sync.py:/app/app/services/xianyu_goods_sync.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/services/mtop_sign_research.py:/app/app/services/mtop_sign_research.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/routes/captcha.py:/app/app/api/v1/routes/captcha.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/api/v1/routes/misc.py:/app/app/api/v1/routes/misc.py:ro
       - /home/ubuntu/project/hot-deploy/automation/data/x5sec_samples:/app/data/x5sec_samples:rw
     logging:
       driver: json-file
@@ -215,20 +204,8 @@ services:
       PLAN_K_PERSIST_SAMPLES: "true"
       PLAN_K_SAMPLE_DIR: "/app/data/x5sec_samples"
       PLAN_K_ENABLED: "false"
-    # 2026-08-03 方案 K hot-deploy volume mount（与 automation 保持一致）
-    # 样本持久化目录挂载为可写（容器 read_only: true，需显式挂载可写目录）
+    # 2026-08-04：移除 hot-deploy 文件挂载（与 automation 保持一致，见其上注释）。保留 x5sec 样本目录。
     volumes:
-      - /home/ubuntu/project/hot-deploy/automation/services/ws_token.py:/app/app/services/ws_token.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/captcha_solver.py:/app/app/services/captcha_solver.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/services/x5sec_cache_client.py:/app/app/services/x5sec_cache_client.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/services/captcha_queue.py:/app/app/services/captcha_queue.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/services/ws_client.py:/app/app/services/ws_client.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/services/ws_health_check.py:/app/app/services/ws_health_check.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/services/cookie_token_refresher.py:/app/app/services/cookie_token_refresher.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/services/xianyu_goods_sync.py:/app/app/services/xianyu_goods_sync.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/services/mtop_sign_research.py:/app/app/services/mtop_sign_research.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/routes/captcha.py:/app/app/api/v1/routes/captcha.py:ro
-      - /home/ubuntu/project/hot-deploy/automation/api/v1/routes/misc.py:/app/app/api/v1/routes/misc.py:ro
       - /home/ubuntu/project/hot-deploy/automation/data/x5sec_samples:/app/data/x5sec_samples:rw
     logging:
       driver: json-file
@@ -260,17 +237,9 @@ services:
       RESIDENTIAL_PROXY_POOL_SIZE: ${RESIDENTIAL_PROXY_POOL_SIZE:-10}
       RESIDENTIAL_PROXY_FETCH_TIMEOUT_MS: ${RESIDENTIAL_PROXY_FETCH_TIMEOUT_MS:-8000}
       RESIDENTIAL_PROXY_QUOTA_RECOVERY_SEC: ${RESIDENTIAL_PROXY_QUOTA_RECOVERY_SEC:-600}
-    # 2026-08-01 热部署 volume mount：用于在不重建镜像的情况下更新滑块求解脚本
-    # 原因：容器 read_only: true 阻止 docker cp，需要 volume mount 覆盖文件
-    # 2026-08-03 新增：residentialProxyPool.js（方案H多代理源聚合+shenlongip适配）、x5secCache.js（方案I 24h TTL）
-    # 2026-08-03 新增：server.js（silent-extract 端点 useResidentialProxy 处理修复）
-    # 2026-08-03 新增：fireyejsToken.js（方案K路线J：FireyeJS token 提取，Playwright 浏览器执行 fireyejs.js）
-    volumes:
-      - /home/ubuntu/project/hot-deploy/sliderSolve.py:/app/sliderSolve.py:ro
-      - /home/ubuntu/project/hot-deploy/crawler/server.js:/app/dist/server.js:ro
-      - /home/ubuntu/project/hot-deploy/crawler/residentialProxyPool.js:/app/dist/residentialProxyPool.js:ro
-      - /home/ubuntu/project/hot-deploy/crawler/x5secCache.js:/app/dist/x5secCache.js:ro
-      - /home/ubuntu/project/hot-deploy/crawler/fireyejsToken.js:/app/dist/crawler/fireyejsToken.js:ro
+    # 2026-08-04：移除 hot-deploy 文件挂载——镜像已包含本次最新代码（server.ts/residentialProxyPool/x5secCache/
+    # fireyejsToken 已编译进 dist，sliderSolve.py 已在镜像中），hot-deploy 旧文件会覆盖新代码且切换目录后挂载失效。
+    volumes: []
     logging:
       driver: json-file
       options:
