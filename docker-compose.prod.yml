@@ -149,6 +149,34 @@ services:
       UPLOAD_MAX_CONCURRENT_PER_TENANT: ${UPLOAD_MAX_CONCURRENT_PER_TENANT:?UPLOAD_MAX_CONCURRENT_PER_TENANT must be set}
       UPLOAD_MAX_CONCURRENT_GLOBAL: ${UPLOAD_MAX_CONCURRENT_GLOBAL:?UPLOAD_MAX_CONCURRENT_GLOBAL must be set}
       UPLOAD_RETENTION_DAYS: ${UPLOAD_RETENTION_DAYS:?UPLOAD_RETENTION_DAYS must be set}
+      # 2026-08-02 添加 Redis 配置（x5sec_cache_client.py 需要，用于读取缓存的 x5sec）
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      # 2026-08-03 方案 K：MTOP H5 API 签名算法逆向研究
+      # PLAN_K_SAMPLE_LOGGING=true 即使方案 K 未启用也记录 x5sec 样本到日志（默认 true）
+      # PLAN_K_PERSIST_SAMPLES=true 将样本写入 JSONL 文件便于离线分析（默认 false，生产开启）
+      # PLAN_K_ENABLED=false 方案 K 本地生成 x5sec 功能未启用（逆向完成后才开启）
+      PLAN_K_SAMPLE_LOGGING: "true"
+      PLAN_K_PERSIST_SAMPLES: "true"
+      PLAN_K_SAMPLE_DIR: "/app/data/x5sec_samples"
+      PLAN_K_ENABLED: "false"
+    # 2026-08-03 方案 K hot-deploy volume mount
+    # 包含之前已挂载的所有文件 + 新增 mtop_sign_research.py（方案 K 研究模块）
+    # 样本持久化目录挂载为可写（容器 read_only: true，需显式挂载可写目录）
+    volumes:
+      - /home/ubuntu/project/hot-deploy/automation/services/ws_token.py:/app/app/services/ws_token.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/captcha_solver.py:/app/app/services/captcha_solver.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/services/x5sec_cache_client.py:/app/app/services/x5sec_cache_client.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/services/captcha_queue.py:/app/app/services/captcha_queue.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/services/ws_client.py:/app/app/services/ws_client.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/services/ws_health_check.py:/app/app/services/ws_health_check.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/services/cookie_token_refresher.py:/app/app/services/cookie_token_refresher.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/services/xianyu_goods_sync.py:/app/app/services/xianyu_goods_sync.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/services/mtop_sign_research.py:/app/app/services/mtop_sign_research.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/routes/captcha.py:/app/app/api/v1/routes/captcha.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/api/v1/routes/misc.py:/app/app/api/v1/routes/misc.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/data/x5sec_samples:/app/data/x5sec_samples:rw
     logging:
       driver: json-file
       options:
@@ -178,6 +206,30 @@ services:
       UPLOAD_MAX_CONCURRENT_PER_TENANT: ${UPLOAD_MAX_CONCURRENT_PER_TENANT:?UPLOAD_MAX_CONCURRENT_PER_TENANT must be set}
       UPLOAD_MAX_CONCURRENT_GLOBAL: ${UPLOAD_MAX_CONCURRENT_GLOBAL:?UPLOAD_MAX_CONCURRENT_GLOBAL must be set}
       UPLOAD_RETENTION_DAYS: ${UPLOAD_RETENTION_DAYS:?UPLOAD_RETENTION_DAYS must be set}
+      # 2026-08-02 添加 Redis 配置（x5sec_cache_client.py 需要）
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      # 2026-08-03 方案 K：MTOP H5 API 签名算法逆向研究（与 automation 保持一致）
+      PLAN_K_SAMPLE_LOGGING: "true"
+      PLAN_K_PERSIST_SAMPLES: "true"
+      PLAN_K_SAMPLE_DIR: "/app/data/x5sec_samples"
+      PLAN_K_ENABLED: "false"
+    # 2026-08-03 方案 K hot-deploy volume mount（与 automation 保持一致）
+    # 样本持久化目录挂载为可写（容器 read_only: true，需显式挂载可写目录）
+    volumes:
+      - /home/ubuntu/project/hot-deploy/automation/services/ws_token.py:/app/app/services/ws_token.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/captcha_solver.py:/app/app/services/captcha_solver.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/services/x5sec_cache_client.py:/app/app/services/x5sec_cache_client.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/services/captcha_queue.py:/app/app/services/captcha_queue.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/services/ws_client.py:/app/app/services/ws_client.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/services/ws_health_check.py:/app/app/services/ws_health_check.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/services/cookie_token_refresher.py:/app/app/services/cookie_token_refresher.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/services/xianyu_goods_sync.py:/app/app/services/xianyu_goods_sync.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/services/mtop_sign_research.py:/app/app/services/mtop_sign_research.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/routes/captcha.py:/app/app/api/v1/routes/captcha.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/api/v1/routes/misc.py:/app/app/api/v1/routes/misc.py:ro
+      - /home/ubuntu/project/hot-deploy/automation/data/x5sec_samples:/app/data/x5sec_samples:rw
     logging:
       driver: json-file
       options:
@@ -200,10 +252,25 @@ services:
       COOKIE_CRYPTO_SECRET: ${COOKIE_CRYPTO_SECRET:?COOKIE_CRYPTO_SECRET must be set}
       CORS_ALLOWED_ORIGINS: ${CRAWLER_CORS_ALLOWED_ORIGINS:?CRAWLER_CORS_ALLOWED_ORIGINS must be set}
       SCHEMA_RUNTIME_MUTATIONS_ENABLED: "false"
+      # 2026-08-03 方案 H：住址IP代理池（shenlongip 神龙代理）
+      # 必须在 environment 中显式声明，否则容器内无法读取 .env.production 中的值
+      USE_RESIDENTIAL_PROXY: ${USE_RESIDENTIAL_PROXY:-false}
+      RESIDENTIAL_PROXY_API_URL: ${RESIDENTIAL_PROXY_API_URL:-}
+      RESIDENTIAL_PROXY_TTL_SEC: ${RESIDENTIAL_PROXY_TTL_SEC:-180}
+      RESIDENTIAL_PROXY_POOL_SIZE: ${RESIDENTIAL_PROXY_POOL_SIZE:-10}
+      RESIDENTIAL_PROXY_FETCH_TIMEOUT_MS: ${RESIDENTIAL_PROXY_FETCH_TIMEOUT_MS:-8000}
+      RESIDENTIAL_PROXY_QUOTA_RECOVERY_SEC: ${RESIDENTIAL_PROXY_QUOTA_RECOVERY_SEC:-600}
     # 2026-08-01 热部署 volume mount：用于在不重建镜像的情况下更新滑块求解脚本
     # 原因：容器 read_only: true 阻止 docker cp，需要 volume mount 覆盖文件
+    # 2026-08-03 新增：residentialProxyPool.js（方案H多代理源聚合+shenlongip适配）、x5secCache.js（方案I 24h TTL）
+    # 2026-08-03 新增：server.js（silent-extract 端点 useResidentialProxy 处理修复）
+    # 2026-08-03 新增：fireyejsToken.js（方案K路线J：FireyeJS token 提取，Playwright 浏览器执行 fireyejs.js）
     volumes:
       - /home/ubuntu/project/hot-deploy/sliderSolve.py:/app/sliderSolve.py:ro
+      - /home/ubuntu/project/hot-deploy/crawler/server.js:/app/dist/server.js:ro
+      - /home/ubuntu/project/hot-deploy/crawler/residentialProxyPool.js:/app/dist/residentialProxyPool.js:ro
+      - /home/ubuntu/project/hot-deploy/crawler/x5secCache.js:/app/dist/x5secCache.js:ro
+      - /home/ubuntu/project/hot-deploy/crawler/fireyejsToken.js:/app/dist/crawler/fireyejsToken.js:ro
     logging:
       driver: json-file
       options:

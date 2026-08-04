@@ -29,6 +29,8 @@ import {
   generateSessionId,
   type ProcessKind,
 } from './processRegistry.js';
+// 2026-08-03 修复：求解成功后提取并缓存 x5sec，实现免滑块复用 + 修复"滑块成功但cookie失效"误判
+import { cacheX5sec, cookieHasX5sec } from '../x5secCache.js';
 
 export interface SlideSolveOptions {
   cookieStr?: string;
@@ -82,15 +84,96 @@ const DEFAULT_TARGET_URL = 'https://www.goofish.com/im';
 export const ANTI_DETECT_SCRIPT = `
 (() => {
   try {
-    // 1. 屏蔽 navigator.webdriver（删除原型属性，降低 'webdriver' in navigator 命中率）
+    // 1. 屏蔽 navigator.webdriver
+    // 关键修复 2026-08-03：
+    //   - 原实现 get: () => undefined 仍可被 'webdriver' in navigator 检测到（属性存在但值为 undefined）
+    //   - 正常 Chrome（非自动化）navigator.webdriver 返回 false，不是 undefined
+    //   - 修复：getter 返回 false（与正常浏览器一致），并删除原型链上的 webdriver
     try { delete Object.getPrototypeOf(navigator).webdriver; } catch (e) {}
-    Object.defineProperty(navigator, 'webdriver', {
-      get: () => undefined,
-      configurable: true,
-    });
     try {
       Object.defineProperty(Navigator.prototype, 'webdriver', {
-        get: () => undefined,
+        get: () => false,
+        configurable: true,
+      });
+    } catch (e) {}
+    try {
+      Object.defineProperty(navigator, 'webdriver', {
+        get: () => false,
+        configurable: true,
+      });
+    } catch (e) {}
+
+    // 1.1 修复 navigator.platform 与 UA 不一致问题
+    // 关键修复 2026-08-03：Linux 服务器上 navigator.platform='Linux x86_64'，
+    //   但 UA 伪装为 Windows，FireyeJS 会检测到 platform 与 UA 不一致直接拒绝加载
+    //   修复：在 Navigator.prototype 和 navigator 实例上都伪装为 'Win32'
+    //   原因：navigator.platform 是 Navigator.prototype 上的 getter，
+    //         仅在实例上 defineProperty 可能被原型链覆盖
+    try {
+      Object.defineProperty(Navigator.prototype, 'platform', {
+        get: () => 'Win32',
+        configurable: true,
+      });
+    } catch (e) {}
+    try {
+      Object.defineProperty(navigator, 'platform', {
+        get: () => 'Win32',
+        configurable: true,
+      });
+    } catch (e) {}
+    // 1.2 伪装 navigator.vendor（Chrome 为 'Google Inc.'）
+    try {
+      Object.defineProperty(navigator, 'vendor', {
+        get: () => 'Google Inc.',
+        configurable: true,
+      });
+    } catch (e) {}
+    // 1.3 伪装 navigator.appVersion 与 UA 一致
+    try {
+      const ua = navigator.userAgent;
+      const appVer = ua.replace(/^Mozilla\\//, '');
+      Object.defineProperty(navigator, 'appVersion', {
+        get: () => appVer,
+        configurable: true,
+      });
+    } catch (e) {}
+
+    // 1.4 关键修复 2026-08-03：覆盖 navigator.userAgentData（Chrome 90+ User-Agent Client Hints）
+    // FireyeJS 通过 navigator.userAgentData.platform 检测真实操作系统，
+    // 即使 navigator.platform 被覆盖为 Win32，userAgentData.platform 仍返回 'Linux'，
+    // 导致 UA 与 platform 不一致，um.json 服务器拒绝设备指纹（返回 {"id":""}）。
+    // 修复：覆盖 userAgentData 为完整的 Windows 指纹
+    try {
+      const chromeVer = (navigator.userAgent.match(/Chrome\\/([\\d]+)/) || [, '146'])[1];
+      const majorVer = chromeVer.split('.')[0];
+      const fakeUAD = {
+        brands: [
+          { brand: 'Google Chrome', version: majorVer },
+          { brand: 'Chromium', version: majorVer },
+          { brand: 'Not.A/Brand', version: '8' },
+        ],
+        mobile: false,
+        platform: 'Windows',
+        getHighEntropyValues: function(hints) {
+          return Promise.resolve({
+            architecture: 'x86',
+            bitness: '64',
+            brands: fakeUAD.brands,
+            fullVersionList: fakeUAD.brands,
+            mobile: false,
+            model: '',
+            platform: 'Windows',
+            platformVersion: '15.0.0',
+            uaFullVersion: chromeVer,
+            wow64: false,
+          });
+        },
+        toJSON: function() {
+          return { brands: fakeUAD.brands, mobile: false, platform: 'Windows' };
+        },
+      };
+      Object.defineProperty(navigator, 'userAgentData', {
+        get: () => fakeUAD,
         configurable: true,
       });
     } catch (e) {}
@@ -386,6 +469,80 @@ async function exportContextCookies(context: any): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * 从浏览器 context 中提取 x5sec cookie 值（2026-08-03 新增）。
+ *
+ * 核心修复：滑块求解成功后，Baxia 会在浏览器 context 中设置 x5sec cookie。
+ * 此函数提取该值，供调用方：
+ * 1. 作为独立字段返回给 automation-service（captcha_solver.py 注入到 fresh_cookies）
+ * 2. 缓存到 x5secCache（实现免滑块复用）
+ *
+ * 如果提取不到 x5sec，说明 Baxia 风控状态未真正解除（滑块被拖到末端但被判为机器人），
+ * 返回空字符串，调用方可据此判断求解是否真正成功。
+ */
+async function extractX5secFromContext(context: any): Promise<string> {
+  try {
+    const cookies: Cookie[] = await context.cookies();
+    if (!cookies?.length) return '';
+    // 查找 x5sec cookie（不限域名，Baxia 可能设置在 .goofish.com 或其他域）
+    const x5secCookie = cookies.find((c) => c.name === 'x5sec' && c.value && c.value.length > 5);
+    if (x5secCookie) {
+      console.log(
+        `[SliderSolver] ✓ 从浏览器提取 x5sec 成功 domain=${x5secCookie.domain} valueLen=${x5secCookie.value.length}`
+      );
+      return x5secCookie.value;
+    }
+    // 没找到 x5sec，打印所有风险相关 cookie 用于诊断
+    const riskCookies = cookies.filter((c) =>
+      ['x5sec', 'x5secdata', 'x5sectag', 'x5pref'].includes(c.name)
+    );
+    if (riskCookies.length > 0) {
+      console.log(
+        `[SliderSolver] ⚠ 未找到 x5sec cookie，但存在其他风险标记: ${riskCookies.map((c) => c.name).join(', ')}`
+      );
+    } else {
+      console.log(`[SliderSolver] ⚠ 浏览器中无任何 x5sec/x5secdata 风险标记 cookie（Baxia 可能未设置）`);
+    }
+    return '';
+  } catch (e: any) {
+    console.warn(`[SliderSolver] extractX5secFromContext 异常: ${safeErrorType(e)}`);
+    return '';
+  }
+}
+
+/**
+ * 求解成功后统一处理：提取 x5sec + 缓存 + 返回增强的 cookies（2026-08-03 新增）。
+ *
+ * 返回 { cookies, x5sec }：
+ * - cookies: 已确保包含 x5sec（如果浏览器有则保留，没有则用提取到的注入）
+ * - x5sec: 独立的 x5sec 值（供 automation-service 二次验证使用）
+ *
+ * 同时调用 cacheX5sec 缓存 x5sec，实现后续请求免滑块。
+ */
+async function exportCookiesAndX5sec(context: any, originalCookieStr?: string): Promise<{ cookies?: string; x5sec: string }> {
+  const cookies = await exportContextCookies(context);
+  const x5sec = await extractX5secFromContext(context);
+
+  // 缓存 x5sec（用于后续免滑块请求）
+  if (x5sec && originalCookieStr) {
+    try {
+      await cacheX5sec(originalCookieStr, x5sec);
+      console.log(`[SliderSolver] ✓ 已缓存 x5sec（后续请求可免滑块）valueLen=${x5sec.length}`);
+    } catch (e: any) {
+      console.warn(`[SliderSolver] 缓存 x5sec 失败（不影响本次求解）: ${safeErrorType(e)}`);
+    }
+  }
+
+  // 确保 cookies 字符串包含 x5sec
+  let enhancedCookies = cookies;
+  if (x5sec && enhancedCookies && !cookieHasX5sec(enhancedCookies)) {
+    enhancedCookies = `${enhancedCookies}; x5sec=${x5sec}`;
+    console.log(`[SliderSolver] ✓ x5sec 未在导出 cookies 中，已手动注入`);
+  }
+
+  return { cookies: enhancedCookies, x5sec };
 }
 
 async function saveDebugScreenshot(page: Page, label: string): Promise<string | undefined> {
@@ -2360,7 +2517,8 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
           }
           console.log('[SliderSolver] 确认无滑块，可能已通过验证或不需要验证');
           {
-            const cookies = await exportContextCookies(context);
+            // 2026-08-03 修复：提取 x5sec + 缓存 + 确保 cookies 包含 x5sec
+            const { cookies, x5sec } = await exportCookiesAndX5sec(context, options.cookieStr);
             return {
               ok: true,
               solved: true,
@@ -2368,6 +2526,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
               attempts,
               durationMs: Date.now() - startTime,
               cookies,
+              x5sec,
               attemptsDetail,
             };
           }
@@ -2392,7 +2551,8 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
           };
         }
         {
-          const cookies = await exportContextCookies(context);
+          // 2026-08-03 修复：提取 x5sec + 缓存 + 确保 cookies 包含 x5sec
+          const { cookies, x5sec } = await exportCookiesAndX5sec(context, options.cookieStr);
           return {
             ok: true,
             solved: true,
@@ -2400,6 +2560,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
             attempts,
             durationMs: Date.now() - startTime,
             cookies,
+            x5sec,
             attemptsDetail,
           };
         }
@@ -2647,7 +2808,8 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
           success: true, durationMs: Date.now() - attemptStartTime,
         });
         {
-          const cookies = await exportContextCookies(context);
+          // 2026-08-03 修复：提取 x5sec + 缓存 + 确保 cookies 包含 x5sec
+          const { cookies, x5sec } = await exportCookiesAndX5sec(context, options.cookieStr);
           return {
             ok: true,
             solved: true,
@@ -2655,6 +2817,7 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
             attempts,
             durationMs: Date.now() - startTime,
             cookies,
+            x5sec,
             attemptsDetail,
           };
         }

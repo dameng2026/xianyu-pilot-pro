@@ -1763,6 +1763,17 @@ def _call_mtop_search_direct(keyword: str, page: int, page_size: int, cookie_str
     在某些账号/IP 下可能触发 FAIL_SYS_USER_VALIDATE 或 RGV587 风控。
     触发风控时抛出 RuntimeError，由上层降级到慢速搜索（浏览器方式）。
     """
+    # 2026-08-03 方案 F 第二阶段：会话预热，补全风控 Cookie，降低 Baxia 评分
+    # 预热结果缓存 5 分钟，不会每次搜索都访问首页
+    try:
+        from app.services.ws_token import _warmup_session
+        warmed_cookie = _warmup_session(cookie_str)
+        if warmed_cookie != cookie_str:
+            cookie_str = warmed_cookie
+            logger.debug("[搜索] 会话预热成功，Cookie 已补全风控字段")
+    except Exception:
+        pass  # 预热失败不影响搜索主流程
+
     search_data = {
         "keyword": keyword,
         "pageNumber": page,

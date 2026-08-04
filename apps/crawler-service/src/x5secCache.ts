@@ -1,13 +1,18 @@
 /**
- * x5sec Redis 缓存模块
+ * x5sec Redis 缓存模块 —— 方案 I x5sec 持久化强化
  *
  * 作用：滑块验证成功后，x5sec cookie 可缓存复用，后续请求注入 x5sec 即可绕过滑块。
  *
  * 缓存策略：
  * - Key: x5sec:{userId} （从 cookie 的 unb 字段提取用户 ID）
  * - Fallback Key: x5sec:tk:{mtopToken} （从 _m_h5_tk 提取 token 作为后备 key）
- * - TTL: 6 小时（保守值，x5sec 实际有效期通常更长，但风控状态可能变化）
+ * - TTL: 24 小时（方案 I 优化：从 6 小时延长到 24 小时，减少重复求解频率）
  * - 惰性过期：缓存到期后自动删除，下次请求触发滑块求解刷新
+ *
+ * 2026-08-03 方案 I 优化：
+ * - TTL 从 6 小时延长到 24 小时（x5sec 实际有效期可能更长，延长 TTL 减少重复求解）
+ * - 在代理配额耗尽期间，已缓存的 x5sec 仍可复用，避免触发滑块
+ * - Python 端 x5sec_cache_client.py 已同步延长到 24 小时
  *
  * 安全性：
  * - x5sec 值不落日志（只记录长度）
@@ -17,40 +22,61 @@
 import IORedis from 'ioredis';
 import crypto from 'crypto';
 
-const X5SEC_CACHE_TTL = 6 * 60 * 60; // 6 小时（秒）
+// 2026-08-03 方案 I：TTL 从 6 小时延长到 24 小时
+const X5SEC_CACHE_TTL = 24 * 60 * 60; // 24 小时（秒）
 const X5SEC_KEY_PREFIX = 'x5sec:';
 const X5SEC_TK_KEY_PREFIX = 'x5sec:tk:';
 
 let x5secRedis: IORedis | null = null;
-let connectAttempted = false;
+let x5secRedisConnecting = false;
 
 function getRedisConnection(): IORedis | null {
   if (x5secRedis) return x5secRedis;
-  if (connectAttempted) return null; // 避免反复重连
-  connectAttempted = true;
+  if (x5secRedisConnecting) return null; // 避免并发创建多个连接
+
+  x5secRedisConnecting = true;
 
   try {
+    // 2026-08-02 修复：enableOfflineQueue 改为 true，让连接断开时操作排队等待重连
+    // 原因：enableOfflineQueue=false 导致连接断开时所有操作直接失败，
+    //       x5sec 缓存完全失效。改为 true 后，操作会排队等待重连完成。
+    // 2026-08-02 修复：移除 connectAttempted 永久标记，允许连接失败后重试
+    // 原因：connectAttempted=true 后永不重试，如果 Redis 启动慢或临时断开，
+    //       x5sec 缓存永久失效，无法恢复。
     x5secRedis = new IORedis({
       host: process.env.REDIS_HOST || 'localhost',
       port: parseInt(process.env.REDIS_PORT || '6379', 10),
       password: process.env.REDIS_PASSWORD || undefined,
-      connectTimeout: 3000,
-      retryStrategy: (attempt: number) => Math.min(attempt * 200, 2000),
-      maxRetriesPerRequest: 1,
-      enableOfflineQueue: false,
+      connectTimeout: 5000,
+      retryStrategy: (attempt: number) => Math.min(attempt * 500, 5000),
+      maxRetriesPerRequest: 3,
+      enableOfflineQueue: true,
       lazyConnect: false,
     });
 
     x5secRedis.on('error', (err: Error) => {
       // Redis 不可用时静默降级，不影响主流程
-      if (process.env.NODE_ENV !== 'production' && process.env.APP_ENV !== 'production') {
-        console.warn(`[X5secCache] Redis 错误（降级为无缓存）: ${err.message}`);
-      }
+      console.warn(`[X5secCache] Redis 错误（降级为无缓存）: ${err.message}`);
+    });
+
+    x5secRedis.on('close', () => {
+      // 2026-08-02 修复：连接关闭时重置状态，允许下次重新创建连接
+      console.warn('[X5secCache] Redis 连接已关闭，将在下次操作时重连');
+      x5secRedis = null;
+    });
+
+    x5secRedis.on('end', () => {
+      // 2026-08-02 修复：连接彻底断开时重置状态
+      console.warn('[X5secCache] Redis 连接已断开，将在下次操作时重连');
+      x5secRedis = null;
     });
 
     return x5secRedis;
-  } catch {
+  } catch (e: any) {
+    console.warn(`[X5secCache] Redis 连接创建失败: ${e?.message || e}`);
     return null;
+  } finally {
+    x5secRedisConnecting = false;
   }
 }
 

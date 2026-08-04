@@ -37,6 +37,14 @@ WS_HEALTH_CHECK_INTERVAL_SEC = 2 * 60  # 每 2 分钟扫描一次
 # WS 无心跳阈值（秒）：超过此时间无心跳才认为 WS 真正异常
 WS_NO_HEARTBEAT_THRESHOLD_SEC = 5 * 60  # 5 分钟
 
+# 2026-08-03 新增：求解后宽限期（秒）
+# 滑块求解后（无论成功还是失败），在此期间 ws_health_check 不再为该账号触发新求解。
+# 原因：求解后 WS 客户端会重启并进入 _connect_loop 重试（60 秒间隔），
+# 需要给 WS 足够的时间重连。如果在重连期间又触发新求解，会形成
+# "求解→WS未连→5分钟→再求解"循环，浪费住宅IP和服务器资源。
+# 10 分钟 = 2 轮 WS 重连尝试（60s × 10），足够 Token API 风控恢复或 WS 连接成功。
+POST_SOLVE_GRACE_PERIOD_SEC = 10 * 60  # 10 分钟
+
 # 单次扫描最大入队数量，避免一次涌入过多
 MAX_ENQUEUE_PER_SCAN = 10
 
@@ -74,13 +82,26 @@ async def _scan_and_enqueue_ws_health() -> int:
 
     try:
         async with async_session() as db:
+            # 2026-08-03 优化：添加求解后宽限期过滤
+            # LEFT JOIN xianyu_captcha_backoff 检查最近求解时间，
+            # 如果 last_success_at 或 last_fail_at 在 POST_SOLVE_GRACE_PERIOD_SEC 内，
+            # 跳过该账号（WS 客户端正在重连中，不需要触发新求解）
             rows = (await db.execute(
                 text(
                     "SELECT r.account_id, r.tenant_id, a.nickname, "
                     "r.last_heartbeat_time, r.updated_time, "
-                    "TIMESTAMPDIFF(SECOND, r.last_heartbeat_time, NOW()) AS hb_age_sec "
+                    "TIMESTAMPDIFF(SECOND, r.last_heartbeat_time, NOW()) AS hb_age_sec, "
+                    "cb.last_success_at AS last_solve_success_at, "
+                    "cb.last_fail_at AS last_solve_fail_at, "
+                    "CASE WHEN cb.last_success_at IS NOT NULL "
+                    "     AND cb.last_success_at > DATE_SUB(NOW(), INTERVAL :grace SECOND) "
+                    "     THEN 1 ELSE 0 END AS in_success_grace, "
+                    "CASE WHEN cb.last_fail_at IS NOT NULL "
+                    "     AND cb.last_fail_at > DATE_SUB(NOW(), INTERVAL :grace SECOND) "
+                    "     THEN 1 ELSE 0 END AS in_fail_grace "
                     "FROM xianyu_account_runtime r "
                     "INNER JOIN xianyu_account a ON a.id = r.account_id AND a.tenant_id = r.tenant_id "
+                    "LEFT JOIN xianyu_captcha_backoff cb ON cb.account_id = r.account_id "
                     "WHERE r.deleted = 0 "
                     "  AND a.deleted = 0 "
                     "  AND r.cookie_status = 1 "
@@ -92,7 +113,8 @@ async def _scan_and_enqueue_ws_health() -> int:
                 ),
                 {
                     "threshold": WS_NO_HEARTBEAT_THRESHOLD_SEC,
-                    "limit": MAX_ENQUEUE_PER_SCAN * 2,  # 多查一些，hasLogin 校验后取前 N
+                    "grace": POST_SOLVE_GRACE_PERIOD_SEC,
+                    "limit": MAX_ENQUEUE_PER_SCAN * 3,  # 多查一些，宽限期过滤后取前 N
                 },
             )).mappings().all()
     except Exception as e:
@@ -111,6 +133,23 @@ async def _scan_and_enqueue_ws_health() -> int:
         tenant_id = int(row["tenant_id"])
         nickname = str(row["nickname"] or "")[:30]
         hb_age = int(row["hb_age_sec"] or 0)
+
+        # 2026-08-03 优化：求解后宽限期检查
+        # 如果最近 10 分钟内有过求解（成功或失败），跳过该账号
+        # 原因：求解后 WS 客户端正在 _connect_loop 中重试（60s 间隔），
+        # 在宽限期内触发新求解会形成"求解→WS未连→5分钟→再求解"循环
+        in_success_grace = int(row.get("in_success_grace") or 0)
+        in_fail_grace = int(row.get("in_fail_grace") or 0)
+        if in_success_grace or in_fail_grace:
+            last_solve_at = row.get("last_solve_success_at") or row.get("last_solve_fail_at")
+            grace_type = "success" if in_success_grace else "fail"
+            logger.info(
+                "WS 健康检查跳过（求解后宽限期 %s）: accountId=%d nickname=%s "
+                "lastSolveAt=%s gracePeriod=%ds",
+                grace_type, account_id, nickname,
+                last_solve_at, POST_SOLVE_GRACE_PERIOD_SEC,
+            )
+            continue
 
         # 内存二次校验：如果 ws_manager 中有活跃且已连接的客户端，
         # 说明 DB 状态滞后（_persist_ws_online 还没执行或被覆盖），跳过

@@ -518,3 +518,151 @@ async def list_record_attempts(
         return ResultObject.success(result)
     except Exception as e:
         return safe_route_failure(logger, e, operation="list record attempts", user_message="查询尝试明细失败，请稍后重试")
+
+
+@router.get("/solve-stats", response_model=ResultObject[dict])
+async def get_solve_stats_by_proxy(
+    accountId: int = 0,
+    days: int = 7,
+    current_user: dict = Depends(get_current_user),
+):
+    """按代理来源（住址IP vs 服务器IP）聚合滑块求解成功率统计。
+
+    2026-08-02 新增：用于评估住址IP代理是否能显著提高滑块求解成功率。
+    详见 .trae/rules/x5sec-research-knowledge.md 方案 E。
+
+    查询参数:
+        accountId: 账号ID筛选（0=不限账号）
+        days: 统计最近 N 天的数据，默认 7
+
+    返回结构:
+    {
+      "totals": {
+        "server_ip": {"total": 100, "success": 5, "fail": 95, "successRate": 0.05, "avgDurationMs": 85000},
+        "residential_ip": {"total": 50, "success": 8, "fail": 42, "successRate": 0.16, "avgDurationMs": 72000},
+        "account_bound": {...},
+        "unknown": {...}
+      },
+      "daily": [
+        {"date": "2026-08-02", "proxySource": "server_ip", "total": 30, "success": 1, ...},
+        ...
+      ],
+      "filter": {"accountId": 0, "days": 7}
+    }
+    """
+    try:
+        tenant_id = int(current_user.get("tenant_id") or 0)
+        if not tenant_id:
+            return ResultObject.validate_failed("租户上下文不能为空")
+
+        days_int = min(90, max(1, days))
+        from sqlalchemy import text
+        from ....core.database import async_session
+
+        # 按代理来源聚合总体统计
+        totals: dict[str, dict] = {}
+        async with async_session() as db:
+            rows = (
+                await db.execute(
+                    text(
+                        """
+                        SELECT
+                            COALESCE(proxy_source, '') AS proxy_source,
+                            COUNT(*) AS total,
+                            SUM(CASE WHEN result = 'slider_success' THEN 1 ELSE 0 END) AS success,
+                            SUM(CASE WHEN result = 'slider_fail' OR result = '' THEN 1 ELSE 0 END) AS fail,
+                            AVG(CASE WHEN error_message LIKE '%durationMs=%'
+                                THEN CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(error_message, 'durationMs=', -1), ']', 1) AS UNSIGNED)
+                                ELSE NULL END) AS avg_duration_ms
+                        FROM xianyu_captcha_solve_record
+                        WHERE tenant_id = :tid
+                          AND created_at >= DATE_SUB(NOW(), INTERVAL :days DAY)
+                          AND COALESCE(deleted, 0) = 0
+                          AND (:aid = 0 OR account_id = :aid)
+                        GROUP BY COALESCE(proxy_source, '')
+                        """
+                    ),
+                    {"tid": tenant_id, "days": days_int, "aid": accountId},
+                )
+            ).mappings().all()
+            for row in rows:
+                ps = str(row["proxy_source"] or "unknown") or "unknown"
+                total = int(row["total"] or 0)
+                success = int(row["success"] or 0)
+                fail = int(row["fail"] or 0)
+                avg_dur = row["avg_duration_ms"]
+                totals[ps] = {
+                    "total": total,
+                    "success": success,
+                    "fail": fail,
+                    "successRate": round(success / total, 4) if total > 0 else 0.0,
+                    "avgDurationMs": int(avg_dur) if avg_dur is not None else None,
+                }
+
+            # 按天 + 代理来源聚合
+            daily_rows = (
+                await db.execute(
+                    text(
+                        """
+                        SELECT
+                            DATE(created_at) AS dt,
+                            COALESCE(proxy_source, '') AS proxy_source,
+                            COUNT(*) AS total,
+                            SUM(CASE WHEN result = 'slider_success' THEN 1 ELSE 0 END) AS success,
+                            SUM(CASE WHEN result = 'slider_fail' OR result = '' THEN 1 ELSE 0 END) AS fail
+                        FROM xianyu_captcha_solve_record
+                        WHERE tenant_id = :tid
+                          AND created_at >= DATE_SUB(NOW(), INTERVAL :days DAY)
+                          AND COALESCE(deleted, 0) = 0
+                          AND (:aid = 0 OR account_id = :aid)
+                        GROUP BY DATE(created_at), COALESCE(proxy_source, '')
+                        ORDER BY dt DESC, proxy_source
+                        """
+                    ),
+                    {"tid": tenant_id, "days": days_int, "aid": accountId},
+                )
+            ).mappings().all()
+            daily = []
+            for row in daily_rows:
+                daily.append({
+                    "date": str(row["dt"]) if row["dt"] else "",
+                    "proxySource": str(row["proxy_source"] or "unknown") or "unknown",
+                    "total": int(row["total"] or 0),
+                    "success": int(row["success"] or 0),
+                    "fail": int(row["fail"] or 0),
+                    "successRate": round(int(row["success"] or 0) / int(row["total"] or 1), 4) if int(row["total"] or 0) > 0 else 0.0,
+                })
+
+        return ResultObject.success({
+            "totals": totals,
+            "daily": daily,
+            "filter": {"accountId": accountId, "days": days_int},
+        })
+    except Exception as e:
+        return safe_route_failure(logger, e, operation="get solve stats by proxy", user_message="查询代理来源统计失败，请稍后重试")
+
+
+@router.get("/x5sec-cache-stats", response_model=ResultObject[dict])
+async def get_x5sec_cache_stats(
+    current_user: dict = Depends(get_current_user),
+):
+    """查询 x5sec 缓存命中率统计快照（11.5.1-2 实施产物）。
+
+    评估方案 I（x5sec 持久化强化）效果，量化缓存对免滑块的贡献。
+    统计由 x5sec_cache_client.py 的 Redis INCR 计数器累计（x5sec:stat:*）。
+
+    返回:
+        {
+            "request_total": int,   # 缓存读取总请求数
+            "hit_redis": int,       # Redis 命中数
+            "hit_local": int,       # 本地文件兜底命中数
+            "miss": int,            # 未命中数
+            "write_total": int,     # 缓存写入总数
+            "hit_rate": float       # 命中率 = (hit_redis+hit_local) / request_total
+        }
+    """
+    try:
+        from ....services.x5sec_cache_client import get_cache_stats
+        return ResultObject.success(get_cache_stats())
+    except Exception as e:
+        return safe_route_failure(logger, e, operation="get x5sec cache stats", user_message="查询 x5sec 缓存统计失败，请稍后重试")

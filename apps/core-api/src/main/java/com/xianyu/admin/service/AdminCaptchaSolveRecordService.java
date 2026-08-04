@@ -249,6 +249,22 @@ public class AdminCaptchaSolveRecordService {
         }
         vo.setAccounts(accounts);
 
+        // 按代理来源分组（2026-08-03 新增：住址IP vs 服务器IP 成功率对比）
+        List<Map<String, Object>> proxyRows = recordMapper.selectProxySourceGroups(startTime, userId, accountId);
+        List<CaptchaSolveStatsVO.ProxySourceGroup> byProxySource = new ArrayList<>(proxyRows.size());
+        for (Map<String, Object> row : proxyRows) {
+            CaptchaSolveStatsVO.ProxySourceGroup group = new CaptchaSolveStatsVO.ProxySourceGroup();
+            group.setProxySource(getString(row, "proxy_source"));
+            long psTotal = getLong(row, "total");
+            long psSuccess = getLong(row, "success_count");
+            group.setTotal(psTotal);
+            group.setSuccess(psSuccess);
+            group.setFail(getLong(row, "fail_count"));
+            group.setSuccessRate(psTotal > 0 ? (double) psSuccess / psTotal : 0.0);
+            byProxySource.add(group);
+        }
+        vo.setByProxySource(byProxySource);
+
         return vo;
     }
 
@@ -320,6 +336,7 @@ public class AdminCaptchaSolveRecordService {
 
         vo.setPriority(getInteger(row, "priority"));
         vo.setFailureReason(getString(row, "failure_reason"));
+        vo.setProxySource(getString(row, "proxy_source"));
         vo.setQueuedAt(toLocalDateTime(row.get("queued_at")));
         vo.setStartedAt(toLocalDateTime(row.get("started_at")));
         vo.setFinishedAt(toLocalDateTime(row.get("finished_at")));

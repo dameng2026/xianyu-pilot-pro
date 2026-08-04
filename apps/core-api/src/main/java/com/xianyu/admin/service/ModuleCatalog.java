@@ -48,7 +48,20 @@ public class ModuleCatalog {
                 "createdTime:创建时间:170"
         ));
 
-        add("goods", "商品监管", "高转化虚拟商品模板和交易数据", cols("id:ID:80", "goodsTitle:商品标题:280", "username:所属用户:130", "price:价格:100", "autoDelivery:自动发货:100:tag", "autoReply:自动回复:100:tag", "status:状态:100:tag", "createdTime:创建时间:170"));
+        add("goods", "商品监管", "高转化虚拟商品模板和交易数据", cols(
+                "id:ID:70",
+                "coverPic:封面:90:image",
+                "goodsTitle:商品标题:260",
+                "accountName:所属闲鱼账号:150",
+                "username:所属用户:120",
+                "orderCount:总订单:90",
+                "price:价格:100",
+                "goofishLink:闲鱼连接:140:link",
+                "autoDelivery:自动发货:100:tag",
+                "autoReply:自动回复:100:tag",
+                "status:状态:100:tag",
+                "createdTime:创建时间:170"
+        ));
         add("orders", "订单监管", "闲鱼订单数据与状态追踪", cols("id:ID:80", "orderNo:订单号:200", "buyerName:买家:130", "username:所属用户:130", "amount:金额:100", "payStatus:支付:100:tag", "orderStatus:订单状态:110:tag", "deliveryStatus:发货状态:110:tag", "createdTime:创建时间:170"));
         add("messages", "消息监管", "闲鱼聊天消息记录和合规审查", cols("id:ID:80", "buyerName:买家:130", "accountName:账号:140", "messageType:类型:100:tag", "replyType:回复:100:tag", "summary:摘要:240", "createdTime:创建时间:170"));
         add("delivery", "自动发货监管", "卡密发放与自动发货状态", cols("id:ID:80", "accountName:账号:140", "deliveryType:发货类型:100:tag", "orderStatus:状态:100:tag", "retryCount:重试:80", "failReason:失败原因:200", "createdTime:创建时间:170"));

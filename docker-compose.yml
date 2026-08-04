@@ -96,6 +96,10 @@ services:
       NOTIFICATION_SMTP_ALLOWED_HOSTS: ${NOTIFICATION_SMTP_ALLOWED_HOSTS:-}
       CORE_API_BASE_URL: http://backend:18080
       CRAWLER_SERVICE_URL: http://crawler-service:3001
+      # 2026-08-02 添加 Redis 配置（x5sec_cache_client.py 需要，用于读取缓存的 x5sec）
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-dev-only-redis-password-change-me}
     expose:
       - "12401"
     volumes:
@@ -139,6 +143,10 @@ services:
       NOTIFICATION_SMTP_ALLOWED_HOSTS: ${NOTIFICATION_SMTP_ALLOWED_HOSTS:-}
       CORE_API_BASE_URL: http://backend:18080
       CRAWLER_SERVICE_URL: http://crawler-service:3001
+      # 2026-08-02 添加 Redis 配置（x5sec_cache_client.py 需要）
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-dev-only-redis-password-change-me}
       WORKER_INTERVAL_SECONDS: ${WORKER_INTERVAL_SECONDS:-60}
       WORKER_HEARTBEAT_FILE: /tmp/automation-worker-heartbeat
     command: ["python", "run-worker.py"]
@@ -165,8 +173,10 @@ services:
     cap_drop:
       - ALL
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=512m
-      - /home/pwuser:rw,noexec,nosuid,size=64m
+      # 2026-08-02 扩大 /tmp 到 2g：Chrome 启动+滑块求解需要大量临时空间
+      # 原值 512m 会导致 Chrome "No space left on device" 崩溃
+      - /tmp:rw,noexec,nosuid,size=2g
+      - /home/pwuser:rw,noexec,nosuid,size=128m
     shm_size: "1gb"
     depends_on:
       redis:
@@ -212,8 +222,10 @@ services:
     cap_drop:
       - ALL
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=512m
-      - /home/pwuser:rw,noexec,nosuid,size=64m
+      # 2026-08-02 扩大 /tmp 到 2g：Chrome 启动+滑块求解需要大量临时空间
+      # 原值 512m 会导致 Chrome "No space left on device" 崩溃
+      - /tmp:rw,noexec,nosuid,size=2g
+      - /home/pwuser:rw,noexec,nosuid,size=128m
     shm_size: "1gb"
     depends_on:
       redis:

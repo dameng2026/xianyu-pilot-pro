@@ -864,9 +864,11 @@ public class AdminModuleController {
                                                         @RequestParam(defaultValue = "1") int current,
                                                         @RequestParam(defaultValue = "10") int size,
                                                         @RequestParam(required = false) String keyword,
-                                                        @RequestParam(required = false) String status) {
+                                                        @RequestParam(required = false) String status,
+                                                        @RequestParam(required = false) String sortField,
+                                                        @RequestParam(required = false) String sortOrder) {
         return Result.ok(callDependency("模块列表",
-                () -> service.page(moduleKey, current, size, keyword, status)));
+                () -> service.page(moduleKey, current, size, keyword, status, sortField, sortOrder)));
     }
 
     /**

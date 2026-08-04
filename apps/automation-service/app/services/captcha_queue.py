@@ -84,6 +84,10 @@ NON_RETRYABLE_REASONS = {
     "account_disabled",
     "precheck_rejected",
     "service_unavailable",  # hasLogin 服务不可用：不重试，等 WS 下次自然重连触发
+    "ws_connect_failed",    # 2026-08-03 新增：滑块成功但 WS 未连接，不重试
+                            # 原因：WS 未连接通常是 Token API 被 Baxia 二次风控，
+                            # 立即重试求解只会浪费资源。WS _connect_loop 会自然重试。
+                            # 60 秒冷却由 captcha_backoff.py 保证。
 }
 
 
@@ -178,19 +182,79 @@ class CaptchaQueueManager:
         Returns:
             被清理的记录数
         """
+        return await self._cleanup_orphaned_records(
+            status_filter="queued",
+            time_column="created_at",
+            time_interval="1 MINUTE",
+            reason_desc="容器重启后孤儿 queued 记录",
+            operation="cleanup_orphaned_queued_records",
+            broadcast_reason="容器重启导致任务丢失，已自动终止",
+        )
+
+    async def _cleanup_orphaned_retrying_records(self) -> int:
+        """清理容器重启导致的孤儿 retrying 记录。
+
+        容器重启后内存队列丢失，旧容器中 worker 已取出（status=retrying）但未完成的任务成为孤儿。
+        新容器的 worker 不会重新拾取这些任务（它们不在内存 PriorityQueue 中），
+        且 dedup 检查会发现这些 retrying 记录，阻止同账号新任务入队，造成死锁。
+
+        判定条件：
+        - status = 'retrying'
+        - started_at < NOW() - INTERVAL 10 MINUTE（滑块求解正常 60-120 秒，10 分钟足够判定为孤儿）
+
+        Returns:
+            被清理的记录数
+        """
+        return await self._cleanup_orphaned_records(
+            status_filter="retrying",
+            time_column="started_at",
+            time_interval="10 MINUTE",
+            reason_desc="容器重启后孤儿 retrying 记录（worker 已丢失）",
+            operation="cleanup_orphaned_retrying_records",
+            broadcast_reason="容器重启导致 worker 丢失任务，已自动终止",
+        )
+
+    async def _cleanup_orphaned_records(
+        self,
+        status_filter: str,
+        time_column: str,
+        time_interval: str,
+        reason_desc: str,
+        operation: str,
+        broadcast_reason: str,
+    ) -> int:
+        """通用孤儿记录清理方法。
+
+        容器重启后内存队列丢失，旧容器中的任务成为孤儿，永远不会被新容器的 worker 处理。
+        此方法将这些孤儿记录标记为 timeout/stale_terminated，避免：
+        1. 前端误判"队列卡住"
+        2. dedup 检查阻止同账号新任务入队（retrying 状态会导致死锁）
+
+        Args:
+            status_filter: 要清理的状态（queued / retrying）
+            time_column: 时间判定列（created_at / started_at）
+            time_interval: 时间间隔表达式（如 "1 MINUTE", "10 MINUTE"）
+            reason_desc: 清理原因描述（写入 error_message）
+            operation: 日志中的操作名
+            broadcast_reason: 广播给前端的原因
+
+        Returns:
+            被清理的记录数
+        """
         try:
             async with async_session() as db:
                 # 1. 先查询孤儿记录详情（用于广播）
                 rows = (await db.execute(
                     text(
-                        """
+                        f"""
                         SELECT id, account_id, tenant_id
                         FROM xianyu_captcha_solve_record
-                        WHERE status = 'queued'
+                        WHERE status = :status
                           AND COALESCE(deleted, 0) = 0
-                          AND created_at < DATE_SUB(NOW(), INTERVAL 1 MINUTE)
+                          AND {time_column} < DATE_SUB(NOW(), INTERVAL {time_interval})
                         """
                     ),
+                    {"status": status_filter},
                 )).mappings().all()
 
                 if not rows:
@@ -208,7 +272,7 @@ class CaptchaQueueManager:
                             result = 'stale_terminated',
                             failure_reason = 'stale_terminated',
                             error_message = CONCAT(COALESCE(error_message, ''),
-                                '[系统清理] 容器重启后孤儿 queued 记录，已自动终止'),
+                                '[系统清理] {reason_desc}，已自动终止'),
                             finished_at = NOW(),
                             updated_at = NOW()
                         WHERE id IN ({in_clause})
@@ -220,11 +284,11 @@ class CaptchaQueueManager:
 
                 affected = len(rows)
                 logger.warning(
-                    "孤儿 queued 记录清理：已将 %d 条 queued 孤儿记录标记为 timeout/stale_terminated",
-                    affected,
+                    "孤儿 %s 记录清理：已将 %d 条 %s 孤儿记录标记为 timeout/stale_terminated",
+                    status_filter, affected, status_filter,
                 )
 
-                # 3. 广播状态变更（让前端实时看到状态从 queued → timeout）
+                # 3. 广播状态变更（让前端实时看到状态变化）
                 try:
                     from .captcha_solve_record import _lookup_account_name
                     from .ws_sse import broadcaster
@@ -242,20 +306,20 @@ class CaptchaQueueManager:
                                 "status": "timeout",
                                 "result": "stale_terminated",
                                 "engine": "Playwright",
-                                "reason": "容器重启导致任务丢失，已自动终止",
+                                "reason": broadcast_reason,
                                 "recordId": record_id,
                             },
                         )
                 except Exception as e:
                     log_service_failure(
-                        logger, e, operation="broadcast_orphan_cleanup",
+                        logger, e, operation=f"broadcast_{operation}",
                         level=logging.DEBUG,
                     )
 
                 return affected
         except Exception as e:
             log_service_failure(
-                logger, e, operation="cleanup_orphaned_queued_records",
+                logger, e, operation=operation,
                 level=logging.WARNING,
             )
             return 0
@@ -264,17 +328,25 @@ class CaptchaQueueManager:
         """启动 worker 协程（幂等，重复调用安全）。
 
         启动流程：
-        1. 清理容器重启导致的孤儿 queued 记录（避免前端误判"队列卡住"）
+        1. 清理容器重启导致的孤儿 queued + retrying 记录（避免死锁和前端误判"队列卡住"）
         2. 启动 worker 协程消费内存队列
         """
         if self._started:
             return
         self._started = True
 
-        # 1. 清理孤儿 queued 记录（容器重启前的旧任务，内存队列已丢失）
-        orphan_count = await self._cleanup_orphaned_queued_records()
-        if orphan_count > 0:
-            logger.info("启动前清理孤儿 queued 记录 %d 条", orphan_count)
+        # 1. 清理孤儿记录（容器重启前的旧任务，内存队列已丢失）
+        # 1a. 清理孤儿 queued 记录
+        orphan_queued = await self._cleanup_orphaned_queued_records()
+        if orphan_queued > 0:
+            logger.info("启动前清理孤儿 queued 记录 %d 条", orphan_queued)
+
+        # 1b. 清理孤儿 retrying 记录（worker 已取出但未完成，新容器不会重新拾取）
+        #     这类记录会导致 dedup 死锁：新任务因 retrying 记录存在而被跳过，
+        #     但 retrying 记录永远不会被处理，造成该账号 WS 永远无法恢复
+        orphan_retrying = await self._cleanup_orphaned_retrying_records()
+        if orphan_retrying > 0:
+            logger.info("启动前清理孤儿 retrying 记录 %d 条", orphan_retrying)
 
         # 2. 启动 worker 协程
         for i in range(SOLVE_WORKER_CONCURRENCY):
@@ -632,18 +704,35 @@ class CaptchaQueueManager:
                 )
 
         # 执行求解（handle_captcha_for_account 内部已包含预校验逻辑）
+        # 添加 180 秒超时保护：防止 crawler-service 无响应或 Python solver 挂起
+        # 导致任务永久卡在 retrying 状态（worker 协程被阻塞，无法处理后续任务）
+        # 正常滑块求解 60-120 秒，180 秒超时足够覆盖异常情况
+        SOLVE_TASK_TIMEOUT_SEC = 180
         try:
-            result = await handle_captcha_for_account(
-                account_id=task.account_id,
-                tenant_id=task.tenant_id,
-                response=None,
-                auto_solve=True,
-                trigger_scene=task.trigger_scene,
-                open_reason=task.open_reason,
-                solve_reason=task.solve_reason,
-                record_id=task.record_id,  # 复用已创建的记录
-                priority=task.priority,
+            result = await asyncio.wait_for(
+                handle_captcha_for_account(
+                    account_id=task.account_id,
+                    tenant_id=task.tenant_id,
+                    response=None,
+                    auto_solve=True,
+                    trigger_scene=task.trigger_scene,
+                    open_reason=task.open_reason,
+                    solve_reason=task.solve_reason,
+                    record_id=task.record_id,  # 复用已创建的记录
+                    priority=task.priority,
+                ),
+                timeout=SOLVE_TASK_TIMEOUT_SEC,
             )
+        except asyncio.TimeoutError:
+            logger.error(
+                "滑块求解超时（%d秒），强制终止 accountId=%d recordId=%s",
+                SOLVE_TASK_TIMEOUT_SEC, task.account_id, task.record_id,
+            )
+            result = {
+                "autoSolveResult": {"success": False, "error": f"solve timeout after {SOLVE_TASK_TIMEOUT_SEC}s"},
+                "recovered": False,
+                "failureReason": "timeout",
+            }
         except Exception as e:
             log_service_failure(
                 logger, e, operation="process_solve_task",

@@ -37,6 +37,10 @@ public class AdminRealDataModuleService {
     }
 
     public PageResult<Map<String, Object>> page(String moduleKey, int current, int size, String keyword, String status) {
+        return page(moduleKey, current, size, keyword, status, null, null);
+    }
+
+    public PageResult<Map<String, Object>> page(String moduleKey, int current, int size, String keyword, String status, String sortField, String sortOrder) {
         QueryDef def = queryDef(moduleKey);
         int safeCurrent = PageUtils.normalizeCurrent(current);
         int safeSize = PageUtils.normalizeSize(size);
@@ -50,9 +54,27 @@ public class AdminRealDataModuleService {
         List<Object> pageArgs = new ArrayList<>(args);
         pageArgs.add(safeSize);
         pageArgs.add(offset);
-        String pageSql = "SELECT * FROM (" + def.sql() + ") t" + where + " ORDER BY t.createdTime DESC, t.id DESC LIMIT ? OFFSET ?";
+        String orderClause = resolveOrderClause(def, sortField, sortOrder);
+        String pageSql = "SELECT * FROM (" + def.sql() + ") t" + where + " ORDER BY " + orderClause + " LIMIT ? OFFSET ?";
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(pageSql, pageArgs.toArray());
         return new PageResult<>(rows, safeCurrent, safeSize, total == null ? 0 : total);
+    }
+
+    /**
+     * 解析排序子句。当前仅支持按订单数（orderCount）排序，其余字段回退到默认创建时间倒序。
+     */
+    private String resolveOrderClause(QueryDef def, String sortField, String sortOrder) {
+        boolean desc = !"asc".equalsIgnoreCase(sortOrder);
+        if (StringUtils.hasText(sortField)) {
+            if ("orderCount".equals(sortField)) {
+                return "t.orderCount " + (desc ? "DESC" : "ASC") + ", t.id DESC";
+            }
+            // 其他字段按白名单校验后支持排序，防止 SQL 注入
+            if (def.sortableFields().contains(sortField)) {
+                return "t." + sortField + " " + (desc ? "DESC" : "ASC") + ", t.id DESC";
+            }
+        }
+        return "t.createdTime DESC, t.id DESC";
     }
 
     public Map<String, Object> detail(String moduleKey, long id) {
@@ -204,10 +226,21 @@ public class AdminRealDataModuleService {
             String deliveryType = col("xianyu_goods", "g", List.of("delivery_type", "delivery_mode"), "NULL");
             String autoDelivery = "CASE WHEN " + deliveryType + " IS NULL THEN '-' WHEN " + deliveryType + " LIKE 'auto%' OR " + deliveryType + " IN ('kami','auto_kami','1') THEN '开启' ELSE '关闭' END";
             String created = col("xianyu_goods", "g", List.of("created_time", "published_time"), "NULL");
-            parts.add("SELECT g.id AS id, 'xianyu_goods' AS sourceTable, " + title + " AS goodsTitle, " + username + " AS username, " + accountName + " AS accountName, " + price + " AS price, " + autoDelivery + " AS autoDelivery, '-' AS autoReply, " + status + " AS status, " + created + " AS createdTime " +
+            // 商品封面图：优先 cover_pic，其次 image_url
+            String coverPic = col("xianyu_goods", "g", List.of("cover_pic", "image_url"), "''");
+            // 闲鱼商品 itemId（external_goods_id），用于拼闲鱼商品链接
+            String itemId = col("xianyu_goods", "g", List.of("external_goods_id", "goods_id"), "''");
+            // 商品闲鱼连接：itemId 非空时拼接详情页地址
+            String goofishLink = "CASE WHEN " + itemId + " IS NOT NULL AND " + itemId + " <> '' " +
+                    "THEN CONCAT('https://www.goofish.com/item?itemId=', " + itemId + ") ELSE '' END";
+            // 商品总订单：统计 xianyu_trade_order 中该 itemId 的有效订单数（含全部订单状态，与订单监管口径一致）
+            String orderCount = (tableExists("xianyu_trade_order") && columnExists("xianyu_trade_order", "item_id"))
+                    ? "COALESCE((SELECT COUNT(*) FROM xianyu_trade_order o WHERE o.item_id=" + itemId + " AND " + notDeleted("xianyu_trade_order", "o") + "),0)"
+                    : "0";
+            parts.add("SELECT g.id AS id, 'xianyu_goods' AS sourceTable, " + title + " AS goodsTitle, " + coverPic + " AS coverPic, " + username + " AS username, " + accountName + " AS accountName, " + orderCount + " AS orderCount, " + price + " AS price, " + goofishLink + " AS goofishLink, " + autoDelivery + " AS autoDelivery, '-' AS autoReply, " + status + " AS status, " + created + " AS createdTime " +
                     "FROM xianyu_goods g " + accountJoin("xianyu_goods", "g") + userJoin("xianyu_goods", "g", "a") + " WHERE " + notDeleted("xianyu_goods", "g"));
         }
-        return new QueryDef(unionOrEmpty(parts), List.of("goodsTitle", "username", "accountName", "price", "status"), List.of("status", "autoDelivery", "autoReply"));
+        return new QueryDef(unionOrEmpty(parts), List.of("goodsTitle", "username", "accountName", "price", "status"), List.of("status", "autoDelivery", "autoReply"), List.of("orderCount"));
     }
 
     private QueryDef ordersQuery() {
@@ -384,8 +417,8 @@ public class AdminRealDataModuleService {
     }
 
     private String emptySelectSql() {
-        return "SELECT 0 AS id, 'none' AS sourceTable, '' AS goodsTitle, '' AS username, '' AS accountName, " +
-                "'' AS price, '' AS autoDelivery, '' AS autoReply, '' AS orderNo, '' AS buyerName, '' AS amount, " +
+        return "SELECT 0 AS id, 'none' AS sourceTable, '' AS goodsTitle, '' AS coverPic, '' AS username, '' AS accountName, " +
+                "0 AS orderCount, '' AS price, '' AS goofishLink, '' AS autoDelivery, '' AS autoReply, '' AS orderNo, '' AS buyerName, '' AS amount, " +
                 "'' AS payStatus, '' AS orderStatus, '' AS deliveryStatus, '' AS messageType, '' AS replyType, " +
                 "'' AS summary, '' AS deliveryType, 0 AS retryCount, '' AS failReason, '' AS ruleName, 0 AS hitCount, " +
                 "'' AS configName, 0 AS totalCount, 0 AS usedCount, 0 AS remainCount, '' AS status, NULL AS createdTime WHERE 1=0";
@@ -630,5 +663,9 @@ public class AdminRealDataModuleService {
         return CsvCellEncoder.encode(s);
     }
 
-    private record QueryDef(String sql, List<String> keywordFields, List<String> statusFields) {}
+    private record QueryDef(String sql, List<String> keywordFields, List<String> statusFields, List<String> sortableFields) {
+        QueryDef(String sql, List<String> keywordFields, List<String> statusFields) {
+            this(sql, keywordFields, statusFields, List.of());
+        }
+    }
 }

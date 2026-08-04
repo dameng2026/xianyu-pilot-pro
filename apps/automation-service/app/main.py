@@ -293,6 +293,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log_service_failure(logger, e, operation="start_ws_health_check")
 
+    # 启动 x5sec 主动刷新循环（11.5.1-5）
+    # 每 20 小时扫描一次 cookie_status=1 账号，对 x5sec 缓存剩余 TTL < 4 小时的账号
+    # 提前用纯 HTTP 提取（方案 D）刷新缓存，避免 WS 掉线后被动获取（减少 WS 中断时间）。
+    # 关键约束：仅 HTTP 提取，不主动触发滑块求解（遵守 cookie-valid-ws-persistence.md 规则 7）。
+    x5sec_refresh_task = None
+    try:
+        from .services.x5sec_refresh_task import run_x5sec_refresh_loop
+        x5sec_refresh_task = asyncio.create_task(run_x5sec_refresh_loop())
+        logger.info("x5sec 主动刷新循环已启动")
+    except Exception as e:
+        log_service_failure(logger, e, operation="start_x5sec_refresh_loop")
+
     # 启动售整自动上架调度器
     # 每 3 分钟扫描所有 auto_relist_enabled=1 且 has_snapshot=1 且 status in (0,2) 且
     # next_relist_goods_id IS NULL 且 original_quantity=1 的商品，调用发布接口重发。
@@ -360,6 +372,14 @@ async def lifespan(app: FastAPI):
         ws_health_check_task.cancel()
         try:
             await ws_health_check_task
+        except asyncio.CancelledError:
+            pass
+
+    # 停止 x5sec 主动刷新循环
+    if x5sec_refresh_task is not None:
+        x5sec_refresh_task.cancel()
+        try:
+            await x5sec_refresh_task
         except asyncio.CancelledError:
             pass
 

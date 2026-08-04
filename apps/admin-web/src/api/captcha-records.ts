@@ -34,6 +34,8 @@ export interface CaptchaRecordRow {
   errorMessageText?: string
   priority?: number
   failureReason?: string
+  /** 代理来源：server_ip/residential_ip/account_bound/unknown（2026-08-03 新增） */
+  proxySource?: string
   queuedAt?: string
   startedAt?: string
   finishedAt?: string
@@ -83,6 +85,17 @@ export interface CaptchaSolveStats {
   kpi: CaptchaSolveKpi
   trend: CaptchaSolveTrendPoint[]
   accounts: CaptchaSolveAccountGroup[]
+  /** 按代理来源聚合的成功率（2026-08-03 新增，住址IP vs 服务器IP对比） */
+  byProxySource?: CaptchaSolveProxySourceGroup[]
+}
+
+/** 按代理来源聚合的统计行 */
+export interface CaptchaSolveProxySourceGroup {
+  proxySource: string // server_ip / residential_ip / account_bound / unknown
+  total: number
+  success: number
+  fail: number
+  successRate: number // 0~1
 }
 
 /** 滑块求解统计参数 */

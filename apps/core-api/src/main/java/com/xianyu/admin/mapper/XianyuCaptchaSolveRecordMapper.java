@@ -120,7 +120,7 @@ public interface XianyuCaptchaSolveRecordMapper {
     @Select("<script>" +
             "SELECT id, tenant_id, account_id, account_name, event_desc, open_reason, solve_reason, " +
             "trigger_scene, result, status, engine, retry_count, error_message, " +
-            "priority, failure_reason, queued_at, started_at, finished_at, " +
+            "priority, failure_reason, proxy_source, queued_at, started_at, finished_at, " +
             "created_at, updated_at " +
             "FROM xianyu_captcha_solve_record " +
             "WHERE COALESCE(deleted, 0) = 0 " +
@@ -153,6 +153,30 @@ public interface XianyuCaptchaSolveRecordMapper {
     @Select("SELECT COUNT(*) FROM xianyu_captcha_solve_record " +
             "WHERE status = #{status} AND COALESCE(deleted, 0) = 0")
     int countByStatus(@Param("status") String status);
+
+    /**
+     * 按代理来源（proxy_source）分组聚合成功率（2026-08-03 新增）。
+     * 统计口径与 selectKpi 一致：排除超时/预检验拒绝/服务不可用记录。
+     * 空值 proxy_source 归为 'unknown'。
+     */
+    @Select("<script>" +
+            "SELECT COALESCE(NULLIF(proxy_source, ''), 'unknown') AS proxy_source, " +
+            "SUM(CASE WHEN NOT (status IN ('timeout', 'precheck_rejected') OR COALESCE(failure_reason, '') IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled')) THEN 1 ELSE 0 END) AS total, " +
+            "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count, " +
+            "SUM(CASE WHEN status = 'fail' AND COALESCE(failure_reason, '') NOT IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled') THEN 1 ELSE 0 END) AS fail_count " +
+            "FROM xianyu_captcha_solve_record " +
+            "WHERE COALESCE(deleted, 0) = 0 " +
+            "<if test='startTime != null'> AND created_at &gt;= #{startTime} </if>" +
+            "<if test='accountId != null'> AND account_id = #{accountId} </if>" +
+            "<if test='userId != null and accountId == null'>" +
+            "  AND account_id IN (SELECT id FROM xianyu_account WHERE COALESCE(user_id, created_by_user_id) = #{userId}) " +
+            "</if>" +
+            "GROUP BY COALESCE(NULLIF(proxy_source, ''), 'unknown') " +
+            "ORDER BY total DESC" +
+            "</script>")
+    List<Map<String, Object>> selectProxySourceGroups(@Param("startTime") LocalDateTime startTime,
+                                                       @Param("userId") Long userId,
+                                                       @Param("accountId") Long accountId);
 
     /**
      * 明细总数。

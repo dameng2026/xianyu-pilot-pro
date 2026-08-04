@@ -793,6 +793,14 @@
           "sha256": "eed7789e6c3fdb8952c6b5b6eae845951d2adcb954a958278d05aaee25acbfc2",
           "risk": "expand",
           "rollback": "restore"
+        },
+        {
+          "version": "1.28",
+          "description": "add proxy_source column to xianyu_captcha_solve_record for residential IP vs server IP success rate comparison (Plan E)",
+          "path": "apps/automation-service/migrations/V1.28__add_captcha_solve_record_proxy_source.sql",
+          "sha256": "6899ab7b89484968e8c04cf7c91f6305ebfdbb8683b5dd20836b3a86de90c25e",
+          "risk": "expand",
+          "rollback": "restore"
         }
       ],
       "quarantined": []

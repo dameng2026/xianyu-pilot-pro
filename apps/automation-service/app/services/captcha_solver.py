@@ -336,6 +336,15 @@ async def try_auto_solve(
     }
     if proxy_payload:
         payload["proxy"] = proxy_payload
+    else:
+        # 2026-08-02 新增：无账号绑定代理时，请求 crawler-service 使用住址IP代理池
+        # 业务目的：测试住址IP vs 服务器IP的求解成功率对比
+        # crawler-service 会根据 USE_RESIDENTIAL_PROXY 环境变量决定是否启用
+        # 详见 .trae/rules/x5sec-research-knowledge.md 方案 E
+        use_residential = os.environ.get("USE_RESIDENTIAL_PROXY", "false").lower() == "true"
+        if use_residential:
+            payload["useResidentialProxy"] = True
+            logger.info("滑块求解请求使用住址IP代理池 accountId=%d", account_id)
 
     headers = {
         "Content-Type": "application/json",
@@ -444,12 +453,12 @@ async def try_auto_solve(
         #
         # 2026-08-01 二次修正：cookie_invalid 不再 skip_backoff。
         # 原因：真正的 cookie_invalid（Cookie 已过期）短期内重试必然失败，浪费资源。
-        # captcha_backoff.py 已改为 cookie_invalid 触发 30 分钟冷却，等用户重新登录。
-        # 累加 fail_count 让 30 分钟冷却生效，避免 5 分钟冷却后立即重试又失败。
+        # captcha_backoff.py 统一 60 秒冷却（MAX_COOLDOWN_SEC=60），等用户重新登录。
+        # 累加 fail_count 让 60 秒冷却生效，避免瞬时高频触发 Baxia 风控。
         is_cookie_invalid = "Cookie Session" in crawler_error or "Cookie 已过期" in crawler_error or "FAIL_SYS_SESSION_EXPIRED" in crawler_error
-        # 2026-08-01 优化：累进冷却
-        # - slider_fail：基于 fail_count 累进冷却（5/15/30 分钟），让 Baxia 风控状态充分恢复
-        # - cookie_invalid：30 分钟冷却（等用户重新登录）
+        # 2026-08-02 修正：累进冷却已废弃，所有失败统一 60 秒冷却（见 cookie-valid-ws-persistence.md）
+        # - slider_fail：60 秒冷却（快速重试，服务于 WS 持久化目标）
+        # - cookie_invalid：60 秒冷却（等用户重新登录）
         # - browser_crashed：跳过退避（临时性错误，不累加 fail_count）
         # - 其他失败：60 秒冷却
         if is_browser_crash:
@@ -461,7 +470,7 @@ async def try_auto_solve(
         await record_solve_failure(
             account_id, tenant_id,
             error=crawler_error or "滑块验证未通过",
-            skip_backoff=is_browser_crash,  # cookie_invalid 不再 skip_backoff，让 30 分钟冷却生效
+            skip_backoff=is_browser_crash,  # cookie_invalid 不再 skip_backoff，让 60 秒冷却生效
             failure_reason=failure_reason_for_cooldown,
         )
 
@@ -469,6 +478,63 @@ async def try_auto_solve(
     # 关键：Baxia 验证通过后浏览器中的 cookie 已更新，必须持久化到数据库，
     # 否则后续 _verify_cookie_via_token_api 和 API 调用仍用旧 cookie 会失败
     if solve_ok and fresh_cookies:
+        # 2026-08-03 修复"滑块成功但cookie失效"误判（用户质疑的核心问题）
+        # 原因：crawler-service 返回的 cookies 和 x5sec 是两个独立字段，
+        #       fresh_cookies 可能不包含 x5sec（Baxia 验证通过后获得的标记）。
+        #       如果不注入 x5sec 就更新数据库，后续 _verify_cookie_via_token_api
+        #       读取的 cookie 缺少 x5sec，调用 Token API 又被 Baxia 拦截，
+        #       返回 FAIL_SYS_SESSION_EXPIRED，被误判为 Cookie 失效。
+        #       实际上 Cookie 是有效的（能让浏览器登录、加载滑块、拖动通过），
+        #       只是缺少 x5sec 标记。用户逻辑："滑块成功说明cookie有效"是正确的。
+        x5sec_value = data.get("x5sec") or ""
+        # 2026-08-03 修复 x5sec 注入条件 bug：
+        # 原条件 `if x5sec_value and "x5sec=" not in fresh_cookies:` 有 bug——
+        # 如果 fresh_cookies 已包含旧 x5sec（被 Baxia punish 的旧值），就不注入新 x5sec，
+        # 导致后续 Token API 调用仍用旧 x5sec 失败，被误判为 cookie_invalid。
+        # inject_x5sec_into_cookie 是幂等的（内部 re.sub 替换旧值），
+        # 所以只要 x5sec_value 有值就强制注入（替换或追加）。
+        if x5sec_value:
+            try:
+                from .x5sec_cache_client import inject_x5sec_into_cookie
+                # 检查 fresh_cookies 是否已包含 x5sec（用于日志区分"替换"vs"追加"）
+                had_x5sec = "x5sec=" in fresh_cookies
+                fresh_cookies = inject_x5sec_into_cookie(fresh_cookies, x5sec_value)
+                logger.info(
+                    "已将 x5sec 注入到 fresh_cookies accountId=%d x5secLen=%d cookieLen=%d action=%s",
+                    account_id, len(x5sec_value), len(fresh_cookies),
+                    "replace" if had_x5sec else "append",
+                )
+            except Exception as e:
+                log_service_failure(
+                    logger, e, operation="inject_x5sec_to_fresh_cookies",
+                    tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
+                )
+
+        # 2026-08-03 新增：将 x5sec 缓存到 Redis，实现后续 WS 重连免滑块
+        # 原因：crawler-service 的 cacheX5sec 已在 slide-solve 端点中调用，
+        #       但 Python 端缺少缓存写入函数，导致通过 _try_silent_extract /
+        #       _try_http_x5sec_extract 获取的 x5sec 无法缓存。
+        #       此处作为双重保障：即使 crawler-service 缓存失败，Python 端也缓存一次。
+        if x5sec_value:
+            try:
+                from .x5sec_cache_client import cache_x5sec
+                cache_x5sec(fresh_cookies or cookie_str, x5sec_value)
+                logger.info(
+                    "已缓存 x5sec 到 Redis accountId=%d x5secLen=%d",
+                    account_id, len(x5sec_value),
+                )
+            except Exception as e:
+                log_service_failure(
+                    logger, e, operation="cache_x5sec_after_solve",
+                    tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
+                )
+            # 方案 K：记录滑块求解获取的 x5sec 样本（用于离线逆向分析）
+            # 滑块求解成功是最高价值的样本（确认 Baxia 验证通过后服务端下发的 x5sec）
+            try:
+                from .mtop_sign_research import log_x5sec_sample
+                log_x5sec_sample(fresh_cookies or cookie_str, x5sec_value, source="slider_solve")
+            except Exception:
+                pass
         try:
             from .ws_token import extract_m_h5_tk_from_cookie
             m_h5_tk = extract_m_h5_tk_from_cookie(fresh_cookies)
@@ -493,8 +559,9 @@ async def try_auto_solve(
                 )
                 await db.commit()
             logger.info(
-                "滑块求解成功，已更新数据库 Cookie accountId=%d cookieLen=%d hasToken=%s",
+                "滑块求解成功，已更新数据库 Cookie accountId=%d cookieLen=%d hasToken=%s hasX5sec=%s",
                 account_id, len(fresh_cookies), bool(m_h5_tk),
+                "x5sec=" in fresh_cookies,
             )
         except Exception as e:
             log_service_failure(
@@ -517,6 +584,11 @@ async def try_auto_solve(
         # 2026-08-02 新增：标识是否为 x5sec 缓存命中（免滑块）
         # 用于 handle_captcha_for_account 中判断：缓存命中但 Token API 验证失败时清除失效缓存
         "cached": bool(data.get("cached")),
+        # 2026-08-02 新增：代理来源标识（用于统计住址IP vs 服务器IP的求解成功率）
+        # server_ip=服务器IP / residential_ip=住址IP / account_bound=账号绑定代理 / none=无代理
+        "proxySource": data.get("proxySource") or "unknown",
+        # 住址IP元数据（仅 residential_ip 时有值，便于日志审计）
+        "residentialProxy": data.get("residentialProxy"),
     }
 
 
@@ -606,19 +678,25 @@ async def _update_cookie_status_for_captcha(
         )
 
 
-async def _verify_cookie_via_token_api(account_id: int, tenant_id: int) -> bool:
+async def _verify_cookie_via_token_api(account_id: int, tenant_id: int) -> tuple[bool, str]:
     """滑块求解成功后，调用 Token API 二次验证 Cookie 是否真正可用。
 
-    滑块求解器在 Cookie Session 已过期时会误报成功（页面跳转到登录页，
-    没有滑块组件）。此处通过 Token API 的实际响应来确认 Cookie 真实可用性。
+    2026-08-03 根因修复：用户质疑"滑块成功但cookie失效"的逻辑矛盾。
+    核心逻辑：滑块拖动通过 = Cookie 一定有效（Cookie 失效无法登录看到滑块）。
+    Token API 返回 captcha（Baxia 风控）≠ Cookie 失效，只是 Token API 调用本身
+    被 Baxia 二次风控了。原先把 captcha 也当作 Cookie 失效，导致大量误判。
 
     Args:
         account_id: 账号 ID
         tenant_id: 租户 ID
 
     Returns:
-        True: Cookie 可用，Token API 返回 SUCCESS
-        False: Cookie 已过期（FAIL_SYS_SESSION_EXPIRED）或不可用
+        (is_valid, error_type) 二元组：
+        - (True, None): Token API 验证通过，Cookie 确实可用
+        - (True, "captcha"): Token API 被 Baxia 风控（captcha），但滑块已通过
+                             说明 Cookie 仍有效，只是 Token API 触发了二次风控
+        - (False, "expired"): Cookie 真的过期了（极少见，滑块通过说明 Cookie 有效）
+        - (False, "unknown"): 其他未知错误
     """
     try:
         async with async_session() as db:
@@ -632,12 +710,12 @@ async def _verify_cookie_via_token_api(account_id: int, tenant_id: int) -> bool:
             )).mappings().first()
         if not row:
             logger.warning("_verify_cookie_via_token_api: 账号不存在 accountId=%d", account_id)
-            return False
+            return False, "unknown"
 
         cookie_str = decrypt_cookie_if_needed(row["encrypted_cookie"])
         if not cookie_str:
             logger.warning("_verify_cookie_via_token_api: Cookie 为空 accountId=%d", account_id)
-            return False
+            return False, "unknown"
 
         m_h5_tk = None
         if row["encrypted_token"]:
@@ -646,12 +724,14 @@ async def _verify_cookie_via_token_api(account_id: int, tenant_id: int) -> bool:
         # 调用 ws_token 模块的完整 Token 获取流程
         # （会自动尝试 cookie 中的 _m_h5_tk、DB 中的 _m_h5_tk、刷新 _m_h5_tk 三种路径）
         from .ws_token import get_ws_token_with_refreshed_m_h5_tk
-        # 关键修复：添加重试机制（最多 3 次，间隔 3 秒）
+        # 重试机制（最多 3 次，间隔 3 秒）
         # 场景：滑块刚通过时，闲鱼服务端 Baxia 风控状态可能还没更新，
-        # Token API 暂时返回 FAIL_SYS_SESSION_EXPIRED，但这不是真正的 Cookie 过期。
-        # 等待几秒后重试就能通过（已由 01:12 误判→01:35 成功的生产案例证实）。
+        # Token API 暂时返回 captcha，但这不是 Cookie 失效。
+        # 等待几秒后重试可能通过（Baxia 风控状态恢复）。
         max_verify_retries = 3
         last_error_type = None
+        captcha_count = 0
+        expired_count = 0
         for attempt in range(1, max_verify_retries + 1):
             access_token, _, error_type, _ = await asyncio.to_thread(
                 get_ws_token_with_refreshed_m_h5_tk, cookie_str, m_h5_tk
@@ -661,25 +741,47 @@ async def _verify_cookie_via_token_api(account_id: int, tenant_id: int) -> bool:
                     "_verify_cookie_via_token_api: Cookie 验证通过 accountId=%d, accessToken长度=%d, attempt=%d/%d",
                     account_id, len(access_token), attempt, max_verify_retries,
                 )
-                return True
+                return True, None
             last_error_type = error_type
+            # 统计 error_type 分布，用于最终判定
+            if error_type == "captcha":
+                captcha_count += 1
+            elif error_type == "expired":
+                expired_count += 1
             logger.warning(
                 "_verify_cookie_via_token_api: Cookie 验证失败 accountId=%d, error_type=%s, attempt=%d/%d",
                 account_id, error_type, attempt, max_verify_retries,
             )
             if attempt < max_verify_retries:
                 await asyncio.sleep(3)  # 等待 3 秒让 Baxia 风控状态更新
-        logger.warning(
-            "_verify_cookie_via_token_api: Cookie 不可用 accountId=%d, error_type=%s (重试 %d 次均失败)",
-            account_id, last_error_type, max_verify_retries,
-        )
-        return False
+
+        # 2026-08-03 根因修复：根据 error_type 分布判定 Cookie 有效性
+        # 用户逻辑：滑块拖动通过 = Cookie 一定有效（用户质疑的核心）
+        # - 全部是 captcha（Baxia 风控）→ Cookie 仍有效，只是 Token API 被风控
+        # - 全部是 expired → Cookie 真的过期（极少见，理论上滑块通过就不会 expired）
+        # - 混合或未知 → 保守起见视为有效（滑块通过的先验概率更高）
+        if expired_count > 0 and captcha_count == 0:
+            # 全部是 expired，Cookie 真的过期
+            logger.warning(
+                "_verify_cookie_via_token_api: Cookie 真正过期 accountId=%d (expired=%d, captcha=%d)",
+                account_id, expired_count, captcha_count,
+            )
+            return False, "expired"
+        else:
+            # captcha 占多数或混合 → Cookie 仍有效（滑块已通过）
+            # 这是最关键的修复：不再把 captcha 误判为 cookie_invalid
+            logger.info(
+                "_verify_cookie_via_token_api: Token API 被 Baxia 风控（captcha），"
+                "但滑块已通过，Cookie 视为有效 accountId=%d (expired=%d, captcha=%d, last_error=%s)",
+                account_id, expired_count, captcha_count, last_error_type,
+            )
+            return True, "captcha"
     except Exception as e:
         log_service_failure(
             logger, e, operation="verify_captcha_cookie",
             tenant_id=tenant_id, account_id=account_id,
         )
-        return False
+        return False, "unknown"
 
 
 # ============================================================
@@ -944,7 +1046,7 @@ async def handle_captcha_for_account(
 
         # 先查冷却：冷却中则直接落库失败记录，不启动浏览器
         # 手动触发场景（manual/manual_retry）跳过冷却，让用户能主动解除冷却并求解
-        from .captcha_backoff import assert_auto_solve_allowed
+        from .captcha_backoff import assert_auto_solve_allowed, record_solve_failure
         from .captcha_precheck import MANUAL_TRIGGER_SCENES
         skip_cooldown = trigger_scene in MANUAL_TRIGGER_SCENES
         blocked = await assert_auto_solve_allowed(account_id, tenant_id, force=skip_cooldown)
@@ -1068,13 +1170,24 @@ async def handle_captcha_for_account(
             logger.info("账号 %d 滑块自动求解成功", account_id)
 
             # === 关键二次验证：调用 Token API 确认 Cookie 真实可用 ===
-            cookie_valid = await _verify_cookie_via_token_api(account_id, tenant_id)
+            # 2026-08-03 根因修复：_verify_cookie_via_token_api 现在返回 (is_valid, error_type) 二元组
+            # - (True, None): Token API 验证通过
+            # - (True, "captcha"): Token API 被 Baxia 风控，但滑块已通过 → Cookie 仍有效
+            # - (False, "expired"): Cookie 真过期（极少见）
+            # - (False, "unknown"): 其他错误
+            #
+            # 用户逻辑（铁律）：滑块拖动通过 = Cookie 一定有效。
+            # Cookie 失效无法登录看到滑块，更不可能拖动通过。
+            # 所以 captcha（Baxia 风控）不应判定为 cookie_invalid。
+            cookie_valid, verify_error_type = await _verify_cookie_via_token_api(account_id, tenant_id)
             if not cookie_valid:
+                # 只有 verify_error_type == "expired" 才是真正的 Cookie 过期
+                # 其他情况（unknown）保守起见也标记为 cookie_invalid，但记录详细 error_type
                 failure_reason = "cookie_invalid"
                 logger.warning(
-                    "账号 %d 滑块求解器报告成功，但 Token API 验证 Cookie 仍不可用，"
-                    "Cookie Session 已真正过期，需要用户重新扫码登录",
-                    account_id,
+                    "账号 %d 滑块求解器报告成功，但 Token API 验证 Cookie 不可用 "
+                    "error_type=%s，Cookie Session 可能已真正过期，需要用户重新扫码登录",
+                    account_id, verify_error_type,
                 )
 
                 # 2026-08-02 强化：如果本次求解是 x5sec 缓存命中（免滑块），
@@ -1125,15 +1238,25 @@ async def handle_captcha_for_account(
                     )
 
                 auto_solve_result["cookieVerified"] = False
-                auto_solve_result["error"] = (
-                    "滑块已通过，但 Cookie Session 已真正过期（FAIL_SYS_SESSION_EXPIRED），"
-                    "请前往账号管理页重新扫码登录闲鱼账号获取新 Cookie"
-                )
+                # 2026-08-03 修复：根据 verify_error_type 区分错误信息
+                if verify_error_type == "expired":
+                    err_msg_detail = "Cookie Session 已过期（expired），需重新扫码登录"
+                    err_msg_user = (
+                        "滑块已通过，但 Cookie Session 已真正过期（FAIL_SYS_SESSION_EXPIRED），"
+                        "请前往账号管理页重新扫码登录闲鱼账号获取新 Cookie"
+                    )
+                else:
+                    err_msg_detail = f"Token API 验证失败 error_type={verify_error_type}，需重新扫码登录"
+                    err_msg_user = (
+                        f"滑块已通过，但 Token API 验证 Cookie 不可用（{verify_error_type}），"
+                        "请前往账号管理页重新扫码登录闲鱼账号获取新 Cookie"
+                    )
+                auto_solve_result["error"] = err_msg_user
                 auto_solve_result["failureReason"] = failure_reason
                 # 更新求解记录为失败 + 广播失败事件
                 await update_solve_record(
                     solve_record_id, status="fail", result="slider_success",
-                    error_message="Cookie Session 已过期，需重新扫码登录",
+                    error_message=err_msg_detail,
                     retry_count=int(auto_solve_result.get("attempts") or 0),
                     duration_ms=int(auto_solve_result.get("durationMs") or 0),
                     screenshot_path=str(auto_solve_result.get("screenshotPath") or ""),
@@ -1230,36 +1353,60 @@ async def handle_captcha_for_account(
                             await ws_manager.start_client(
                                 account_id, tenant_id, fresh_cookie, fresh_token, unb_value
                             )
+                            # 2026-08-03 优化：设置求解后重启时间戳
+                            # 用于抑制 _auto_solve_captcha_after_failure 在 WS 重连期间重复触发求解
+                            new_client = ws_manager.get_client(account_id)
+                            if new_client is not None:
+                                new_client._last_solve_restart_at = time.time()
                             logger.info(
-                                "滑块求解成功后已强制重启 WS 客户端 accountId=%d cookieLen=%d tokenLen=%d",
+                                "滑块求解成功后已强制重启 WS 客户端 accountId=%d cookieLen=%d tokenLen=%d "
+                                "（已设置求解后抑制期 5 分钟）",
                                 account_id, len(fresh_cookie), len(fresh_token),
                             )
 
-                            # 2026-08-02 强化：等待 WS 连接结果，只有 WS 连接成功才算求解成功
+                            # 2026-08-03 优化：等待 WS 连接结果，使用轮询代替固定 sleep
                             # WS 连接流程：_refresh_token(1-3s) + connect(≤10s) + reg(1-2s) + sync(1s) ≈ 3-15s
-                            # 等待 8 秒是折中值：足够大部分 WS 连接完成，不会过度阻塞队列 worker
-                            ws_wait_seconds = 8
+                            # 原先固定等待 8 秒，但 Token API 可能需要更长时间（尤其是 Baxia 风控恢复期）
+                            # 现改为轮询：每 3 秒检查一次，最多等待 25 秒
+                            # 25 秒是折中值：足够 WS 完成两轮 Token API 调用（60s 重试间隔内），
+                            # 不会过度阻塞队列 worker（求解本身已耗时 30-120s，多等 17s 影响有限）
+                            ws_wait_max_seconds = 25
+                            ws_poll_interval = 3
                             logger.info(
-                                "等待 WS 连接结果 accountId=%d waitSeconds=%d",
-                                account_id, ws_wait_seconds,
+                                "等待 WS 连接结果 accountId=%d maxWait=%ds pollInterval=%ds",
+                                account_id, ws_wait_max_seconds, ws_poll_interval,
                             )
-                            await asyncio.sleep(ws_wait_seconds)
+                            ws_elapsed = 0
+                            while ws_elapsed < ws_wait_max_seconds:
+                                await asyncio.sleep(ws_poll_interval)
+                                ws_elapsed += ws_poll_interval
+                                client = ws_manager.get_client(account_id)
+                                if client and client.is_connected:
+                                    ws_connected = True
+                                    logger.info(
+                                        "滑块求解成功且 WS 已连接 accountId=%d phase=%s elapsed=%ds",
+                                        account_id, getattr(client, "phase", "unknown"), ws_elapsed,
+                                    )
+                                    break
+                                # 检查是否处于 token_failed 状态（Token API 返回 captcha）
+                                # 如果是，提前退出等待，避免无意义地等满 25 秒
+                                client_phase = getattr(client, "phase", "unknown") if client else "no_client"
+                                if client_phase == "token_failed":
+                                    logger.warning(
+                                        "滑块求解成功但 WS 进入 token_failed 状态，提前结束等待 "
+                                        "accountId=%d elapsed=%ds — Token API 被 Baxia 二次风控",
+                                        account_id, ws_elapsed,
+                                    )
+                                    break
 
-                            # 检查 WS 连接状态
-                            client = ws_manager.get_client(account_id)
-                            if client and client.is_connected:
-                                ws_connected = True
-                                logger.info(
-                                    "滑块求解成功且 WS 已连接 accountId=%d phase=%s",
-                                    account_id, getattr(client, "phase", "unknown"),
-                                )
-                            else:
-                                # WS 未连接，检查 phase 判断原因
+                            # 最终检查 WS 连接状态
+                            if not ws_connected:
+                                client = ws_manager.get_client(account_id)
                                 client_phase = getattr(client, "phase", "unknown") if client else "no_client"
                                 client_error = getattr(client, "last_error", "") if client else ""
                                 logger.warning(
-                                    "滑块求解成功但 WS 未连接 accountId=%d phase=%s error=%s",
-                                    account_id, client_phase, client_error[:100],
+                                    "滑块求解成功但 WS 未连接 accountId=%d phase=%s error=%s elapsed=%ds",
+                                    account_id, client_phase, client_error[:100], ws_elapsed,
                                 )
                         else:
                             logger.warning(
@@ -1305,36 +1452,53 @@ async def handle_captcha_for_account(
                         record_id=solve_record_id,
                     )
                 else:
-                    # WS 连接失败，求解记录标记为 success 但备注 WS 连接失败
-                    # Cookie 已恢复（cookie_status=1），WS 会在下次重连周期继续尝试
-                    # 不标记为 fail，因为滑块求解本身是成功的，只是 WS 连接需要时间
+                    # 2026-08-03 重大修复：WS 连接失败时标记为 fail，不再标记为 success
+                    # 原先标记为 success 导致冷却被重置（record_solve_success 已在 solve_captcha 中调用），
+                    # ws_health_check 5 分钟后再次触发求解，形成"求解→WS未连→待确认→5分钟→再求解"循环。
+                    # 用户要求："只有连接成功，才算成功"
+                    # 修复：标记为 fail + 调用 record_solve_failure 重新武装 60 秒冷却，
+                    # 阻止 ws_health_check 和 token_refresh 在短时间内重复触发求解。
+                    # Cookie 已恢复（cookie_status=1），WS 会在 _connect_loop 中继续重试。
+                    await record_solve_failure(
+                        account_id, tenant_id,
+                        error=f"滑块求解成功但 WS 连接失败（8 秒内未建立连接），"
+                              f"phase={getattr(client, 'phase', 'unknown') if client else 'no_client'}",
+                        failure_reason="ws_connect_failed",
+                    )
                     await update_solve_record(
-                        solve_record_id, status="success", result="slider_success",
+                        solve_record_id, status="fail", result="slider_success",
                         retry_count=int(auto_solve_result.get("attempts") or 0),
                         engine="Playwright",
                         error_message=(
                             f"[durationMs={solve_duration_ms}] 滑块求解成功，Cookie 已恢复，"
-                            f"WS 连接待确认（将在下次重连周期继续尝试）"
+                            f"但 WS 连接失败（将在 _connect_loop 中继续重试）"
                         ),
                     )
-                    # 更新 finished_at
+                    # 更新 failure_reason + finished_at
                     try:
                         async with async_session() as db:
                             await db.execute(
                                 text(
                                     "UPDATE xianyu_captcha_solve_record "
-                                    "SET finished_at = NOW() WHERE id = :rid"
+                                    "SET failure_reason = 'ws_connect_failed', finished_at = NOW() "
+                                    "WHERE id = :rid"
                                 ),
                                 {"rid": solve_record_id},
                             )
                             await db.commit()
                     except Exception as e:
-                        log_service_failure(logger, e, operation="update_finished_at", level=logging.WARNING)
+                        log_service_failure(logger, e, operation="update_failure_reason", level=logging.WARNING)
                     await broadcast_captcha_solve(
                         tenant_id, account_id, account_name,
-                        status="success", result="slider_success",
-                        reason="滑块求解成功，Cookie 已恢复，WS 连接将在下次重连周期继续尝试",
+                        status="fail", result="slider_success",
+                        reason="滑块求解成功但 WS 连接失败，将在重连周期继续尝试",
                         record_id=solve_record_id,
+                    )
+                    logger.warning(
+                        "滑块求解成功但 WS 连接失败，已标记为 fail 并武装 60 秒冷却 "
+                        "accountId=%d phase=%s — 阻止 ws_health_check 短时间内重复触发求解",
+                        account_id,
+                        getattr(client, "phase", "unknown") if client else "no_client",
                     )
         else:
             # 滑块求解失败
@@ -1431,6 +1595,38 @@ async def handle_captcha_for_account(
                 status="fail", result="slider_fail",
                 reason=error_msg,
                 record_id=solve_record_id,
+            )
+
+    # 2026-08-02 新增：记录代理来源到求解记录（用于统计住址IP vs 服务器IP的成功率）
+    # proxy_source 由 crawler-service 返回，标识本次求解使用的代理类型
+    # server_ip=服务器IP / residential_ip=住址IP / account_bound=账号绑定代理 / none/unknown=无代理
+    # 2026-08-03 修复：添加 INFO 日志记录 proxySource 读取情况，便于排查 proxy_source 为空的问题
+    proxy_source_value = (auto_solve_result.get("proxySource") or "unknown") if auto_solve_result else "unknown"
+    logger.info(
+        "proxy_source 写入检查 accountId=%d solveRecordId=%s proxySourceValue=%s autoSolveResultKeys=%s",
+        account_id, solve_record_id, proxy_source_value,
+        list(auto_solve_result.keys()) if auto_solve_result else "None",
+    )
+    # 2026-08-03 修复：即使 proxySource="unknown" 也写入数据库，便于统计哪些记录没有代理来源
+    if solve_record_id and proxy_source_value:
+        try:
+            async with async_session() as db:
+                await db.execute(
+                    text(
+                        "UPDATE xianyu_captcha_solve_record "
+                        "SET proxy_source = :ps WHERE id = :rid AND COALESCE(proxy_source, '') = ''"
+                    ),
+                    {"ps": proxy_source_value, "rid": solve_record_id},
+                )
+                await db.commit()
+                logger.info(
+                    "proxy_source 已写入数据库 accountId=%d solveRecordId=%s proxySource=%s",
+                    account_id, solve_record_id, proxy_source_value,
+                )
+        except Exception as e:
+            log_service_failure(
+                logger, e, operation="update_solve_record_proxy_source",
+                tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
             )
 
     return {

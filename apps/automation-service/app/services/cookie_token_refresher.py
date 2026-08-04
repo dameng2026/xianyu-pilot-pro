@@ -742,8 +742,12 @@ async def _do_ws_token_refresh(state: AccountRefreshState, cookie_str: str, m_h5
                     logger.warning("WS Token 刷新触发滑块后发送通知失败 accountId=%d", state.account_id)
                 # 自动触发滑块求解（通过优先级队列）
                 try:
-                    from .captcha_queue import captcha_queue_manager
-                    await captcha_queue_manager.enqueue(
+                    # 2026-08-03 修复 ImportError：captcha_queue.py 只有 get_queue_manager()，
+                    # 没有模块级 captcha_queue_manager 实例。原先 import captcha_queue_manager
+                    # 必然 ImportError，导致 Cookie 保活器触发滑块后无法自动入队求解。
+                    from .captcha_queue import get_queue_manager
+                    manager = await get_queue_manager()
+                    await manager.enqueue(
                         account_id=state.account_id,
                         tenant_id=state.tenant_id,
                         trigger_scene="token_refresh",

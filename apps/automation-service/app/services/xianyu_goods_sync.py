@@ -210,12 +210,22 @@ ITEM_LIST_URL = f"{H5_API_BASE}/{ITEM_LIST_API}/1.0/"
 ITEM_DETAIL_API = "mtop.taobao.idle.pc.detail"
 ITEM_DETAIL_URL = f"{H5_API_BASE}/{ITEM_DETAIL_API}/1.0/"
 
+# 2026-08-03 方案 F 第一阶段：请求头完整化，降低 Baxia 风控评分
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "zh-CN,zh;q=0.9",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
     "Referer": "https://www.goofish.com/",
     "Origin": "https://www.goofish.com",
+    "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-site": "same-site",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-dest": "empty",
+    "cache-control": "no-cache",
+    "pragma": "no-cache",
 }
 
 # 同步状态跟踪
@@ -1945,23 +1955,39 @@ class XianyuItemOperator:
         """构建请求头"""
         if self.is_seller:
             return {
-                "Accept": "application/json",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Cookie": self.cookie_str,
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Origin": "https://seller.goofish.com",
                 "Referer": "https://seller.goofish.com/",
+                "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"',
+                "sec-fetch-site": "same-site",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-dest": "empty",
                 "idle_site_biz_code": "COMMONPRO",
                 "idle_user_group_member_id": "",
             }
         else:
             return {
-                "Accept": "application/json",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Cookie": self.cookie_str,
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Origin": "https://www.goofish.com",
                 "Referer": "https://www.goofish.com/",
+                "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"',
+                "sec-fetch-site": "same-site",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-dest": "empty",
             }
 
     def _call_api(self, api_name: str, version: str, data: dict) -> dict:
@@ -2458,12 +2484,20 @@ class XianyuItemPublisher:
 
     def _get_headers(self) -> dict:
         return {
-            "Accept": "application/json",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
             "Content-Type": "application/x-www-form-urlencoded",
             "Cookie": self.cookie_str,
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Origin": "https://www.goofish.com",
             "Referer": "https://www.goofish.com/",
+            "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "sec-fetch-site": "same-site",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-dest": "empty",
         }
 
     def _call_api(self, api_name: str, version: str, data: dict) -> dict:

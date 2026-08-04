@@ -44,6 +44,13 @@ HEARTBEAT_INTERVAL = 15  # 心跳间隔（秒）
 RECONNECT_DELAY_INITIAL = 5       # 初始重连延迟（秒）
 RECONNECT_DELAY_MAX = 300         # 最大重连延迟（5 分钟，避免长时间失联）
 RECONNECT_BACKOFF_FACTOR = 2      # 退避倍数
+# 2026-08-02 修复：Token 失败（captcha/过期）时的最小重连间隔
+# 原因：_connect() 在 _refresh_token() 返回 False 时正常 return（不抛异常），
+#       导致 _connect_loop() 将 reconnect_delay 重置为 5 秒，
+#       WS 每 5 秒重连一次，每次都调用 Token API 触发 FAIL_SYS_USER_VALIDATE，
+#       高频请求加重 Baxia 风控，让账号 deeper 进入 punish 状态。
+# 修复：token 失败时不重置退避，使用 60 秒最小间隔，给 Baxia 风控恢复时间。
+RECONNECT_DELAY_ON_TOKEN_FAIL = 60  # Token 失败时最小重连间隔（秒）
 MESSAGE_TIMEOUT = 10  # 发送消息超时（秒）
 
 # ackDiff 短轮询间隔（秒）：服务端无新消息时，客户端等待多长时间再发下一轮 ackDiff。
@@ -89,7 +96,7 @@ def _cleanup_recent_text_sends(now: float) -> None:
 
 
 # 注：自动滑块求解去重和串行化已迁移至 captcha_queue.py 的优先级队列管理器，
-# 由 CaptchaQueueManager 统一管理去重（30 分钟同账号冷却）和并发（2 worker）。
+# 由 CaptchaQueueManager 统一管理去重（60 秒同账号冷却）和并发（2 worker）。
 # 原 _AUTO_SOLVE_LAST_TS / _AUTO_SOLVE_GLOBAL_LOCK 已移除。
 
 
@@ -331,6 +338,20 @@ class XianyuWebSocketClient:
 
         # 最近一次收到服务端消息的时间戳（用于检测连接是否静默断开）
         self._last_recv_time: float = time.time()
+
+        # 2026-08-03 新增：滑块求解后重启 WS 的时间戳
+        # 用于抑制 _auto_solve_captcha_after_failure 在 WS 重连期间重复触发求解
+        # 原因：滑块求解成功后 WS 客户端重启，_refresh_token 可能因 Token API 二次风控返回 captcha，
+        # 触发 _auto_solve_captcha_after_failure 入队新求解。这与 ws_health_check 形成双重触发，
+        # 导致同一账号在短时间内被反复求解。设置 5 分钟抑制期，让 WS _connect_loop 自然重试。
+        self._last_solve_restart_at: float = 0.0
+
+        # 2026-08-03 新增：Session 过期标志位（FAIL_SYS_SESSION_EXPIRED）
+        # 当 Token API 返回 FAIL_SYS_SESSION_EXPIRED 时，表示 Cookie 登录态已失效，
+        # 滑块求解无法解决，需用户重新扫码登录。此时设置此标志位，
+        # _connect_loop 检测到后停止重连，避免每 60 秒无效调用 Token API。
+        # 用户重新扫码登录后，外部 start_client 会创建新实例，标志位自动重置。
+        self._session_expired: bool = False
 
         # 诊断状态：前端连接管理页可据此区分"已提交但未连接"、
         # “Token/Cookie 异常”、“已注册并同步”等状态。
@@ -678,12 +699,24 @@ class XianyuWebSocketClient:
             )
 
     async def _connect_loop(self):
-        """连接循环（自动重连，指数退避）。"""
+        """连接循环（自动重连，指数退避）。
+
+        2026-08-02 修复：Token 失败时使用 60 秒最小重连间隔，
+        避免每 5 秒重连一次加重 Baxia 风控。
+        """
         reconnect_delay = RECONNECT_DELAY_INITIAL
         while self._running:
+            token_failed = False
             try:
-                await self._connect()
-                reconnect_delay = RECONNECT_DELAY_INITIAL  # 成功后重置退避
+                result = await self._connect()
+                # 2026-08-02 修复：_connect() 返回 False 表示 Token 获取失败
+                # 此时不重置退避，使用 60 秒最小间隔，给 Baxia 风控恢复时间
+                if result is False:
+                    token_failed = True
+                    # Token 失败：使用 60 秒最小间隔，但不重置到 5 秒
+                    reconnect_delay = max(reconnect_delay, RECONNECT_DELAY_ON_TOKEN_FAIL)
+                else:
+                    reconnect_delay = RECONNECT_DELAY_INITIAL  # 成功后重置退避
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -695,12 +728,40 @@ class XianyuWebSocketClient:
                 )
 
             if self._running:
-                logger.info("WS 将在 %d 秒后重连 accountId=%d", reconnect_delay, self.account_id)
-                await asyncio.sleep(reconnect_delay)
-                reconnect_delay = min(
-                    reconnect_delay * RECONNECT_BACKOFF_FACTOR,
-                    RECONNECT_DELAY_MAX,
-                )
+                if token_failed:
+                    # 2026-08-03 新增：Session 过期后停止重连，避免无效 Token API 调用
+                    # 原因：FAIL_SYS_SESSION_EXPIRED 表示 Cookie 登录态已失效，重连必然失败。
+                    #       每 60 秒重连一次纯属无效消耗，且高频调用 Token API 可能加重 Baxia 风控。
+                    #       停止重连后，账号进入"等待用户重新扫码"状态，由外部 start_client 重启。
+                    if self._session_expired:
+                        logger.warning(
+                            "WS _connect_loop 退出：Session 已过期，停止重连 accountId=%d "
+                            "（cookie_status=0，等待用户重新扫码登录后由外部重启）",
+                            self.account_id,
+                        )
+                        self.phase = "session_expired_stopped"
+                        self._running = False
+                        break
+                    # 2026-08-02 修复：Token 失败时固定 60 秒重连，不做指数退避。
+                    # 原因：规则要求 "WS 重连不得被滑块求解冷却阻断超过 1 分钟"。
+                    #       原逻辑 max(reconnect_delay, 60) + 指数退避会导致
+                    #       第 1 次 60s → 第 2 次 120s → 第 3 次 240s → 第 4 次 300s，
+                    #       违反 60 秒规则，让 Cookie 有效账号长时间无法恢复 WS。
+                    # 修复：Token 失败时固定 60 秒，不递增。
+                    reconnect_delay = RECONNECT_DELAY_ON_TOKEN_FAIL
+                    logger.warning(
+                        "WS Token 失败，将在 %d 秒后重连（固定 60 秒，符合 WS 持久化规则）accountId=%d",
+                        reconnect_delay, self.account_id,
+                    )
+                    await asyncio.sleep(reconnect_delay)
+                    # Token 失败时不做指数退避，保持 60 秒
+                else:
+                    logger.info("WS 将在 %d 秒后重连 accountId=%d", reconnect_delay, self.account_id)
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(
+                        reconnect_delay * RECONNECT_BACKOFF_FACTOR,
+                        RECONNECT_DELAY_MAX,
+                    )
 
     async def _send_and_wait(self, msg: dict[str, Any], timeout: float = MESSAGE_TIMEOUT) -> dict[str, Any]:
         if not self._connected or not self._ws:
@@ -820,7 +881,12 @@ class XianyuWebSocketClient:
             )
 
     async def _connect(self):
-        """建立 WebSocket 连接并初始化。"""
+        """建立 WebSocket 连接并初始化。
+
+        返回值：
+        - True: 连接成功（或连接后正常断开，可快速重连）
+        - False: Token 获取失败（captcha/过期），应使用更长重连间隔
+        """
         # Step 1: 获取 accessToken
         self.phase = "refresh_token"
         if not await self._refresh_token():
@@ -829,8 +895,9 @@ class XianyuWebSocketClient:
             logger.error("获取 WebSocket Token 失败 accountId=%d", self.account_id)
             # 关键修复：Token 获取失败时持久化离线状态，避免 ws_status 保持旧值 1 误导前端
             await self._persist_ws_offline("token_failed: 获取 WebSocket Token 失败")
-            # 不在此处 sleep，由 _connect_loop 的指数退避统一控制重连节奏
-            return
+            # 2026-08-02 修复：返回 False 告知 _connect_loop 使用更长重连间隔
+            # 原先正常 return（返回 None）导致 _connect_loop 误判为成功，重置退避到 5 秒
+            return False
 
         # === 关键：确保 cookie 中的 _m_h5_tk 与 accessToken 匹配 ===
         # 必须在 _refresh_token 之后（此时 self.m_h5_tk 已是最新的有效值）
@@ -906,7 +973,8 @@ class XianyuWebSocketClient:
             if not await self._do_reg(ws):
                 self.last_error = "WebSocket 已连接但注册失败，可能是 accessToken/deviceId/Cookie 不匹配"
                 self.phase = "register_failed"
-                return
+                # 2026-08-02 修复：注册失败也返回 False，使用更长重连间隔
+                return False
 
             # Step 4: 等 1 秒再发同步消息（与 Java 实现对齐）
             await asyncio.sleep(1)
@@ -924,6 +992,8 @@ class XianyuWebSocketClient:
 
             # Step 6: 消息接收循环 + 心跳
             await self._message_loop(ws)
+            # 2026-08-02 修复：消息循环正常结束（WS 断开），返回 True 允许快速重连
+            return True
 
         except ConnectionError as e:
             self.last_error = "WebSocket 连接已关闭，正在重连"
@@ -1352,6 +1422,38 @@ class XianyuWebSocketClient:
                 )
             # 自动触发滑块求解（失败不影响主流程，状态由求解器内部决定）
             await self._auto_solve_captcha_after_failure(scene="captcha")
+        elif error_type == "session_expired":
+            # 2026-08-03 新增：FAIL_SYS_SESSION_EXPIRED 专用处理
+            # Token API 返回 FAIL_SYS_SESSION_EXPIRED 表示 Cookie 登录态字段（unb/cookie2 等）已过期。
+            # 这与 Baxia 风控（FAIL_SYS_USER_VALIDATE）不同：
+            # - Baxia 风控：Cookie 仍有效，滑块求解可恢复
+            # - Session 过期：Cookie 登录态失效，滑块求解无法解决，需用户重新扫码
+            # 因此不触发滑块求解，避免无效消耗求解资源（队列槽位、浏览器启动等）。
+            logger.warning(
+                "WS Token 获取失败（Session 已过期）: accountId=%d（不触发滑块求解，需用户重新扫码）",
+                self.account_id,
+            )
+            # 恢复原始 cookie（如果注入了 x5sec），保持 cookie_str 一致性
+            if x5sec_injected:
+                self.cookie_str = original_cookie_str
+            # 2026-08-03 新增：设置 Session 过期标志位，_connect_loop 检测后停止重连
+            # 原因：Session 过期后重连必然失败（Token API 每次都返回 FAIL_SYS_SESSION_EXPIRED），
+            #       每 60 秒重连一次纯属无效消耗，且高频调用 Token API 可能加重 Baxia 风控。
+            #       停止重连后，账号进入"等待用户重新扫码"状态，由外部 start_client 重启。
+            self._session_expired = True
+            await self._update_cookie_status(
+                0, "SESSION_EXPIRED", "Cookie Session 已过期，请重新扫码登录闲鱼账号",
+            )
+            # 通知用户 Cookie Session 过期
+            try:
+                from .notify_dispatcher import notify_cookie_expired
+                await notify_cookie_expired(self.tenant_id, self.account_id, "Cookie Session 已过期，请重新扫码登录")
+            except Exception as exc:
+                log_service_failure(
+                    logger, exc, operation="notify_session_expired",
+                    tenant_id=self.tenant_id, account_id=self.account_id, level=logging.DEBUG,
+                )
+            # 不触发 _auto_solve_captcha_after_failure：Session 过期无法通过滑块求解解决
         elif error_type == "expired":
             logger.warning(
                 "WS Token 获取失败（Cookie 已过期）: accountId=%d",
@@ -1373,7 +1475,7 @@ class XianyuWebSocketClient:
 
         将求解任务入队到 CaptchaQueueManager 优先级队列，由 worker 按优先级
         （SVIP > VIP > 普通）依次处理。队列内部处理：
-        1. 同账号 30 分钟去重
+        1. 同账号 60 秒去重
         2. 三重预校验（账号活跃度 + Cookie 状态 + 退避检查）
         3. Playwright 检测/求解滑块
         4. Token API 二次验证 Cookie
@@ -1388,9 +1490,30 @@ class XianyuWebSocketClient:
         优先级：基于用户级会员（sys_user.vip_level），SVIP=2 > VIP=1 > 普通=0。
         一个用户的所有闲鱼账号共享同一等级。
 
+        2026-08-03 优化：添加求解后抑制期检查
+        - 如果 WS 客户端是因滑块求解成功而重启的（_last_solve_restart_at 在 5 分钟内），
+          则跳过本次自动求解触发。
+        - 原因：滑块求解成功后 WS 重启，_refresh_token 可能因 Token API 二次风控返回 captcha，
+          此时再触发求解只会浪费资源（WS _connect_loop 会每 60 秒自然重试）。
+        - 5 分钟抑制期与 captcha_queue 的 60 秒去重叠加，有效阻止重复求解循环。
+
         Args:
             scene: 触发场景，"captcha" 表示滑块验证，"expired" 表示 Session 过期
         """
+        # 2026-08-03 优化：求解后抑制期检查
+        # 如果 WS 客户端是因滑块求解成功而重启的（5 分钟内），跳过自动求解触发
+        SOLVE_RESTART_SUPPRESSION_SEC = 5 * 60  # 5 分钟抑制期
+        if self._last_solve_restart_at > 0:
+            elapsed_since_solve = time.time() - self._last_solve_restart_at
+            if elapsed_since_solve < SOLVE_RESTART_SUPPRESSION_SEC:
+                logger.info(
+                    "WS Token 失败后自动求解被抑制（滑块求解后 %.0f 秒内，抑制期 %d 秒）"
+                    "accountId=%d scene=%s — WS _connect_loop 会自然重试",
+                    elapsed_since_solve, SOLVE_RESTART_SUPPRESSION_SEC,
+                    self.account_id, scene,
+                )
+                return
+
         # 根据场景确定具体的求解原因（写入滑块求解记录）
         if scene == "expired":
             solve_reason = "WS Token 获取失败：Cookie Session 已过期，尝试通过滑块求解恢复"
@@ -1426,7 +1549,7 @@ class XianyuWebSocketClient:
 
             if record_id is None:
                 logger.info(
-                    "WS Token 失败后自动滑块求解入队去重跳过 accountId=%d scene=%s（30 分钟内已入队）",
+                    "WS Token 失败后自动滑块求解入队去重跳过 accountId=%d scene=%s（60 秒内已入队）",
                     self.account_id, scene,
                 )
             else:

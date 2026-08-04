@@ -2696,6 +2696,27 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
         } catch (Exception e) {
             log.warn("初始化 growth_agent_tier_config 失败（可忽略）: {}", e.getMessage());
         }
+
+        // 修复历史 tier_name 乱码：UTF-8 字节被当作 CP1252 解释后再以 UTF-8 存储
+        // 现象：tier_name 显示为 "é’»çŸ³ä»£ç†" 等 12 字符乱码（原始中文 4 字符）
+        // 检测：默认 4 级（normal/bronze/gold/diamond）且 CHAR_LENGTH(tier_name) > 6
+        // 安全性：不影响管理员自定义的合法名称（如 "白银代理" 4 字符）
+        try {
+            int fixed = jdbcTemplate.update(
+                    "UPDATE growth_agent_tier_config SET tier_name = CASE tier_code " +
+                    "WHEN 'normal' THEN '普通代理' " +
+                    "WHEN 'bronze' THEN '青铜代理' " +
+                    "WHEN 'gold' THEN '黄金代理' " +
+                    "WHEN 'diamond' THEN '钻石代理' " +
+                    "ELSE tier_name END " +
+                    "WHERE tier_code IN ('normal','bronze','gold','diamond') " +
+                    "AND CHAR_LENGTH(tier_name) > 6");
+            if (fixed > 0) {
+                log.info("修复 growth_agent_tier_config.tier_name 乱码：{} 条", fixed);
+            }
+        } catch (Exception e) {
+            log.warn("修复 tier_name 乱码失败（可忽略）: {}", e.getMessage());
+        }
     }
 
     private void ensureCompatibilityColumns() {

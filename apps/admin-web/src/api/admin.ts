@@ -25,6 +25,8 @@ export interface AdminModulePageQuery {
   size?: number
   keyword?: string
   status?: string
+  sortField?: string
+  sortOrder?: 'asc' | 'desc'
 }
 
 export interface AdminPageResult<T = any> {

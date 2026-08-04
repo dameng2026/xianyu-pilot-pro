@@ -270,3 +270,19 @@ docs/superpowers/
 /scripts/diag_prod_db*.py
 /scripts/read_evidence.py
 /quick_fix.sh
+
+# 2026-08-04 x5sec 上线前：scripts 目录调试脚本与临时产物（不进入版本控制）
+/scripts/*_*.py
+/scripts/*_*.sh
+/scripts/local_*.json
+/scripts/local_*.png
+/scripts/*_result.json
+/scripts/*.png
+/scripts/browser_tests/
+/scripts/patches/
+/scripts/scripts/
+/scripts/observe.py
+*.tsbuildinfo
+/.trae/
+/2026-08-03
+/insert_silent_*.py

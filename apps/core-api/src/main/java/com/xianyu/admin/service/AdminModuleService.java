@@ -75,6 +75,10 @@ public class AdminModuleService {
     }
 
     public PageResult<Map<String, Object>> page(String moduleKey, int current, int size, String keyword, String status) {
+        return page(moduleKey, current, size, keyword, status, null, null);
+    }
+
+    public PageResult<Map<String, Object>> page(String moduleKey, int current, int size, String keyword, String status, String sortField, String sortOrder) {
         requireAvailableModule(moduleKey);
         if ("xianyu-accounts".equals(moduleKey)) {
             return pageXianyuAccounts(keyword, status, current, size);
@@ -86,7 +90,7 @@ public class AdminModuleService {
             return billingPlanService.page(current, size, keyword, status);
         }
         if (realDataModuleService.supports(moduleKey)) {
-            return realDataModuleService.page(moduleKey, current, size, keyword, status);
+            return realDataModuleService.page(moduleKey, current, size, keyword, status, sortField, sortOrder);
         }
         if ("ai-usage".equals(moduleKey)) {
             return aiBillingService.pageUsageLogs(current, size, keyword, null, status);

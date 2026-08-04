@@ -622,6 +622,13 @@
               <ElOption label="异常/失败/禁用" value="异常" />
             </ElSelect>
           </ElFormItem>
+          <ElFormItem v-if="moduleKey === 'goods'" label="订单排序">
+            <ElSelect v-model="orderSort" style="width:150px" @change="reload">
+              <ElOption label="默认排序" value="default" />
+              <ElOption label="订单数降序" value="orderCount_desc" />
+              <ElOption label="订单数升序" value="orderCount_asc" />
+            </ElSelect>
+          </ElFormItem>
           <ElFormItem>
             <ElButton type="primary" @click="reload">查询</ElButton>
             <ElButton @click="reset">重置</ElButton>
@@ -648,6 +655,8 @@
               </ElTag>
               <ElImage v-else-if="col.type === 'image' && scope.row[col.prop]" :src="scope.row[col.prop]" :preview-src-list="[scope.row[col.prop]]" fit="cover" style="width:60px;height:60px;border-radius:6px;cursor:pointer;" />
               <a v-else-if="col.type === 'image'" class="img-placeholder">无图</a>
+              <a v-else-if="col.type === 'link' && scope.row[col.prop]" :href="scope.row[col.prop]" target="_blank" rel="noopener" class="table-link">打开链接</a>
+              <span v-else-if="col.type === 'link'" class="row-muted">-</span>
               <span v-else>{{ formatFieldValue(col, scope.row[col.prop]) }}</span>
             </template>
           </ElTableColumn>
@@ -667,7 +676,7 @@
         </ElTable>
         <div class="pagination-row">
           <span class="selected-tip">已选 {{ selectedIds.length }} 条</span>
-          <ElPagination v-model:current-page="query.current" v-model:page-size="query.size" layout="total, sizes, prev, pager, next, jumper" :total="total" @change="reload" />
+          <ElPagination v-model:current-page="query.current" v-model:page-size="query.size" :page-sizes="pageSizeOptions" layout="total, sizes, prev, pager, next, jumper" :total="total" @change="reload" />
         </div>
       </ElCard>
     </template>
@@ -789,6 +798,9 @@
   const trendRange = ref<7 | 30 | 90>(7)
   const moduleStats = ref<any>({})
   const query = reactive({ current: 1, size: 10, keyword: '', status: '' })
+  // 商品监管专属：订单排序选择（default=创建时间倒序 / orderCount_desc / orderCount_asc）
+  const orderSort = ref('default')
+  const pageSizeOptions = computed(() => (moduleKey.value === 'goods' ? [10, 20, 50, 100] : [10, 20, 30, 50]))
   const selectedIds = ref<Array<number | string>>([])
   const drawer = reactive({ visible: false, title: '', mode: 'detail', form: {} as Record<string, any> })
   const overviewMonitor = reactive({
@@ -1024,6 +1036,9 @@ function formatFieldValue(col: any, value: any) {
     selectedIds.value = []
     if (moduleKey.value === 'dashboard') return loadDashboard(loadVersion)
     query.current = 1
+    // 商品监管模块每页默认展示 100 条，其余模块保持每页 10 条
+    query.size = moduleKey.value === 'goods' ? 100 : 10
+    orderSort.value = 'default'
     await Promise.all([loadMeta(loadVersion), reload(loadVersion)])
     // 注意：reload() 内部已调用 loadStats()，此处不再重复调用
   }
@@ -1319,7 +1334,14 @@ function formatFieldValue(col: any, value: any) {
     if (moduleKey.value === 'dashboard') return loadDashboard(activeLoadVersion)
     loading.value = true
     try {
-      const page = await getModulePage(moduleKey.value, { ...query })
+      const pageParams: any = { ...query }
+      // 商品监管：订单排序（orderCount_desc / orderCount_asc）透传到后端
+      if (moduleKey.value === 'goods' && orderSort.value.startsWith('orderCount')) {
+        const [sortField, sortOrder] = orderSort.value.split('_')
+        pageParams.sortField = sortField
+        pageParams.sortOrder = sortOrder
+      }
+      const page = await getModulePage(moduleKey.value, pageParams)
       if (isStaleModuleLoad(activeLoadVersion)) return
       records.value = page.records || []
       total.value = page.total || 0
@@ -1337,6 +1359,7 @@ function formatFieldValue(col: any, value: any) {
     query.keyword = ''
     query.status = ''
     query.current = 1
+    orderSort.value = 'default'
     reload()
   }
 
@@ -2876,6 +2899,9 @@ function openEdit(row: any) {
 .selected-tip { color: var(--art-gray-500); }
 .drawer-form { padding-right: 20px; }
 .empty-state { padding: 40px 0; text-align: center; color: var(--art-gray-500); font-size: 14px; }
+.table-link { color: var(--el-color-primary); text-decoration: none; white-space: nowrap; }
+.table-link:hover { text-decoration: underline; }
+.row-muted { color: var(--art-gray-400); }
 @media (max-width: 1180px) {
   .two-col-grid,
   .finance-grid {

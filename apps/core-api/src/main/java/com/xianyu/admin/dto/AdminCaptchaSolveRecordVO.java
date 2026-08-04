@@ -31,6 +31,8 @@ public class AdminCaptchaSolveRecordVO {
     private Integer priority;
     /** 失败原因分类: slider_fail/cookie_invalid/service_unavailable/timeout/account_inactive/account_disabled/precheck_rejected/stale_terminated */
     private String failureReason;
+    /** 代理来源: server_ip/residential_ip/account_bound/none（2026-08-03 新增，用于住址IP vs 服务器IP成功率对比） */
+    private String proxySource;
     /** 入队时间 */
     private LocalDateTime queuedAt;
     /** 开始处理时间 */
@@ -76,6 +78,8 @@ public class AdminCaptchaSolveRecordVO {
     public void setPriority(Integer priority) { this.priority = priority; }
     public String getFailureReason() { return failureReason; }
     public void setFailureReason(String failureReason) { this.failureReason = failureReason; }
+    public String getProxySource() { return proxySource; }
+    public void setProxySource(String proxySource) { this.proxySource = proxySource; }
     public LocalDateTime getQueuedAt() { return queuedAt; }
     public void setQueuedAt(LocalDateTime queuedAt) { this.queuedAt = queuedAt; }
     public LocalDateTime getStartedAt() { return startedAt; }

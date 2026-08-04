@@ -18,6 +18,7 @@ import json
 import math
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -1446,17 +1447,31 @@ async def xdotool_drag(page, start_x: float, start_y: float, distance: float, at
     except Exception:
         pass
 
-    # 获取窗口在屏幕上的位置
-    win_x, win_y = _get_window_position(win_id)
-
-    # 获取 chrome bar 高度（outerHeight - innerHeight）
+    # 2026-08-02 重大修复：用 window.screenX/screenY 获取精确窗口位置
+    # 原因：xdotool getwindowgeometry 返回 (0,0)，但 window.screenX/screenY 可能不同。
+    #       Chrome --window-position=0,0 设置的是窗口外框位置，
+    #       但窗口装饰（标题栏、边框）会占用空间，导致客户区不在 (0,0)。
+    #       window.screenX/screenY 是浏览器窗口在屏幕上的实际位置，
+    #       更准确反映视口在屏幕中的位置。
+    # chrome_bar = outerHeight - innerHeight（标签栏+地址栏+书签栏等）
     try:
         offset = await page.evaluate("""() => ({
+            screenX: window.screenX,
+            screenY: window.screenY,
             outerHeight: window.outerHeight || window.innerHeight,
             innerHeight: window.innerHeight,
+            outerWidth: window.outerWidth || window.innerWidth,
+            innerWidth: window.innerWidth,
         })""")
+        win_x = int(offset.get('screenX', 0))
+        win_y = int(offset.get('screenY', 0))
         chrome_bar_h = max(0, int(offset.get('outerHeight', 0)) - int(offset.get('innerHeight', 0)))
-    except Exception:
+        log(f"  [xdotool坐标] window.screenX={win_x} screenY={win_y} "
+            f"outerH={offset.get('outerHeight')} innerH={offset.get('innerHeight')} "
+            f"chrome_bar={chrome_bar_h}")
+    except Exception as e:
+        log(f"  [xdotool坐标] page.evaluate 失败: {e}，回退到 xdotool getwindowgeometry")
+        win_x, win_y = _get_window_position(win_id)
         chrome_bar_h = 100  # 默认值
 
     # 视口坐标 → 屏幕坐标
@@ -2799,6 +2814,13 @@ async def click_retry_if_needed(page) -> bool:
 
 async def page_shows_load_failure(page) -> bool:
     """检测消息页/会话页「加载失败」风控态（人工拖也过不了的典型表现）。"""
+    # 2026-08-03 修复"假成功"：浏览器错误页（chrome-error:// / chromewebdata，ERR_TIMED_OUT 等）
+    # document.body 为空，page.evaluate 抛异常会被下方 except 吞掉返回 False，
+    # 导致错误页被误判为正常页面 → 后续"未检测到滑块→验证通过"假成功。
+    # 因此先检查 URL，错误页直接视为加载失败。
+    url_l = (page.url or "").lower()
+    if "chrome-error://" in url_l or "chromewebdata" in url_l:
+        return True
     try:
         text = await page.evaluate(
             "() => document.body ? document.body.innerText.slice(0, 800) : ''"
@@ -3095,6 +3117,13 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
     # 监听 Baxia 校验响应，辅助判定成功（不依赖 DOM）
     net_success = {"flag": False}
 
+    # 2026-08-02 重大修复：在 HTTP 响应拦截器中捕获 x5sec（不依赖浏览器上下文）
+    # 问题：_collect_cookies_and_x5sec 依赖 ctx.cookies()/page.evaluate()，
+    #       但 Baxia 验证后浏览器经常崩溃，导致 x5sec 永远无法提取。
+    # 解决：在 _on_response 回调中直接从 Set-Cookie 头和 JSON 响应体提取 x5sec，
+    #       这在浏览器崩溃之前就已完成（HTTP 响应到达即触发）。
+    captured_x5sec = {"value": "", "source": ""}
+
     # 2026-08-01 新增：Baxia 验证 API 请求/响应分析器（增强版）
     # 目标：记录 Baxia 验证请求的参数（bx-pp/bx-ua/slidedata/x5secdata）和响应体，
     #       分析 x5sec 获取流程，为"伪造 x5sec 或绕过风控"方案提供数据支持。
@@ -3178,10 +3207,30 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
                             data = json.loads(body)
                             if isinstance(data, dict):
                                 for k, v in data.items():
-                                    if "x5sec" in str(k).lower() or "x5sec" in str(v).lower()[:200]:
-                                        log(f"🔍 [Baxia响应] x5sec 字段: {k}={str(v)[:200]}")
-                        except Exception:
-                            pass
+                                    val_str = str(v) if v is not None else ""
+                                    if "x5sec" in str(k).lower() or "x5sec" in val_str.lower()[:200]:
+                                        log(f"🔍 [Baxia响应] x5sec 字段: {k}={val_str[:200]}")
+                                        x5sec_candidate = ""
+                                        if isinstance(v, str) and v.startswith("x5sec="):
+                                            x5sec_candidate = v.split("=", 1)[1].split(";")[0]
+                                        elif isinstance(v, str) and "x5sec=" in v:
+                                            m = re.search(r"x5sec=([^;]+)", v)
+                                            if m:
+                                                x5sec_candidate = m.group(1)
+                                        elif k.lower() == "x5sec" and isinstance(v, str) and len(v) > 10:
+                                            x5sec_candidate = v
+                                        if x5sec_candidate and not captured_x5sec["value"]:
+                                            captured_x5sec["value"] = x5sec_candidate
+                                            captured_x5sec["source"] = f"response_body_{k}"
+                                            log(f"🔑 [x5sec] 从响应体提取成功! source={k} value长度={len(x5sec_candidate)}")
+                        except Exception as e:
+                            log(f"🔍 [Baxia响应] JSON 解析失败: {e}")
+                        if not captured_x5sec["value"]:
+                            m = re.search(r'"x5sec"\s*[:=]\s*"([^"]{10,})"', body)
+                            if m:
+                                captured_x5sec["value"] = m.group(1)
+                                captured_x5sec["source"] = "response_body_regex"
+                                log(f"🔑 [x5sec] 从响应体正则提取成功! value长度={len(m.group(1))}")
             except Exception as e:
                 log(f"🔍 [Baxia响应] 读取 body 失败: {e}")
         except Exception:
@@ -3196,6 +3245,19 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
                 method = (resp.request.method or "").upper()
             except Exception:
                 pass
+            # 2026-08-02 重大修复：从 Set-Cookie 响应头中提取 x5sec
+            # 这是浏览器崩溃前就能捕获的，不依赖 ctx.cookies()/page.evaluate()
+            if not captured_x5sec["value"]:
+                try:
+                    set_cookie = resp.headers.get("set-cookie", "")
+                    if set_cookie and "x5sec=" in set_cookie:
+                        m = re.search(r"x5sec=([^;]+)", set_cookie)
+                        if m and m.group(1):
+                            captured_x5sec["value"] = m.group(1)
+                            captured_x5sec["source"] = f"set_cookie_header_{u[:80]}"
+                            log(f"🔑 [x5sec] 从 Set-Cookie 头提取成功! url={u[:100]} value长度={len(m.group(1))}")
+                except Exception:
+                    pass
             # 记录所有 POST 响应 + Baxia 关键字响应 + API 域名响应
             is_post = method == "POST"
             has_keyword = any(k in ul for k in _baxia_api_keywords)
@@ -3239,7 +3301,7 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
         log("⚠ 进入消息页即出现「加载失败」——浏览器环境很可能已被风控标记")
         shot = os.path.join(screenshot_dir, f"load-fail-entry-{int(time.time())}.png")
         try:
-            await page.screenshot(path=shot, full_page=False)
+            await asyncio.wait_for(page.screenshot(path=shot, full_page=False), timeout=3.0)
             result["screenshotPath"] = shot
         except Exception:
             pass
@@ -3291,22 +3353,27 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
             log(f"⚠ {last_error} streak={load_fail_streak}")
             shot = os.path.join(screenshot_dir, f"load-fail-{attempt}-{int(time.time())}.png")
             try:
-                await page.screenshot(path=shot, full_page=False)
+                await asyncio.wait_for(page.screenshot(path=shot, full_page=False), timeout=3.0)
                 last_screenshot = shot
                 result["screenshotPath"] = shot
             except Exception:
                 pass
-            # 2026-08-01 修复：加载失败立即返回，不执行硬重置
-            # 原因：加载失败说明 Baxia 已惩罚页面，硬重置（navigate_fresh）消耗 20-30s，
-            # 且重置后仍会被识别。直接返回让冷却机制处理，节省 120s 超时预算。
-            if load_fail_streak >= 1:
+            # 2026-08-03 强化：加载失败不立即返回，改为刷新重试
+            # 原因：用户反馈"10秒就失败"的根因之一就是加载失败立即返回，
+            #       导致没有机会检查 punish iframe 和拖动滑块。
+            #       Baxia 的"加载失败"可能是暂时的，刷新后可能恢复。
+            #       连续 3 次加载失败才放弃，给 Baxia 风控恢复机会。
+            if load_fail_streak >= 3:
                 result["error"] = (
-                    "页面显示加载失败（Baxia 风控惩罚）：自动化浏览器环境被闲鱼风控标记，"
-                    "请等待冷却期后重试或更换 Cookie"
+                    f"页面连续 {load_fail_streak} 次显示加载失败（Baxia 风控惩罚）："
+                    "自动化浏览器环境被闲鱼风控标记，请等待冷却期后重试或更换 Cookie"
                 )
                 return result
-            # 仅在第一次加载失败时尝试硬重置（实际不会执行，因为上面已返回）
+            # 加载失败时尝试硬重置（navigate_fresh），给 Baxia 重新评估会话的机会
+            log(f"加载失败 streak={load_fail_streak}，尝试硬重置刷新页面...")
             page, actual_im_url = await navigate_fresh(page, actual_im_url, hard=True)
+            # 等待页面重新加载
+            await asyncio.sleep(2.0 + random.random() * 1.5)
             continue
         else:
             load_fail_streak = 0
@@ -3325,25 +3392,37 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
 
         # 2026-08-01 重大修正：punish 状态下仍尝试拖动滑块（脱离 punish 的唯一方法）
         # 原逻辑（已废弃）：检测到 punish 立即返回 → 账号永远无法脱离 punish → 0% 成功率
-        # 新逻辑：punish 状态下允许 2 次拖动尝试（第 1 次用精确距离，第 2 次用微调距离），
-        #         第 3 次起跳过拖动避免加码惩罚。
-        # 原因：Baxia punish 页面本身就需要通过滑块验证才能解除，
-        #       放弃拖动等于永远放弃这个账号，违背 WS 持久化目标。
-        #       详见 .trae/rules/cookie-valid-ws-persistence.md 第 9 条核心约束。
-        if has_punish and attempt >= 3:
+        # 2026-08-03 强化：punish 状态下允许 max_retries 次拖动（原 2 次）
+        # 原因：多策略轮换需要更多尝试机会，不同策略可能突破 punish
+        # 60 秒冷却规则由 captcha_backoff.py 保证，这里不重复限制
+        # 详见 .trae/rules/cookie-valid-ws-persistence.md 第 9 条核心约束。
+        if has_punish and attempt >= max_retries:
             result["error"] = (
                 f"账号已被 Baxia 风控惩罚（punish 状态），第 {attempt} 次尝试跳过拖动避免加码。"
-                "前 2 次已尝试拖动未通过，请等待 60 秒冷却后重试"
+                f"前 {max_retries - 1} 次已尝试拖动未通过，请等待 60 秒冷却后重试"
             )
             log(f"⚠ {result['error']}")
+            result["captured_x5sec"] = captured_x5sec.get("value", "")
             return result
         if has_punish:
-            log(f"⚠ 检测到 punish 状态，仍尝试拖动滑块以脱离 punish（attempt={attempt}/2）")
+            log(f"⚠ 检测到 punish 状态，仍尝试拖动滑块以脱离 punish（attempt={attempt}/{max_retries}）")
 
         if not detected and not has_punish:
+            # 2026-08-03 修复"假成功"：页面加载失败（chrome-error/ERR_TIMED_OUT）时
+            # document.body 为空导致 page_shows_load_failure 检测不到（evaluate 抛异常），
+            # 且 detect_captcha_container 返回 False、check_solved 返回 True，
+            # 此前会误判为"验证通过"并返回无 x5sec 的 cookies → 后续 WS 重连必然失败。
+            # 修复：URL 为错误页时不得判定通过，硬重置刷新后重试。
+            url_l2 = (page.url or "").lower()
+            if "chrome-error://" in url_l2 or "chromewebdata" in url_l2:
+                log(f"⚠ 页面为浏览器错误页（{url_l2}），不能判定验证通过，硬重置刷新重试")
+                page, actual_im_url = await navigate_fresh(page, actual_im_url, hard=True)
+                await asyncio.sleep(2.0 + random.random() * 1.5)
+                continue
             if await check_solved(page):
                 log("✓ 未检测到滑块，验证通过！")
                 result.update({"ok": True, "solved": True, "captchaDetected": False})
+                await _collect_cookies_and_x5sec(ctx, page, result, captured_x5sec.get("value", ""))
                 return result
             # 可能还在加载
             await asyncio.sleep(2.0)
@@ -3357,6 +3436,7 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
         if slider_info and slider_info.get("already_solved"):
             log("✓ 用户已手动完成滑块验证 / 无需验证")
             result.update({"ok": True, "solved": True, "captchaDetected": True})
+            await _collect_cookies_and_x5sec(ctx, page, result, captured_x5sec.get("value", ""))
             return result
 
         if not slider_info:
@@ -3364,7 +3444,7 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
             log(last_error)
             shot = os.path.join(screenshot_dir, f"slider-not-found-{int(time.time())}.png")
             try:
-                await page.screenshot(path=shot, full_page=False)
+                await asyncio.wait_for(page.screenshot(path=shot, full_page=False), timeout=3.0)
                 last_screenshot = shot
                 result["screenshotPath"] = shot
             except Exception:
@@ -3384,11 +3464,12 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
             detected2, _ = await detect_captcha_container(page)
             if not detected2:
                 result.update({"ok": True, "solved": True, "captchaDetected": True})
+                await _collect_cookies_and_x5sec(ctx, page, result, captured_x5sec.get("value", ""))
                 return result
 
         pre_path = os.path.join(screenshot_dir, f"slider-pre-{attempt}-{int(time.time())}.png")
         try:
-            await page.screenshot(path=pre_path, full_page=False)
+            await asyncio.wait_for(page.screenshot(path=pre_path, full_page=False), timeout=3.0)
             last_screenshot = pre_path
         except Exception:
             pass
@@ -3404,25 +3485,33 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
             await asyncio.sleep(0.06 + random.random() * 0.15)
 
         try:
-            # 2026-08-01 重大突破：优先使用 xdotool（X11 系统级鼠标事件）
-            # 原因：CDP 的 Input.dispatchMouseEvent 即使带 deltaX/deltaY，仍被 Baxia FireyeJS
-            #       识别为机器人（拖动后 bodyText 变成"加载中"）。
-            #       xdotool 在 X11 层生成真实鼠标事件，不经过 CDP 协议，
-            #       Baxia 的 JS 无法区分 xdotool 事件和真实硬件鼠标事件。
-            #       xdotool 不可用时回退到 CDP（human_physics_drag）。
-            # 2026-08-01 早期策略（已废弃）：JS dispatch + CDP 交替使用
-            # - JS dispatch 事件 isTrusted=false，Baxia FireyeJS 检测到后加码惩罚
-            # - CDP 事件 isTrusted=true，但仍被 CDP 痕迹检测
+            # 2026-08-03 强化：多策略拖动组合，每次 attempt 用不同策略
+            # 原因：单一策略（xdotool）失败后 Baxia 可能已适应，换策略可能突破
+            # 策略轮换顺序：
+            #   attempt 1: xdotool（X11 系统级鼠标，绕过 CDP，最强）
+            #   attempt 2: human_physics_drag（CDP + Minimum-Jerk 轨迹）
+            #   attempt 3: bezier_mouse_drag（三次贝塞尔曲线，慢-快-慢节奏）
+            #   attempt 4: microstep_drag（小步匀加速，贴近部分真人习惯）
+            #   attempt 5: xdotool（再试一次，可能 Baxia 状态已恢复）
             slider_frame = slider_info.get("frame")
-            use_js_dispatch = False
-            if use_js_dispatch:
-                log(f"  attempt={attempt} 【JS dispatch】frame.evaluate（绕过 CDP）")
-                await asyncio.wait_for(js_dispatch_drag(page, slider_frame, sx, sy, dist, attempt), timeout=20.0)
-            else:
-                log(f"  attempt={attempt} 【xdotool X11】系统级鼠标事件（绕过 CDP）")
+            strategy_index = (attempt - 1) % 5
+            strategy_names = ["xdotool", "human_physics", "bezier", "microstep", "xdotool"]
+            strategy_name = strategy_names[strategy_index]
+            log(f"  attempt={attempt} 【{strategy_name}】策略（多策略轮换）")
+
+            if strategy_name == "xdotool":
                 # xdotool_drag 内部会检测 xdotool 是否可用，不可用时回退到 human_physics_drag
                 # 超时 30 秒（xdotool 每步有 subprocess 开销，比 CDP 慢）
                 await asyncio.wait_for(xdotool_drag(page, sx, sy, dist, attempt), timeout=30.0)
+            elif strategy_name == "human_physics":
+                # CDP + Minimum-Jerk 轨迹（x(t) = 10t^3 - 15t^4 + 6t^5）
+                await asyncio.wait_for(human_physics_drag(page, sx, sy, dist, attempt), timeout=20.0)
+            elif strategy_name == "bezier":
+                # 三次贝塞尔曲线，慢-快-慢节奏，X 近似单调递增
+                await asyncio.wait_for(bezier_mouse_drag(page, sx, sy, dist, attempt), timeout=20.0)
+            elif strategy_name == "microstep":
+                # 小步匀加速，每步 2~4px，总时长约 1.2~2.2s
+                await asyncio.wait_for(microstep_drag(page, sx, sy, dist, attempt), timeout=20.0)
         except asyncio.TimeoutError:
             last_error = f"拖动超时（10s），page.mouse 可能卡住"
             log(f"× {last_error}")
@@ -3492,18 +3581,21 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
                 pass
             log("✓✓✓ 滑块验证通过！")
             result.update({"ok": True, "solved": True, "captchaDetected": True})
+            await _collect_cookies_and_x5sec(ctx, page, result, captured_x5sec.get("value", ""))
             return result
 
         last_error = f"第 {attempt} 次拖动未通过"
         log(f"× {last_error}")
 
-        # 2026-08-01 优化：第 1 次失败后直接返回，不点重试避免 Baxia 加码。
-        # 原因：数据分析显示，第 1 次 JS dispatch 拖动后 Baxia 加码，
-        #       第 2 次页面直接加载失败（streak=1）。继续重试只会加重惩罚。
-        #       改为只拖动 1 次，失败后 60 秒冷却重试，给 Baxia 风控恢复时间。
-        if attempt >= 1:
+        # 2026-08-03 强化：允许 max_retries 次尝试，每次用不同策略
+        # 原逻辑（已废弃）：attempt >= 2 放弃重试 → 只拖动 1 次就放弃
+        # 新逻辑：attempt >= max_retries 才放弃，配合多策略轮换
+        # 原因：用户明确要求"应当仍可以通过模拟轨迹的方式通过滑块"，
+        #       不同策略可能突破 Baxia 的轨迹检测，多策略组合提高成功率。
+        #       60 秒冷却规则由 captcha_backoff.py 保证，这里不重复限制。
+        if attempt >= max_retries:
             result["error"] = (
-                f"连续 {attempt} 次拖动未通过，放弃重试避免 Baxia 加码惩罚。"
+                f"连续 {attempt} 次拖动未通过（已用 {max_retries} 种策略），"
                 "请等待冷却期后重试"
             )
             log(f"⚠ {result['error']}")
@@ -3544,6 +3636,7 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
     result["error"] = last_error or f"滑块验证未通过，已全自动重试 {max_retries} 次"
     if last_screenshot:
         result["screenshotPath"] = last_screenshot
+    result["captured_x5sec"] = captured_x5sec.get("value", "")
     return result
 
 
@@ -3585,6 +3678,65 @@ async def extract_x5sec(ctx) -> str:
     except Exception as e:
         log(f"🔑 [x5sec] 提取失败: {e}")
         return ""
+
+
+async def _collect_cookies_and_x5sec(ctx, page, result: dict, captured_x5sec_val: str = "") -> None:
+    """在 ctx 还活着时收集 cookies 和 x5sec，避免 ctx 关闭后无法提取。
+
+    问题背景：solve_in_context 返回 solved=True 后，_launch_solve_once 再调用
+    export_cookies(ctx) / extract_x5sec(ctx) 时，ctx 可能已被浏览器崩溃关闭，
+    抛出 "BrowserContext.cookies: Target page, context or browser has been closed"，
+    导致 x5sec 丢失、无法缓存到 Redis，WS 重连时无法免滑块恢复。
+
+    解决方案：在 solve_in_context 内部 solved=True 时立即调用此函数，
+    将 cookies 和 x5sec 写入 result，_launch_solve_once 直接复用。
+    增加 page.evaluate("document.cookie") 作为 fallback（不依赖 ctx 状态）。
+    """
+    # 方案 A：通过 ctx.cookies() 提取（优先，能拿到 HttpOnly cookie 如 x5sec）
+    try:
+        cookies = await ctx.cookies()
+        if cookies:
+            parts = []
+            x5sec_val = ""
+            for c in cookies:
+                name = c.get("name") or ""
+                value = c.get("value") or ""
+                if name and value is not None:
+                    parts.append(f"{name}={value}")
+                if name == "x5sec" and value:
+                    x5sec_val = value
+            if parts:
+                result["cookies"] = "; ".join(parts)
+                result["cookieCount"] = len(parts)
+            if x5sec_val:
+                result["x5sec"] = x5sec_val
+                log(f"🔑 [x5sec] solve_in_context 内 ctx.cookies 提取成功! value长度={len(x5sec_val)}")
+                return
+    except Exception as e:
+        log(f"收集 cookies/x5sec: ctx.cookies 失败（ctx 可能已关闭）: {e}")
+
+    # 方案 B：通过 page.evaluate("document.cookie") 提取（fallback，不依赖 ctx）
+    # 注意：document.cookie 无法读取 HttpOnly cookie，但 x5sec 通常不是 HttpOnly
+    try:
+        doc_cookie = await page.evaluate("() => document.cookie")
+        if doc_cookie:
+            result["cookies"] = doc_cookie
+            result["cookieCount"] = doc_cookie.count("=")
+            # 从 document.cookie 中提取 x5sec
+            m = re.search(r"(?:^|;\s*)x5sec=([^;]+)", doc_cookie)
+            if m and m.group(1):
+                result["x5sec"] = m.group(1)
+                log(f"🔑 [x5sec] solve_in_context 内 document.cookie 提取成功! value长度={len(m.group(1))}")
+                return
+    except Exception as e:
+        log(f"收集 cookies/x5sec: page.evaluate 失败（page 可能已关闭）: {e}")
+
+    # 方案 C（2026-08-02 新增）：使用 HTTP 响应拦截器捕获的 x5sec
+    # 这是从 Set-Cookie 头或 JSON 响应体中提取的，在浏览器崩溃之前就已完成
+    if captured_x5sec_val and not result.get("x5sec"):
+        result["x5sec"] = captured_x5sec_val
+        result["x5secSource"] = "http_response_interceptor"
+        log(f"🔑 [x5sec] 从 HTTP 响应拦截器提取成功! value长度={len(captured_x5sec_val)}")
 
 
 # ============================================================
@@ -3771,15 +3923,22 @@ async def _semi_auto_human_fallback(
                     if fresh:
                         solve_result["cookies"] = fresh
                         solve_result["cookieCount"] = fresh.count("=")
-                except Exception:
-                    pass
-                # 提取 x5sec cookie（用于后续免滑块请求）
-                try:
-                    x5sec = await extract_x5sec(ctx)
-                    if x5sec:
-                        solve_result["x5sec"] = x5sec
-                except Exception:
-                    pass
+                except Exception as e:
+                    log(f"export_cookies 失败（半自动兜底）: {e}")
+                # 提取 x5sec（仅在缺失时补充）
+                if not solve_result.get("x5sec"):
+                    try:
+                        x5sec = await extract_x5sec(ctx)
+                        if x5sec:
+                            solve_result["x5sec"] = x5sec
+                    except Exception:
+                        pass
+                # 兜底：从 cookies 字符串提取 x5sec
+                if not solve_result.get("x5sec") and solve_result.get("cookies"):
+                    m = re.search(r"(?:^|;\s*)x5sec=([^;]+)", solve_result["cookies"])
+                    if m and m.group(1):
+                        solve_result["x5sec"] = m.group(1)
+                        log(f"🔑 [x5sec] 半自动兜底从 cookies 字符串提取成功! value长度={len(m.group(1))}")
                 return solve_result
         except Exception as e:
             log(f"半自动检测异常（继续等待）: {e}")
@@ -3793,6 +3952,390 @@ async def _semi_auto_human_fallback(
     solve_result["humanFallback"] = False
     solve_result["humanFallbackTimeout"] = True
     return solve_result
+
+
+async def silent_extract_x5sec(
+    playwright,
+    chrome_path: str,
+    ua: str,
+    cookie_str: str,
+    target_url: str = "https://www.goofish.com/im",
+    proxy: Optional[dict] = None,
+    profile_strategy: str = "temp",
+    timeout_sec: int = 8,
+) -> dict:
+    """静默 x5sec 提取：不拖滑块，依赖浏览器 Baxia JS 静默验证获取 x5sec。
+
+    2026-08-02 x5sec 主方案（方案 B）。
+    详见 .trae/rules/x5sec-research-knowledge.md 第三章方案 B。
+
+    流程：
+    1. 启动浏览器（patchright + temp profile）
+    2. 清除风控 cookie（x5sectag/x5sec/x5secdata/tfstk 等）
+    3. 注入 cookie，导航到 /im
+    4. HTTP 响应拦截器捕获 x5sec（Set-Cookie 头）
+    5. 等待 timeout_sec 秒或事件驱动 x5sec 出现
+    6. 返回 x5sec
+    """
+    start_time = time.time()
+    result: dict[str, Any] = {
+        "ok": False,
+        "x5sec": "",
+        "source": "",
+        "error": "",
+        "durationMs": 0,
+    }
+
+    user_data_dir = _resolve_profile_dir(profile_strategy, cookie_str=cookie_str)
+    prepare_profile_dir(user_data_dir)
+
+    captured_x5sec = {"value": "", "source": ""}
+
+    def _on_response(resp) -> None:
+        try:
+            u = resp.url or ""
+            if not captured_x5sec["value"]:
+                try:
+                    set_cookie = resp.headers.get("set-cookie", "")
+                    if set_cookie and "x5sec=" in set_cookie:
+                        m = re.search(r"x5sec=([^;]+)", set_cookie)
+                        if m and m.group(1):
+                            captured_x5sec["value"] = m.group(1)
+                            captured_x5sec["source"] = f"set_cookie_header_{u[:80]}"
+                            log(f"🔑 [silent] 从 Set-Cookie 头提取成功! url={u[:100]} value长度={len(m.group(1))}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    ctx = None
+    try:
+        log(f"=== [silent] 启动静默提取（profile={profile_strategy} patchright={_USING_PATCHRIGHT} timeout={timeout_sec}s）===")
+
+        if _USING_PATCHRIGHT:
+            launch_kwargs = dict(
+                user_data_dir=user_data_dir,
+                headless=False,
+                executable_path=chrome_path,
+                user_agent=ua,
+                viewport={"width": WINDOW_WIDTH, "height": WINDOW_HEIGHT},
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+                color_scheme="light",
+                device_scale_factor=1,
+                is_mobile=False,
+                has_touch=False,
+                args=[
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}",
+                    "--window-position=0,0",
+                    "--lang=zh-CN",
+                ],
+            )
+        else:
+            launch_kwargs = dict(
+                user_data_dir=user_data_dir,
+                headless=False,
+                executable_path=chrome_path,
+                viewport={"width": WINDOW_WIDTH, "height": WINDOW_HEIGHT},
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+                user_agent=ua,
+                color_scheme="light",
+                device_scale_factor=1,
+                is_mobile=False,
+                has_touch=False,
+                ignore_default_args=["--enable-automation"],
+                args=_chrome_stealth_args(),
+            )
+        if proxy and proxy.get("server"):
+            launch_kwargs["proxy"] = {
+                "server": str(proxy["server"]),
+                **({"username": str(proxy["username"])} if proxy.get("username") else {}),
+                **({"password": str(proxy["password"])} if proxy.get("password") else {}),
+            }
+        try:
+            ctx = await playwright.chromium.launch_persistent_context(**launch_kwargs)
+        except Exception as e:
+            log(f"[silent] launch_persistent_context 失败，重试精简参数: {e}")
+            launch_kwargs.pop("timezone_id", None)
+            launch_kwargs["args"] = [
+                "--no-first-run",
+                "--disable-blink-features=AutomationControlled",
+                f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}",
+            ]
+            ctx = await playwright.chromium.launch_persistent_context(**launch_kwargs)
+
+        if _USING_PATCHRIGHT:
+            await ctx.add_init_script(_ADVANCED_FINGERPRINT_SCRIPT)
+        else:
+            await ctx.add_init_script(STEALTH_INIT_SCRIPT)
+
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        try:
+            page.on("response", _on_response)
+        except Exception:
+            pass
+
+        try:
+            await page.goto("https://www.goofish.com/", wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:
+            log(f"[silent] 预热域导航警告: {e}")
+
+        clean_cookie_str = strip_risk_cookies(cookie_str)
+        cookies = parse_cookie_string(clean_cookie_str, ".goofish.com")
+        cookies += parse_cookie_string(clean_cookie_str, "www.goofish.com")
+        if cookies:
+            try:
+                await ctx.add_cookies(cookies)
+                log(f"[silent] 注入 {len(cookies)} 条 cookies")
+            except Exception as e:
+                log(f"[silent] 注入 cookies 警告: {e}")
+
+        try:
+            await page.reload(wait_until="domcontentloaded", timeout=30000)
+        except Exception:
+            pass
+
+        if _USING_PATCHRIGHT:
+            try:
+                await page.evaluate(_ADVANCED_FINGERPRINT_SCRIPT)
+            except Exception as e:
+                log(f"[silent] 指纹强制修复异常: {e}")
+
+        log(f"[silent] 导航到 {target_url}，等待 Baxia JS 静默验证...")
+        try:
+            await page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:
+            log(f"[silent] 目标页导航警告: {e}")
+
+        current_url = page.url or ""
+        log(f"[silent] 当前 URL: {current_url[:120]}")
+        try:
+            _title = await page.title()
+            log(f"[silent] 页面标题: {_title}")
+        except Exception:
+            pass
+        # 检查是否跳转到登录页（Cookie 真正失效）
+        if "login.taobao.com" in current_url or "login.goofish.com" in current_url or "/uiLogin" in current_url:
+            result["source"] = "login_redirect"
+            result["error"] = f"Cookie 失效，跳转登录页: {current_url[:100]}"
+            log(f"[silent] ⚠ Cookie 失效，跳转登录页: {current_url[:100]}")
+            result["durationMs"] = int((time.time() - start_time) * 1000)
+            return result
+
+        # 2026-08-02 关键发现：/im 页面本身不触发 Baxia 验证，x5sec 只在调用 MTOP API 时才会被设置。
+        # 主动调用 MTOP token API 触发 Baxia 静默验证。
+        log(f"[silent] 主动调用 MTOP token API 触发 Baxia 静默验证...")
+        try:
+            mtop_result = await page.evaluate("""async () => {
+                try {
+                    const m_h5_tk_match = document.cookie.match(/_m_h5_tk=([^;]+)/);
+                    const m_h5_tk = m_h5_tk_match ? m_h5_tk_match[1] : '';
+                    if (!m_h5_tk) return { ok: false, error: 'no _m_h5_tk in cookie' };
+
+                    const token_part = m_h5_tk.split('_')[0];
+                    const ts = Date.now();
+                    // 调用 WS token 刷新 API（与 ws_token.py 中的 _call_token_api 一致）
+                    const api = 'mtop.taobao.idlemessage.pc.login.token';
+                    const url = 'https://h5api.m.goofish.com/h5/' + api + '/1.0/?jsv=2.7.4&appKey=12574478&t=' + ts + '&sign=' + token_part + '&api=' + api + '&v=1.0&type=jsonp&dataType=jsonp&timeout=20000';
+                    const resp = await fetch(url, {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: 'data=' + encodeURIComponent(JSON.stringify({})),
+                    });
+                    const text = await resp.text();
+                    return { ok: true, status: resp.status, body: text.substring(0, 800) };
+                } catch (e) {
+                    return { ok: false, error: String(e) };
+                }
+            }""")
+            if mtop_result and mtop_result.get("ok"):
+                body = mtop_result.get("body", "")
+                log(f"[silent] MTOP API 响应: status={mtop_result.get('status')} body={body[:1500]}")
+                if "FAIL_SYS_USER_VALIDATE" in body or "RGV587_ERROR" in body:
+                    log(f"[silent] ✓ MTOP API 触发 Baxia 验证")
+                    # 尝试从响应中提取验证 URL
+                    import json as _json
+                    try:
+                        # JSONP 响应可能需要解析
+                        # 尝试直接 JSON 解析
+                        try:
+                            resp_data = _json.loads(body)
+                        except Exception:
+                            # 尝试 JSONP 解析
+                            import re as _re
+                            m = _re.search(r'\{.*\}', body)
+                            if m:
+                                resp_data = _json.loads(m.group(0))
+                            else:
+                                resp_data = {}
+
+                        # 检查 data.url（Baxia 验证 URL）
+                        data_obj = resp_data.get("data", {}) if isinstance(resp_data, dict) else {}
+                        verify_url = data_obj.get("url") or data_obj.get("validateUrl") or ""
+                        if not verify_url:
+                            # 有些响应把 url 放在 ret 中
+                            ret_list = resp_data.get("ret", []) if isinstance(resp_data, dict) else []
+                            for r in ret_list:
+                                if isinstance(r, str) and "http" in r:
+                                    verify_url = r
+                                    break
+
+                        if verify_url:
+                            log(f"[silent] 发现 Baxia 验证 URL: {verify_url[:200]}")
+                            # 在新 iframe 中加载验证 URL，让 Baxia JS 自动处理
+                            try:
+                                # 方案 1: 直接 page.goto 验证 URL
+                                await page.goto(verify_url, wait_until="domcontentloaded", timeout=15000)
+                                log(f"[silent] 导航到验证 URL 后页面 URL: {page.url[:200]}")
+                                # 等待 Baxia JS 静默验证
+                                await asyncio.sleep(3)
+                                # 检查 x5sec
+                                try:
+                                    all_cookies = await ctx.cookies()
+                                    for c in all_cookies:
+                                        if c.get("name") == "x5sec" and c.get("value"):
+                                            captured_x5sec["value"] = c["value"]
+                                            captured_x5sec["source"] = "verify_url_nav"
+                                            log(f"[silent] ✓ 从验证 URL 导航后获取到 x5sec (长度={len(c['value'])})")
+                                            break
+                                except Exception as e:
+                                    log(f"[silent] 验证 URL 后 ctx.cookies() 异常: {e}")
+                            except Exception as e:
+                                log(f"[silent] 导航验证 URL 异常: {e}")
+                        else:
+                            log(f"[silent] 响应中未找到验证 URL，尝试 JSONP 完整解析...")
+                            log(f"[silent] 完整响应: {body[:2000]}")
+                    except Exception as e:
+                        log(f"[silent] 解析 MTOP 响应异常: {e}")
+                        log(f"[silent] 完整响应: {body[:2000]}")
+
+                    # 检查页面是否有 Baxia iframe 或验证元素
+                    try:
+                        baxia_info = await page.evaluate("""() => {
+                            const iframes = document.querySelectorAll('iframe');
+                            const iframe_info = [];
+                            for (const f of iframes) {
+                                iframe_info.push({src: f.src || '', id: f.id || '', name: f.name || ''});
+                            }
+                            // 检查是否有 nocaptcha 或 baxia 相关元素
+                            const nc = document.querySelector('#nc_1_wrapper, .nc-container, [data-nc], .baxia-dialog');
+                            return {
+                                iframes: iframe_info,
+                                hasNocaptcha: !!nc,
+                                ncHtml: nc ? nc.outerHTML.substring(0, 200) : null,
+                                title: document.title,
+                                url: location.href,
+                            };
+                        }""")
+                        log(f"[silent] 页面 Baxia 元素: iframes={len(baxia_info.get('iframes', []))} hasNocaptcha={baxia_info.get('hasNocaptcha')} title={baxia_info.get('title')}")
+                        for ii, iframe in enumerate(baxia_info.get("iframes", [])[:5]):
+                            log(f"[silent] iframe[{ii}]: src={iframe.get('src', '')[:150]} id={iframe.get('id')}")
+                        if baxia_info.get("ncHtml"):
+                            log(f"[silent] nocaptcha HTML: {baxia_info['ncHtml']}")
+                    except Exception as e:
+                        log(f"[silent] 检查 Baxia 元素异常: {e}")
+
+                    # 2026-08-02 关键修复：MTOP API 返回 FAIL_SYS_USER_VALIDATE 但未获取到 x5sec
+                    # 说明账号已被 Baxia punish，静默验证无法通过，必须拖滑块才能解除
+                    # 不再等待 15 秒超时，立即返回 punished 让上层快速降级到滑块求解
+                    if not captured_x5sec["value"]:
+                        log(f"[silent] ⚠ MTOP API 返回 FAIL_SYS_USER_VALIDATE 但未获取到 x5sec，账号被 punish，立即降级到滑块求解")
+                        result["source"] = "punished"
+                        result["error"] = "账号被 Baxia punish（MTOP API 返回 FAIL_SYS_USER_VALIDATE，未获取 x5sec），需降级到滑块求解"
+                        result["durationMs"] = int((time.time() - start_time) * 1000)
+                        return result
+
+                    log(f"[silent] 等待 Baxia JS 静默验证设置 x5sec...")
+                elif '"token"' in body or "tokenInfo" in body:
+                    log(f"[silent] ✓ MTOP API 直接返回 token（无需 Baxia 验证）")
+                    # 直接成功，从 cookie 提取 x5sec
+                    try:
+                        all_cookies = await ctx.cookies()
+                        for c in all_cookies:
+                            if c.get("name") == "x5sec" and c.get("value"):
+                                captured_x5sec["value"] = c["value"]
+                                captured_x5sec["source"] = "ctx_cookies_after_mtop"
+                                log(f"[silent] ✓ MTOP API 调用后从 cookie 获取到 x5sec (长度={len(c['value'])})")
+                                break
+                    except Exception as e:
+                        log(f"[silent] MTOP API 后 ctx.cookies() 异常: {e}")
+                else:
+                    log(f"[silent] MTOP API 响应未识别，继续等待 x5sec...")
+                    log(f"[silent] 完整响应: {body[:2000]}")
+            else:
+                log(f"[silent] MTOP API 调用失败: {mtop_result}")
+        except Exception as e:
+            log(f"[silent] MTOP API 调用异常: {e}")
+
+        if "punish" in current_url.lower() or "deny" in current_url.lower():
+            result["source"] = "punished"
+            result["error"] = f"账号被 punish，静默验证无法通过（URL={current_url[:100]}）"
+            log(f"[silent] ⚠ 账号被 punish: {current_url[:100]}")
+        else:
+            # 等待 Baxia JS 静默验证完成并设置 x5sec
+            for i in range(timeout_sec):
+                if captured_x5sec["value"]:
+                    break
+                await asyncio.sleep(1)
+                # 每 3 秒轮询 cookie，弥补 Set-Cookie 头未捕获的情况
+                if i % 3 == 2:
+                    try:
+                        all_cookies = await ctx.cookies()
+                        for c in all_cookies:
+                            if c.get("name") == "x5sec" and c.get("value"):
+                                captured_x5sec["value"] = c["value"]
+                                captured_x5sec["source"] = f"ctx_cookies_poll_{i+1}s"
+                                log(f"[silent] ✓ 轮询 cookie 获取到 x5sec (长度={len(c['value'])})")
+                                break
+                    except Exception:
+                        pass
+                log(f"[silent] 等待 x5sec... ({i+1}/{timeout_sec}s)")
+
+            if captured_x5sec["value"]:
+                result["ok"] = True
+                result["x5sec"] = captured_x5sec["value"]
+                result["source"] = captured_x5sec["source"] or "set_cookie_header"
+                log(f"[silent] ✓ 通过 HTTP 拦截器获取到 x5sec (长度={len(result['x5sec'])})")
+            else:
+                try:
+                    all_cookies = await ctx.cookies()
+                    for c in all_cookies:
+                        if c.get("name") == "x5sec" and c.get("value"):
+                            result["ok"] = True
+                            result["x5sec"] = c["value"]
+                            result["source"] = "ctx_cookies"
+                            log(f"[silent] ✓ 通过 ctx.cookies() 获取到 x5sec (长度={len(result['x5sec'])})")
+                            break
+                except Exception as e:
+                    log(f"[silent] ctx.cookies() 异常: {e}")
+
+                if not result["ok"]:
+                    result["source"] = "timeout"
+                    result["error"] = f"静默验证超时（{timeout_sec}s内未获取到 x5sec，账号可能被 punish 或指纹被识别）"
+                    log(f"[silent] ⚠ 静默提取超时（{timeout_sec}s）")
+
+    except Exception as e:
+        log(f"[silent] 静默提取异常: {e}")
+        result["source"] = "error"
+        result["error"] = f"静默提取异常: {e}"
+    finally:
+        if ctx:
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+        if profile_strategy != "persistent":
+            try:
+                shutil.rmtree(user_data_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+    result["durationMs"] = int((time.time() - start_time) * 1000)
+    return result
 
 
 async def _launch_solve_once(
@@ -4001,19 +4544,41 @@ async def _launch_solve_once(
         await asyncio.sleep(0.8 + random.random() * 1.0)
 
         solve_result = await solve_in_context(ctx, target_url, max_retries)
+        # 2026-08-02 修复：从 solve_in_context 传回的 captured_x5sec 中恢复 x5sec
+        captured_x5sec_val = solve_result.pop("captured_x5sec", "") or ""
+        if captured_x5sec_val and not solve_result.get("x5sec"):
+            solve_result["x5sec"] = captured_x5sec_val
+            log(f"🔑 [x5sec] 从 HTTP 响应拦截器恢复成功! value长度={len(captured_x5sec_val)}")
+
         if solve_result.get("solved"):
-            fresh = await export_cookies(ctx)
-            if fresh:
-                solve_result["cookies"] = fresh
-                solve_result["cookieCount"] = fresh.count("=")
-                log(f"导出 {solve_result['cookieCount']} 个最新 cookies（{len(fresh)} 字符）")
-            # 提取 x5sec cookie（用于后续免滑块请求）
+            # solve_in_context 内部已通过 _collect_cookies_and_x5sec 提取了 cookies/x5sec
+            # 这里作为补充：如果 ctx 仍可用，重新提取最新 cookies
             try:
-                x5sec = await extract_x5sec(ctx)
-                if x5sec:
-                    solve_result["x5sec"] = x5sec
-            except Exception:
-                pass
+                fresh = await export_cookies(ctx)
+                if fresh:
+                    solve_result["cookies"] = fresh
+                    solve_result["cookieCount"] = fresh.count("=")
+                    log(f"导出 {solve_result['cookieCount']} 个最新 cookies（{len(fresh)} 字符）")
+            except Exception as e:
+                log(f"export_cookies 失败（ctx 可能已关闭，使用内部提取的 cookies）: {e}")
+            # 提取 x5sec（仅在缺失时补充）
+            if not solve_result.get("x5sec"):
+                try:
+                    x5sec = await extract_x5sec(ctx)
+                    if x5sec:
+                        solve_result["x5sec"] = x5sec
+                except Exception:
+                    pass
+            # 兜底：从 cookies 字符串提取 x5sec
+            if not solve_result.get("x5sec") and solve_result.get("cookies"):
+                m = re.search(r"(?:^|;\s*)x5sec=([^;]+)", solve_result["cookies"])
+                if m and m.group(1):
+                    solve_result["x5sec"] = m.group(1)
+                    log(f"🔑 [x5sec] 从 cookies 字符串中提取成功! value长度={len(m.group(1))}")
+            if solve_result.get("x5sec"):
+                log(f"🔑 [x5sec] 最终获取成功! value长度={len(solve_result['x5sec'])}")
+            else:
+                log("⚠ [x5sec] 未能获取 x5sec，WS 重连时无法免滑块恢复")
             return solve_result
 
         # 全自动失败 → 半自动人工兜底（保留窗口供人工拖拽）
@@ -4023,6 +4588,9 @@ async def _launch_solve_once(
             if solve_result.get("solved"):
                 return solve_result
 
+        # 2026-08-02 修复：即使求解失败，如果拦截器捕获了 x5sec，也记录日志
+        if solve_result.get("x5sec"):
+            log(f"🔑 [x5sec] 求解失败但拦截器捕获到 x5sec! value长度={len(solve_result['x5sec'])}，仍可缓存用于免滑块")
         return solve_result
     finally:
         if ctx is not None:
@@ -4071,6 +4639,51 @@ async def main_async(args) -> dict:
         result["error"] = "Cookie 字符串为空"
         result["durationMs"] = int((time.time() - start_time) * 1000)
         return result
+
+    # 2026-08-02 x5sec 主方案：静默提取模式（--silent-extract）
+    # 不拖滑块，依赖浏览器 Baxia JS 静默验证获取 x5sec（8s 超时）
+    # 详见 .trae/rules/x5sec-research-knowledge.md 方案 B
+    if bool(getattr(args, "silent_extract", False)):
+        log("=== 静默 x5sec 提取模式（--silent-extract）===")
+        try:
+            _chrome = find_chrome_path()
+            if not _chrome:
+                result["error"] = "未找到 Chrome 可执行文件"
+                result["durationMs"] = int((time.time() - start_time) * 1000)
+                return result
+            _ua = get_chrome_user_agent(_chrome)
+            _proxy = None
+            if getattr(args, "proxy_server", ""):
+                _proxy = {"server": args.proxy_server}
+                if getattr(args, "proxy_username", ""):
+                    _proxy["username"] = args.proxy_username
+                if getattr(args, "proxy_password", ""):
+                    _proxy["password"] = args.proxy_password
+            # 注意：async_playwright 已在模块顶部全局导入（patchright 优先，playwright 兜底）
+            # 不得在此处局部 import，否则会让 Python 把 async_playwright 当作 main_async 的局部变量，
+            # 导致非静默流程（main_async 末尾的 async with async_playwright()）报错：
+            # "cannot access local variable 'async_playwright' where it is not associated with a value"
+            async with async_playwright() as p:
+                silent_result = await silent_extract_x5sec(
+                    playwright=p,
+                    chrome_path=_chrome,
+                    ua=_ua,
+                    cookie_str=cookie_str,
+                    target_url=getattr(args, "target_url", "https://www.goofish.com/im"),
+                    proxy=_proxy,
+                    profile_strategy=getattr(args, "profile_strategy", "temp"),
+                    timeout_sec=15,
+                )
+            result.update(silent_result)
+            result["ok"] = silent_result.get("ok", False)
+            result["durationMs"] = int((time.time() - start_time) * 1000)
+            log(f"静默提取完成: ok={result['ok']} source={silent_result.get('source', '')} x5sec_len={len(silent_result.get('x5sec', ''))}")
+            return result
+        except Exception as e:
+            log(f"静默提取异常: {e}")
+            result["error"] = f"静默提取异常: {e}"
+            result["durationMs"] = int((time.time() - start_time) * 1000)
+            return result
 
     chrome_path = find_chrome_path()
     if not chrome_path:
@@ -4153,6 +4766,11 @@ def main() -> None:
         "--semi-auto-fallback",
         action="store_true",
         help="全自动失败后保留浏览器窗口供人工拖拽（120 秒超时）",
+    )
+    parser.add_argument(
+        "--silent-extract",
+        action="store_true",
+        help="静默 x5sec 提取模式：不拖滑块，依赖浏览器 Baxia JS 静默验证获取 x5sec（8s 超时）",
     )
     args = parser.parse_args()
     result = asyncio.run(main_async(args))

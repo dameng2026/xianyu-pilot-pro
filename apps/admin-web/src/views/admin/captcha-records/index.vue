@@ -293,6 +293,14 @@
               <span v-else class="muted">—</span>
             </template>
           </ElTableColumn>
+          <ElTableColumn label="代理来源" width="120">
+            <template #default="{ row }">
+              <ElTag v-if="row.proxySource" :type="proxySourceTagType(row.proxySource)" size="small" effect="plain">
+                {{ proxySourceLabel(row.proxySource) }}
+              </ElTag>
+              <span v-else class="muted">—</span>
+            </template>
+          </ElTableColumn>
           <ElTableColumn label="引擎" prop="engine" width="110">
             <template #default="{ row }">{{ row.engine || '—' }}</template>
           </ElTableColumn>
@@ -345,6 +353,12 @@
           <ElDescriptionsItem label="失败原因">
             <ElTag v-if="detailDrawer.row.failureReason" :type="failureReasonTagType(detailDrawer.row.failureReason)" size="small" effect="plain">
               {{ failureReasonLabel(detailDrawer.row.failureReason) }}
+            </ElTag>
+            <span v-else>—</span>
+          </ElDescriptionsItem>
+          <ElDescriptionsItem label="代理来源">
+            <ElTag v-if="detailDrawer.row.proxySource" :type="proxySourceTagType(detailDrawer.row.proxySource)" size="small" effect="plain">
+              {{ proxySourceLabel(detailDrawer.row.proxySource) }}
             </ElTag>
             <span v-else>—</span>
           </ElDescriptionsItem>
@@ -448,6 +462,45 @@
             <div class="metric-sub">{{ attemptAccountLabel }}</div>
           </ElCard>
         </div>
+
+        <!-- 按代理来源聚合的成功率对比（2026-08-03 新增，住址IP vs 服务器IP） -->
+        <ElCard shadow="never" class="section-card" v-if="stats.byProxySource && stats.byProxySource.length > 0">
+          <template #header>
+            <div class="table-header">
+              <span>按代理来源聚合（住址IP vs 服务器IP 成功率对比）</span>
+              <span class="muted small">统计口径与概览KPI一致：排除超时/预检验拒绝/服务不可用；空值归为 unknown（修复前历史记录）</span>
+            </div>
+          </template>
+          <ElTable :data="stats.byProxySource" border stripe>
+            <template #empty><div class="empty-state">暂无数据</div></template>
+            <ElTableColumn label="代理来源" min-width="140">
+              <template #default="{ row }">
+                <ElTag :type="proxySourceTagType(row.proxySource)" size="small" effect="plain">
+                  {{ proxySourceLabel(row.proxySource) }}
+                </ElTag>
+                <span class="dim-code">{{ row.proxySource }}</span>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="总次数" prop="total" width="100" align="right" />
+            <ElTableColumn label="成功" prop="success" width="100" align="right">
+              <template #default="{ row }">
+                <span class="text-success">{{ row.success }}</span>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="失败" prop="fail" width="100" align="right">
+              <template #default="{ row }">
+                <span :class="row.fail > 0 ? 'text-danger' : ''">{{ row.fail }}</span>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="成功率" width="140" align="right">
+              <template #default="{ row }">
+                <span :class="row.successRate >= 0.5 ? 'text-success' : (row.successRate >= 0.1 ? 'text-warning' : 'text-danger')">
+                  {{ (row.successRate * 100).toFixed(2) }}%
+                </span>
+              </template>
+            </ElTableColumn>
+          </ElTable>
+        </ElCard>
 
         <ElAlert type="info" :closable="false" class="stats-scope-alert" show-icon>
           <template #title>
@@ -700,6 +753,24 @@
     return 'danger'
   }
 
+  // 代理来源标签（2026-08-03 新增，住址IP vs 服务器IP对比）
+  const proxySourceLabel = (source?: string) => {
+    const map: Record<string, string> = {
+      residential_ip: '住址IP',
+      server_ip: '服务器IP',
+      account_bound: '账号绑定',
+      unknown: '未知',
+    }
+    return (source && map[source]) || source || '—'
+  }
+
+  const proxySourceTagType = (source?: string): any => {
+    if (source === 'residential_ip') return 'success'
+    if (source === 'server_ip') return 'info'
+    if (source === 'account_bound') return 'warning'
+    return 'info'
+  }
+
   // ==================== 入口过滤参数（从路由 query 读取） ====================
 
   const accountIdFilter = computed<number | null>(() => {
@@ -726,7 +797,8 @@
   const stats = reactive<CaptchaSolveStats>({
     kpi: { total: 0, success: 0, fail: 0, timeout: 0, precheckRejected: 0, serviceUnavailable: 0, successRate: 0 },
     trend: [],
-    accounts: []
+    accounts: [],
+    byProxySource: []
   })
 
   // ==================== 队列实时状态 ====================
@@ -786,7 +858,7 @@
       if (accountIdFilter.value) params.accountId = accountIdFilter.value
       else if (userIdFilter.value) params.userId = userIdFilter.value
       const data = await getCaptchaSolveStats(params)
-      Object.assign(stats, data || { kpi: { total: 0, success: 0, fail: 0, timeout: 0, precheckRejected: 0, serviceUnavailable: 0, successRate: 0 }, trend: [], accounts: [] })
+      Object.assign(stats, data || { kpi: { total: 0, success: 0, fail: 0, timeout: 0, precheckRejected: 0, serviceUnavailable: 0, successRate: 0 }, trend: [], accounts: [], byProxySource: [] })
       // 从账号分组提取账号名提示
       if (accountIdFilter.value && stats.accounts && stats.accounts.length > 0) {
         accountNameHint.value = stats.accounts[0].accountName || ''
@@ -1345,6 +1417,11 @@
 
 .text-danger {
   color: #dc2626;
+  font-weight: 600;
+}
+
+.text-warning {
+  color: #d97706;
   font-weight: 600;
 }
 

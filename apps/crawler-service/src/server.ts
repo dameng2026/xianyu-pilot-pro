@@ -1,4 +1,4 @@
-﻿import express, { type NextFunction, type Request, type Response } from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
@@ -17,6 +17,20 @@ import { solveGoofishSlider, isHeadedDisplayAvailable, type SlideSolveResult } f
 import { captureQrCodeOnly, completeQrLoginSession } from './crawler/qrLoginSolver.js';
 import { processRegistry, processMonitor } from './crawler/processRegistry.js';
 import { cacheX5sec, getCachedX5sec, evictCachedX5sec, injectX5secIntoCookie, cookieHasX5sec, closeX5secCache } from './x5secCache.js';
+// 2026-08-03 新增：FireyeJS token 提取（方案 K - 路线 J）
+// 通过 Playwright 浏览器执行 fireyejs.js，获取真实的 FYToken 和 umidToken
+// 用于 um.json 端点请求，突破 NoCaptcha 验证流程的设备指纹瓶颈
+import { getFireyejsToken, executeRouteJFlow, type FireyejsTokenResult, type RouteJFlowResult } from './crawler/fireyejsToken.js';
+// 2026-08-02 新增：住址IP代理池集成（方案 E）
+import {
+  isResidentialProxyEnabled,
+  getResidentialProxy,
+  getResidentialProxyConfig,
+  reportProxyFailure,
+  ensureShenlongipWhitelist,
+  closeResidentialProxyPool,
+  proxyQualityTracker,
+} from './residentialProxyPool.js';
 import {
   isCorsOriginAllowed,
   isProductionLike,
@@ -42,21 +56,42 @@ import {
 // 策略：当 Playwright 求解失败且失败原因是 slider_fail（非 cookie_invalid）时，
 // 调用 Python sliderSolve.py 重试。Python 有独立的 120s 超时。
 const PYTHON_SOLVER_SCRIPT = process.env.PYTHON_SOLVER_SCRIPT || '/app/sliderSolve.py';
+// 2026-08-04 CloakBrowser 反指纹浏览器后端切换（7.11 节，已验证实施）
+// SLIDER_BROWSER_BACKEND=cloakbrowser 时，Python fallback 改用 cloakbrowser_solve.py
+// （源码级反指纹，根治 patchright 的 plugins=0 / WebGL 软件渲染 / 页面不渲染问题）
+// 注意：静默提取（--silent-extract）始终走 patchright，CloakBrowser 求解器未实现静默提取
+const SLIDER_BROWSER_BACKEND = process.env.SLIDER_BROWSER_BACKEND || 'patchright';
+const CLOAK_SOLVER_SCRIPT = process.env.CLOAK_SOLVER_SCRIPT || '/app/cloakbrowser_solve.py';
 const PYTHON_BINARY = process.env.PYTHON_BINARY || 'python3';
 // 2026-08-01 优化：Python fallback 超时从 120s 增加到 155s
 // 原因：Playwright 超时从 50s 降到 10s，Python fallback 获得更多时间。
 //       实测 Python 脚本启动+Chrome启动+导航+检测滑块需要约 30-40s，
 //       155s 给拖动阶段留 100s+（足够 2 次拖动+验证+冷却）。
 // 总时间预算：Playwright 10s + Python 155s = 165s（在 170s 整体超时以内）
-const PYTHON_FALLBACK_TIMEOUT_MS = 155_000;  // 155 秒（Python 独立超时）
+// 2026-08-03 优化：超时从 155s 降到 120s
+// 原因：数据分析显示成功的 Python fallback 求解通常在 30-124s 完成。
+//       155s 超时让卡住的请求占用并发槽位太久（6 个并发 × 155s = 15.5 分钟才能周转一轮），
+//       导致大量请求被跳过（"已有 N 个实例在运行"）。
+//       降到 120s：覆盖大多数成功场景（30-124s），同时加快槽位周转（6×120s=12 分钟）。
+//       总时间预算：Playwright 10s + Python 120s = 130s（在 170s 整体超时以内）
+const PYTHON_FALLBACK_TIMEOUT_MS = 120_000;  // 120 秒（Python 独立超时）
 
 // 2026-08-01 优化：Python fallback 全局并发控制
 // 2026-08-01 二次优化：移除全局锁，允许 2 个并发（匹配 SOLVE_WORKER_CONCURRENCY=2）
 // 原因：全局锁导致第二个请求直接失败，6 个活跃账号只有 1 个能求解。
 //       服务器有 16GB 内存，完全支持 2 个 Chrome 进程并行。
 //       Python 脚本的 _FileLock 已移除（每个进程用独立 temp 目录，不冲突）。
+// 2026-08-03 优化：并发数从 2 增加到 4
+// 原因：6+ 个活跃账号同时需要求解时，并发 2 导致大量请求被跳过（"已有 2 个实例在运行"），
+//       直接返回失败。服务器 16GB 内存可支持 4 个 Chrome 进程并行（每个约 300MB）。
+//       每个进程用独立 temp 目录，不冲突。
+// 2026-08-03 三次优化：并发数从 4 增加到 6
+// 原因：14:00-14:55 期间 20 个账号同时求解，并发 4 导致大量请求被跳过
+//       （"已有 4 个 Python fallback 在运行，跳过本次"）。
+//       服务器 16GB 内存可支持 6 个 Chrome 进程并行（6×300MB=1.8GB）。
+//       同时降低 Python fallback 超时从 155s 到 120s，加快槽位周转。
 let pythonFallbackRunning = 0;  // 当前运行的 Python fallback 数量
-const MAX_PYTHON_FALLBACK_CONCURRENCY = 2;  // 最大并发数
+const MAX_PYTHON_FALLBACK_CONCURRENCY = 6;  // 最大并发数（2026-08-03 增加到 6）
 
 interface PythonSolveResult {
   ok: boolean;
@@ -74,9 +109,10 @@ async function solveWithPythonPatchright(params: {
   targetUrl?: string;
   proxy?: { server: string; username?: string; password?: string };
   maxRetries?: number;
+  silentExtract?: boolean;
 }): Promise<PythonSolveResult> {
   const startTime = Date.now();
-  const { cookieStr, targetUrl, proxy, maxRetries } = params;
+  const { cookieStr, targetUrl, proxy, maxRetries, silentExtract } = params;
 
   // 2026-08-01 优化：允许 2 个 Python fallback 并发（原全局锁已移除）
   // 原因：全局锁导致第二个请求直接失败，6 个活跃账号只有 1 个能求解。
@@ -105,30 +141,50 @@ async function solveWithPythonPatchright(params: {
     };
   }
 
+  // 2026-08-04 CloakBrowser 后端切换：SLIDER_BROWSER_BACKEND=cloakbrowser 时用 cloakbrowser_solve.py
+  // 静默提取（silentExtract）始终走 patchright（CloakBrowser 求解器未实现静默提取）
+  const isCloakBackend = SLIDER_BROWSER_BACKEND === 'cloakbrowser' && !silentExtract;
+  const solverScript = isCloakBackend ? CLOAK_SOLVER_SCRIPT : PYTHON_SOLVER_SCRIPT;
+
   const args = [
-    PYTHON_SOLVER_SCRIPT,
+    solverScript,
     '--cookie-file', cookieFile,
+  ];
+  if (isCloakBackend) {
+    // CloakBrowser 求解器参数（--max-attempts / --proxy-server）
+    args.push('--max-attempts', String(Math.max(1, Math.min(maxRetries || 3, 3))));
+    args.push('--target-url', targetUrl || 'https://www.goofish.com/im');
+    if (proxy?.server) {
+      args.push('--proxy-server', proxy.server);
+    }
+  } else {
+    // patchright sliderSolve.py 参数
     // 2026-08-01 优化：max-retries 设为 1
     // 原因：sliderSolve.py 内部 attempt>=1 即返回（只拖动 1 次）。
     //       减少重试次数避免 Baxia 加码惩罚（每次拖动失败都会加重风控）。
     //       第 1 次失败后直接返回，不点重试按钮，避免触发加码。
-    '--max-retries', String(Math.max(1, Math.min(maxRetries || 1, 1))),
+    args.push('--max-retries', String(Math.max(1, Math.min(maxRetries || 2, 2))));
     // 2026-08-01 修复：用 temp 而不是 seed
     // 原因：seed 策略每次求解都 copytree 克隆 90MB+ profile 到 /tmp，
     // 容器 /tmp 是 tmpfs 只有 512MB，几次求解就塞满导致 [Errno 28] No space left on device。
     // temp 策略创建空目录，不克隆，实测也能通过指纹探针（patchright + WebGL patch 足够）。
-    '--profile-strategy', 'temp',
-  ];
-  if (targetUrl) {
-    args.push('--target-url', targetUrl);
-  }
-  if (proxy?.server) {
-    args.push('--proxy-server', proxy.server);
-    if (proxy.username) args.push('--proxy-username', proxy.username);
-    if (proxy.password) args.push('--proxy-password', proxy.password);
+    args.push('--profile-strategy', 'temp');
+    if (targetUrl) {
+      args.push('--target-url', targetUrl);
+    }
+    if (proxy?.server) {
+      args.push('--proxy-server', proxy.server);
+      if (proxy.username) args.push('--proxy-username', proxy.username);
+      if (proxy.password) args.push('--proxy-password', proxy.password);
+    }
   }
 
-  console.log(`[SliderSolver-Python] 启动 Python patchright 求解: ${PYTHON_BINARY} ${args.join(' ').replace(cookieFile, '<cookie-file>')}`);
+  if (silentExtract) {
+    args.push('--silent-extract');
+    console.log('[SliderSolver-Python] 静默提取模式已启用（--silent-extract）');
+  }
+
+    console.log(`[SliderSolver-Python] 启动 Python ${isCloakBackend ? 'CloakBrowser' : 'patchright'} 求解: ${PYTHON_BINARY} ${args.join(' ').replace(cookieFile, '<cookie-file>')}`);
 
   return new Promise<PythonSolveResult>((resolve) => {
     let stdout = '';
@@ -526,7 +582,23 @@ async function reconcileOrphanedCrawlJobs(): Promise<void> {
 function requireInternalAuth(req: Request, res: Response, next: NextFunction) {
   // /api/health 和 /api/health/processes 豁免 internal token（仅暴露运行状态，不涉及业务数据）
   // /api/ready 豁免（Docker healthcheck 使用）
+  // /api/proxy/* 豁免 tenant ID 检查（基础设施端点，所有 tenant 共享住宅IP代理池，方案G）
+  // /api/fireyejs/* 豁免 tenant ID 检查（方案 K 路线 J：FireyeJS token 获取是匿名访问，不需要账号上下文）
   if (req.path === '/api/health' || req.path === '/api/health/processes' || req.path === '/api/ready') return next();
+  if (req.path === '/api/proxy/get' || req.path === '/api/proxy/report-failure' || req.path === '/api/proxy/report-quality' || req.path === '/api/proxy/quality-snapshot' || req.path === '/api/goofish/silent-extract'
+      || req.path === '/api/fireyejs/get-token' || req.path === '/api/fireyejs/test'
+      || req.path === '/api/fireyejs/route-j-flow') {
+    // 代理/FireyeJS 端点仍需 internal token 鉴权，但跳过 tenant ID 检查
+    if (!internalTokenPolicy.ready) {
+      return res.status(503).json({ ok: false, error: internalTokenPolicy.reason || 'internal authentication is not ready' });
+    }
+    const expected = internalTokenPolicy.token;
+    const provided = req.header('X-Internal-Token');
+    if (!safeEquals(provided, expected)) {
+      return res.status(403).json({ ok: false, error: 'forbidden' });
+    }
+    return next();
+  }
 
   if (!internalTokenPolicy.ready) {
     return res.status(503).json({ ok: false, error: internalTokenPolicy.reason || 'internal authentication is not ready' });
@@ -1108,8 +1180,35 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
       }
     }
 
+    // 2026-08-02 新增：住址IP代理池集成（方案 E）
+    // 优先级：账号绑定代理 > 住址IP代理池 > 服务器IP（无代理）
+    let proxySource: 'server_ip' | 'residential_ip' | 'account_bound' | 'none' = 'none';
+    let residentialProxyMeta: { ip: string; port: string; prov?: string; city?: string } | null = null;
+    const useResidentialProxy = req.body?.useResidentialProxy === true;
+    if (safeProxy) {
+      proxySource = 'account_bound';
+    } else if (useResidentialProxy && isResidentialProxyEnabled()) {
+      const residentialProxy = await getResidentialProxy();
+      if (residentialProxy) {
+        safeProxy = { server: residentialProxy.server };
+        proxySource = 'residential_ip';
+        residentialProxyMeta = {
+          ip: residentialProxy.ip,
+          port: residentialProxy.port,
+          prov: residentialProxy.prov,
+          city: residentialProxy.city,
+        };
+        console.log(`[SliderSolver] requestId=${(req as RequestWithTrace).requestId} 使用住址IP代理: ip=${residentialProxy.ip} prov=${residentialProxy.prov || ''} city=${residentialProxy.city || ''}`);
+      } else {
+        console.log(`[SliderSolver] requestId=${(req as RequestWithTrace).requestId} 住址IP代理池为空或未启用，降级到服务器IP`);
+        proxySource = 'server_ip';
+      }
+    } else {
+      proxySource = 'server_ip';
+    }
+
     console.log(
-      `[SliderSolver] requestId=${(req as RequestWithTrace).requestId} tenantId=${tenantId} hasCookie=${!!cookieStr} hasProxy=${!!safeProxy} targetHost=${safeTargetUrl ? new URL(safeTargetUrl).hostname : 'default'}`,
+      `[SliderSolver] requestId=${(req as RequestWithTrace).requestId} tenantId=${tenantId} hasCookie=${!!cookieStr} hasProxy=${!!safeProxy} proxySource=${proxySource} targetHost=${safeTargetUrl ? new URL(safeTargetUrl).hostname : 'default'}`,
     );
 
     const slotType = req.body?.slotType;
@@ -1243,6 +1342,7 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
         }
       } else {
         // Python 也失败，合并错误信息
+        // 2026-08-02 修复：即使 Python 求解失败，也传回 x5sec（HTTP 拦截器可能已捕获）
         result = {
           ok: false,
           solved: false,
@@ -1250,7 +1350,11 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
           attempts: playwrightResult.attempts + pythonResult.attempts,
           error: `Playwright: ${playwrightResult.error?.substring(0, 100)} | Python: ${pythonResult.error?.substring(0, 100)}`,
           durationMs: playwrightResult.durationMs + pythonResult.durationMs,
+          x5sec: pythonResult.x5sec || playwrightResult.x5sec,
         };
+        if (result.x5sec) {
+          console.log(`[SliderSolver] requestId=${requestId} ✓ Python 求解失败但获取到 x5sec (长度=${result.x5sec.length})，将缓存用于免滑块`);
+        }
       }
     }
 
@@ -1261,9 +1365,11 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
     // 这里直接返回原始 error 字段，由前端根据 failureReason 分类展示。
 
     // 2026-08-01 优化：求解成功后缓存 x5sec，后续请求可直接复用（免滑块）
-    if (result.solved && result.x5sec) {
+    // 2026-08-02 重大修复：即使 solved=false，只要 x5sec 有值就缓存。
+    if (result.x5sec) {
       try {
         await cacheX5sec(cookieStr, result.x5sec);
+        console.log(`[SliderSolver] requestId=${(req as RequestWithTrace).requestId} ✓ x5sec 已缓存到 Redis (长度=${result.x5sec.length}, solved=${result.solved})`);
       } catch (e: any) {
         console.warn(`[SliderSolver] requestId=${(req as RequestWithTrace).requestId} x5sec 缓存写入失败: ${e?.message || e}`);
       }
@@ -1282,6 +1388,11 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
 
     const response = {
       ...result,
+      // 2026-08-03 修复：响应必须包含 proxySource，否则 captcha_solver.py 收不到代理来源，
+      // 数据库 proxy_source 字段保持空值，无法统计住址IP vs 服务器IP的成功率。
+      // 之前 proxySource 在第 1144 行定义但未加入响应，导致所有求解记录 proxy_source 为空。
+      proxySource,
+      residentialProxy: residentialProxyMeta,
       ...(productionLike ? { screenshotPath: undefined } : {}),
     };
     return res.status(result.ok ? 200 : 422).json(response);
@@ -1296,6 +1407,71 @@ app.post('/api/goofish/slide-solve', async (req, res) => {
       attempts: 0,
       durationMs: 0,
     });
+  }
+});
+
+// ---- POST /api/goofish/silent-extract ----  静默 x5sec 提取（免滑块）
+// 2026-08-02 x5sec 主方案：不拖滑块，依赖浏览器 Baxia JS 静默验证获取 x5sec
+// 详见 .trae/rules/x5sec-research-knowledge.md 方案 B
+app.post('/api/goofish/silent-extract', async (req, res) => {
+  try {
+    const { cookie, targetUrl, proxy } = req.body || {};
+    let cookieStr: string;
+    try {
+      cookieStr = normalizeCookieInput(cookie);
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error instanceof Error ? error.message : 'Cookie is invalid' });
+    }
+    let safeTargetUrl: string | undefined;
+    try {
+      safeTargetUrl = targetUrl ? normalizeGoofishTargetUrl(targetUrl) : undefined;
+    } catch (e: any) {
+      return res.status(400).json({ ok: false, error: e?.message || '目标 URL 无效' });
+    }
+    let safeProxy: { server: string; username?: string; password?: string } | undefined;
+    if (proxy && typeof proxy === 'object' && typeof proxy.server === 'string') {
+      const server = String(proxy.server).trim();
+      if (/^(https?|socks5?):\/\//i.test(server) && server.length <= 256) {
+        safeProxy = { server };
+        if (typeof proxy.username === 'string' && proxy.username.trim()) {
+          safeProxy.username = proxy.username.trim().slice(0, 128);
+        }
+        if (typeof proxy.password === 'string' && proxy.password) {
+          safeProxy.password = String(proxy.password).slice(0, 256);
+        }
+      }
+    }
+
+    // 2026-08-03 修复：静默提取端点必须支持住址IP代理池（与 slide-solve 端点一致）
+    // 优先级：账号绑定代理 > 住址IP代理池 > 服务器IP（无代理）
+    // 2026-08-03 事故：原先 silent-extract 端点解构 req.body 时遗漏 useResidentialProxy，
+    // 导致 _try_silent_extract 发送 useResidentialProxy=true 但被忽略，
+    // 静默提取始终使用服务器IP（被Baxia标记为高风险），方案B从未真正生效。
+    let proxySource: 'server_ip' | 'residential_ip' | 'account_bound' | 'none' = 'none';
+    const useResidentialProxy = req.body?.useResidentialProxy === true;
+    if (safeProxy) {
+      proxySource = 'account_bound';
+    } else if (useResidentialProxy && isResidentialProxyEnabled()) {
+      const residentialProxy = await getResidentialProxy();
+      if (residentialProxy) {
+        safeProxy = { server: residentialProxy.server };
+        proxySource = 'residential_ip';
+        console.log(`[SilentExtract] requestId=${(req as RequestWithTrace).requestId} 使用住址IP代理: ip=${residentialProxy.ip} prov=${residentialProxy.prov || ''} city=${residentialProxy.city || ''}`);
+      } else {
+        console.log(`[SilentExtract] requestId=${(req as RequestWithTrace).requestId} 住址IP代理池为空或未启用，降级到服务器IP`);
+        proxySource = 'server_ip';
+      }
+    } else {
+      proxySource = 'server_ip';
+    }
+
+    console.log('[SilentExtract] requestId=' + (req as RequestWithTrace).requestId + ' hasCookie=' + (!!cookieStr) + ' proxySource=' + proxySource + ' targetHost=' + (safeTargetUrl ? new URL(safeTargetUrl).hostname : 'default'));
+    const result = await solveWithPythonPatchright({ cookieStr, targetUrl: safeTargetUrl || 'https://www.goofish.com/im', proxy: safeProxy, silentExtract: true });
+    // 2026-08-03 修复：响应体包含 proxySource 字段，便于追踪静默提取是否真的使用住址IP
+    return res.status(result.ok ? 200 : 422).json({ ok: result.ok, x5sec: result.x5sec || '', x5secSource: result.ok ? 'silent_extract' : undefined, proxySource, error: result.error, durationMs: result.durationMs });
+  } catch (e: any) {
+    console.error('[SilentExtract] requestId=' + (req as RequestWithTrace).requestId + ' errorType=' + safeErrorType(e));
+    return res.status(500).json({ ok: false, error: (e instanceof Error && e.message) ? e.message : '静默提取处理失败' });
   }
 });
 
@@ -1341,6 +1517,334 @@ app.post('/api/goofish/x5sec-cache', async (req, res) => {
     } else {
       return res.status(400).json({ ok: false, error: `未知的 action: ${action}（支持: get, inject, evict）` });
     }
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: safeErrorType(e) });
+  }
+});
+
+// ---- POST /api/fireyejs/get-token ----  FireyeJS token 提取（方案 K - 路线 J）
+// 2026-08-03 新增：通过 Playwright 浏览器执行 fireyejs.js，获取真实的 FYToken 和 umidToken
+// 用途：um.json 端点需要 FireyeJS 生成的 token 才能返回有效的设备指纹，
+//       进而调用 initialize.jsonp 和 analyze.jsonp 完成 NoCaptcha 验证获取 x5sec。
+// 请求体：
+//   - cookie: 用户 cookie 字符串（可选，匿名访问时留空）
+//   - targetUrl: 目标页面 URL（可选，默认 https://www.goofish.com/）
+//   - proxy: 代理配置（可选）
+//   - simulateBehavior: 是否模拟行为（默认 true）
+//   - debug: 是否启用调试日志（默认 false）
+// 响应：
+//   - ok: 是否成功
+//   - fyToken: FireyeJS getFYToken 返回值（行为指纹 token）
+//   - umidToken: FireyeJS getUidToken 返回值（设备指纹 token）
+//   - durationMs: 总耗时
+//   - error: 错误信息（失败时）
+app.post('/api/fireyejs/get-token', async (req, res) => {
+  try {
+    const { cookie, targetUrl, proxy, simulateBehavior, debug } = req.body || {};
+
+    // Cookie 是可选的（匿名访问也可以获取 token，但登录态下的 token 更稳定）
+    let cookieStr = '';
+    if (cookie) {
+      try {
+        cookieStr = normalizeCookieInput(cookie);
+      } catch (error) {
+        return res.status(400).json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Cookie is invalid',
+        });
+      }
+    }
+
+    // 目标 URL 校验（可选）
+    let safeTargetUrl: string | undefined;
+    if (targetUrl) {
+      try {
+        safeTargetUrl = normalizeGoofishTargetUrl(targetUrl);
+      } catch (e: any) {
+        return res.status(400).json({
+          ok: false,
+          error: e?.message || '目标 URL 无效',
+        });
+      }
+    }
+
+    // 代理配置（可选）
+    let safeProxy: { server: string; username?: string; password?: string } | undefined;
+    if (proxy && typeof proxy === 'object' && typeof proxy.server === 'string') {
+      const server = String(proxy.server).trim();
+      if (/^(https?|socks5?):\/\//i.test(server) && server.length <= 256) {
+        safeProxy = { server };
+        if (typeof proxy.username === 'string' && proxy.username.trim()) {
+          safeProxy.username = proxy.username.trim().slice(0, 128);
+        }
+        if (typeof proxy.password === 'string' && proxy.password) {
+          safeProxy.password = String(proxy.password).slice(0, 256);
+        }
+      }
+    }
+
+    const requestId = (req as RequestWithTrace).requestId;
+    console.log(
+      `[FireyejsToken] requestId=${requestId} hasCookie=${!!cookieStr} targetUrl=${safeTargetUrl || 'default'} hasProxy=${!!safeProxy}`,
+    );
+
+    const result: FireyejsTokenResult = await getFireyejsToken({
+      cookieStr,
+      targetUrl: safeTargetUrl,
+      proxy: safeProxy,
+      simulateBehavior: typeof simulateBehavior === 'boolean' ? simulateBehavior : true,
+      debug: debug === true,
+    });
+
+    if (result.ok) {
+      return res.status(200).json({
+        ok: true,
+        fyToken: result.fyToken,
+        umidToken: result.umidToken,
+        durationMs: result.durationMs,
+        fireyejsVersion: result.fireyejsVersion,
+        environmentInfo: result.environmentInfo,
+      });
+    } else {
+      return res.status(422).json({
+        ok: false,
+        fyToken: '',
+        umidToken: '',
+        durationMs: result.durationMs,
+        error: result.error,
+        fireyejsVersion: result.fireyejsVersion,
+        environmentInfo: result.environmentInfo,
+      });
+    }
+  } catch (e: any) {
+    console.error('[FireyejsToken] errorType=' + safeErrorType(e));
+    return res.status(500).json({
+      ok: false,
+      error: (e instanceof Error && e.message) ? e.message : 'FireyeJS token 提取失败',
+    });
+  }
+});
+
+// ---- GET /api/fireyejs/test ----  FireyeJS token 提取测试端点（匿名访问）
+// 用于快速验证 FireyeJS token 提取流程是否正常工作
+app.get('/api/fireyejs/test', async (_req, res) => {
+  try {
+    const { testFireyejsTokenExtraction } = await import('./crawler/fireyejsToken.js');
+    const result = await testFireyejsTokenExtraction();
+    return res.status(result.ok ? 200 : 422).json(result);
+  } catch (e: any) {
+    return res.status(500).json({
+      ok: false,
+      error: (e instanceof Error && e.message) ? e.message : '测试失败',
+    });
+  }
+});
+
+// ---- POST /api/fireyejs/route-j-flow ----  路线 J 完整 x5sec 流程
+// 2026-08-03 v5 新增：在浏览器内串联 FireyeJS → um.json → initialize.jsonp → analyze.jsonp
+// 解决 Python 端调用 um.json 的 IP 不一致问题（FireyeJS 在浏览器生成，um.json 必须从同 IP 调用）
+//
+// 请求体：
+//   - cookie: 用户 cookie 字符串（可选，匿名访问时留空）
+//   - targetUrl: 目标页面 URL（可选）
+//   - debug: 是否启用调试日志（默认 false）
+// 响应：RouteJFlowResult 完整结构
+app.post('/api/fireyejs/route-j-flow', async (req, res) => {
+  try {
+    const { cookie, targetUrl, debug, useProxy } = req.body || {};
+
+    let cookieStr = '';
+    if (cookie) {
+      try {
+        cookieStr = normalizeCookieInput(cookie);
+      } catch (error) {
+        return res.status(400).json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Cookie is invalid',
+        });
+      }
+    }
+
+    let safeTargetUrl: string | undefined;
+    if (targetUrl) {
+      try {
+        safeTargetUrl = normalizeGoofishTargetUrl(targetUrl);
+      } catch (e: any) {
+        return res.status(400).json({
+          ok: false,
+          error: e?.message || '目标 URL 无效',
+        });
+      }
+    }
+
+    const requestId = (req as RequestWithTrace).requestId;
+    console.log(
+      `[RouteJFlow] requestId=${requestId} hasCookie=${!!cookieStr} targetUrl=${safeTargetUrl || 'default'}`,
+    );
+
+    // v19 新增：住宅 IP 代理支持（默认关闭，useProxy=true 时启用）
+    // v22 修复：住宅代理连接不稳定（ERR_PROXY_CONNECTION_FAILED），默认用服务器 IP（带导航重试）
+    // 服务器 IP 被限流时，可手动 useProxy=true 使用住宅代理绕过 IP 级风控
+    let proxy: { server: string; username?: string; password?: string } | undefined;
+    if (useProxy === true) {
+      try {
+        const residentialProxy = await getResidentialProxy();
+        if (residentialProxy) {
+          proxy = {
+            server: residentialProxy.server,
+            ...(residentialProxy.username ? { username: residentialProxy.username } : {}),
+            ...(residentialProxy.password ? { password: residentialProxy.password } : {}),
+          };
+          console.log(
+            `[RouteJFlow] v22 使用住宅 IP 代理 ${residentialProxy.ip}:${residentialProxy.port} (${residentialProxy.city || ''}${residentialProxy.prov || ''})`,
+          );
+        } else {
+          console.log(`[RouteJFlow] v22 住宅代理不可用，使用服务器 IP`);
+        }
+      } catch (e: any) {
+        console.log(`[RouteJFlow] v22 获取住宅代理失败: ${e?.message}，使用服务器 IP`);
+      }
+    } else {
+      console.log(`[RouteJFlow] v22 使用服务器 IP（useProxy=${useProxy}）`);
+    }
+
+    const result: RouteJFlowResult = await executeRouteJFlow({
+      cookieStr,
+      targetUrl: safeTargetUrl,
+      debug: debug === true,
+      proxy,
+    });
+
+    if (result.ok) {
+      return res.status(200).json(result);
+    } else {
+      return res.status(422).json(result);
+    }
+  } catch (e: any) {
+    console.error('[RouteJFlow] errorType=' + safeErrorType(e));
+    return res.status(500).json({
+      ok: false,
+      error: (e instanceof Error && e.message) ? e.message : '路线 J 流程失败',
+    });
+  }
+});
+
+// ---- 代理获取端点（方案G：Python 端 Token API 通过住宅IP代理调用）----
+// 2026-08-03 新增：让 automation-service 的 Python 端能共享 crawler-service 的住宅IP代理池
+// Python 端调用此端点获取一个住宅IP代理，用于 Token API 调用，绕过 Baxia IP 级风控
+app.get('/api/proxy/get', async (req, res) => {
+  try {
+    // 鉴权：使用 INTERNAL_API_TOKEN
+    const internalToken = String(req.headers['x-internal-token'] || '');
+    const expectedToken = process.env.INTERNAL_API_TOKEN || '';
+    if (!expectedToken || internalToken !== expectedToken) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+
+    // 检查是否启用住宅IP代理
+    if (!isResidentialProxyEnabled()) {
+      return res.json({
+        ok: true,
+        enabled: false,
+        proxy: null,
+        reason: 'residential_proxy_not_enabled',
+        config: getResidentialProxyConfig(),
+      });
+    }
+
+    // 获取一个代理
+    const proxy = await getResidentialProxy();
+    if (!proxy) {
+      return res.json({
+        ok: true,
+        enabled: true,
+        proxy: null,
+        reason: 'pool_empty_or_fetch_failed',
+        config: getResidentialProxyConfig(),
+      });
+    }
+
+    return res.json({
+      ok: true,
+      enabled: true,
+      proxy: {
+        server: proxy.server,
+        ip: proxy.ip,
+        port: proxy.port,
+        prov: proxy.prov || null,
+        city: proxy.city || null,
+        source: proxy.source,
+      },
+      config: getResidentialProxyConfig(),
+    });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: safeErrorType(e) });
+  }
+});
+
+// ---- 代理释放端点（标记代理使用失败，可选调用）----
+app.post('/api/proxy/report-failure', async (req, res) => {
+  try {
+    const internalToken = String(req.headers['x-internal-token'] || '');
+    const expectedToken = process.env.INTERNAL_API_TOKEN || '';
+    if (!expectedToken || internalToken !== expectedToken) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+
+    const ip = String(req.body?.ip || '').trim();
+    const reason = String(req.body?.reason || '').trim();
+    if (!ip) {
+      return res.status(400).json({ ok: false, error: 'ip is required' });
+    }
+
+    reportProxyFailure(ip, reason);
+    return res.json({ ok: true, reported: true });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: safeErrorType(e) });
+  }
+});
+
+// ---- 代理质量上报端点（方案 H 11.5.1-3）----
+// automation-service 在滑块求解/Token API 调用后上报代理 IP 结果，评估 IP 质量，
+// 低质量 IP（评分 < 40）自动加入黑名单 30 分钟，避免再次提取到同一 IP。
+app.post('/api/proxy/report-quality', async (req, res) => {
+  try {
+    const internalToken = String(req.headers['x-internal-token'] || '');
+    const expectedToken = process.env.INTERNAL_API_TOKEN || '';
+    if (!expectedToken || internalToken !== expectedToken) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+
+    const ip = String(req.body?.ip || '').trim();
+    const success = !!req.body?.success;
+    if (!ip) {
+      return res.status(400).json({ ok: false, error: 'ip is required' });
+    }
+
+    proxyQualityTracker.recordResult(ip, success);
+    console.log(
+      `[ProxyQuality] 上报结果 ip=${ip} success=${success} score=${proxyQualityTracker.getScore(ip)}` +
+      ` blacklisted=${proxyQualityTracker.isBlacklisted(ip)}`
+    );
+    return res.json({
+      ok: true,
+      score: proxyQualityTracker.getScore(ip),
+      blacklisted: proxyQualityTracker.isBlacklisted(ip),
+    });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: safeErrorType(e) });
+  }
+});
+
+// ---- 代理质量快照端点（运维诊断）----
+app.get('/api/proxy/quality-snapshot', async (req, res) => {
+  try {
+    const internalToken = String(req.headers['x-internal-token'] || '');
+    const expectedToken = process.env.INTERNAL_API_TOKEN || '';
+    if (!expectedToken || internalToken !== expectedToken) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+    return res.json({ ok: true, quality: proxyQualityTracker.getSnapshot() });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: safeErrorType(e) });
   }
@@ -1727,6 +2231,17 @@ async function start() {
     cleanOrphanChrome();
     orphanCleanerTimer = setInterval(cleanOrphanChrome, 30 * 1000);
     orphanCleanerTimer.unref();
+
+    // 2026-08-04 方案 H 11.4.4：启动时自动检查/添加 shenlongip 白名单（不阻塞启动）
+    ensureShenlongipWhitelist().then((wl) => {
+      if (wl.checked) {
+        console.log(`[Server] shenlongip 白名单自动管理完成: publicIp=${wl.publicIp} inWhitelist=${wl.inWhitelist} added=${wl.added}`);
+      } else {
+        console.log(`[Server] shenlongip 白名单自动管理跳过: ${wl.error || 'not_applicable'}`);
+      }
+    }).catch((e) => {
+      console.warn(`[Server] shenlongip 白名单自动管理异常: ${safeErrorType(e)}`);
+    });
   }
 
   // 启动滑块求解进程监测器：定期扫描注册表，清理超时/已结束的求解进程
@@ -1753,7 +2268,7 @@ async function start() {
     const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()));
     await closeAllQrLoginSessions();
     await serverClosed;
-    await Promise.allSettled([closeQueue(), closePool(), closeX5secCache()]);
+    await Promise.allSettled([closeQueue(), closePool(), closeX5secCache(), closeResidentialProxyPool()]);
     clearTimeout(forcedExit);
   };
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
@@ -1762,6 +2277,9 @@ async function start() {
 
 start().catch(async (error) => {
   console.error(`[Server] operation=start errorType=${safeErrorType(error)}`);
-  await Promise.allSettled([closeAllQrLoginSessions(), closeQueue(), closePool(), closeX5secCache()]);
+  console.error('[Server] FULL ERROR:', error);
+  if (error?.stack) console.error(error.stack);
+  await Promise.allSettled([closeAllQrLoginSessions(), closeQueue(), closePool(), closeX5secCache(), closeResidentialProxyPool()]);
   process.exitCode = 1;
 });
+

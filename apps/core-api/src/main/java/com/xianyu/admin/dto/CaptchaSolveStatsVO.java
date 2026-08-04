@@ -9,6 +9,8 @@ public class CaptchaSolveStatsVO {
     private Kpi kpi;
     private List<TrendPoint> trend;
     private List<AccountGroup> accounts;
+    /** 按代理来源聚合的成功率统计（2026-08-03 新增，用于住址IP vs 服务器IP对比） */
+    private List<ProxySourceGroup> byProxySource;
 
     public Kpi getKpi() { return kpi; }
     public void setKpi(Kpi kpi) { this.kpi = kpi; }
@@ -16,6 +18,8 @@ public class CaptchaSolveStatsVO {
     public void setTrend(List<TrendPoint> trend) { this.trend = trend; }
     public List<AccountGroup> getAccounts() { return accounts; }
     public void setAccounts(List<AccountGroup> accounts) { this.accounts = accounts; }
+    public List<ProxySourceGroup> getByProxySource() { return byProxySource; }
+    public void setByProxySource(List<ProxySourceGroup> byProxySource) { this.byProxySource = byProxySource; }
 
     public static class Kpi {
         private long total;
@@ -103,5 +107,30 @@ public class CaptchaSolveStatsVO {
         public void setSuccessRate(double successRate) { this.successRate = successRate; }
         public String getLastSolveTime() { return lastSolveTime; }
         public void setLastSolveTime(String lastSolveTime) { this.lastSolveTime = lastSolveTime; }
+    }
+
+    /**
+     * 按代理来源分组（住址IP vs 服务器IP 成功率对比）。
+     * 统计口径与 Kpi 一致：排除超时/预检验拒绝/服务不可用记录。
+     */
+    public static class ProxySourceGroup {
+        /** 代理来源：server_ip/residential_ip/account_bound/unknown（空值归为 unknown） */
+        private String proxySource;
+        private long total;
+        private long success;
+        private long fail;
+        /** 成功率 0~1 */
+        private double successRate;
+
+        public String getProxySource() { return proxySource; }
+        public void setProxySource(String proxySource) { this.proxySource = proxySource; }
+        public long getTotal() { return total; }
+        public void setTotal(long total) { this.total = total; }
+        public long getSuccess() { return success; }
+        public void setSuccess(long success) { this.success = success; }
+        public long getFail() { return fail; }
+        public void setFail(long fail) { this.fail = fail; }
+        public double getSuccessRate() { return successRate; }
+        public void setSuccessRate(double successRate) { this.successRate = successRate; }
     }
 }
