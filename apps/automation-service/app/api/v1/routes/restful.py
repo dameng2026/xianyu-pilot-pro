@@ -20,6 +20,7 @@ from ....models.entities import (
     XianyuMessage,
     XianyuTradeOrder,
 )
+from ....services.store_limit import assert_can_add_store
 from ..deps import get_current_user
 from .account import _account_access_conditions, account_to_dto
 
@@ -539,6 +540,10 @@ async def restful_create_account(
     try:
         tenant_id = current_user.get("tenant_id")
         user_id = current_user.get("user_id")
+        # 店铺数量限制：会员等级可绑定的店铺数已满时禁止新增（0=无限制）
+        blocked = await assert_can_add_store(db, user_id)
+        if blocked:
+            return ResultObject.failed(blocked.get("message", "店铺数量已达上限，请升级 VIP 后继续添加"), code=400)
         nickname = body.get("nickname", "")
         remark = body.get("account_note") or body.get("remark", "")
         external_uid = body.get("unb") or body.get("external_uid", "")

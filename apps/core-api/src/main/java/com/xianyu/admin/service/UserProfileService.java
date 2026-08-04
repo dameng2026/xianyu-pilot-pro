@@ -432,8 +432,13 @@ public class UserProfileService {
                     Integer.class, userId);
             if (vipLevel != null && vipLevel > 0) {
                 Map<String, Object> plan = new LinkedHashMap<>();
-                plan.put("planCode", vipLevel >= 2 ? "svp" : "vip");
-                plan.put("planName", vipLevel >= 2 ? "SVP (手动)" : "VIP (手动)");
+                if (vipLevel == 3) {
+                    plan.put("planCode", "vip-single");
+                    plan.put("planName", "VIP（单店版） (手动)");
+                } else {
+                    plan.put("planCode", vipLevel >= 2 ? "svp" : "vip");
+                    plan.put("planName", vipLevel >= 2 ? "SVP (手动)" : "VIP (手动)");
+                }
                 plan.put("startTime", null);
                 plan.put("endTime", null);
                 return plan;

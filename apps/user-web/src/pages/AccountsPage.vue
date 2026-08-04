@@ -854,7 +854,7 @@ import { recordsOfOrThrow } from '../utils/apiData.js'
 import { accountAuthUsable, accountCookieBadgeType, accountCookieLabel, accountLoginHint, accountWsConnectionState, resolveAccountAuthDisplayState } from '../utils/accountAuth.js'
 import { extractKeyFields, maskKeyFields, validateCookie, checkIdentity, maskValue } from '../utils/cookie.js'
 import { useCaptchaSolver } from '../composables/useCaptchaSolver.js'
-import { getFeatureStatus, invalidateFeatureSwitchCache } from '../api/feature-switch.js'
+import { getFeatureStatus, invalidateFeatureSwitchCache, getStoreLimitStatus } from '../api/feature-switch.js'
 import { globalConfirm } from '../composables/confirmState.js'
 
 const { solveStates, isAccountSolving, isAccountQueued, getAccountSolveStatus, solveManually, initCaptchaSolverListener, destroyCaptchaSolverListener } = useCaptchaSolver()
@@ -1458,6 +1458,8 @@ function resetQrState() {
 
 async function openModal(type){
   if (!await guardFeatureAction()) return
+  // 新增店铺（扫码/手动）前校验会员等级店铺数量上限；重新扫码不校验
+  if ((type === 'scan' || type === 'manual') && !await ensureCanAddStore()) return
   if (!accountsAvailable.value) {
     error.value = '账号列表不可用，已禁用新增与扫码操作；请先重试加载。'
     return
@@ -1488,6 +1490,42 @@ function closeModal(){
   unifiedConfigTaskText.value = ''
   stopQrPolling()
   resetQrState()
+}
+
+/**
+ * 店铺数量已达上限引导弹窗：提示用户升级 VIP 后继续添加店铺。
+ */
+async function showStoreLimitUpgradeDialog(status) {
+  const limit = Number(status?.limit ?? 0)
+  const count = Number(status?.accountCount ?? 0)
+  const levelName = status?.levelName || '普通用户'
+  const description = status?.message
+    || `当前会员等级（${levelName}）最多绑定 ${limit} 个闲鱼店铺，您已绑定 ${count} 个。\n\n升级 VIP 后可解除店铺数量限制，继续添加更多店铺。`
+  const confirmed = await globalConfirm.confirm(
+    '店铺数量已达上限',
+    description,
+    '去升级会员',
+  )
+  if (confirmed) emit('navigate', 'vip')
+}
+
+/**
+ * 添加店铺前校验：店铺数量已满时弹窗引导升级，返回 false 阻止打开添加弹窗。
+ */
+async function ensureCanAddStore() {
+  try {
+    const status = await getStoreLimitStatus()
+    if (status?.unlimited === true || Number(status?.limit ?? 0) <= 0) return true
+    const count = Number(status?.accountCount ?? 0)
+    if (count >= Number(status.limit)) {
+      await showStoreLimitUpgradeDialog(status)
+      return false
+    }
+    return true
+  } catch {
+    // 查询失败时放行，后端仍会做最终校验
+    return true
+  }
 }
 function openRescanModal(account) {
   if (!account?.id) return
@@ -2459,6 +2497,11 @@ async function submitManual() {
     closeModal()
     await loadAccounts()
   } catch (e) {
+    if (e?.data?.errorCode === 'STORE_LIMIT_REACHED') {
+      await showStoreLimitUpgradeDialog(e.data)
+      closeModal()
+      return
+    }
     manualError.value = e.message || '添加账号失败'
   } finally {
     submitting.value = false
@@ -2563,6 +2606,11 @@ async function startQrLogin() {
     qr.message = data.message || '请使用闲鱼 App 扫码'
     if (qr.sessionId) startQrPolling()
   } catch (e) {
+    if (e?.data?.errorCode === 'STORE_LIMIT_REACHED') {
+      await showStoreLimitUpgradeDialog(e.data)
+      closeModal()
+      return
+    }
     qr.status = 'error'
     qr.qrUrl = ''
     qr.sessionId = ''
@@ -2620,12 +2668,23 @@ async function checkQrStatus() {
     if (qr.status === 'error') {
       stopQrPolling()
       qr.message = data.message || '账号保存失败，请重试'
+      if (data.errorCode === 'STORE_LIMIT_REACHED') {
+        await showStoreLimitUpgradeDialog(data)
+        closeModal()
+        return
+      }
       if (data.errorCode) {
         console.warn('扫码保存错误码:', data.errorCode)
       }
     }
     if (['expired', 'failed', 'cancelled'].includes(qr.status)) stopQrPolling()
   } catch (e) {
+    if (e?.data?.errorCode === 'STORE_LIMIT_REACHED') {
+      stopQrPolling()
+      await showStoreLimitUpgradeDialog(e.data)
+      closeModal()
+      return
+    }
     stopQrPolling()
     qr.status = 'error'
     qr.message = e.message || '查询扫码状态失败'

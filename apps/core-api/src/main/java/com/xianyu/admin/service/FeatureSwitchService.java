@@ -44,9 +44,13 @@ public class FeatureSwitchService {
     static {
         LEVEL_WEIGHT.put("normal", 0);
         LEVEL_WEIGHT.put("vip", 1);
+        LEVEL_WEIGHT.put("vip-single", 1);
         LEVEL_WEIGHT.put("svip", 2);
         LEVEL_WEIGHT.put("svp", 2);
     }
+
+    /** 功能管理首行「店铺数量」的特殊功能 key（0 表示无限制） */
+    public static final String STORE_LIMIT_KEY = "store-limit";
 
     /** 等级从低到高排序，用于查找"第一个开启的更高级别" */
     private static final List<String> LEVELS_ASC = List.of("normal", "vip", "svp");
@@ -79,6 +83,8 @@ public class FeatureSwitchService {
 
     private static List<Map<String, Object>> buildDefaultFeatures() {
         List<Map<String, Object>> list = new ArrayList<>();
+        // 首行「店铺数量」：数字配置行，0 表示无限制（普通用户 1 / VIP 单店版 1 / VIP 不限 / SVIP 不限）
+        list.add(storeLimitFeature());
         // 概览（所有等级可用）
         list.add(feature("dashboard", "工作台", "overview", true, true, true));
         list.add(feature("data", "数据看板", "overview", true, true, true));
@@ -142,6 +148,24 @@ public class FeatureSwitchService {
         return Collections.unmodifiableList(list);
     }
 
+    private static Map<String, Object> storeLimitFeature() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("key", STORE_LIMIT_KEY);
+        m.put("title", "店铺数量");
+        m.put("group", "overview");
+        m.put("normal", true);
+        m.put("vipSingle", true);
+        m.put("vip", true);
+        m.put("svp", true);
+        m.put("storeLimitNormal", 1);
+        m.put("storeLimitVipSingle", 1);
+        m.put("storeLimitVip", 0);
+        m.put("storeLimitSvp", 0);
+        m.put("maintenance", false);
+        m.put("limitMode", LIMIT_MODE_NONE);
+        return m;
+    }
+
     private static Map<String, Object> feature(String key, String title, String group) {
         return feature(key, title, group, true, true, true);
     }
@@ -153,6 +177,7 @@ public class FeatureSwitchService {
         m.put("title", title);
         m.put("group", group);
         m.put("normal", normal);
+        m.put("vipSingle", vip);
         m.put("vip", vip);
         m.put("svp", svp);
         m.put("maintenance", false);  // 维护开关：默认关闭，开启后所有用户进入该页面均弹窗拦截
@@ -196,6 +221,12 @@ public class FeatureSwitchService {
                 for (String level : LEVELS_ASC) {
                     if (override.containsKey(level)) merged.put(level, override.get(level));
                 }
+                // VIP（单店版）与 VIP 功能权限保持一致：未存储时继承 VIP 开关
+                if (override.containsKey("vipSingle")) {
+                    merged.put("vipSingle", boolOr(override.get("vipSingle"), boolOr(merged.get("vip"), true)));
+                } else {
+                    merged.put("vipSingle", merged.get("vip"));
+                }
                 if (override.containsKey("title")) merged.put("title", override.get("title"));
                 if (override.containsKey("group")) merged.put("group", override.get("group"));
                 // 维护开关：所有功能均支持，合并存储覆盖值
@@ -210,6 +241,13 @@ public class FeatureSwitchService {
                 if (REASON_SUPPORTED_KEYS.contains(key) && override.containsKey("reason")) {
                     merged.put("reason", sanitizeReason(String.valueOf(override.get("reason"))));
                 }
+                // 店铺数量行：合并数字配置（0=无限制）
+                if (isStoreLimitKey(key)) {
+                    merged.put("storeLimitNormal", limitInt(override.get("storeLimitNormal"), 1));
+                    merged.put("storeLimitVipSingle", limitInt(override.get("storeLimitVipSingle"), 1));
+                    merged.put("storeLimitVip", limitInt(override.get("storeLimitVip"), 0));
+                    merged.put("storeLimitSvp", limitInt(override.get("storeLimitSvp"), 0));
+                }
             }
             // REASON_SUPPORTED_KEYS 中的功能始终返回 reason 字段（即使为空）
             if (REASON_SUPPORTED_KEYS.contains(key) && !merged.containsKey("reason")) {
@@ -219,6 +257,8 @@ public class FeatureSwitchService {
             if (!merged.containsKey("maintenance")) merged.put("maintenance", false);
             // 确保所有功能都返回 limitMode 字段（默认 none）
             if (!merged.containsKey("limitMode")) merged.put("limitMode", LIMIT_MODE_NONE);
+            // 确保所有功能都返回 vipSingle 字段（默认与 VIP 一致）
+            if (!merged.containsKey("vipSingle")) merged.put("vipSingle", merged.get("vip"));
             result.add(merged);
         }
         // 允许后台预置清单之外的自定义条目（向前兼容）
@@ -229,6 +269,7 @@ public class FeatureSwitchService {
             for (String level : LEVELS_ASC) {
                 if (!extra.containsKey(level)) extra.put(level, true);
             }
+            if (!extra.containsKey("vipSingle")) extra.put("vipSingle", extra.get("vip"));
             if (!extra.containsKey("maintenance")) extra.put("maintenance", false);
             if (!extra.containsKey("limitMode")) extra.put("limitMode", LIMIT_MODE_NONE);
             result.add(extra);
@@ -259,7 +300,7 @@ public class FeatureSwitchService {
     public Map<String, Object> getStatusForCurrentUser(Long userId) {
         Map<String, Object> status = new LinkedHashMap<>();
         String userLevel = resolveUserLevel(userId);
-        status.put("level", userLevel);
+        status.put("level", normalizeLevel(userLevel));
 
         Map<String, Map<String, Object>> stored = loadStoredFeatures();
         Map<String, Boolean> accessible = new LinkedHashMap<>();
@@ -268,6 +309,11 @@ public class FeatureSwitchService {
 
         for (Map<String, Object> def : DEFAULT_FEATURES) {
             String key = String.valueOf(def.get("key"));
+            // 店铺数量行为配置行，不参与页面访问控制
+            if (isStoreLimitKey(key)) {
+                accessible.put(key, true);
+                continue;
+            }
             // 1. 维护开关优先级最高：开启时对所有等级用户拦截
             if (resolveMaintenance(key, def, stored)) {
                 accessible.put(key, false);
@@ -343,6 +389,11 @@ public class FeatureSwitchService {
         result.put("feature_key", featureKey);
         if (featureKey == null || featureKey.isBlank()) {
             result.put("allowed", true);  // 未知 key 默认放行，避免锁死
+            result.put("preview", false);
+            return result;
+        }
+        if (isStoreLimitKey(featureKey)) {
+            result.put("allowed", true);
             result.put("preview", false);
             return result;
         }
@@ -478,6 +529,12 @@ public class FeatureSwitchService {
             }
             f.put("maintenance", false);
             f.put("limitMode", LIMIT_MODE_NONE);
+            if (isStoreLimitKey(String.valueOf(def.get("key")))) {
+                f.put("storeLimitNormal", def.get("storeLimitNormal"));
+                f.put("storeLimitVipSingle", def.get("storeLimitVipSingle"));
+                f.put("storeLimitVip", def.get("storeLimitVip"));
+                f.put("storeLimitSvp", def.get("storeLimitSvp"));
+            }
             features.put(String.valueOf(def.get("key")), f);
         }
         Map<String, Object> root = new LinkedHashMap<>();
@@ -638,6 +695,8 @@ public class FeatureSwitchService {
             for (String level : LEVELS_ASC) {
                 m.put(level, boolOr(f.get(level), true));
             }
+            // VIP（单店版）与 VIP 功能权限保持一致，随 VIP 一并持久化，便于后续独立演进
+            m.put("vipSingle", boolOr(f.get("vipSingle"), boolOr(f.get("vip"), true)));
             if (f.containsKey("title")) m.put("title", f.get("title"));
             if (f.containsKey("group")) m.put("group", f.get("group"));
             // 维护开关：所有功能均支持持久化
@@ -648,6 +707,13 @@ public class FeatureSwitchService {
             if (REASON_SUPPORTED_KEYS.contains(key)) {
                 Object reasonVal = f.get("reason");
                 m.put("reason", sanitizeReason(reasonVal == null ? "" : String.valueOf(reasonVal)));
+            }
+            // 店铺数量行：持久化数字配置（0=无限制）
+            if (isStoreLimitKey(key)) {
+                m.put("storeLimitNormal", limitInt(f.get("storeLimitNormal"), 1));
+                m.put("storeLimitVipSingle", limitInt(f.get("storeLimitVipSingle"), 1));
+                m.put("storeLimitVip", limitInt(f.get("storeLimitVip"), 0));
+                m.put("storeLimitSvp", limitInt(f.get("storeLimitSvp"), 0));
             }
             result.put(key, m);
         }
@@ -682,6 +748,7 @@ public class FeatureSwitchService {
         if (level == null) return 0;
         String normalized = level.trim().toLowerCase(Locale.ROOT);
         if ("svip".equals(normalized)) normalized = "svp";
+        if (isVipSingleCode(normalized)) normalized = "vip";
         Integer w = LEVEL_WEIGHT.get(normalized);
         return w == null ? 0 : w;
     }
@@ -704,8 +771,144 @@ public class FeatureSwitchService {
         String s = level.trim().toLowerCase(Locale.ROOT);
         if (s.isEmpty()) return "normal";
         if ("svip".equals(s)) return "svp";
+        if (isVipSingleCode(s)) return "vip";
         if (!LEVEL_WEIGHT.containsKey(s)) return "normal";
         return s;
+    }
+
+    private boolean isVipSingleCode(String code) {
+        return code != null
+                && (code.startsWith("vip-single") || code.startsWith("vip_single") || "vip1".equals(code) || "vipone".equals(code));
+    }
+
+    private boolean isStoreLimitKey(String key) {
+        return STORE_LIMIT_KEY.equals(key);
+    }
+
+    private int limitInt(Object v, int def) {
+        if (v == null) return def;
+        if (v instanceof Number n) return n.intValue();
+        try {
+            return Integer.parseInt(String.valueOf(v).trim().replaceAll("[^0-9-]", ""));
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
+    // ===================== 店铺数量限制 =====================
+
+    /**
+     * 解析用户当前套餐编码（原始值，含 vip-single），失败降级为 normal。
+     * 与 resolveUserLevel 的区别：保留 VIP（单店版）标识，用于店铺数量判断。
+     */
+    public String resolveUserPlanCode(Long userId) {
+        if (userId == null) return "normal";
+        try {
+            String code = userProfileService.currentPlanCode(userId);
+            if (code == null) return "normal";
+            String c = code.trim().toLowerCase(Locale.ROOT);
+            if (c.isBlank()) return "normal";
+            return "svip".equals(c) ? "svp" : c;
+        } catch (Exception e) {
+            log.warn("解析用户套餐编码失败，降级为 normal, userId={}, errorType={}", userId, e.getClass().getSimpleName());
+            return "normal";
+        }
+    }
+
+    /**
+     * 返回四档店铺数量限制（来源：功能管理首行 store-limit 配置）。
+     * 0 表示无限制；配置缺失时使用默认值：普通 1 / 单店版 1 / VIP 不限 / SVIP 不限。
+     */
+    public Map<String, Integer> getStoreLimits() {
+        Map<String, Integer> limits = new LinkedHashMap<>();
+        limits.put("normal", 1);
+        limits.put("vipSingle", 1);
+        limits.put("vip", 0);
+        limits.put("svp", 0);
+        try {
+            Map<String, Map<String, Object>> stored = loadStoredFeatures();
+            Map<String, Object> row = stored.get(STORE_LIMIT_KEY);
+            if (row != null) {
+                limits.put("normal", limitInt(row.get("storeLimitNormal"), limits.get("normal")));
+                limits.put("vipSingle", limitInt(row.get("storeLimitVipSingle"), limits.get("vipSingle")));
+                limits.put("vip", limitInt(row.get("storeLimitVip"), limits.get("vip")));
+                limits.put("svp", limitInt(row.get("storeLimitSvp"), limits.get("svp")));
+            }
+        } catch (Exception e) {
+            log.warn("读取店铺数量限制配置失败，使用默认值, errorType={}", e.getClass().getSimpleName());
+        }
+        return limits;
+    }
+
+    /** 按套餐编码返回店铺数量限制（0=无限制）。 */
+    public int storeLimitForPlanCode(String planCode) {
+        Map<String, Integer> limits = getStoreLimits();
+        if (planCode == null) return limits.getOrDefault("normal", 1);
+        String c = planCode.trim().toLowerCase(Locale.ROOT);
+        if (isVipSingleCode(c)) return limits.getOrDefault("vipSingle", 1);
+        if (c.startsWith("svp") || c.startsWith("svip")) return limits.getOrDefault("svp", 0);
+        if (c.startsWith("vip")) return limits.getOrDefault("vip", 0);
+        return limits.getOrDefault("normal", 1);
+    }
+
+    /**
+     * 当前用户店铺数量限制状态（供前台添加账号前校验与个人中心展示）。
+     */
+    public Map<String, Object> getStoreLimitStatus(Long userId) {
+        String planCode = resolveUserPlanCode(userId);
+        int limit = storeLimitForPlanCode(planCode);
+        long count = countUserAccounts(userId);
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("planCode", planCode);
+        res.put("level", normalizeLevel(planCode));
+        res.put("levelName", levelDisplayName(planCode));
+        res.put("limit", limit);
+        res.put("unlimited", limit <= 0);
+        res.put("accountCount", count);
+        return res;
+    }
+
+    /**
+     * 添加店铺前校验：店铺数量已满时抛出业务异常（引导升级 VIP）。
+     * 仅在 limit &gt; 0 且当前非删除账号数 &gt;= limit 时拦截。
+     */
+    public void assertCanAddAccount(Long userId) {
+        if (userId == null) return;
+        Map<String, Object> status = getStoreLimitStatus(userId);
+        int limit = ((Number) status.get("limit")).intValue();
+        long count = ((Number) status.get("accountCount")).longValue();
+        if (limit > 0 && count >= limit) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("errorCode", "STORE_LIMIT_REACHED");
+            data.put("limit", limit);
+            data.put("accountCount", count);
+            data.put("planCode", status.get("planCode"));
+            data.put("requiredLevel", "vip");
+            throw new BizException(400,
+                    "店铺数量已达上限（" + limit + " 个），请升级 VIP 后继续添加", data);
+        }
+    }
+
+    private long countUserAccounts(Long userId) {
+        if (userId == null) return 0;
+        try {
+            Long n = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM xianyu_account WHERE user_id=? AND deleted=0",
+                    Long.class, userId);
+            return n == null ? 0 : n;
+        } catch (Exception e) {
+            log.warn("统计用户店铺数量失败，按 0 处理, userId={}, errorType={}", userId, e.getClass().getSimpleName());
+            return 0;
+        }
+    }
+
+    private String levelDisplayName(String planCode) {
+        if (planCode == null) return "普通用户";
+        String c = planCode.trim().toLowerCase(Locale.ROOT);
+        if (isVipSingleCode(c)) return "VIP（单店版）";
+        if (c.startsWith("svp") || c.startsWith("svip")) return "SVIP";
+        if (c.startsWith("vip")) return "VIP";
+        return "普通用户";
     }
 
     private boolean isDefaultKey(String key) {

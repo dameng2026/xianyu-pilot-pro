@@ -202,6 +202,8 @@ public class AiScenePricingService {
 
     private String normalizePlanCode(String planCode) {
         String code = StringUtils.hasText(planCode) ? planCode.trim().toLowerCase(Locale.ROOT) : "normal";
-        return "svip".equals(code) ? "svp" : code;
+        if ("svip".equals(code)) return "svp";
+        if (code.startsWith("vip-single") || code.startsWith("vip_single") || "vip1".equals(code)) return "vip";
+        return code;
     }
 }

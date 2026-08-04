@@ -52,6 +52,9 @@ class XianyuAccountServiceTest {
     @Mock
     private XianyuAccountAuthStatusService authStatusService;
 
+    @Mock
+    private FeatureSwitchService featureSwitchService;
+
     private XianyuAccountService service;
 
     @BeforeEach
@@ -64,7 +67,8 @@ class XianyuAccountServiceTest {
                 healthSnapshotMapper,
                 cookieCryptoService,
                 automationClient,
-                authStatusService
+                authStatusService,
+                featureSwitchService
         );
     }
 

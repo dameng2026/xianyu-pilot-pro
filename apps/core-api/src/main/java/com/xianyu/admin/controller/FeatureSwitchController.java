@@ -86,4 +86,15 @@ public class FeatureSwitchController {
         if (userId == null) throw new BizException(401, "登录状态已失效");
         return Result.ok(featureSwitchService.listSwitches());
     }
+
+    /**
+     * 用户端：返回当前用户店铺数量限制状态（等级、限制数量、当前店铺数）。
+     * 用于前台「添加账号」前校验与会员中心/个人中心展示店铺数量。
+     */
+    @GetMapping("/api/feature-switches/store-limit")
+    public Result<Map<String, Object>> getStoreLimitForCurrentUser() {
+        Long userId = TenantContext.getCurrentUserId();
+        if (userId == null) throw new BizException(401, "登录状态已失效");
+        return Result.ok(featureSwitchService.getStoreLimitStatus(userId));
+    }
 }

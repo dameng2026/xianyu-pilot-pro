@@ -37,6 +37,23 @@ export const getFeatureSwitchComparison = (options = {}) => withRequestCache({
 })
 
 /**
+ * 获取当前用户店铺数量限制状态。
+ * 返回结构：{ planCode, level, levelName, limit, unlimited, accountCount }
+ * limit=0 表示无限制；用于「添加账号」前校验与会员中心/个人中心展示店铺数量。
+ * 失败降级：返回 { unlimited: true }，避免后端故障锁死添加账号操作（后端仍有最终校验）。
+ */
+export const getStoreLimitStatus = async () => {
+  try {
+    const res = await request.get('/feature-switches/store-limit')
+    const data = res?.data
+    if (data && typeof data === 'object') return data
+    return { unlimited: true }
+  } catch {
+    return { unlimited: true }
+  }
+}
+
+/**
  * 失效功能开关状态缓存。
  * 用于登录/登出/套餐变更后强制刷新。
  */

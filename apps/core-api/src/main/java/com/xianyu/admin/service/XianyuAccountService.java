@@ -32,6 +32,7 @@ public class XianyuAccountService {
     private final CookieCryptoService cookieCryptoService;
     private final AutomationClient automationClient;
     private final XianyuAccountAuthStatusService accountAuthStatusService;
+    private final FeatureSwitchService featureSwitchService;
 
     public XianyuAccountService(XianyuAccountMapper accountMapper,
                                  XianyuAccountAuthMapper authMapper,
@@ -40,7 +41,8 @@ public class XianyuAccountService {
                                  XianyuAccountHealthSnapshotMapper healthSnapshotMapper,
                                  CookieCryptoService cookieCryptoService,
                                  AutomationClient automationClient,
-                                 XianyuAccountAuthStatusService accountAuthStatusService) {
+                                 XianyuAccountAuthStatusService accountAuthStatusService,
+                                 FeatureSwitchService featureSwitchService) {
         this.accountMapper = accountMapper;
         this.authMapper = authMapper;
         this.runtimeMapper = runtimeMapper;
@@ -49,6 +51,7 @@ public class XianyuAccountService {
         this.cookieCryptoService = cookieCryptoService;
         this.automationClient = automationClient;
         this.accountAuthStatusService = accountAuthStatusService;
+        this.featureSwitchService = featureSwitchService;
     }
 
     /**
@@ -186,6 +189,8 @@ public class XianyuAccountService {
      */
     @Transactional
     public XianyuAccountVO create(Long tenantId, Long userId, XianyuAccountDTO dto) {
+        // 店铺数量限制：会员等级可绑定的店铺数已满时禁止新增（0=无限制）
+        featureSwitchService.assertCanAddAccount(userId);
         // 检查 external_uid 是否已存在
         XianyuAccount existing = accountMapper.findByExternalUid(tenantId, dto.getExternalUid());
         if (existing != null) {
@@ -327,6 +332,8 @@ public class XianyuAccountService {
             XianyuAccount existing = accountMapper.findByExternalUid(tenantId, externalUid);
             XianyuAccount account;
             if (existing == null) {
+                // 新增店铺前校验会员等级店铺数量上限
+                featureSwitchService.assertCanAddAccount(userId);
                 XianyuAccountDTO dto = new XianyuAccountDTO();
                 dto.setExternalUid(externalUid);
                 dto.setNickname(nickname);
@@ -335,6 +342,10 @@ public class XianyuAccountService {
                 XianyuAccountVO created = create(tenantId, userId, dto);
                 account = accountMapper.findById(tenantId, created.getId());
             } else {
+                // 恢复被移除（软删除）的店铺同样计入店铺数量，需校验上限
+                if (existing.getDeleted() != null && existing.getDeleted() == 1) {
+                    featureSwitchService.assertCanAddAccount(userId);
+                }
                 account = existing;
                 restoreRelatedRecords(tenantId, existing.getId());
                 XianyuAccountDTO dto = new XianyuAccountDTO();

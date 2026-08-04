@@ -104,7 +104,7 @@
                   <span v-else-if="plan.discountRate && Number(plan.discountRate) > 0" class="vip-price-discount">{{ plan.discountRate }}折</span>
                 </div>
               </div>
-              <div class="vip-plan-ornament" :class="plan.ornament"><Icon :name="plan.level === 'normal' ? 'diamond' : 'crown'" /></div>
+              <div class="vip-plan-ornament" :class="plan.ornament"><Icon name="crown" /></div>
             </div>
             <p>{{ plan.summary }}</p>
             <ul v-if="plan.features && plan.features.length">
@@ -131,8 +131,8 @@
               ⏱ {{ promotionCountdown }}
             </div>
 
-            <button class="vip-btn" :class="plan.buttonClass" type="button" :disabled="plan.level !== 'normal' && !plan.canPurchase" @click="handlePlanClick(plan)">
-              {{ plan.level === 'normal' ? '当前套餐' : plan.level === 'unknown' ? '套餐标识无效' : plan.quotaFull ? '名额已售罄' : plan.canPurchase ? (plan.hasActivePrice ? '立即抢购' : '立即升级') : '价格未配置' }}
+            <button class="vip-btn" :class="plan.buttonClass" type="button" :disabled="!plan.canPurchase" @click="handlePlanClick(plan)">
+              {{ plan.level === 'unknown' ? '套餐标识无效' : plan.quotaFull ? '名额已售罄' : plan.canPurchase ? (plan.hasActivePrice ? '立即抢购' : '立即升级') : '价格未配置' }}
             </button>
           </article>
         </div>
@@ -142,7 +142,7 @@
           <div class="vip-panel-title">
             <div>
               <h3>功能对比</h3>
-              <p>数据来源：后台「系统运维 → 功能管理」配置，与个人中心「会员等级功能对比」共用同一份数据源。✓ 表示该等级可用，— 表示该等级不可用。限制模式由管理员配置，影响所有等级用户的访问权限。</p>
+              <p>数据来源：后台「系统运维 → 功能管理」配置，与个人中心「会员等级功能对比」共用同一份数据源。首行为各等级可绑定的闲鱼店铺数量（0 表示不限）；功能行 ✓ 表示该等级可用，— 表示该等级不可用。VIP（单店版）与 VIP 功能权限一致。</p>
             </div>
             <button
               type="button"
@@ -172,7 +172,8 @@
               <thead>
                 <tr>
                   <th class="vip-th-feature">功能 / 权益</th>
-                  <th class="vip-th-normal">普通会员</th>
+                  <th class="vip-th-normal">普通用户</th>
+                  <th class="vip-th-vipsingle">VIP（单店版）</th>
                   <th class="vip-th-vip">VIP会员</th>
                   <th class="vip-th-svip">
                     <div class="vip-svip-th-inner">
@@ -185,7 +186,6 @@
                       SVIP会员
                     </div>
                   </th>
-                  <th class="vip-th-limit">限制模式</th>
                 </tr>
               </thead>
               <tbody>
@@ -197,30 +197,41 @@
                       <span class="vip-group-count">{{ group.items.length }} 项</span>
                     </td>
                   </tr>
-                  <tr v-for="(item, iIdx) in group.items" :key="'i'+gIdx+'-'+iIdx" :class="['vip-feature-row', { 'vip-feature-row-alt': iIdx % 2 === 1 }]">
-                    <td class="vip-td-name">{{ item.name }}</td>
-                    <td class="vip-td-normal" :class="{ 'vip-mark-on': item.normal === '✓', 'vip-mark-off': item.normal !== '✓' }">
-                      <span v-if="item.normal === '✓'" class="vip-check-ico">
-                        <svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
-                      </span>
-                      <span v-else class="vip-dash">—</span>
-                    </td>
-                    <td class="vip-td-vip" :class="{ 'vip-mark-on': item.vip === '✓', 'vip-mark-off': item.vip !== '✓' }">
-                      <span v-if="item.vip === '✓'" class="vip-check-ico">
-                        <svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
-                      </span>
-                      <span v-else class="vip-dash">—</span>
-                    </td>
-                    <td class="vip-td-svip" :class="{ 'vip-mark-on': item.svip === '✓', 'vip-mark-off': item.svip !== '✓' }">
-                      <span v-if="item.svip === '✓'" class="vip-check-ico vip-check-gold">
-                        <svg viewBox="0 0 16 16" width="18" height="18"><circle cx="8" cy="8" r="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#d97706" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
-                      </span>
-                      <span v-else class="vip-dash">—</span>
-                    </td>
-                    <td class="vip-td-limit">
-                      <span class="vip-limit-badge" :class="`vip-limit-${item.limitModeClass || 'none'}`">{{ item.limitMode }}</span>
-                    </td>
-                  </tr>
+                    <tr v-for="(item, iIdx) in group.items" :key="'i'+gIdx+'-'+iIdx" :class="['vip-feature-row', { 'vip-feature-row-alt': iIdx % 2 === 1, 'vip-store-limit-row': item.isStoreLimit }]">
+                      <td class="vip-td-name">{{ item.name }}</td>
+                      <template v-if="item.isStoreLimit">
+                        <td class="vip-td-normal vip-store-limit-cell">{{ item.normalText }}</td>
+                        <td class="vip-td-vipsingle vip-store-limit-cell">{{ item.vipSingleText }}</td>
+                        <td class="vip-td-vip vip-store-limit-cell">{{ item.vipText }}</td>
+                        <td class="vip-td-svip vip-store-limit-cell">{{ item.svipText }}</td>
+                      </template>
+                      <template v-else>
+                        <td class="vip-td-normal" :class="{ 'vip-mark-on': item.normal === '✓', 'vip-mark-off': item.normal !== '✓' }">
+                          <span v-if="item.normal === '✓'" class="vip-check-ico">
+                            <svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                          </span>
+                          <span v-else class="vip-dash">—</span>
+                        </td>
+                        <td class="vip-td-vipsingle" :class="{ 'vip-mark-on': item.vipSingle === '✓', 'vip-mark-off': item.vipSingle !== '✓' }">
+                          <span v-if="item.vipSingle === '✓'" class="vip-check-ico">
+                            <svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                          </span>
+                          <span v-else class="vip-dash">—</span>
+                        </td>
+                        <td class="vip-td-vip" :class="{ 'vip-mark-on': item.vip === '✓', 'vip-mark-off': item.vip !== '✓' }">
+                          <span v-if="item.vip === '✓'" class="vip-check-ico">
+                            <svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                          </span>
+                          <span v-else class="vip-dash">—</span>
+                        </td>
+                        <td class="vip-td-svip" :class="{ 'vip-mark-on': item.svip === '✓', 'vip-mark-off': item.svip !== '✓' }">
+                          <span v-if="item.svip === '✓'" class="vip-check-ico vip-check-gold">
+                            <svg viewBox="0 0 16 16" width="18" height="18"><circle cx="8" cy="8" r="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#d97706" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                          </span>
+                          <span v-else class="vip-dash">—</span>
+                        </td>
+                      </template>
+                    </tr>
                 </template>
               </tbody>
             </table>
@@ -364,6 +375,7 @@ function handleAvatarError() {
 const normalizeLevel = plan => {
   const code = String(plan?.level || plan?.planCode || '').trim().toLowerCase()
   if (code.startsWith('svip') || code.startsWith('svp')) return 'svp'
+  if (code.startsWith('vip-single') || code.startsWith('vip_single') || code === 'vip1') return 'vip-single'
   if (code.startsWith('vip')) return 'vip'
   if (code.startsWith('normal') || code === 'free') return 'normal'
   return 'unknown'
@@ -378,6 +390,7 @@ const periodOptions = [
 
 const PLAN_DEFAULT_SUMMARY = {
   normal: '基础运营功能全套开放，适合个人闲鱼卖家',
+  'vip-single': '在普通会员基础上，解锁商机发掘与货源商城，限 1 个闲鱼店铺',
   vip: '在普通会员基础上，解锁商机发掘与货源商城',
   svp: '在 VIP 基础上，解锁工作流自动化与图片生成能力',
   unknown: '具体权益与限制以后台套餐配置为准'
@@ -391,21 +404,23 @@ const displayPlans = computed(() => {
     const key = `${ap.planId}:${ap.periodType}`
     promotionMap.set(key, ap)
   }
+  // 会员中心仅展示可购买的付费套餐：普通用户为免费档，不在会员中心展示
   return plans.value
+    .filter(raw => normalizeLevel(raw) !== 'normal')
     .map(raw => {
       const level = normalizeLevel(raw)
       // 所有套餐都显示，按 selectedPeriod 取对应周期价格
       const period = selectedPeriod.value
       const periodLabel = PERIOD_LABELS[period] || ''
       const durationLabel = raw.durationText && raw.durationText !== '永久' ? raw.durationText : ''
-      const planName = raw.planName || (level === 'svp' ? 'SVP 用户' : level === 'vip' ? 'VIP 用户' : level === 'normal' ? '普通用户' : '套餐名称未配置')
+      const planName = raw.planName || (level === 'svp' ? 'SVP 用户' : level === 'vip-single' ? 'VIP（单店版）' : level === 'vip' ? 'VIP 用户' : '套餐名称未配置')
       // 根据选中周期取对应价格（priceMonth / priceQuarter / priceYear 为格式化字符串；*Cent 为分值）
       const priceField = `price${period.charAt(0).toUpperCase()}${period.slice(1)}`
       const priceCentField = `price${period.charAt(0).toUpperCase()}${period.slice(1)}Cent`
       const priceCent = Number(raw[priceCentField] ?? 0)
       const priceDisplay = raw[priceField]
       const hasPrice = priceDisplay !== null && priceDisplay !== undefined && String(priceDisplay).trim() !== '' && String(priceDisplay).trim() !== '免费' && priceCent > 0
-      const canPurchase = ['vip', 'svp'].includes(level) && hasPrice && Number.isFinite(priceCent) && priceCent > 0
+      const canPurchase = ['vip-single', 'vip', 'svp'].includes(level) && hasPrice && Number.isFinite(priceCent) && priceCent > 0
       // 前台套餐介绍严格使用后台 featuresText 按行拆分后的数组；为空则不展示任何 li
       const features = Array.isArray(raw.features) ? raw.features : []
       // 注入活动信息：仅当活动状态为 ongoing 且套餐配置存在时生效
@@ -433,9 +448,7 @@ const displayPlans = computed(() => {
       const quotaProgress = quota > 0 ? Math.min(100, Math.round((soldCount / quota) * 100)) : 0
       const quotaFull = quota > 0 && remainCount <= 0
       // 实际展示价：活动价优先，否则原价
-      const displayPrice = level === 'normal'
-        ? '免费'
-        : (hasActivePrice ? `¥${activityPriceYuan}` : (hasPrice ? String(priceDisplay) : '价格未配置'))
+      const displayPrice = hasActivePrice ? `¥${activityPriceYuan}` : (hasPrice ? String(priceDisplay) : '价格未配置')
       const strikethroughPrice = hasActivePrice && originalPriceYuan ? `¥${originalPriceYuan}` : ''
       return {
         ...raw,
@@ -449,9 +462,9 @@ const displayPlans = computed(() => {
         periodType: period,
         summary: raw.summary || raw.description || PLAN_DEFAULT_SUMMARY[level] || '具体权益与限制以后台套餐配置为准',
         features,
-        cardClass: level === 'svp' ? 'svip' : level,
-        ornament: level === 'svp' ? 'warm' : level === 'vip' ? 'blue' : 'muted',
-        buttonClass: level === 'svp' ? 'vip-btn-warm' : level === 'vip' ? 'vip-btn-primary' : 'vip-btn-ghost',
+        cardClass: level === 'svp' ? 'svip' : (level === 'vip' || level === 'vip-single') ? 'vip' : level,
+        ornament: level === 'svp' ? 'warm' : (level === 'vip' || level === 'vip-single') ? 'blue' : 'muted',
+        buttonClass: level === 'svp' ? 'vip-btn-warm' : (level === 'vip' || level === 'vip-single') ? 'vip-btn-primary' : 'vip-btn-ghost',
         ribbon: raw.ribbon || (raw.recommended === true ? '推荐' : (level === 'vip' ? '推荐' : '')),
         // 活动相关字段
         promotionInfo,
@@ -526,27 +539,48 @@ const memberCompareData = computed(() => {
   if (!Array.isArray(features) || features.length === 0) return []
   const buckets = new Map()
   for (const g of FEATURE_COMPARISON_GROUPS) buckets.set(g.key, [])
-  for (const f of features) {
+  features.forEach((f, index) => {
     const g = String(f?.group || 'misc')
     if (!buckets.has(g)) buckets.set(g, [])
-    buckets.get(g).push(f)
-  }
+    const isStoreLimit = f?.key === 'store-limit'
+    const item = {
+      key: f.key,
+      name: f.title || f.key,
+      isStoreLimit,
+      normal: isStoreLimit ? '' : boolToMark(f.normal),
+      vipSingle: isStoreLimit ? '' : boolToMark(f.vipSingle ?? f.vip),
+      vip: isStoreLimit ? '' : boolToMark(f.vip),
+      svip: isStoreLimit ? '' : boolToMark(f.svp),
+      normalText: isStoreLimit ? storeLimitText(f.storeLimitNormal) : '',
+      vipSingleText: isStoreLimit ? storeLimitText(f.storeLimitVipSingle) : '',
+      vipText: isStoreLimit ? storeLimitText(f.storeLimitVip) : '',
+      svipText: isStoreLimit ? storeLimitText(f.storeLimitSvp) : '',
+      // 可等级数越少越靠后（不可用统一往后排）：0 个可用排最后，4 个可用排最前
+      usableCount: isStoreLimit ? 5 : [
+        boolToMark(f.normal),
+        boolToMark(f.vipSingle ?? f.vip),
+        boolToMark(f.vip),
+        boolToMark(f.svp)
+      ].filter(v => v === '✓').length,
+      order: index
+    }
+    buckets.get(g).push(item)
+  })
   const result = []
   for (const g of FEATURE_COMPARISON_GROUPS) {
     const items = buckets.get(g.key) || []
     if (items.length === 0) continue
+    items.sort((a, b) => {
+      // 店铺数量行固定在分组最前
+      if (a.isStoreLimit !== b.isStoreLimit) return a.isStoreLimit ? -1 : 1
+      // 可用等级少的排后面（不可用的统一往后排：0 个可用排最后，4 个可用排最前）
+      if (a.usableCount !== b.usableCount) return b.usableCount - a.usableCount
+      return a.order - b.order
+    })
     result.push({
       category: g.label,
       icon: g.icon,
-      items: items.map(f => ({
-        key: f.key,
-        name: f.title || f.key,
-        normal: boolToMark(f.normal),
-        vip: boolToMark(f.vip),
-        svip: boolToMark(f.svp),
-        limitMode: limitModeLabel(f.limitMode),
-        limitModeClass: limitModeClassKey(f.limitMode)
-      }))
+      items
     })
   }
   return result
@@ -556,19 +590,11 @@ function boolToMark(value) {
   return value === true || value === 'true' || value === 1 || value === '1' ? '✓' : '—'
 }
 
-/** 限制模式 → 展示文案（与后台功能管理配置一致，单选互斥） */
-function limitModeLabel(mode) {
-  const m = String(mode || 'none').toLowerCase()
-  if (m === 'preview') return '预览模式'
-  if (m === 'blocked') return '不可进入'
-  return '无限制'
-}
-
-/** 限制模式 → CSS 类名后缀（none/preview/blocked） */
-function limitModeClassKey(mode) {
-  const m = String(mode || 'none').toLowerCase()
-  if (m === 'preview' || m === 'blocked') return m
-  return 'none'
+/** 店铺数量展示：0=不限，正数显示具体数量 */
+function storeLimitText(value) {
+  const n = Number(value ?? 0)
+  if (!Number.isFinite(n) || n <= 0) return '不限'
+  return String(n)
 }
 
 const coreFeatures = [
@@ -581,7 +607,8 @@ const coreFeatures = [
 ]
 
 const faqs = [
-  { q: 'VIP 与普通用户有什么区别？', a: '权益由后台「功能管理」统一控制，前台 VIP 会员中心与个人中心展示同一份功能对比数据。' },
+  { q: 'VIP 与普通用户有什么区别？', a: '普通用户免费使用，可绑定 1 个闲鱼店铺；VIP（单店版）与 VIP 功能权限一致，单店版限 1 个店铺，VIP 不限店铺数量；SVIP 享最高权益且不限店铺数量。具体权益由后台「功能管理」统一控制。' },
+  { q: '店铺数量如何计算？', a: '店铺数量即您在「账号管理」中绑定的闲鱼账号数。普通用户与 VIP（单店版）默认限 1 个，VIP 与 SVIP 不限；后台「系统运维 → 功能管理」首行可实时调整各等级可绑定店铺数（0 表示不限）。' },
   { q: '如何升级会员？', a: '点击"立即升级"后，系统会展示后台当前启用的支付方式；未配置价格或支付渠道时会明确提示不可用。' },
   { q: '会员是否按账号独立生效？', a: '会员状态按当前登录用户生效；具体可用功能以后台「功能管理」配置为准。' },
   { q: '功能对比数据从哪里来？', a: '来自后台「系统运维 → 功能管理」配置，与个人中心「会员等级功能对比」共用同一份数据源。' }
@@ -1392,51 +1419,13 @@ onBeforeUnmount(() => {
 }
 
 .vip-th-normal,
+.vip-th-vipsingle,
 .vip-th-vip,
 .vip-th-svip {
   min-width: 100px;
 }
 
-.vip-th-limit {
-  min-width: 96px;
-  color: #6f7e97;
-}
-
-.vip-td-limit {
-  text-align: center;
-}
-
-/* 限制模式徽章（无限制/预览模式/不可进入） */
-.vip-limit-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.4;
-  white-space: nowrap;
-  border: 1px solid transparent;
-}
-
-.vip-limit-none {
-  background: #f1f5f9;
-  color: #64748b;
-  border-color: #e2e8f0;
-}
-
-.vip-limit-preview {
-  background: #fffbeb;
-  color: #b45309;
-  border-color: #fde68a;
-}
-
-.vip-limit-blocked {
-  background: #fef2f2;
-  color: #b91c1c;
-  border-color: #fecaca;
-}
-
+.vip-th-vipsingle,
 .vip-th-vip {
   color: #2f66ff;
 }
@@ -1456,6 +1445,21 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+/* 店铺数量首行：数字展示，区别于功能开关行 */
+.vip-store-limit-row {
+  background: #f0f7ff;
+}
+
+.vip-store-limit-row:hover .vip-td-name {
+  color: #1d4ed8;
+}
+
+.vip-store-limit-cell {
+  font-size: 14px;
+  font-weight: 800;
+  color: #1e3a8a;
 }
 
 /* 分组行 */

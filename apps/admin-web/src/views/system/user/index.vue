@@ -171,7 +171,7 @@
             const level = row.userLevel
             const levelName = row.userLevelName || '普通用户'
             let type: any = 'info'
-            if (level === 'vip') type = 'warning'
+            if (level === 'vip' || level === 'vip-single') type = 'warning'
             else if (level === 'svp') type = 'danger'
             return h(ElTag, { type, size: 'small', effect: 'dark' }, () => levelName)
           }

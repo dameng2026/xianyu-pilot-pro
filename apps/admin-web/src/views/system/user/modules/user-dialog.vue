@@ -90,6 +90,7 @@
         <ElFormItem label="VIP 级别" prop="vipLevel">
           <ElSelect v-model="form.vipLevel" placeholder="选择 VIP 级别">
             <ElOption label="普通用户" :value="0" />
+            <ElOption label="VIP（单店版）" :value="3" />
             <ElOption label="VIP" :value="1" />
             <ElOption label="SVP" :value="2" />
           </ElSelect>
@@ -267,7 +268,7 @@
       form.tenantId = data.tenantId === undefined || data.tenantId === null ? '' : String(data.tenantId)
       form.status = data.status || '正常'
       // VIP 等级映射：从 userLevel 字符串转换成数值
-      const levelMap: Record<string, number> = { svp: 2, vip: 1 }
+      const levelMap: Record<string, number> = { svp: 2, vip: 1, 'vip-single': 3 }
       form.vipLevel = levelMap[data.userLevel || ''] || 0
       form.tokenBalance = data.tokenBalance ?? 0
     } else {

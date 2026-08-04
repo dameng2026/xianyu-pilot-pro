@@ -58,7 +58,7 @@ public class BillingPlanService {
         pageArgs.add(safeSize);
         pageArgs.add(offset);
         List<Map<String, Object>> records = jdbcTemplate.query(
-                baseSelect() + where + " ORDER BY CASE WHEN plan_code LIKE 'normal%' THEN 1 WHEN plan_code LIKE 'svip%' OR plan_code LIKE 'svp%' THEN 3 WHEN plan_code LIKE 'vip%' THEN 2 ELSE 9 END, price_month_cent ASC, id ASC LIMIT ? OFFSET ?",
+                baseSelect() + where + " ORDER BY CASE WHEN plan_code LIKE 'normal%' THEN 1 WHEN plan_code LIKE 'vip-single%' OR plan_code LIKE 'vip_single%' THEN 2 WHEN plan_code LIKE 'svip%' OR plan_code LIKE 'svp%' THEN 4 WHEN plan_code LIKE 'vip%' THEN 3 ELSE 9 END, price_month_cent ASC, id ASC LIMIT ? OFFSET ?",
                 (rs, rowNum) -> toMap(rs),
                 pageArgs.toArray()
         );
@@ -67,7 +67,7 @@ public class BillingPlanService {
 
     public List<Map<String, Object>> enabledPlans() {
         return jdbcTemplate.query(
-                baseSelect() + " WHERE deleted=0 AND status=1 ORDER BY CASE WHEN plan_code LIKE 'normal%' THEN 1 WHEN plan_code LIKE 'svip%' OR plan_code LIKE 'svp%' THEN 3 WHEN plan_code LIKE 'vip%' THEN 2 ELSE 9 END, price_month_cent ASC, id ASC",
+                baseSelect() + " WHERE deleted=0 AND status=1 ORDER BY CASE WHEN plan_code LIKE 'normal%' THEN 1 WHEN plan_code LIKE 'vip-single%' OR plan_code LIKE 'vip_single%' THEN 2 WHEN plan_code LIKE 'svip%' OR plan_code LIKE 'svp%' THEN 4 WHEN plan_code LIKE 'vip%' THEN 3 ELSE 9 END, price_month_cent ASC, id ASC",
                 (rs, rowNum) -> toMap(rs)
         );
     }
@@ -260,6 +260,8 @@ public class BillingPlanService {
         row.put("durationDays", durationDays);
         row.put("durationText", durationDays <= 0 ? "永久" : durationDays + "天");
         row.put("maxStorageMb", storageMb);
+        row.put("maxXianyuAccounts", rs.getInt("max_xianyu_accounts"));
+        row.put("storeLimit", storeLimitText(rs.getInt("max_xianyu_accounts")));
         row.put("enableAutoDelivery", rs.getInt("enable_auto_delivery") == 1);
         row.put("enableKami", rs.getInt("enable_kami") == 1);
         row.put("enableAiReply", rs.getInt("enable_ai_reply") == 1);
@@ -323,8 +325,14 @@ public class BillingPlanService {
         if (code == null) return "normal";
         String c = code.trim().toLowerCase(Locale.ROOT);
         if (c.startsWith("svp") || c.startsWith("svip")) return "svp";
+        if (c.startsWith("vip-single") || c.startsWith("vip_single") || "vip1".equals(c)) return "vip-single";
         if (c.startsWith("vip")) return "vip";
         return "normal";
+    }
+
+    private String storeLimitText(int maxAccounts) {
+        if (maxAccounts <= 0) return "不限";
+        return maxAccounts + " 个";
     }
 
     private String normalizePeriodType(Object value) {

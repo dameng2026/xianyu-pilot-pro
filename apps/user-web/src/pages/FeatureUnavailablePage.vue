@@ -31,6 +31,7 @@ const emit = defineEmits(['navigate'])
 const LEVEL_LABELS = {
   normal: '普通用户',
   vip: 'VIP',
+  'vip-single': 'VIP（单店版）',
   svp: 'SVP',
   svip: 'SVP'
 }

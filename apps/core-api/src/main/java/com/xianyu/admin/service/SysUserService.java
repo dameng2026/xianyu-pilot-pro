@@ -499,10 +499,10 @@ public class SysUserService {
                 // vip_level 覆盖优先于订阅
                 Integer overrideLevel = vipOverrides.get(uid);
                 if (overrideLevel != null) {
-                    String code = overrideLevel >= 2 ? "svp" : "vip";
+                    String code = overrideLevel == 3 ? "vip-single" : (overrideLevel >= 2 ? "svp" : "vip");
                     row.put("userLevel", code);
                     row.put("userLevelName", userLevelName(code));
-                    row.put("planName", overrideLevel >= 2 ? "SVP (手动)" : "VIP (手动)");
+                    row.put("planName", overrideLevel == 3 ? "VIP（单店版） (手动)" : (overrideLevel >= 2 ? "SVP (手动)" : "VIP (手动)"));
                 } else {
                     Map<String, Object> plan = first.get(uid);
                     if (plan != null) {
@@ -522,11 +522,13 @@ public class SysUserService {
         if (planCode == null) return "normal";
         String c = planCode.trim().toLowerCase(Locale.ROOT);
         if ("svip".equals(c)) return "svp";
+        if (c.startsWith("vip-single") || c.startsWith("vip_single") || "vip1".equals(c)) return "vip-single";
         if ("svp".equals(c) || "vip".equals(c)) return c;
         return "normal";
     }
 
     private String userLevelName(String userLevel) {
+        if ("vip-single".equals(userLevel)) return "VIP（单店版）";
         if ("svp".equals(userLevel)) return "SVP";
         if ("vip".equals(userLevel)) return "VIP";
         return "普通用户";

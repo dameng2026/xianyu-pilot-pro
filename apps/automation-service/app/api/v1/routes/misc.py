@@ -23,6 +23,7 @@ from ....services.upload_governance import (
 from ....core.response import ResultObject
 from ....core.config import settings
 from ....core.cookie_crypto import decrypt_cookie_if_needed, encrypt_cookie_for_storage
+from ....services.store_limit import assert_can_add_store
 
 
 class SearchError(Exception):
@@ -779,6 +780,10 @@ async def _save_scan_login_result(session_id: str, db: AsyncSession) -> dict:
         if existing_account:
             account = existing_account
             if existing_account.deleted == 1:
+                # 恢复被移除（软删除）的店铺同样计入店铺数量，需校验上限
+                blocked = await assert_can_add_store(db, user_id)
+                if blocked:
+                    return blocked
                 # 恢复软删除的账号
                 existing_account.deleted = 0
                 existing_account.status = 1
@@ -787,6 +792,10 @@ async def _save_scan_login_result(session_id: str, db: AsyncSession) -> dict:
             else:
                 logger.info("扫码登录: 账号已存在 accountId=%d", account.id)
         else:
+            # 新增店铺前校验会员等级店铺数量上限
+            blocked = await assert_can_add_store(db, user_id)
+            if blocked:
+                return blocked
             account = XianyuAccount(
                 tenant_id=tenant_id,
                 user_id=user_id,

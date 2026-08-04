@@ -551,15 +551,23 @@
           "risk": "expand",
           "rollback": "restore"
         },
-        {
-          "version": "1.68",
-          "description": "add weight column to mall_product for display ordering control",
-          "path": "apps/core-api/src/main/resources/db/migration/V1.68__add_mall_product_weight.sql",
-          "sha256": "17bf590b18fa3d1b98a58e5005e0252a24c062a33f46974839ea1c9607b62b3e",
-          "risk": "expand",
-          "rollback": "restore"
-        }
-      ],
+          {
+            "version": "1.68",
+            "description": "add weight column to mall_product for display ordering control",
+            "path": "apps/core-api/src/main/resources/db/migration/V1.68__add_mall_product_weight.sql",
+            "sha256": "17bf590b18fa3d1b98a58e5005e0252a24c062a33f46974839ea1c9607b62b3e",
+            "risk": "expand",
+            "rollback": "restore"
+          },
+          {
+            "version": "1.69",
+            "description": "membership upgrade: vip-single plan, store limits, prices and feature-switch store-limit row",
+            "path": "apps/core-api/src/main/resources/db/migration/V1.69__membership_vip_single_store_limit.sql",
+            "sha256": "4c6986973ec2fd435626399ae355c3848b729ab8208a37b3f8a612d94257926e",
+            "risk": "contract",
+            "rollback": "restore"
+          }
+        ],
       "quarantined": [
         {
           "path": "apps/core-api/src/main/resources/db/migration-quarantine/LEGACY_V1.1__add_goods_sync_fields.sql.disabled",

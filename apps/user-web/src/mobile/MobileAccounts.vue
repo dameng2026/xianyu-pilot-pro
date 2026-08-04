@@ -9,7 +9,7 @@
     </div>
 
     <div class="m-action-bar">
-      <button class="m-action-btn m-action-primary" @click="showAddSheet = true">
+      <button class="m-action-btn m-action-primary" @click="onAddAccountClick">
         <MIcon name="userPlus" :size="16" />
         <span>添加账号</span>
       </button>
@@ -446,6 +446,7 @@ import MIcon from './MIcon.vue'
 import MobileUnavailableState from './MobileUnavailableState.vue'
 import { getAccounts, getAccountSummary, refreshAccountProfile as apiRefreshProfile, createAccountByCookie, updateAccount, deleteAccount } from '../api/accounts.js'
 import { generateQrLogin, getQrLoginStatus, cleanupQrLogin } from '../api/qrlogin.js'
+import { getStoreLimitStatus } from '../api/feature-switch.js'
 import { accountCookieLabel, accountCookieStatus, accountWsConnectionState } from '../utils/accountAuth.js'
 import { validateCookie, extractKeyFields, maskKeyFields } from '../utils/cookie.js'
 import { resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
@@ -1004,13 +1005,16 @@ function chooseQrLogin() {
 
 function openManualModal() {
   showAddSheet.value = false
-  manual.cookie = ''
-  manual.accountNote = ''
-  manualError.value = ''
-  manualWarning.value = ''
-  submitting.value = false
-  showManualModal.value = true
-  document.body.style.overflow = 'hidden'
+  void ensureCanAddStore().then(allowed => {
+    if (!allowed) return
+    manual.cookie = ''
+    manual.accountNote = ''
+    manualError.value = ''
+    manualWarning.value = ''
+    submitting.value = false
+    showManualModal.value = true
+    document.body.style.overflow = 'hidden'
+  })
 }
 
 function closeManualModal() {
@@ -1043,6 +1047,10 @@ async function submitManualCookie() {
     document.body.style.overflow = ''
     await reload()
   } catch (error) {
+    if (error?.data?.errorCode === 'STORE_LIMIT_REACHED') {
+      await showStoreLimitUpgradeDialog(error.data)
+      return
+    }
     manualError.value = error?.message || '添加失败，请检查 Cookie 是否有效'
   } finally {
     submitting.value = false
@@ -1133,9 +1141,49 @@ async function reload() {
   await Promise.all([loadSummary(), loadAccounts(true)])
 }
 
-function startAddAccount() {
+async function startAddAccount() {
+  if (!await ensureCanAddStore()) return
   qrLoginAccount.value = null
   generateQr()
+}
+
+/**
+ * 主「添加账号」按钮：先校验店铺数量上限，未超限再打开添加方式选择。
+ */
+async function onAddAccountClick() {
+  if (!await ensureCanAddStore()) return
+  showAddSheet.value = true
+}
+
+/**
+ * 店铺数量已达上限弹窗引导（移动端）：确认后前往会员中心升级。
+ */
+async function showStoreLimitUpgradeDialog(status) {
+  const limit = Number(status?.limit ?? 0)
+  const count = Number(status?.accountCount ?? 0)
+  const levelName = status?.levelName || '普通用户'
+  const message = status?.message
+    || `当前会员等级（${levelName}）最多绑定 ${limit} 个闲鱼店铺，您已绑定 ${count} 个。\n\n升级 VIP 后可解除店铺数量限制，继续添加更多店铺。`
+  const confirmed = window.confirm(`${message}\n\n点击"确定"前往会员中心升级，点击"取消"返回。`)
+  if (confirmed) emit('navigate', 'vip')
+}
+
+/**
+ * 添加店铺前校验（移动端）：店铺数量已满时弹窗引导升级。
+ */
+async function ensureCanAddStore() {
+  try {
+    const status = await getStoreLimitStatus()
+    if (status?.unlimited === true || Number(status?.limit ?? 0) <= 0) return true
+    const count = Number(status?.accountCount ?? 0)
+    if (count >= Number(status.limit)) {
+      await showStoreLimitUpgradeDialog(status)
+      return false
+    }
+    return true
+  } catch {
+    return true
+  }
 }
 
 function startQrLoginForAccount(acc) {
@@ -1196,8 +1244,21 @@ function startQrPolling() {
       } else if (status === 'canceled') {
         qrError.value = '登录已取消'
         stopQrPolling()
+      } else if (status === 'error') {
+        qrError.value = data?.message || '登录失败，请重试'
+        stopQrPolling()
+        if (data?.errorCode === 'STORE_LIMIT_REACHED') {
+          closeQrModal()
+          await showStoreLimitUpgradeDialog(data)
+        }
       }
     } catch (e) {
+      if (e?.data?.errorCode === 'STORE_LIMIT_REACHED') {
+        stopQrPolling()
+        closeQrModal()
+        await showStoreLimitUpgradeDialog(e.data)
+        return
+      }
       if (pollCount > 30) {
         qrError.value = '二维码已过期，请重新生成'
         stopQrPolling()

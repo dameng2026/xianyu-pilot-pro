@@ -12,10 +12,17 @@ export interface FeatureSwitchItem {
   group?: string
   /** 普通用户是否可访问 */
   normal: boolean
+  /** VIP（单店版）是否可访问（与 VIP 功能权限保持一致，默认继承 VIP 开关） */
+  vipSingle?: boolean
   /** VIP 是否可访问 */
   vip: boolean
   /** SVP 是否可访问 */
   svp: boolean
+  /** 店铺数量（仅 store-limit 行）：0 表示无限制 */
+  storeLimitNormal?: number
+  storeLimitVipSingle?: number
+  storeLimitVip?: number
+  storeLimitSvp?: number
   /** 维护开关：开启后所有用户进入该页面均弹窗提示"正在维护升级中"（优先级高于等级开关） */
   maintenance?: boolean
   /** 限制模式（单选，全局统一配置，与等级开关正交）：

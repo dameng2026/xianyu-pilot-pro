@@ -347,16 +347,16 @@ public class AdminModuleService {
                 // vip_level 覆盖优先于订阅
                 Integer overrideLevel = vipOverrides.get(uid);
                 if (overrideLevel != null) {
-                    String code = overrideLevel >= 2 ? "svp" : "vip";
+                    String code = overrideLevel == 3 ? "vip-single" : (overrideLevel >= 2 ? "svp" : "vip");
                     row.put("userLevel", code);
-                    row.put("userLevelName", overrideLevel >= 2 ? "SVP" : "VIP");
-                    row.put("planName", overrideLevel >= 2 ? "SVP (手动)" : "VIP (手动)");
+                    row.put("userLevelName", overrideLevel == 3 ? "VIP（单店版）" : (overrideLevel >= 2 ? "SVP" : "VIP"));
+                    row.put("planName", overrideLevel == 3 ? "VIP（单店版） (手动)" : (overrideLevel >= 2 ? "SVP (手动)" : "VIP (手动)"));
                 } else {
                     Map<String, Object> p = byUser.get(uid);
                     if (p != null) {
                         String level = String.valueOf(p.get("planCode"));
                         row.put("userLevel", level);
-                        row.put("userLevelName", "svp".equals(level) ? "SVP" : "vip".equals(level) ? "VIP" : "普通用户");
+                        row.put("userLevelName", "svp".equals(level) ? "SVP" : "vip-single".equals(level) ? "VIP（单店版）" : "vip".equals(level) ? "VIP" : "普通用户");
                         row.put("planName", p.get("planName"));
                     }
                 }
@@ -372,6 +372,7 @@ public class AdminModuleService {
         if (planCode == null) return "normal";
         String c = planCode.trim().toLowerCase(Locale.ROOT);
         if ("svip".equals(c)) return "svp";
+        if (c.startsWith("vip-single") || c.startsWith("vip_single") || "vip1".equals(c)) return "vip-single";
         if ("svp".equals(c) || "vip".equals(c)) return c;
         return "normal";
     }

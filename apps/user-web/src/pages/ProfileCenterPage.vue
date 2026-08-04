@@ -349,7 +349,7 @@
                 @click="loadMemberComparison"
               >{{ memberComparisonLoading ? '加载中…' : '刷新' }}</button>
             </div>
-            <p class="pc-compare-desc">数据来源：后台「系统运维 → 功能管理」配置。✓ 表示该等级可用，— 表示该等级不可用。限制模式由管理员配置，影响所有等级用户的访问权限。</p>
+            <p class="pc-compare-desc">数据来源：后台「系统运维 → 功能管理」配置。首行为各等级可绑定的闲鱼店铺数量（0 表示不限）；功能行 ✓ 表示该等级可用，— 表示该等级不可用。VIP（单店版）与 VIP 功能权限一致。</p>
             <div class="pc-compare-table-wrap">
               <EmptyState
                 v-if="memberComparisonError"
@@ -371,8 +371,9 @@
                 <thead>
                   <tr>
                     <th class="pc-th-feature">功能 / 权益</th>
-                    <th class="pc-th-normal">普通会员</th>
-                    <th class="pc-th-vip">VIP会员</th>
+                    <th class="pc-th-normal">普通用户<span v-if="currentCompareLevel === 'normal'" class="pc-svip-badge">你的等级</span></th>
+                    <th class="pc-th-vipsingle">VIP（单店版）<span v-if="currentCompareLevel === 'vip-single'" class="pc-svip-badge">你的等级</span></th>
+                    <th class="pc-th-vip">VIP会员<span v-if="currentCompareLevel === 'vip'" class="pc-svip-badge">你的等级</span></th>
                     <th class="pc-th-svip">
                       <div class="pc-svip-th-inner">
                         <span class="pc-svip-crown" aria-hidden="true">
@@ -382,10 +383,9 @@
                           </svg>
                         </span>
                         SVIP会员
-                        <span class="pc-svip-badge">你的等级</span>
+                        <span v-if="currentCompareLevel === 'svip'" class="pc-svip-badge">你的等级</span>
                       </div>
                     </th>
-                    <th class="pc-th-limit">限制模式</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -397,29 +397,40 @@
                         <span class="pc-group-count">{{ group.items.length }} 项</span>
                       </td>
                     </tr>
-                    <tr v-for="(item, iIdx) in group.items" :key="'i'+gIdx+'-'+iIdx" :class="['pc-feature-row', { 'pc-feature-row-alt': iIdx % 2 === 1 }]">
+                    <tr v-for="(item, iIdx) in group.items" :key="'i'+gIdx+'-'+iIdx" :class="['pc-feature-row', { 'pc-feature-row-alt': iIdx % 2 === 1, 'pc-store-limit-row': item.isStoreLimit }]">
                       <td class="pc-td-name">{{ item.name }}</td>
-                      <td class="pc-td-normal" :class="{ 'pc-mark-on': item.normal === '✓', 'pc-mark-off': item.normal !== '✓' }">
-                        <span v-if="item.normal === '✓'" class="pc-check-ico">
-                          <svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
-                        </span>
-                        <span v-else class="pc-dash">—</span>
-                      </td>
-                      <td class="pc-td-vip" :class="{ 'pc-mark-on': item.vip === '✓', 'pc-mark-off': item.vip !== '✓' }">
-                        <span v-if="item.vip === '✓'" class="pc-check-ico">
-                          <svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
-                        </span>
-                        <span v-else class="pc-dash">—</span>
-                      </td>
-                      <td class="pc-td-svip" :class="{ 'pc-mark-on': item.svip === '✓', 'pc-mark-off': item.svip !== '✓' }">
-                        <span v-if="item.svip === '✓'" class="pc-check-ico pc-check-gold">
-                          <svg viewBox="0 0 16 16" width="18" height="18"><circle cx="8" cy="8" r="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#d97706" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
-                        </span>
-                        <span v-else class="pc-dash">—</span>
-                      </td>
-                      <td class="pc-td-limit">
-                        <span class="pc-limit-badge" :class="`pc-limit-${item.limitModeClass || 'none'}`">{{ item.limitMode }}</span>
-                      </td>
+                      <template v-if="item.isStoreLimit">
+                        <td class="pc-td-normal pc-store-limit-cell">{{ item.normalText }}</td>
+                        <td class="pc-td-vipsingle pc-store-limit-cell">{{ item.vipSingleText }}</td>
+                        <td class="pc-td-vip pc-store-limit-cell">{{ item.vipText }}</td>
+                        <td class="pc-td-svip pc-store-limit-cell">{{ item.svipText }}</td>
+                      </template>
+                      <template v-else>
+                        <td class="pc-td-normal" :class="{ 'pc-mark-on': item.normal === '✓', 'pc-mark-off': item.normal !== '✓' }">
+                          <span v-if="item.normal === '✓'" class="pc-check-ico">
+                            <svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                          </span>
+                          <span v-else class="pc-dash">—</span>
+                        </td>
+                        <td class="pc-td-vipsingle" :class="{ 'pc-mark-on': item.vipSingle === '✓', 'pc-mark-off': item.vipSingle !== '✓' }">
+                          <span v-if="item.vipSingle === '✓'" class="pc-check-ico">
+                            <svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                          </span>
+                          <span v-else class="pc-dash">—</span>
+                        </td>
+                        <td class="pc-td-vip" :class="{ 'pc-mark-on': item.vip === '✓', 'pc-mark-off': item.vip !== '✓' }">
+                          <span v-if="item.vip === '✓'" class="pc-check-ico">
+                            <svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                          </span>
+                          <span v-else class="pc-dash">—</span>
+                        </td>
+                        <td class="pc-td-svip" :class="{ 'pc-mark-on': item.svip === '✓', 'pc-mark-off': item.svip !== '✓' }">
+                          <span v-if="item.svip === '✓'" class="pc-check-ico pc-check-gold">
+                            <svg viewBox="0 0 16 16" width="18" height="18"><circle cx="8" cy="8" r="7" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#d97706" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+                          </span>
+                          <span v-else class="pc-dash">—</span>
+                        </td>
+                      </template>
                     </tr>
                   </template>
                 </tbody>
@@ -1474,6 +1485,14 @@ let noticeTimer = null
 
 const stats = computed(() => overview.stats || {})
 const planName = computed(() => overview.activePlan?.planName || '套餐状态未知')
+/** 功能对比表中当前用户的等级列（用于“你的等级”标识） */
+const currentCompareLevel = computed(() => {
+  const code = String(overview.activePlan?.planCode || '').trim().toLowerCase()
+  if (code.startsWith('svip') || code.startsWith('svp')) return 'svip'
+  if (code.startsWith('vip-single') || code.startsWith('vip_single') || code === 'vip1') return 'vip-single'
+  if (code.startsWith('vip')) return 'vip'
+  return 'normal'
+})
 const planBadge = computed(() => {
   if (!overview.activePlan?.planCode) return 'UNKNOWN'
   const code = String(overview.activePlan.planCode).toUpperCase()
@@ -1678,27 +1697,48 @@ const memberCompareData = computed(() => {
   if (!Array.isArray(features) || features.length === 0) return []
   const buckets = new Map()
   for (const g of FEATURE_COMPARISON_GROUPS) buckets.set(g.key, [])
-  for (const f of features) {
+  features.forEach((f, index) => {
     const g = String(f?.group || 'misc')
     if (!buckets.has(g)) buckets.set(g, [])
-    buckets.get(g).push(f)
-  }
+    const isStoreLimit = f?.key === 'store-limit'
+    const item = {
+      key: f.key,
+      name: f.title || f.key,
+      isStoreLimit,
+      normal: isStoreLimit ? '' : boolToMark(f.normal),
+      vipSingle: isStoreLimit ? '' : boolToMark(f.vipSingle ?? f.vip),
+      vip: isStoreLimit ? '' : boolToMark(f.vip),
+      svip: isStoreLimit ? '' : boolToMark(f.svp),
+      normalText: isStoreLimit ? storeLimitText(f.storeLimitNormal) : '',
+      vipSingleText: isStoreLimit ? storeLimitText(f.storeLimitVipSingle) : '',
+      vipText: isStoreLimit ? storeLimitText(f.storeLimitVip) : '',
+      svipText: isStoreLimit ? storeLimitText(f.storeLimitSvp) : '',
+      // 可等级数越少越靠后（不可用统一往后排）：0 个可用排最后，4 个可用排最前
+      usableCount: isStoreLimit ? 5 : [
+        boolToMark(f.normal),
+        boolToMark(f.vipSingle ?? f.vip),
+        boolToMark(f.vip),
+        boolToMark(f.svp)
+      ].filter(v => v === '✓').length,
+      order: index
+    }
+    buckets.get(g).push(item)
+  })
   const result = []
   for (const g of FEATURE_COMPARISON_GROUPS) {
     const items = buckets.get(g.key) || []
     if (items.length === 0) continue
+    items.sort((a, b) => {
+      // 店铺数量行固定在分组最前
+      if (a.isStoreLimit !== b.isStoreLimit) return a.isStoreLimit ? -1 : 1
+      // 可用等级少的排后面（不可用的统一往后排：0 个可用排最后，4 个可用排最前）
+      if (a.usableCount !== b.usableCount) return b.usableCount - a.usableCount
+      return a.order - b.order
+    })
     result.push({
       category: g.label,
       icon: g.icon,
-      items: items.map(f => ({
-        key: f.key,
-        name: f.title || f.key,
-        normal: boolToMark(f.normal),
-        vip: boolToMark(f.vip),
-        svip: boolToMark(f.svp),
-        limitMode: limitModeLabel(f.limitMode),
-        limitModeClass: limitModeClassKey(f.limitMode)
-      }))
+      items
     })
   }
   return result
@@ -1708,19 +1748,11 @@ function boolToMark(value) {
   return value === true || value === 'true' || value === 1 || value === '1' ? '✓' : '—'
 }
 
-/** 限制模式 → 展示文案（与后台功能管理配置一致，单选互斥） */
-function limitModeLabel(mode) {
-  const m = String(mode || 'none').toLowerCase()
-  if (m === 'preview') return '预览模式'
-  if (m === 'blocked') return '不可进入'
-  return '无限制'
-}
-
-/** 限制模式 → CSS 类名后缀（none/preview/blocked） */
-function limitModeClassKey(mode) {
-  const m = String(mode || 'none').toLowerCase()
-  if (m === 'preview' || m === 'blocked') return m
-  return 'none'
+/** 店铺数量展示：0=不限，正数显示具体数量 */
+function storeLimitText(value) {
+  const n = Number(value ?? 0)
+  if (!Number.isFinite(n) || n <= 0) return '不限'
+  return String(n)
 }
 
 async function loadMemberComparison() {
@@ -5978,66 +6010,30 @@ watch(activeTab, async (tab) => {
 }
 
 .pc-th-feature {
-  width: 34%;
+  width: 28%;
 }
 
 .pc-th-normal {
-  width: 15%;
+  width: 18%;
   color: #94a3b8 !important;
   font-weight: 600;
 }
 
+.pc-th-vipsingle {
+  width: 18%;
+  color: #2563eb !important;
+}
+
 .pc-th-vip {
-  width: 15%;
+  width: 18%;
   color: #2563eb !important;
 }
 
 .pc-th-svip {
-  width: 15%;
+  width: 18%;
   background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%) !important;
   color: #92400e !important;
   position: relative;
-}
-
-.pc-th-limit {
-  width: 21%;
-  color: #6f7e97 !important;
-  font-weight: 600;
-}
-
-.pc-td-limit {
-  text-align: center;
-}
-
-/* 限制模式徽章（无限制/预览模式/不可进入） */
-.pc-limit-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.4;
-  white-space: nowrap;
-  border: 1px solid transparent;
-}
-
-.pc-limit-none {
-  background: #f1f5f9;
-  color: #64748b;
-  border-color: #e2e8f0;
-}
-
-.pc-limit-preview {
-  background: #fffbeb;
-  color: #b45309;
-  border-color: #fde68a;
-}
-
-.pc-limit-blocked {
-  background: #fef2f2;
-  color: #b91c1c;
-  border-color: #fecaca;
 }
 
 .pc-th-svip::after {
@@ -6149,6 +6145,21 @@ watch(activeTab, async (tab) => {
   background: linear-gradient(180deg, #fffdf5 0%, #fef9e7 100%) !important;
   color: #92400e !important;
   font-weight: 600;
+}
+
+/* 店铺数量首行：数字展示，区别于功能开关行 */
+.pc-store-limit-row {
+  background: #eff6ff !important;
+}
+
+.pc-store-limit-row:hover td {
+  background: #e8f1ff !important;
+}
+
+.pc-store-limit-cell {
+  font-size: 14px;
+  font-weight: 800;
+  color: #1e3a8a !important;
 }
 
 .pc-feature-row:hover .pc-td-svip {

@@ -100,8 +100,8 @@ declare namespace Api {
       tenantName: string
       tenantId?: number
       planName?: string
-      userLevel?: string          // "normal" | "vip" | "svp"
-      userLevelName?: string      // "普通用户" | "VIP" | "SVP"
+      userLevel?: string          // "normal" | "vip-single" | "vip" | "svp"
+      userLevelName?: string      // "普通用户" | "VIP（单店版）" | "VIP" | "SVP"
       tokenBalance?: number
       xianyuAccountCount?: number | string
       status: string           // "正常" | "禁用"
