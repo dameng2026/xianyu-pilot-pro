@@ -1715,10 +1715,14 @@ app.post('/api/fireyejs/route-j-flow', async (req, res) => {
       proxy,
     });
 
-    if (result.ok) {
-      return res.status(200).json(result);
+    // 注入 proxyUsed：让调用方（Route I）能判断是否真正使用了住宅 IP
+    // useProxy=true 但住宅代理池为空时，proxyUsed=false（fallback 到服务器 IP，Route J 已证明失败）
+    const resultWithProxy: RouteJFlowResult = { ...result, proxyUsed: !!proxy };
+
+    if (resultWithProxy.ok) {
+      return res.status(200).json(resultWithProxy);
     } else {
-      return res.status(422).json(result);
+      return res.status(422).json(resultWithProxy);
     }
   } catch (e: any) {
     console.error('[RouteJFlow] errorType=' + safeErrorType(e));

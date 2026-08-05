@@ -39,6 +39,7 @@ public class UserJwtAuthFilter extends OncePerRequestFilter {
                 || uri.equals("/api/health")
                 || uri.equals("/api/client-errors") || uri.equals("/api/sse/subscribe")
                 || uri.equals("/api/carousel/list") || uri.equals("/api/announcement/list")
+                || uri.equals("/api/content/release-notes")
                 || uri.equals("/api/maintenance/status")
                 || uri.equals("/api/ops/liveness") || uri.equals("/api/ops/readiness") || uri.equals("/api/ops/prometheus")
                 || uri.startsWith("/api/proxy-image/")

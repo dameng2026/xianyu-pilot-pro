@@ -566,6 +566,38 @@
             "sha256": "4c6986973ec2fd435626399ae355c3848b729ab8208a37b3f8a612d94257926e",
             "risk": "contract",
             "rollback": "restore"
+          },
+          {
+            "version": "1.70",
+            "description": "refresh ai_cs_knowledge membership/token entries to four-tier plan and add realtime info query rules for AI assistant",
+            "path": "apps/core-api/src/main/resources/db/migration/V1.70__refresh_ai_cs_knowledge_realtime_info.sql",
+            "sha256": "b033ebdba761836c92b19e989019e0e7ab640b1ea007589eb9908205dbc2425b",
+            "risk": "expand",
+            "rollback": "restore"
+          },
+          {
+            "version": "1.71",
+            "description": "ai_cs knowledge base performance indexes (fulltext + created_time/date/code indexes) and widen learned question column",
+            "path": "apps/core-api/src/main/resources/db/migration/V1.71__ai_cs_perf_indexes_and_field_fixes.sql",
+            "sha256": "5d3930f9b7b98a0989be13010c7ae1bbea4b3246af81d2d4d13cb8bb9eac6a04",
+            "risk": "expand",
+            "rollback": "restore"
+          },
+          {
+            "version": "1.72",
+            "description": "ensure member_promotion tables exist (activity/plan/quota_log) and refresh promotion KB entry for AI assistant realtime query",
+            "path": "apps/core-api/src/main/resources/db/migration/V1.72__ensure_member_promotion_tables_and_refresh_kb.sql",
+            "sha256": "16da527406476580dc8d1b5fb216185bcb0c4b42b0ad42b181fbb04c45dd2286",
+            "risk": "expand",
+            "rollback": "restore"
+          },
+          {
+            "version": "1.73",
+            "description": "refresh ai_cs_knowledge chat charging description (xiaomeng chat free) and context compression entry (remove internal fields)",
+            "path": "apps/core-api/src/main/resources/db/migration/V1.73__refresh_ai_cs_chat_charging_kb.sql",
+            "sha256": "1414b8f527434ce3feb042d4b964aa8ff8155e50c85d9656595d211e85a42d5e",
+            "risk": "expand",
+            "rollback": "restore"
           }
         ],
       "quarantined": [

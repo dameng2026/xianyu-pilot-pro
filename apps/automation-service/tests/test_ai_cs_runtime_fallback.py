@@ -19,12 +19,21 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.services.ai_cs_runtime import build_fallback_summary, _fmt_dt  # noqa: E402
+from app.services.ai_cs_runtime import (  # noqa: E402
+    build_fallback_summary,
+    _build_write_tool_from_query_results,
+    _detect_required_query_for_query_intent,
+    _is_generic_help_reply,
+    _parse_cron_from_message,
+    _sanitize_kb_content,
+    _fmt_dt,
+)
 from app.services.ai_cs_tools import (  # noqa: E402
     TOOL_REGISTRY,
     TOOL_DEFINITIONS,
     QUERY_TOOLS,
     is_query_tool,
+    _resolve_plan_from_rows,
 )
 
 
@@ -375,8 +384,7 @@ def test_fallback_summary_get_product_summary():
     )
     assert "50 个" in summary
     assert "在售 40" in summary
-    assert "下架 5" in summary
-    assert "已售 5" in summary
+    assert "下架/草稿 5" in summary
     assert "1000" in summary
     assert "{" not in summary
 
@@ -711,3 +719,455 @@ def test_v2_total_tool_count_at_least_38():
     """v2 扩展后工具总数应至少为 38（25 原有 + 13 新增）。"""
     assert len(TOOL_REGISTRY) >= 38, f"工具总数 {len(TOOL_REGISTRY)} < 38"
     assert len(QUERY_TOOLS) >= 19, f"查询类工具数 {len(QUERY_TOOLS)} < 19"
+
+
+# ============================================================
+# 实时信息工具（公告/更新日志/店铺限制/功能对比）+ 会员报价
+# ============================================================
+
+_REALTIME_TOOLS = {
+    "get_release_notes",
+    "get_announcements",
+    "get_store_limit",
+    "get_feature_comparison",
+    "get_promotions",
+    "get_vip_price",
+}
+
+
+def test_realtime_tools_registered():
+    """实时信息工具应全部注册到 TOOL_REGISTRY。"""
+    for name in _REALTIME_TOOLS:
+        assert name in TOOL_REGISTRY, f"工具 {name} 未注册"
+
+
+def test_realtime_tools_have_definitions():
+    """实时信息工具应全部有元信息定义（含参数说明）。"""
+    names = {t["name"] for t in TOOL_DEFINITIONS}
+    for name in _REALTIME_TOOLS:
+        assert name in names, f"工具 {name} 缺少元信息定义"
+    defs = {t["name"]: t for t in TOOL_DEFINITIONS}
+    assert "limit" in defs["get_release_notes"]["parameters"]
+    assert "limit" in defs["get_announcements"]["parameters"]
+    assert "group" in defs["get_feature_comparison"]["parameters"]
+
+
+def test_realtime_tools_are_query_tools():
+    """实时信息工具应全部为查询类（自动执行，无需用户确认）。"""
+    for name in _REALTIME_TOOLS:
+        assert name in QUERY_TOOLS, f"工具 {name} 未加入 QUERY_TOOLS"
+        assert is_query_tool(name) is True
+
+
+def test_fallback_summary_get_release_notes():
+    """get_release_notes 兜底摘要应展示最新版本与更新内容。"""
+    summary = build_fallback_summary(
+        user_message="最近更新了什么",
+        tool_name="get_release_notes",
+        tool_result={
+            "success": True,
+            "data": {
+                "currentVersion": "2.5.0",
+                "releaseNotes": [
+                    {
+                        "version": "2.5.0",
+                        "date": "2026-08-04",
+                        "title": "滑块求解强化",
+                        "summary": "滑块求解成功率大幅提升",
+                    },
+                ],
+            },
+        },
+    )
+    assert "2.5.0" in summary
+    assert "滑块求解强化" in summary
+    assert "滑块求解成功率大幅提升" in summary
+    assert "{" not in summary
+
+
+def test_fallback_summary_get_announcements():
+    """get_announcements 兜底摘要应展示公告标题与内容。"""
+    summary = build_fallback_summary(
+        user_message="有什么公告",
+        tool_name="get_announcements",
+        tool_result={
+            "success": True,
+            "data": {
+                "announcements": [
+                    {
+                        "title": "服务器维护通知",
+                        "content": "本周六凌晨维护",
+                        "createdAt": "2026-08-05T10:00:00",
+                    },
+                ],
+                "count": 1,
+            },
+        },
+    )
+    assert "服务器维护通知" in summary
+    assert "本周六凌晨维护" in summary
+    assert "{" not in summary
+
+
+def test_fallback_summary_get_store_limit():
+    """get_store_limit 兜底摘要应展示四档限制与当前用户状态。"""
+    summary = build_fallback_summary(
+        user_message="能绑几个店铺",
+        tool_name="get_store_limit",
+        tool_result={
+            "success": True,
+            "data": {
+                "limits": {"normal": 1, "vipSingle": 1, "vip": 0, "svp": 0},
+                "currentPlan": {"levelLabel": "普通用户", "planCode": "normal"},
+                "currentLimit": 1,
+                "unlimited": False,
+                "accountCount": 1,
+            },
+        },
+    )
+    assert "普通用户" in summary
+    assert "VIP（单店版）" in summary
+    assert "不限制" in summary
+    assert "已绑定 1 个店铺" in summary
+    assert "{" not in summary
+
+
+def test_fallback_summary_get_feature_comparison():
+    """get_feature_comparison 兜底摘要应展示功能与可用等级。"""
+    summary = build_fallback_summary(
+        user_message="普通和VIP有什么区别",
+        tool_name="get_feature_comparison",
+        tool_result={
+            "success": True,
+            "data": {
+                "features": [
+                    {
+                        "key": "accounts",
+                        "title": "闲鱼账号",
+                        "maintenance": False,
+                        "levels": {
+                            "普通用户": True,
+                            "VIP（单店版）": True,
+                            "VIP": True,
+                            "SVP": True,
+                        },
+                    },
+                    {
+                        "key": "supply",
+                        "title": "供货中心",
+                        "maintenance": True,
+                        "levels": {
+                            "普通用户": False,
+                            "VIP（单店版）": True,
+                            "VIP": True,
+                            "SVP": True,
+                        },
+                    },
+                ],
+            },
+        },
+    )
+    assert "闲鱼账号" in summary
+    assert "普通用户 / VIP（单店版） / VIP / SVP" in summary
+    assert "供货中心" in summary
+    assert "维护中" in summary
+    assert "{" not in summary
+
+
+def test_fallback_summary_get_vip_price():
+    """get_vip_price 兜底摘要应展示实时价格与升级建议。"""
+    summary = build_fallback_summary(
+        user_message="会员多少钱",
+        tool_name="get_vip_price",
+        tool_result={
+            "success": True,
+            "data": {
+                "plans": [
+                    {
+                        "planName": "VIP（单店版）",
+                        "priceMonthCent": 999,
+                        "priceQuarterCent": 2599,
+                        "priceYearCent": 8888,
+                        "storeLimitText": "1 个店铺",
+                    },
+                    {
+                        "planName": "VIP",
+                        "priceMonthCent": 1999,
+                        "priceQuarterCent": 3999,
+                        "priceYearCent": 13888,
+                        "storeLimitText": "不限制",
+                    },
+                ],
+                "currentPlan": {"levelLabel": "普通用户"},
+                "upgradeTarget": "VIP（单店版）或 VIP",
+            },
+        },
+    )
+    assert "9.99" in summary
+    assert "19.99" in summary
+    assert "1 个店铺" in summary
+    assert "不限制" in summary
+    assert "普通用户" in summary
+    assert "升级" in summary
+    assert "{" not in summary
+
+
+def test_fallback_summary_get_promotions_with_data():
+    """get_promotions 兜底摘要应展示活动名/活动价/名额/通知。"""
+    summary = build_fallback_summary(
+        user_message="有什么促销活动",
+        tool_name="get_promotions",
+        tool_result={
+            "success": True,
+            "data": {
+                "activities": [
+                    {
+                        "activityName": "开学季限时特惠",
+                        "notice": {
+                            "title": "开学季特惠",
+                            "content": "VIP 年付直降",
+                            "visible": True,
+                        },
+                        "plans": [
+                            {
+                                "planName": "VIP",
+                                "periodType": "year",
+                                "activityPriceYuan": "99.99",
+                                "originalPriceYuan": "138.88",
+                                "remainText": "12",
+                                "activityTag": "限时",
+                            },
+                        ],
+                    },
+                ],
+                "count": 1,
+            },
+        },
+    )
+    assert "开学季限时特惠" in summary
+    assert "99.99" in summary
+    assert "138.88" in summary
+    assert "剩余 12" in summary
+    assert "{" not in summary
+
+
+def test_fallback_summary_get_promotions_empty():
+    """get_promotions 无活动时应如实告知。"""
+    summary = build_fallback_summary(
+        user_message="有什么促销活动",
+        tool_name="get_promotions",
+        tool_result={"success": True, "data": {"activities": [], "count": 0}},
+    )
+    assert "暂无" in summary
+    assert "{" not in summary
+
+
+def test_fallback_summary_get_token_balance_with_tier_pricing():
+    """get_token_balance 兜底摘要应展示按等级定价的真实数据。"""
+    summary = build_fallback_summary(
+        user_message="Token 怎么消耗的",
+        tool_name="get_token_balance",
+        tool_result={
+            "success": True,
+            "data": {
+                "balance": 48005,
+                "perCallTokens": 3,
+                "remainingCalls": 16001,
+                "tierPricing": [
+                    {"vipLabel": "普通用户", "tokensPerCall": 3},
+                    {"vipLabel": "VIP", "tokensPerCall": 3},
+                    {"vipLabel": "SVP", "tokensPerCall": 3},
+                ],
+                "rechargeHint": "",
+            },
+        },
+    )
+    assert "按等级定价" in summary
+    assert "普通用户 3 Token/次" in summary
+    assert "{" not in summary
+
+
+def test_resolve_plan_from_rows_four_tiers():
+    """用户会员信息归一化应支持四档（含 vip_level=3 单店版）。"""
+    normal = _resolve_plan_from_rows(0, None)
+    assert normal["planCode"] == "normal"
+    assert normal["levelLabel"] == "普通用户"
+
+    single = _resolve_plan_from_rows(3, None)
+    assert single["planCode"] == "vip-single"
+    assert single["levelLabel"] == "VIP（单店版）"
+
+    vip = _resolve_plan_from_rows(1, None)
+    assert vip["planCode"] == "vip"
+
+    svp = _resolve_plan_from_rows(2, None)
+    assert svp["planCode"] == "svp"
+
+    # 有效订阅优先于 sys_user.vip_level
+    sub = {"plan_code": "vip", "plan_name": "VIP"}
+    assert _resolve_plan_from_rows(0, sub)["planCode"] == "vip"
+    sub_single = {"plan_code": "vip-single", "plan_name": "VIP（单店版）"}
+    assert _resolve_plan_from_rows(1, sub_single)["planCode"] == "vip-single"
+
+
+def test_build_system_prompt_contains_realtime_and_sales_rules():
+    """系统提示词应包含实时接口查询规则与销管引导规则。"""
+    src_path = ROOT / "app" / "services" / "ai_cs_runtime.py"
+    src = src_path.read_text(encoding="utf-8")
+    assert "get_release_notes" in src
+    assert "get_announcements" in src
+    assert "get_store_limit" in src
+    assert "get_feature_comparison" in src
+    assert "实时信息必须走接口" in src
+    assert "销管引导" in src
+    assert "禁止虚假承诺" in src
+    assert "一次对话最多主动引导一次" in src
+
+
+def test_detect_required_query_for_query_intent():
+    """查询意图补全应能识别公告/更新日志/会员/店铺/功能对比/Token 等关键词。"""
+    assert ("get_announcements", {}) in _detect_required_query_for_query_intent("有什么公告")
+    assert ("get_release_notes", {}) in _detect_required_query_for_query_intent("最近更新了什么")
+    assert ("get_vip_price", {}) in _detect_required_query_for_query_intent("会员多少钱")
+    assert ("get_vip_price", {}) in _detect_required_query_for_query_intent("套餐价格")
+    assert ("get_store_limit", {}) in _detect_required_query_for_query_intent("能绑定几个店铺")
+    assert ("get_feature_comparison", {}) in _detect_required_query_for_query_intent("普通和VIP有什么区别")
+    assert ("get_token_balance", {}) in _detect_required_query_for_query_intent("我的Token余额是多少")
+    assert ("get_promotions", {}) in _detect_required_query_for_query_intent("有什么促销活动")
+    # 无匹配关键词时不返回任何工具
+    assert _detect_required_query_for_query_intent("今天天气怎么样") == []
+    # 歧义词「多少钱/价格」单独出现不应误判为会员价格（可能是商品价格）
+    assert _detect_required_query_for_query_intent("这个商品多少钱") == []
+    assert _detect_required_query_for_query_intent("价格怎么样") == []
+
+
+def test_is_generic_help_reply():
+    """泛泛的「有什么可以帮」式回复应被识别，触发主动补查。"""
+    assert _is_generic_help_reply("你好！我是小梦，有什么可以帮你的吗？")
+    assert _is_generic_help_reply("直接告诉我你的需求就行")
+    assert not _is_generic_help_reply("好的，已为您查询到最新会员价格。")
+
+
+def test_build_write_tool_from_query_results_product_on_shelf():
+    """商品上架：查询到下架商品时应生成 toggle_product_status(onShelf=true)。"""
+    tool, args = _build_write_tool_from_query_results(
+        "帮我把商品上架",
+        [{"tool": "list_products", "result": {"success": True, "data": {"products": [{"id": 1, "status": 0}]}}}],
+    )
+    assert tool == "toggle_product_status"
+    assert args == {"goodsId": 1, "onShelf": True}
+
+
+def test_build_write_tool_from_query_results_product_off_shelf():
+    """商品下架：查询到在售商品时应生成 toggle_product_status(onShelf=false)。"""
+    tool, args = _build_write_tool_from_query_results(
+        "帮我把商品下架",
+        [{"tool": "list_products", "result": {"success": True, "data": {"products": [{"id": 2, "status": 1}]}}}],
+    )
+    assert tool == "toggle_product_status"
+    assert args == {"goodsId": 2, "onShelf": False}
+
+
+def test_build_write_tool_from_query_results_delete_product():
+    """删除下架商品：应生成 delete_product。"""
+    tool, args = _build_write_tool_from_query_results(
+        "我想删除一个下架很久的商品",
+        [{"tool": "list_products", "result": {"success": True, "data": {"products": [{"id": 3, "status": 0}]}}}],
+    )
+    assert tool == "delete_product"
+    assert args == {"goodsId": 3}
+
+
+def test_build_write_tool_from_query_results_enable_workflow():
+    """启用工作流：应生成 update_workflow(status=published)。"""
+    tool, args = _build_write_tool_from_query_results(
+        "帮我启用工作流",
+        [{"tool": "list_workflows", "result": {"success": True, "data": {"workflows": [{"id": 4}]}}}],
+    )
+    assert tool == "update_workflow"
+    assert args == {"workflowId": 4, "status": "published"}
+
+
+def test_build_write_tool_from_query_results_disable_rule():
+    """禁用自动回复规则：应生成 toggle_auto_reply_rule(enabled=false)。"""
+    tool, args = _build_write_tool_from_query_results(
+        "帮我禁用某个自动回复规则",
+        [{"tool": "list_auto_reply_rules", "result": {"success": True, "data": {"rules": [{"id": 5}]}}}],
+    )
+    assert tool == "toggle_auto_reply_rule"
+    assert args == {"ruleId": 5, "enabled": False}
+
+
+def test_build_write_tool_from_query_results_reply_buyer():
+    """回复买家：应提取引号内消息并生成 reply_buyer_message。"""
+    tool, args = _build_write_tool_from_query_results(
+        "帮我回复买家「您好，在的」",
+        [{"tool": "list_recent_conversations", "result": {"success": True, "data": {"conversations": [{"id": 7, "accountId": 2}]}}}],
+    )
+    assert tool == "reply_buyer_message"
+    assert args["accountId"] == 2
+    assert args["conversationId"] == 7
+    assert "您好，在的" in args["message"]
+
+
+def test_build_write_tool_from_query_results_retry_delivery():
+    """重试失败发货：应选中 deliveryStatus=failed 的记录。"""
+    tool, args = _build_write_tool_from_query_results(
+        "帮我重试失败发货",
+        [{"tool": "list_delivery_records", "result": {"success": True, "data": {"records": [{"id": 9, "deliveryStatus": "failed"}]}}}],
+    )
+    assert tool == "retry_delivery_record"
+    assert args == {"recordId": 9}
+
+
+def test_build_write_tool_from_query_results_no_data_returns_none():
+    """查询结果为空时不应编造写工具调用。"""
+    tool, args = _build_write_tool_from_query_results(
+        "帮我把商品上架",
+        [{"tool": "list_products", "result": {"success": True, "data": {"products": []}}}],
+    )
+    assert tool is None and args is None
+
+
+def test_build_write_tool_from_query_results_create_scheduled_task():
+    """创建每天 9 点的定时任务：应解析 cron 并生成 create_scheduled_task。"""
+    tool, args = _build_write_tool_from_query_results(
+        "帮我创建一个每天 9 点执行的定时任务",
+        [{"tool": "list_accounts", "result": {"success": True, "data": {"accounts": [{"id": 1}]}}}],
+    )
+    assert tool == "create_scheduled_task"
+    assert args["accountId"] == 1
+    assert args["cronExpr"] == "0 0 9 * * ?"
+
+
+def test_parse_cron_from_message():
+    """中文调度描述应解析为 Cron 表达式。"""
+    assert _parse_cron_from_message("每天 9 点") == "0 0 9 * * ?"
+    assert _parse_cron_from_message("每天18:30") == "0 30 18 * * ?"
+    assert _parse_cron_from_message("每 10 分钟") == "0 */10 * * * ?"
+    assert _parse_cron_from_message("每天") == "0 0 9 * * ?"
+    assert _parse_cron_from_message("随便") == ""
+
+
+def test_sanitize_kb_content_removes_api_paths():
+    """知识库加载时应移除内部 API 路径/协议字段，防止泄露技术细节。"""
+    raw = (
+        "账号管理：\n"
+        "- 添加账号：扫码登录（推荐）\n"
+        "- 接口：POST /qrlogin/generate\n"
+        "- 查询状态：GET /qrlogin/status/{sessionId}\n"
+        "- 会话标识：session_token 由前端持有\n"
+        "提示：Cookie 失效需重新扫码。"
+    )
+    cleaned = _sanitize_kb_content(raw)
+    assert "扫码登录" in cleaned
+    assert "POST /" not in cleaned
+    assert "GET /" not in cleaned
+    assert "session_token" not in cleaned
+    assert "Cookie 失效需重新扫码" in cleaned
+
+
+def test_sanitize_kb_content_keeps_normal_lines():
+    """不包含 API 路径的正常知识内容应原样保留。"""
+    raw = "普通用户可绑定 1 个闲鱼店铺。\nVIP 不限店铺数量。"
+    assert _sanitize_kb_content(raw) == raw

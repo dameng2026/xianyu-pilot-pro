@@ -128,8 +128,10 @@ def test_build_ai_cs_system_prompt_avoids_proactive_ai_identity():
 
     assert "我是AI" not in prompt
     assert "我是 AI" not in prompt
-    assert "当前店铺的商品客服" in prompt
-    assert "像真人客服一样自然礼貌" in prompt
+    # V1.49 后设计：用户自定义人设原样保留并最优先，不再硬编码系统角色/语气
+    assert prompt.startswith("你是店里负责接待买家的客服")
+    assert "【当前商品信息】" in prompt
+    assert "当前店铺的商品客服" not in prompt
 
 
 def test_build_goods_context_text_uses_human_fallback_tone():

@@ -57,7 +57,7 @@ export function getCsConfig() {
   return request({ url: `${BASE}/config`, method: 'get' })
 }
 
-// 保存 AI 客服计费配置（用户每日免费额度、每条扣费 Token 数等）
+// 保存 AI 客服计费配置（自动回复按次计费等，小梦对话本身不扣用户 Token）
 export function saveCsBillingConfig(data) {
   return request({ url: `${BASE}/billing-config`, method: 'put', data })
 }

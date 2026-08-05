@@ -141,17 +141,20 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import CardPanel from '../../components/CardPanel.vue'
 import Badge from '../../components/Badge.vue'
 import Icon from '../../components/Icon.vue'
 import { APP_BUILD_DATE, APP_VERSION, formatBuildDate, formatReleaseLabel } from '../../utils/appMeta.js'
 import { getLegalDocumentUrl, LEGAL_CONFIG } from '../../utils/legalConfig.js'
-import { releaseNotes, RELEASE_TYPE_META } from '../../data/releaseNotes.js'
+import { releaseNotes as staticReleaseNotes, RELEASE_TYPE_META } from '../../data/releaseNotes.js'
 
 const heroImage = '/xya/illustrations/about-hero.svg'
 const buildDateText = formatBuildDate(APP_BUILD_DATE)
 const releaseLabel = formatReleaseLabel(APP_BUILD_DATE)
+
+// 更新日志优先走后端实时接口（与 AI 客服共用同一数据源），失败时回退到内置静态数据
+const releaseNotes = ref(staticReleaseNotes)
 
 defineProps({ active: String })
 
@@ -173,6 +176,22 @@ const links = computed(() => [
   },
   { label: '导出诊断日志', icon: 'download', actionText: '导出', disabled: false, reason: '', action: exportDiagnostics }
 ])
+
+onMounted(async () => {
+  try {
+    const resp = await fetch('/api/content/release-notes', {
+      headers: { Accept: 'application/json' },
+    })
+    if (!resp.ok) return
+    const payload = await resp.json()
+    const notes = payload?.data?.releaseNotes
+    if (Array.isArray(notes) && notes.length > 0) {
+      releaseNotes.value = notes
+    }
+  } catch (e) {
+    // 接口不可用时保留内置静态数据
+  }
+})
 
 function onSupport(item) {
   item.action?.()

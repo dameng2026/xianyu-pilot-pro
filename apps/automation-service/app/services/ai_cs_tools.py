@@ -13,13 +13,16 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+import httpx
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.config import settings
 from ..models.entities import (
     AutoReplyRule,
     CardGroup,
@@ -38,6 +41,22 @@ logger = logging.getLogger(__name__)
 
 # 工具执行结果统一结构
 ToolResult = Dict[str, Any]
+
+# camelCase → snake_case（工具函数参数均为 snake_case，LLM 输出常为 camelCase）
+_CAMEL_TO_SNAKE_RE = re.compile(r"(?<!^)(?=[A-Z])")
+
+
+def _normalize_tool_args(arguments: Any) -> Dict[str, Any]:
+    """将工具参数键统一转换为 snake_case，兼容 LLM 输出的 camelCase。"""
+    if not isinstance(arguments, dict):
+        return {}
+    normalized: Dict[str, Any] = {}
+    for key, value in arguments.items():
+        if not isinstance(key, str):
+            normalized[key] = value
+            continue
+        normalized[_CAMEL_TO_SNAKE_RE.sub("_", key).lower()] = value
+    return normalized
 
 
 def _ok(data: Optional[dict] = None, **extra: Any) -> ToolResult:
@@ -99,6 +118,200 @@ def _humanize_account_status(status: int) -> str:
 def _humanize_account_type(fish_shop_user: int) -> str:
     """账号类型中文化：1=鱼小铺账号，0=普通账号。"""
     return "鱼小铺账号" if int(fish_shop_user or 0) == 1 else "普通账号"
+
+
+async def _fetch_java_json(
+    path: str,
+    *,
+    label: str,
+    timeout: float = 8.0,
+) -> ToolResult:
+    """调用 Java core-api 公开接口获取实时数据（公告/更新日志等）。
+
+    这些数据随时可能被管理员更新，不写入知识库，直接请求接口保证最新。
+    """
+    base = (settings.core_api_base_url or "").rstrip("/")
+    if not base:
+        return _fail(f"{label}服务未配置，请稍后重试")
+    headers = {"Accept": "application/json"}
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout, follow_redirects=False, trust_env=False,
+        ) as client:
+            resp = await client.get(f"{base}{path}", headers=headers)
+            if resp.status_code >= 400:
+                logger.warning(
+                    "%s http error path=%s status=%d",
+                    label, path, resp.status_code,
+                )
+                return _fail(f"{label}暂时不可用，请稍后重试")
+            payload = resp.json()
+        if not isinstance(payload, dict):
+            return _fail(f"{label}数据格式异常")
+        code = payload.get("code")
+        if code is not None and str(code) not in {"0", "200"}:
+            logger.warning("%s biz error path=%s code=%s", label, path, code)
+            return _fail(f"{label}暂时不可用，请稍后重试")
+        return _ok(payload.get("data"))
+    except Exception as exc:
+        logger.warning(
+            "%s request failed path=%s errorType=%s",
+            label, path, type(exc).__name__,
+            exc_info=True,
+        )
+        return _fail(f"{label}暂时不可用，请稍后重试")
+
+
+def _resolve_plan_from_rows(
+    vip_level: int,
+    subscription_plan: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """归一化用户当前会员信息（四档：normal / vip-single / vip / svp）。"""
+    # vip_level：0=普通 1=VIP 2=SVIP/SVP 3=VIP（单店版）
+    level_by_code = {
+        "normal": 0,
+        "vip-single": 3,
+        "vip": 1,
+        "svp": 2,
+    }
+    code = ""
+    name = ""
+    if subscription_plan and subscription_plan.get("plan_code"):
+        raw = str(subscription_plan.get("plan_code") or "").strip().lower()
+        if raw.startswith("svip"):
+            raw = "svp"
+        if raw in level_by_code:
+            code = raw
+            name = str(subscription_plan.get("plan_name") or "")
+    if not code:
+        code = {0: "normal", 1: "vip", 2: "svp", 3: "vip-single"}.get(vip_level, "normal")
+        name = {
+            "normal": "普通用户",
+            "vip-single": "VIP（单店版）",
+            "vip": "VIP",
+            "svp": "SVP",
+        }[code]
+    return {
+        "planCode": code,
+        "planName": name,
+        "vipLevel": level_by_code.get(code, vip_level),
+        "levelLabel": {
+            "normal": "普通用户",
+            "vip-single": "VIP（单店版）",
+            "vip": "VIP",
+            "svp": "SVP",
+        }.get(code, name),
+    }
+
+
+async def _load_user_plan(
+    db: AsyncSession,
+    *,
+    tenant_id: int,
+    user_id: int,
+) -> Dict[str, Any]:
+    """读取用户当前会员等级与有效订阅，返回 {planCode, planName, vipLevel, levelLabel}。"""
+    vip_level = 0
+    try:
+        vip_level = int(
+            (await db.execute(
+                text("SELECT vip_level FROM sys_user WHERE id = :uid AND deleted = 0"),
+                {"uid": user_id},
+            )).scalar() or 0
+        )
+    except Exception as exc:
+        logger.warning(
+            "load user vip_level failed tenantId=%d userId=%d errorType=%s",
+            tenant_id, user_id, type(exc).__name__,
+            exc_info=True,
+        )
+    subscription_plan: Optional[Dict[str, Any]] = None
+    try:
+        row = (await db.execute(
+            text(
+                "SELECT p.plan_code, p.plan_name FROM billing_subscription s "
+                "JOIN billing_plan p ON p.id = s.plan_id "
+                "WHERE s.tenant_id = :tid AND s.user_id = :uid AND s.status = 1 "
+                "AND (s.end_time IS NULL OR s.end_time > NOW()) "
+                "ORDER BY s.end_time DESC, s.id DESC LIMIT 1"
+            ),
+            {"tid": tenant_id, "uid": user_id},
+        )).mappings().first()
+        if row:
+            subscription_plan = dict(row)
+    except Exception as exc:
+        logger.warning(
+            "load user subscription failed tenantId=%d userId=%d errorType=%s",
+            tenant_id, user_id, type(exc).__name__,
+            exc_info=True,
+        )
+    return _resolve_plan_from_rows(vip_level, subscription_plan)
+
+
+async def _load_store_limits(db: AsyncSession) -> Dict[str, int]:
+    """读取功能管理首行 store-limit 实时配置（admin_module_record），0=无限制。"""
+    limits = {"normal": 1, "vipSingle": 1, "vip": 0, "svp": 0}
+    try:
+        raw = (await db.execute(
+            text(
+                "SELECT json_text FROM admin_module_record "
+                "WHERE module_key = 'user_feature_switch' AND status = 'config' "
+                "AND deleted = 0 ORDER BY id ASC LIMIT 2"
+            ),
+        )).scalars().first()
+        if raw:
+            cfg = json.loads(raw or "{}")
+            features = cfg.get("features") or {}
+            row = features.get("store-limit") or {}
+            for key, field in (
+                ("normal", "storeLimitNormal"),
+                ("vipSingle", "storeLimitVipSingle"),
+                ("vip", "storeLimitVip"),
+                ("svp", "storeLimitSvp"),
+            ):
+                val = row.get(field)
+                if val is not None:
+                    try:
+                        limits[key] = int(str(val).strip().replace(",", "") or 0)
+                    except (TypeError, ValueError):
+                        pass
+    except Exception as exc:
+        logger.warning(
+            "load store limits failed errorType=%s",
+            type(exc).__name__,
+            exc_info=True,
+        )
+    return limits
+
+
+async def _load_feature_switches(db: AsyncSession) -> Dict[str, Dict[str, Any]]:
+    """读取功能管理实时开关配置（admin_module_record）。"""
+    try:
+        raw = (await db.execute(
+            text(
+                "SELECT json_text FROM admin_module_record "
+                "WHERE module_key = 'user_feature_switch' AND status = 'config' "
+                "AND deleted = 0 ORDER BY id ASC LIMIT 2"
+            ),
+        )).scalars().first()
+        if not raw:
+            return {}
+        cfg = json.loads(raw or "{}")
+        features = cfg.get("features")
+        if not isinstance(features, dict):
+            return {}
+        result: Dict[str, Dict[str, Any]] = {}
+        for key, fm in features.items():
+            if isinstance(fm, dict):
+                result[str(key)] = fm
+        return result
+    except Exception as exc:
+        logger.warning(
+            "load feature switches failed errorType=%s",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return {}
 
 
 async def list_accounts(
@@ -1247,11 +1460,11 @@ async def polish_product_title(
                 "billingMode": "per_call",
             })
         except Exception as exc:
-            # 余额不足或计费不可用时不阻塞润色返回，由调用方决定是否提示用户
             logger.info(
                 "polish_product_title precheck failed tenantId=%d userId=%d errorType=%s",
                 tenant_id, user_id, type(exc).__name__,
             )
+            return _fail("Token 余额不足，请先充值后再使用 AI 润色功能")
 
         system_prompt = (
             "你是闲鱼商品标题润色助手。请基于原标题与商品描述，生成 1 个更具吸引力的标题。"
@@ -1944,6 +2157,345 @@ async def list_auto_reply_rules(
         return _fail("查询自动回复规则失败，请稍后重试")
 
 
+async def get_release_notes(
+    db: AsyncSession,
+    *,
+    tenant_id: int,
+    user_id: int,
+    limit: int = 5,
+    **_: Any,
+) -> ToolResult:
+    """查询系统最新更新日志（版本、发布日期、更新内容）。
+
+    数据来自 Java /api/content/release-notes 实时接口，不依赖知识库。
+    """
+    try:
+        safe_limit = max(1, min(int(limit or 5), 20))
+    except (TypeError, ValueError):
+        safe_limit = 5
+    result = await _fetch_java_json("/api/content/release-notes", label="更新日志")
+    if not result.get("success"):
+        return result
+    data = result.get("data") or {}
+    notes = data.get("releaseNotes") or []
+    if not isinstance(notes, list):
+        notes = []
+    notes = notes[:safe_limit]
+    lines = [f"当前最新版本：{data.get('currentVersion') or '未知'}"]
+    for n in notes:
+        version = _safe_str(n.get("version"))
+        date = _safe_str(n.get("date"))
+        title = _safe_str(n.get("title"))
+        summary = _safe_str(n.get("summary"))
+        lines.append(f"- v{version}（{date}）{title}")
+        if summary:
+            lines.append(f"  {summary[:300]}")
+    return _ok({
+        "currentVersion": data.get("currentVersion") or "",
+        "releaseNotes": notes,
+        "count": len(notes),
+        "message": "\n".join(lines),
+    })
+
+
+async def get_announcements(
+    db: AsyncSession,
+    *,
+    tenant_id: int,
+    user_id: int,
+    limit: int = 5,
+    **_: Any,
+) -> ToolResult:
+    """查询平台最新公告。
+
+    数据来自 Java /api/announcement/list 实时接口，管理员随时可更新。
+    """
+    try:
+        safe_limit = max(1, min(int(limit or 5), 20))
+    except (TypeError, ValueError):
+        safe_limit = 5
+    result = await _fetch_java_json("/api/announcement/list", label="公告")
+    if not result.get("success"):
+        return result
+    data = result.get("data") or {}
+    items = data if isinstance(data, list) else []
+    items = items[:safe_limit]
+    lines = ["平台最新公告："]
+    for idx, item in enumerate(items, 1):
+        if not isinstance(item, dict):
+            continue
+        title = _safe_str(item.get("title") or item.get("name"))
+        content = _safe_str(item.get("content") or item.get("body") or item.get("desc"))
+        created = _safe_str(item.get("createdAt") or item.get("updatedAt"))
+        if title:
+            lines.append(f"{idx}. {title}")
+        if content:
+            lines.append(f"   {content[:300]}")
+        if created:
+            lines.append(f"   （{created[:10]}）")
+    if not items:
+        lines = ["当前暂无公告"]
+    return _ok({
+        "announcements": items,
+        "count": len(items),
+        "message": "\n".join(lines),
+    })
+
+
+async def get_store_limit(
+    db: AsyncSession,
+    *,
+    tenant_id: int,
+    user_id: int,
+    **_: Any,
+) -> ToolResult:
+    """查询店铺数量限制实时配置（普通/VIP单店版/VIP/SVP 各档可绑定店铺数，0=不限）。"""
+    try:
+        limits = await _load_store_limits(db)
+        plan = await _load_user_plan(db, tenant_id=tenant_id, user_id=user_id)
+        plan_code = plan["planCode"]
+        key = {
+            "normal": "normal",
+            "vip-single": "vipSingle",
+            "vip": "vip",
+            "svp": "svp",
+        }.get(plan_code, "normal")
+        my_limit = limits.get(key, 1)
+        account_count = 0
+        try:
+            account_count = int((await db.execute(
+                text(
+                    "SELECT COUNT(*) FROM xianyu_account "
+                    "WHERE tenant_id = :tid AND user_id = :uid AND deleted = 0"
+                ),
+                {"tid": tenant_id, "uid": user_id},
+            )).scalar() or 0)
+        except Exception as exc:
+            logger.warning(
+                "get_store_limit count accounts failed tenantId=%d errorType=%s",
+                tenant_id, type(exc).__name__,
+                exc_info=True,
+            )
+        unlimited = my_limit <= 0
+        lines = ["店铺数量限制（实时配置）："]
+        lines.append(
+            f"- 普通用户：{limits['normal'] if limits['normal'] > 0 else '不限制'} 个"
+        )
+        lines.append(
+            f"- VIP（单店版）：{limits['vipSingle'] if limits['vipSingle'] > 0 else '不限制'} 个"
+        )
+        lines.append(
+            f"- VIP：{limits['vip'] if limits['vip'] > 0 else '不限制'} 个"
+        )
+        lines.append(
+            f"- SVP：{limits['svp'] if limits['svp'] > 0 else '不限制'} 个"
+        )
+        lines.append(
+            f"您当前是{plan['levelLabel']}，"
+            f"已绑定 {account_count} 个店铺，"
+            f"上限{'不限制' if unlimited else str(my_limit) + ' 个'}"
+        )
+        if not unlimited and account_count >= my_limit:
+            lines.append("店铺数量已满，如需绑定更多店铺，建议升级更高会员等级。")
+        return _ok({
+            "limits": limits,
+            "currentPlan": plan,
+            "currentLimit": my_limit,
+            "unlimited": unlimited,
+            "accountCount": account_count,
+            "message": "\n".join(lines),
+        })
+    except Exception as exc:
+        logger.warning(
+            "get_store_limit failed tenantId=%d userId=%d errorType=%s",
+            tenant_id, user_id, type(exc).__name__,
+            exc_info=True,
+        )
+        return _fail("查询店铺数量限制失败，请稍后重试")
+
+
+async def get_feature_comparison(
+    db: AsyncSession,
+    *,
+    tenant_id: int,
+    user_id: int,
+    group: str = "",
+    **_: Any,
+) -> ToolResult:
+    """查询各会员等级功能对比（实时开关配置：普通/VIP单店版/VIP/SVP 每项功能是否可用）。"""
+    try:
+        features = await _load_feature_switches(db)
+        result_rows: List[Dict[str, Any]] = []
+        level_names = {
+            "normal": "普通用户",
+            "vipSingle": "VIP（单店版）",
+            "vip": "VIP",
+            "svp": "SVP",
+        }
+        for key, fm in features.items():
+            if key == "store-limit":
+                continue
+            title = _safe_str(fm.get("title") or key)
+            group_name = _safe_str(fm.get("group") or "other")
+            if group and group_name != group:
+                continue
+            row = {
+                "key": key,
+                "title": title,
+                "group": group_name,
+                "maintenance": bool(fm.get("maintenance")),
+                "levels": {
+                    level_names[lv]: bool(fm.get(lv))
+                    for lv in ("normal", "vipSingle", "vip", "svp")
+                },
+            }
+            result_rows.append(row)
+        # 排序：可用等级多的在前（与前台对比表一致）
+        result_rows.sort(
+            key=lambda r: (
+                -sum(1 for v in r["levels"].values() if v),
+                r["group"],
+                r["title"],
+            )
+        )
+        lines = ["各会员等级功能对比（实时配置）："]
+        for r in result_rows:
+            avail = " / ".join(
+                lv for lv, ok in r["levels"].items() if ok
+            ) or "暂未开放"
+            lines.append(f"- {r['title']}：{avail}")
+            if r["maintenance"]:
+                lines[-1] += "（维护中）"
+        return _ok({
+            "features": result_rows,
+            "count": len(result_rows),
+            "message": "\n".join(lines[:60]),
+        })
+    except Exception as exc:
+        logger.warning(
+            "get_feature_comparison failed tenantId=%d userId=%d errorType=%s",
+            tenant_id, user_id, type(exc).__name__,
+            exc_info=True,
+        )
+        return _fail("查询功能对比失败，请稍后重试")
+
+
+async def get_promotions(
+    db: AsyncSession,
+    *,
+    tenant_id: int,
+    user_id: int,
+    **_: Any,
+) -> ToolResult:
+    """查询当前有效的会员充值促销活动（活动价、名额、活动标签、通知）。"""
+    try:
+        activities = (await db.execute(
+            text(
+                "SELECT id, activity_name, activity_code, status, "
+                "start_time, end_time, is_long_term, "
+                "notice_title, notice_content, notice_visible, notice_position, notice_icon, "
+                "sold_count, preoccupied_count "
+                "FROM member_promotion_activity "
+                "WHERE deleted = 0 AND status IN ('ongoing','pending') "
+                "AND start_time <= NOW() AND end_time >= NOW() "
+                "ORDER BY id DESC LIMIT 3"
+            ),
+        )).mappings().all()
+
+        result_activities = []
+        for act in activities:
+            act_id = int(act.get("id"))
+            plans = (await db.execute(
+                text(
+                    "SELECT ap.activity_price_cent, ap.period_type, ap.quota, "
+                    "ap.sold_count, ap.preoccupied_count, ap.activity_tag, "
+                    "bp.plan_name, bp.plan_code, "
+                    "bp.price_month_cent, bp.price_quarter_cent, bp.price_year_cent "
+                    "FROM member_promotion_plan ap "
+                    "INNER JOIN billing_plan bp ON bp.id = ap.plan_id AND bp.deleted = 0 AND bp.status = 1 "
+                    "WHERE ap.activity_id = :aid AND ap.deleted = 0 "
+                    "ORDER BY ap.sort_order ASC, ap.id ASC"
+                ),
+                {"aid": act_id},
+            )).mappings().all()
+
+            plan_list = []
+            for p in plans:
+                period = _safe_str(p.get("period_type")) or "month"
+                original_cent = {
+                    "quarter": int(p.get("price_quarter_cent") or 0),
+                    "year": int(p.get("price_year_cent") or 0),
+                }.get(period, int(p.get("price_month_cent") or 0))
+                activity_price = int(p.get("activity_price_cent") or 0)
+                quota = int(p.get("quota") or 0)
+                sold = int(p.get("sold_count") or 0)
+                preoccupied = int(p.get("preoccupied_count") or 0)
+                remain = max(0, quota - sold - preoccupied) if quota > 0 else -1
+                plan_list.append({
+                    "planName": p.get("plan_name") or "",
+                    "planCode": p.get("plan_code") or "",
+                    "periodType": period,
+                    "activityPriceYuan": f"{activity_price / 100:.2f}",
+                    "originalPriceYuan": f"{original_cent / 100:.2f}",
+                    "activityTag": p.get("activity_tag") or "",
+                    "quota": quota,
+                    "soldCount": sold,
+                    "remainCount": remain,
+                    "remainText": "不限量" if remain < 0 else str(remain),
+                })
+            notice_visible = int(act.get("notice_visible") or 1) == 1
+            result_activities.append({
+                "activityId": act_id,
+                "activityName": act.get("activity_name") or "",
+                "activityCode": act.get("activity_code") or "",
+                "status": _safe_str(act.get("status")),
+                "isLongTerm": int(act.get("is_long_term") or 0) == 1,
+                "notice": {
+                    "title": act.get("notice_title") or "",
+                    "content": act.get("notice_content") or "",
+                    "visible": notice_visible,
+                    "position": act.get("notice_position") or "top",
+                    "icon": act.get("notice_icon") or "hot",
+                },
+                "plans": plan_list,
+            })
+
+        if not result_activities:
+            return _ok({
+                "activities": [],
+                "count": 0,
+                "message": "当前暂无进行中的促销活动",
+            })
+
+        lines = ["当前有效的会员促销活动："]
+        for act in result_activities:
+            lines.append(f"【{act['activityName']}】")
+            notice = act.get("notice") or {}
+            if notice.get("visible") and (notice.get("title") or notice.get("content")):
+                if notice.get("title"):
+                    lines.append(f"  {notice['title']}")
+                if notice.get("content"):
+                    lines.append(f"  {notice['content']}")
+            for p in act.get("plans") or []:
+                tag = f"[{p['activityTag']}]" if p.get("activityTag") else ""
+                lines.append(
+                    f"  {tag}{p['planName']} {p['periodType']} 活动价 {p['activityPriceYuan']} 元"
+                    f"（原价 {p['originalPriceYuan']} 元，剩余 {p['remainText']}）"
+                )
+        return _ok({
+            "activities": result_activities,
+            "count": len(result_activities),
+            "message": "\n".join(lines),
+        })
+    except Exception as exc:
+        logger.warning(
+            "get_promotions failed tenantId=%d userId=%d errorType=%s",
+            tenant_id, user_id, type(exc).__name__,
+            exc_info=True,
+        )
+        return _fail("查询促销活动失败，请稍后重试")
+
+
 async def get_token_balance(
     db: AsyncSession,
     *,
@@ -1972,8 +2524,16 @@ async def get_token_balance(
         vip_level = int(row.get("vip_level") or 0)
         username = row.get("username") or ""
 
-        # VIP 等级文案
-        vip_label = {0: "普通用户", 1: "VIP", 2: "SVP"}.get(vip_level, f"VIP{vip_level}")
+        # VIP 等级文案（四档：0=普通 1=VIP 2=SVP 3=VIP（单店版））
+        vip_label = {
+            0: "普通用户",
+            1: "VIP",
+            2: "SVP",
+            3: "VIP（单店版）",
+        }.get(vip_level, f"VIP{vip_level}")
+
+        # VIP（单店版）在 AI 计费上与 VIP 一致（归一化为 1）
+        pricing_level = 1 if vip_level == 3 else vip_level
 
         # 查询通用模型单次扣费数（按 VIP 等级）
         per_call_tokens = (await db.execute(
@@ -1982,7 +2542,7 @@ async def get_token_balance(
                 "WHERE module_key = 'model-config-general' AND vip_level = :lvl "
                 "LIMIT 1"
             ),
-            {"lvl": vip_level},
+            {"lvl": pricing_level},
         )).scalar()
         if not per_call_tokens:
             # 回退到默认配置
@@ -1997,18 +2557,62 @@ async def get_token_balance(
         # 估算还能调用多少次
         remaining_calls = balance // per_call_tokens if per_call_tokens > 0 else 0
 
+        # 当前会员套餐信息（用于个性化建议）
+        plan = await _load_user_plan(db, tenant_id=tenant_id, user_id=user_id)
+
+        # 通用模型按等级定价表（用户问「Token 怎么消耗/各等级扣多少」时返回真实数据，禁止编造）
+        tier_pricing = []
+        try:
+            tier_rows = (await db.execute(
+                text(
+                    "SELECT vip_level, tokens_per_call FROM ai_model_tier_price "
+                    "WHERE module_key = 'model-config-general' "
+                    "ORDER BY vip_level ASC LIMIT 10"
+                ),
+            )).mappings().all()
+            tier_labels = {0: "普通用户", 1: "VIP", 2: "SVP", 3: "VIP（单店版）"}
+            tier_pricing = [
+                {
+                    "vipLevel": int(r["vip_level"]),
+                    "vipLabel": tier_labels.get(int(r["vip_level"]), f"VIP{int(r['vip_level'])}"),
+                    "tokensPerCall": int(r["tokens_per_call"] or 0),
+                }
+                for r in tier_rows
+            ]
+        except Exception as exc:
+            logger.warning(
+                "get_token_balance load tier pricing failed tenantId=%d errorType=%s",
+                tenant_id, type(exc).__name__,
+                exc_info=True,
+            )
+
+        recharge_hint = ""
+        if balance <= 0 or remaining_calls <= 0:
+            recharge_hint = (
+                "当前余额已不足以支持 AI 功能调用，建议先充值 Token；"
+                "如经常使用 AI 功能，也可在会员中心查看套餐权益。"
+            )
+        elif remaining_calls < 10:
+            recharge_hint = (
+                f"余额约可调用 {remaining_calls} 次，建议留意余额并及时充值，避免影响使用。"
+            )
+
         return _ok({
             "userId": int(row.get("id")),
             "username": username,
             "balance": balance,
             "vipLevel": vip_level,
             "vipLabel": vip_label,
+            "currentPlan": plan,
             "perCallTokens": per_call_tokens,
             "remainingCalls": remaining_calls,
+            "tierPricing": tier_pricing,
+            "rechargeHint": recharge_hint,
             "message": (
                 f"当前 Token 余额：{balance}，{vip_label}，"
                 f"通用模型每次扣 {per_call_tokens} Token，"
-                f"约可调用 {remaining_calls} 次"
+                f"约可调用 {remaining_calls} 次。"
+                + (f" {recharge_hint}" if recharge_hint else "")
             ),
         })
     except Exception as exc:
@@ -2018,6 +2622,142 @@ async def get_token_balance(
             exc_info=True,
         )
         return _fail("查询 Token 余额失败，请稍后重试")
+
+
+async def get_vip_price(
+    db: AsyncSession,
+    *,
+    tenant_id: int,
+    user_id: int,
+    **_: Any,
+) -> ToolResult:
+    """查询当前用户的会员套餐价格信息（四档套餐名称、价格、周期、店铺限制等）。"""
+    try:
+        rows = (await db.execute(
+            text(
+                "SELECT id, plan_name, plan_code, price_cent, duration_days, "
+                "price_month_cent, price_quarter_cent, price_year_cent, "
+                "period_type, features_text, max_xianyu_accounts, max_goods_count, "
+                "max_ai_reply_per_day, max_workflow_per_day, max_storage_mb, "
+                "enable_auto_delivery, enable_kami, enable_ai_reply, enable_workflow "
+                "FROM billing_plan "
+                "WHERE deleted = 0 AND status = 1 "
+                "ORDER BY CASE plan_code "
+                "  WHEN 'normal' THEN 1 "
+                "  WHEN 'vip-single' THEN 2 "
+                "  WHEN 'vip_single' THEN 2 "
+                "  WHEN 'vip' THEN 3 "
+                "  WHEN 'svp' THEN 4 "
+                "  WHEN 'svip' THEN 4 "
+                "  ELSE 9 END, price_cent ASC"
+            ),
+        )).mappings().all()
+
+        if not rows:
+            return _ok({
+                "plans": [],
+                "message": "当前暂无上架会员套餐",
+            })
+
+        plans = []
+        store_limits = await _load_store_limits(db)
+        plan = await _load_user_plan(db, tenant_id=tenant_id, user_id=user_id)
+        account_count = 0
+        try:
+            account_count = int((await db.execute(
+                text(
+                    "SELECT COUNT(*) FROM xianyu_account "
+                    "WHERE tenant_id = :tid AND user_id = :uid AND deleted = 0"
+                ),
+                {"tid": tenant_id, "uid": user_id},
+            )).scalar() or 0)
+        except Exception as exc:
+            logger.warning(
+                "get_vip_price count accounts failed tenantId=%d errorType=%s",
+                tenant_id, type(exc).__name__,
+                exc_info=True,
+            )
+        for row in rows:
+            plan_code = (row.get("plan_code") or "").strip().lower()
+            if plan_code.startswith("svip"):
+                plan_code = "svp"
+            store_limit_key = {
+                "normal": "normal",
+                "vip-single": "vipSingle",
+                "vip_single": "vipSingle",
+                "vip": "vip",
+                "svp": "svp",
+            }.get(plan_code, "normal")
+            store_limit = store_limits.get(store_limit_key, 1)
+            item = {
+                "id": int(row.get("id")),
+                "planName": row.get("plan_name") or "",
+                "planCode": plan_code,
+                "periodType": row.get("period_type") or "month",
+                "priceCent": int(row.get("price_cent") or 0),
+                "priceMonthCent": int(row.get("price_month_cent") or 0),
+                "priceQuarterCent": int(row.get("price_quarter_cent") or 0),
+                "priceYearCent": int(row.get("price_year_cent") or 0),
+                "durationDays": int(row.get("duration_days") or 0),
+                "features": row.get("features_text") or "",
+                "maxAccounts": store_limit,
+                "storeLimitText": "不限制" if store_limit <= 0 else f"{store_limit} 个店铺",
+                "maxGoods": int(row.get("max_goods_count") or 0),
+                "maxAiReplyPerDay": int(row.get("max_ai_reply_per_day") or 0),
+                "maxWorkflowPerDay": int(row.get("max_workflow_per_day") or 0),
+                "maxStorageMb": int(row.get("max_storage_mb") or 0),
+                "enableAutoDelivery": bool(row.get("enable_auto_delivery")),
+                "enableKami": bool(row.get("enable_kami")),
+                "enableAiReply": bool(row.get("enable_ai_reply")),
+                "enableWorkflow": bool(row.get("enable_workflow")),
+            }
+            plans.append(item)
+
+        # 当前用户所在档位
+        my_code = plan["planCode"]
+        upgrade_target = {
+            "normal": "VIP（单店版）或 VIP",
+            "vip-single": "VIP",
+            "vip": "SVP",
+            "svp": "",
+        }.get(my_code, "")
+
+        # 生成价格汇总文本（含店铺限制，价格以 billing_plan 实时数据为准）
+        lines = ["会员套餐价格如下（实时报价）："]
+        for p in plans:
+            parts = [f"【{p['planName']}】"]
+            if p["priceMonthCent"] > 0:
+                parts.append(f"月付 {p['priceMonthCent'] / 100:.2f} 元")
+            if p["priceQuarterCent"] > 0:
+                parts.append(f"季付 {p['priceQuarterCent'] / 100:.2f} 元")
+            if p["priceYearCent"] > 0:
+                parts.append(f"年付 {p['priceYearCent'] / 100:.2f} 元")
+            parts.append(f"店铺限制：{p['storeLimitText']}")
+            if p["features"]:
+                parts.append(f"权益：{p['features']}")
+            lines.append("  " + "，".join(parts))
+        lines.append(
+            f"您当前是{plan['levelLabel']}，已绑定 {account_count} 个店铺。"
+        )
+        if upgrade_target:
+            lines.append(f"如需更多权益或店铺数量，可以考虑升级到 {upgrade_target}。")
+
+        return _ok({
+            "plans": plans,
+            "currentPlan": plan,
+            "currentAccountCount": account_count,
+            "storeLimits": store_limits,
+            "upgradeTarget": upgrade_target,
+            "message": "\n".join(lines),
+            "count": len(plans),
+        })
+    except Exception as exc:
+        logger.warning(
+            "get_vip_price failed tenantId=%d userId=%d errorType=%s",
+            tenant_id, user_id, type(exc).__name__,
+            exc_info=True,
+        )
+        return _fail("查询会员套餐价格失败，请稍后重试")
 
 
 async def get_dashboard_summary(
@@ -2194,6 +2934,48 @@ async def toggle_scheduled_task(
         return _fail("切换定时任务状态失败，请稍后重试")
 
 
+async def delete_scheduled_task(
+    db: AsyncSession,
+    *,
+    tenant_id: int,
+    user_id: int,
+    task_id: int,
+    **_: Any,
+) -> ToolResult:
+    """删除定时任务（软删除）。"""
+    task_id = _safe_int(task_id)
+    if task_id <= 0:
+        return _fail("taskId 必须为正整数")
+    try:
+        # 校验归属
+        sql = (
+            "SELECT id FROM scheduled_task "
+            "WHERE tenant_id = :tenant_id AND user_id = :user_id "
+            "AND id = :task_id AND deleted = 0"
+        )
+        row = (await db.execute(text(sql), {"tenant_id": tenant_id, "user_id": user_id, "task_id": task_id})).mappings().first()
+        if row is None:
+            return _fail("定时任务不存在或无权访问")
+        await db.execute(
+            text("UPDATE scheduled_task SET deleted = 1, updated_time = NOW() WHERE id = :task_id"),
+            {"task_id": task_id},
+        )
+        await db.flush()
+        logger.info(
+            "delete_scheduled_task ok tenantId=%d userId=%d taskId=%d",
+            tenant_id, user_id, task_id,
+        )
+        return _ok({"taskId": task_id, "message": "定时任务已删除"})
+    except Exception as exc:
+        logger.warning(
+            "delete_scheduled_task failed tenantId=%d taskId=%d errorType=%s",
+            tenant_id, task_id, type(exc).__name__,
+            exc_info=True,
+        )
+        await db.rollback()
+        return _fail("删除定时任务失败，请稍后重试")
+
+
 async def toggle_auto_reply_rule(
     db: AsyncSession,
     *,
@@ -2213,6 +2995,7 @@ async def toggle_auto_reply_rule(
             "SELECT r.id FROM auto_reply_rule r "
             "LEFT JOIN xianyu_account a ON a.id = r.account_id "
             "WHERE r.tenant_id = :tenant_id "
+            "AND a.user_id = :user_id "
             "AND r.id = :rule_id AND r.deleted = 0"
         )
         row = (await db.execute(text(sql), {"tenant_id": tenant_id, "user_id": user_id, "rule_id": rule_id})).mappings().first()
@@ -2242,6 +3025,41 @@ async def toggle_auto_reply_rule(
         )
         await db.rollback()
         return _fail("切换自动回复规则状态失败，请稍后重试")
+
+
+async def delete_auto_reply_rule(
+    db: AsyncSession,
+    *,
+    tenant_id: int,
+    user_id: int,
+    rule_id: int,
+    **_: Any,
+) -> ToolResult:
+    """删除自动回复规则（软删除）。"""
+    rule_id = _safe_int(rule_id)
+    if rule_id <= 0:
+        return _fail("ruleId 必须为正整数")
+    try:
+        # 校验归属：通过 JOIN xianyu_account 校验 user_id
+        sql = (
+            "SELECT r.id FROM auto_reply_rule r "
+            "LEFT JOIN xianyu_account a ON a.id = r.account_id "
+            "WHERE r.tenant_id = :tenant_id AND a.user_id = :user_id "
+            "AND r.id = :rule_id AND r.deleted = 0"
+        )
+        row = (await db.execute(text(sql), {"tenant_id": tenant_id, "user_id": user_id, "rule_id": rule_id})).mappings().first()
+        if row is None:
+            return _fail("自动回复规则不存在或无权访问")
+        await db.execute(
+            text("UPDATE auto_reply_rule SET deleted = 1, updated_time = NOW() WHERE id = :rule_id"),
+            {"rule_id": rule_id},
+        )
+        await db.flush()
+        return _ok({"ruleId": rule_id, "message": "自动回复规则已删除"})
+    except Exception as exc:
+        logger.warning("delete_auto_reply_rule failed ...", exc_info=True)
+        await db.rollback()
+        return _fail("删除自动回复规则失败")
 
 
 # ============================================================
@@ -2364,7 +3182,7 @@ async def delete_product(
                  "WHERE id = :id AND tenant_id = :tenant_id"),
             {"id": goods_id, "tenant_id": tenant_id},
         )
-        await db.commit()
+        await db.flush()
         logger.info(
             "delete_product ok tenantId=%d userId=%d goodsId=%d",
             tenant_id, user_id, goods_id,
@@ -2425,7 +3243,7 @@ async def toggle_product_status(
                  "WHERE id = :id AND tenant_id = :tenant_id"),
             {"status": target_status, "id": goods_id, "tenant_id": tenant_id},
         )
-        await db.commit()
+        await db.flush()
         action = "上架" if target_status == 1 else "下架"
         logger.info(
             "toggle_product_status ok tenantId=%d goodsId=%d status=%d",
@@ -3442,6 +4260,14 @@ TOOL_REGISTRY: Dict[str, ToolFunc] = {
     # 数据面板与余额
     "get_token_balance": get_token_balance,
     "get_dashboard_summary": get_dashboard_summary,
+    # 会员套餐
+    "get_vip_price": get_vip_price,
+    # 实时信息（公告/更新日志/店铺限制/功能对比）
+    "get_release_notes": get_release_notes,
+    "get_announcements": get_announcements,
+    "get_store_limit": get_store_limit,
+    "get_feature_comparison": get_feature_comparison,
+    "get_promotions": get_promotions,
     # 创建类
     "create_qr_login": create_qr_login,
     "create_auto_reply_rule": create_auto_reply_rule,
@@ -3455,6 +4281,8 @@ TOOL_REGISTRY: Dict[str, ToolFunc] = {
     # 切换类
     "toggle_scheduled_task": toggle_scheduled_task,
     "toggle_auto_reply_rule": toggle_auto_reply_rule,
+    "delete_scheduled_task": delete_scheduled_task,
+    "delete_auto_reply_rule": delete_auto_reply_rule,
     # 商品管理增强类
     "get_product_summary": get_product_summary,
     "delete_product": delete_product,
@@ -3586,6 +4414,44 @@ TOOL_DEFINITIONS: list[Dict[str, Any]] = [
         "description": "查询数据面板汇总：商品总数、今日订单金额、待发货订单数、发货统计",
         "parameters": {},
     },
+    # ===== 会员套餐 =====
+    {
+        "name": "get_vip_price",
+        "description": "查询当前用户的会员套餐价格信息，包含所有已上架的VIP/SVP套餐的名称、月付/季付/年付价格、功能权益等。当用户问「会员多少钱」「VIP价格」「开通会员多少钱」「套餐价格」「会员有什么权益」「加入会员」时调用此工具。",
+        "parameters": {},
+    },
+    # ===== 实时信息（公告/更新日志/店铺限制/功能对比） =====
+    {
+        "name": "get_release_notes",
+        "description": "查询系统最新更新日志（版本号、发布日期、更新内容）。数据来自后端实时接口，每次发布新版本后自动更新。当用户问「最近更新了什么」「新版本有什么功能」「更新日志」「版本记录」时调用此工具。",
+        "parameters": {
+            "limit": "int (可选) 返回最近 N 个版本，默认5，最大20",
+        },
+    },
+    {
+        "name": "get_announcements",
+        "description": "查询平台最新公告（标题、内容、发布时间）。数据来自后端实时接口，管理员发布后立即可查。当用户问「有什么公告」「最新公告」「平台通知」「官方消息」时调用此工具。",
+        "parameters": {
+            "limit": "int (可选) 返回最近 N 条公告，默认5，最大20",
+        },
+    },
+    {
+        "name": "get_store_limit",
+        "description": "查询店铺数量限制实时配置：普通用户/VIP（单店版）/VIP/SVP 各档可绑定闲鱼店铺数量（0=不限制），并返回当前用户等级、已绑定店铺数与上限。当用户问「能绑几个店铺」「店铺数量限制」「还能添加账号吗」「最多几个店」时调用此工具。",
+        "parameters": {},
+    },
+    {
+        "name": "get_feature_comparison",
+        "description": "查询各会员等级功能对比（实时开关配置）：每一项功能在普通用户/VIP（单店版）/VIP/SVP 下是否可用，含维护中标记。当用户问「普通和VIP有什么区别」「各等级功能对比」「哪些功能是VIP专属」「功能对比表」时调用此工具。",
+        "parameters": {
+            "group": "string (可选) 按功能分组过滤，如「账号」「商品」「消息」「自动发货」「分销管理」「工作流」「营销增长」「系统」；不传则返回全部",
+        },
+    },
+    {
+        "name": "get_promotions",
+        "description": "查询当前有效的会员充值促销活动（限时折扣/活动价/名额余量/活动标签/通知）。数据来自 member_promotion 实时表。当用户问「有什么促销活动」「限时活动」「活动价多少钱」「会员有优惠吗」「打折」「返现活动」时调用此工具。",
+        "parameters": {},
+    },
     # ===== 创建类 =====
     {
         "name": "create_qr_login",
@@ -3684,6 +4550,20 @@ TOOL_DEFINITIONS: list[Dict[str, Any]] = [
         "parameters": {
             "ruleId": "int (必填) 自动回复规则ID",
             "enabled": "bool (必填) true=启用 false=禁用",
+        },
+    },
+    {
+        "name": "delete_scheduled_task",
+        "description": "删除定时任务（软删除）。当用户说「删除定时任务X」「删掉这个定时任务」时调用。",
+        "parameters": {
+            "taskId": "int (必填) 要删除的定时任务ID",
+        },
+    },
+    {
+        "name": "delete_auto_reply_rule",
+        "description": "删除自动回复规则（软删除）。当用户说「删除自动回复规则X」「删掉这个自动回复规则」时调用。",
+        "parameters": {
+            "ruleId": "int (必填) 要删除的自动回复规则ID",
         },
     },
     # ===== 商品管理增强类 =====
@@ -3843,6 +4723,12 @@ QUERY_TOOLS: set[str] = {
     "list_auto_reply_rules",
     "get_token_balance",
     "get_dashboard_summary",
+    "get_vip_price",
+    "get_release_notes",
+    "get_announcements",
+    "get_store_limit",
+    "get_feature_comparison",
+    "get_promotions",
     # 商品管理增强类（只读）
     "get_product_summary",
     "search_goods_online",
@@ -3873,6 +4759,7 @@ async def execute_tool(
     if func is None:
         return _fail(f"未知工具：{tool_name}")
     try:
+        arguments = _normalize_tool_args(arguments)
         return await func(
             db,
             tenant_id=tenant_id,
@@ -3882,15 +4769,19 @@ async def execute_tool(
     except TypeError as exc:
         # 参数缺失/类型不匹配
         logger.info(
-            "execute_tool invalid args tool=%s tenantId=%d errorType=%s",
-            tool_name, tenant_id, type(exc).__name__,
+            "execute_tool invalid args tool=%s tenantId=%d errorType=%s args=%s",
+            tool_name, tenant_id, type(exc).__name__, arguments,
             exc_info=True,
         )
-        return _fail(f"工具参数无效：{tool_name}")
+        return _fail(f"工具参数错误：{exc}")
     except Exception as exc:
         logger.warning(
-            "execute_tool unexpected failure tool=%s tenantId=%d errorType=%s",
-            tool_name, tenant_id, type(exc).__name__,
+            "execute_tool unexpected failure tool=%s tenantId=%d errorType=%s exc=%s",
+            tool_name, tenant_id, type(exc).__name__, exc,
             exc_info=True,
         )
-        return _fail(f"工具执行失败：{tool_name}")
+        # 返回真实异常信息，便于 AI 给出具体建议
+        err_msg = f"{type(exc).__name__}: {exc}"
+        if len(err_msg) > 300:
+            err_msg = err_msg[:300]
+        return _fail(f"工具执行失败：{err_msg}")

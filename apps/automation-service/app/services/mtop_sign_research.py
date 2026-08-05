@@ -13,8 +13,13 @@
 >   3. x5sec 生成器抽象接口：待逆向完成后填充具体算法
 >   4. 方案 K 调用入口：在优先级链中作为优先级 1.5 尝试
 >
-> **当前状态**：研究阶段。`generate_x5sec_locally` 始终返回 None（未逆向完成），
-> 但会记录 x5sec 样本到日志，便于后续离线分析。不影响现有方案 F/G/缓存/HTTP/静默/滑块。
+> **当前状态**：2026-08-05 迭代。`generate_x5sec_locally` 已实现三条路线：
+>   - Route 1（模板替换）：从缓存 x5sec 替换时间戳刷新（无网络请求）
+>   - Route 3（MTOP API 触发）：调用轻量 MTOP API 触发服务端下发 x5sec
+>   - Route I（FireyeJS 浏览器）：调用 crawler-service NC 链（useProxy=true）
+>   Route 2（完整逆向）因研究结论"x5sec 服务端生成"而搁置。
+>   各路线成功时返回有效 x5sec，由 try_plan_k_x5sec 注入后调用 Token API 验证。
+>   不影响现有方案 F/G/缓存/HTTP/静默/滑块（PLAN_K_ENABLED=false 时本模块仅记录样本）。
 >
 > **相关文件**：
 >   - 本模块：apps/automation-service/app/services/mtop_sign_research.py
@@ -288,46 +293,465 @@ def _persist_x5sec_sample(
 
 
 # ============================================================
-# 3. x5sec 生成器（待逆向完成）
+# 3. x5sec 生成器（方案 K 多路线实现）
 # ============================================================
 
-def generate_x5sec_locally(cookie_str: str, m_h5_tk: str) -> Optional[str]:
-    """方案 K 核心：在客户端本地生成有效 x5sec。
+# 已知可能触发 x5sec 下发的轻量 MTOP API 端点
+# 这些端点风控等级较低，调用时服务端可能在 Set-Cookie 中附带 x5sec
+# 顺序：从最可能下发 x5sec（会话/用户类）到次可能（配置/通知类）
+_X5SEC_TRIGGER_MTOP_APIS = [
+    "mtop.taobao.idle.user.get",
+    "mtop.taobao.idle.session.check",
+    "mtop.taobao.idle.config.get",
+    "mtop.taobao.idle.message.list.get",
+    "mtop.taobao.idle.profile.get",
+    "mtop.taobao.idle.notice.get",
+]
 
-    **当前状态：未实现（始终返回 None）**
+# MTOP 风控信号关键词（响应体含这些说明触发 Baxia 风控）
+_BAXIA_RISK_SIGNALS = [
+    "FAIL_SYS_USER_VALIDATE",
+    "RGV587_ERROR",
+    "x5secdata",
+    "baxia",
+    "punish",
+]
 
-    逆向完成后，本函数应基于以下输入生成有效 x5sec：
-    - cookie_str 中的 unb / cookie2 / sgcookie（用户身份）
-    - _m_h5_tk 的 token 部分（会话令牌）
-    - 当前时间戳（防止重放）
-    - 设备指纹（可选，参考方案 I 的 FireyeJS 逆向）
 
-    生成算法待研究，可能的路线：
-    1. 复用服务端下发的 x5sec 模板，替换关键字段（uid / ts）
-    2. 完整逆向 Baxia JS 的 x5sec 生成函数
-    3. 利用已知端点（如 mtop.taobao.idle.user.get）触发服务端下发 x5sec
+def _extract_x5sec_from_response(resp: Any) -> Tuple[Optional[str], str, bool]:
+    """从 MTOP/HTTP 响应中提取 x5sec，并检测风控信号。
+
+    优先用 resp.cookies（requests 自动解析所有 Set-Cookie，最可靠），
+    回退到 resp.raw.headers.getlist（多个 Set-Cookie 头），再回退到合并的 headers。
+
+    Args:
+        resp: requests.Response 对象
+
+    Returns:
+        (x5sec, source, risk_triggered):
+        - x5sec: 提取的 x5sec 值，或 None
+        - source: 提取来源（cookies / set_cookie_header / raw_headers）
+        - risk_triggered: 响应是否含 Baxia 风控信号
+    """
+    x5sec = None
+    source = "none"
+
+    # 优先用 resp.cookies（requests 自动解析所有 Set-Cookie）
+    if hasattr(resp, "cookies") and resp.cookies:
+        for ck in resp.cookies:
+            if ck.name == "x5sec" and ck.value and len(ck.value) > 5:
+                x5sec = ck.value
+                source = "cookies"
+                break
+
+    # 回退 1：resp.raw.headers.getlist（多个 Set-Cookie 头，未合并）
+    if not x5sec and hasattr(resp, "raw") and hasattr(resp.raw, "headers"):
+        try:
+            set_cookies = resp.raw.headers.getlist("Set-Cookie")
+        except Exception:
+            set_cookies = []
+        for sc in set_cookies:
+            extracted = extract_x5sec_from_response_headers(sc)
+            if extracted:
+                x5sec = extracted
+                source = "raw_headers"
+                break
+
+    # 回退 2：合并的 headers（最不可靠，但兜底）
+    if not x5sec:
+        set_cookie = resp.headers.get("Set-Cookie") or resp.headers.get("set-cookie") or ""
+        if set_cookie:
+            x5sec = extract_x5sec_from_response_headers(set_cookie)
+            if x5sec:
+                source = "set_cookie_header"
+
+    # 检测风控信号（响应体）
+    risk_triggered = False
+    try:
+        body_text = resp.text[:2000] if hasattr(resp, "text") else ""
+        if body_text:
+            for signal in _BAXIA_RISK_SIGNALS:
+                if signal in body_text:
+                    risk_triggered = True
+                    break
+    except Exception:
+        pass
+
+    return x5sec, source, risk_triggered
+
+
+def _refresh_x5sec_via_template(cookie_str: str, m_h5_tk: str) -> Optional[str]:
+    """Route 1：基于缓存 x5sec 模板替换时间戳，尝试刷新过期 x5sec。
+
+    原理：如果 x5sec 包含明文时间戳字段（ASCII 秒级/毫秒级），且服务端
+    仅校验时间戳时效性（不校验签名或签名不覆盖时间戳字段），则替换时间戳
+    后可能恢复有效性。这是"尽力尝试"——若 x5sec 含签名校验则会失败，
+    失败后由 generate_x5sec_locally 的后续 Route 接管。
+
+    步骤：
+    1. 从 Redis/本地缓存获取已缓存的 x5sec 样本
+    2. 用 find_timestamp_in_x5sec 定位时间戳位置
+    3. 替换为当前时间戳（保持相同长度）
+    4. 重新 base64 编码返回
+
+    Args:
+        cookie_str: Cookie 字符串
+        m_h5_tk: _m_h5_tk 值（未使用，保持接口一致）
+
+    Returns:
+        刷新后的 x5sec 值，或 None（无缓存样本/无时间戳/替换失败）
+    """
+    try:
+        from .x5sec_cache_client import get_cached_x5sec
+    except ImportError:
+        logger.debug("[方案K-Route1] x5sec_cache_client 模块不可用")
+        return None
+
+    cached_x5sec = get_cached_x5sec(cookie_str)
+    if not cached_x5sec:
+        logger.debug("[方案K-Route1] 无缓存 x5sec 样本，跳过模板替换")
+        return None
+
+    ts_analysis = find_timestamp_in_x5sec(cached_x5sec)
+    if not ts_analysis.get("found"):
+        logger.debug("[方案K-Route1] 缓存 x5sec 中未找到时间戳模式，跳过")
+        return None
+
+    current_ts = int(time.time())
+
+    best_match = None
+    for match in ts_analysis.get("matches", []):
+        if not match.get("plausible"):
+            continue
+        enc = match.get("encoding", "")
+        if enc == "ascii_seconds":
+            best_match = match
+            break
+        if enc == "ascii_millis" and not best_match:
+            best_match = match
+
+    if not best_match:
+        logger.debug("[方案K-Route1] 未找到合理的时间戳匹配，跳过")
+        return None
+
+    try:
+        cleaned = cached_x5sec.replace("-", "+").replace("_", "/")
+        padding = 4 - (len(cleaned) % 4)
+        if padding != 4:
+            cleaned = cleaned + "=" * padding
+        decoded = bytearray(base64.b64decode(cleaned, validate=False))
+    except Exception as e:
+        logger.debug("[方案K-Route1] base64 解码失败: %s", e)
+        return None
+
+    encoding = best_match.get("encoding")
+    offset = best_match.get("offset", 0)
+    old_value = best_match.get("value", 0)
+
+    if encoding == "ascii_seconds":
+        new_ts_str = str(current_ts).encode("ascii")
+        old_ts_str = str(old_value).encode("ascii")
+        if len(new_ts_str) == len(old_ts_str) and offset + len(old_ts_str) <= len(decoded):
+            decoded[offset:offset + len(old_ts_str)] = new_ts_str
+            logger.info(
+                "[方案K-Route1] 替换 ASCII 秒级时间戳 offset=%d old=%d new=%d",
+                offset, old_value, current_ts,
+            )
+        else:
+            logger.debug("[方案K-Route1] 秒级时间戳长度不匹配或越界，跳过")
+            return None
+    elif encoding == "ascii_millis":
+        new_ts_ms = current_ts * 1000
+        new_ts_str = str(new_ts_ms).encode("ascii")
+        old_ts_str = str(old_value).encode("ascii")
+        if len(new_ts_str) == len(old_ts_str) and offset + len(old_ts_str) <= len(decoded):
+            decoded[offset:offset + len(old_ts_str)] = new_ts_str
+            logger.info(
+                "[方案K-Route1] 替换 ASCII 毫秒级时间戳 offset=%d old=%d new=%d",
+                offset, old_value, new_ts_ms,
+            )
+        else:
+            logger.debug("[方案K-Route1] 毫秒时间戳长度不匹配或越界，跳过")
+            return None
+    else:
+        logger.debug("[方案K-Route1] 不支持的时间戳编码 %s，跳过", encoding)
+        return None
+
+    try:
+        new_x5sec = base64.urlsafe_b64encode(bytes(decoded)).decode("ascii").rstrip("=")
+        logger.info("[方案K-Route1] ✓ 模板替换完成，生成新 x5sec 长度=%d", len(new_x5sec))
+        return new_x5sec
+    except Exception as e:
+        logger.warning("[方案K-Route1] base64 重新编码失败: %s", e)
+        return None
+
+
+def _trigger_x5sec_via_mtop_api(cookie_str: str, m_h5_tk: str) -> Optional[str]:
+    """Route 3：调用轻量 MTOP API 触发服务端在 Set-Cookie 中下发 x5sec。
+
+    原理：某些低风控等级的 MTOP API 调用时，服务端会在响应的 Set-Cookie
+    头中附带 x5sec（作为会话续期/风控放行令牌）。这等同于"服务端生成 x5sec"，
+    但无需完整 Baxia 验证流程。
+
+    与 _try_http_x5sec_extract 的区别：
+    - _try_http_x5sec_extract 侧重 GET 请求探测（首页/im 页/personal 页）
+    - 本函数侧重 MTOP API POST 请求（带签名），尝试不同的 API 端点
+    - 端点列表互补：_try_http 用 mtop.gaia.nodejs.gaia.idle.data.gw.v2.index.get，
+      本函数用 mtop.taobao.idle.user.get / session.check / config.get
 
     Args:
         cookie_str: Cookie 字符串
         m_h5_tk: _m_h5_tk 值
 
     Returns:
-        生成的 x5sec 值，或 None（未实现 / 逆向失败）
+        从 Set-Cookie 提取的 x5sec 值，或 None（所有端点均未下发）
     """
-    # 方案 K 未启用时直接返回 None
+    token = extract_token_from_m_h5_tk(m_h5_tk)
+    if not token:
+        logger.debug("[方案K-Route3] 无法从 _m_h5_tk 提取 token，跳过")
+        return None
+
+    try:
+        import requests as _requests
+    except ImportError:
+        logger.debug("[方案K-Route3] requests 模块不可用，跳过")
+        return None
+
+    t_ms = int(time.time() * 1000)
+    data_str = "{}"
+    sign = make_mtop_sign(token, t_ms, data_str)
+
+    for api_name in _X5SEC_TRIGGER_MTOP_APIS:
+        try:
+            url = f"{H5_API_BASE}/{api_name}/1.0/"
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Cookie": cookie_str,
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Referer": "https://www.goofish.com/",
+                "Origin": "https://www.goofish.com",
+            }
+            params = {
+                "jsv": "2.7.2",
+                "appKey": APP_KEY,
+                "t": str(t_ms),
+                "sign": sign,
+                "api": api_name,
+                "v": "1.0",
+                "type": "originaljson",
+                "dataType": "json",
+                "data": data_str,
+            }
+            resp = _requests.post(
+                url, headers=headers, data=params, timeout=8, allow_redirects=False
+            )
+
+            x5sec, source, risk_triggered = _extract_x5sec_from_response(resp)
+
+            if x5sec:
+                logger.info(
+                    "[方案K-Route3] ✓ MTOP API %s 下发 x5sec (长度=%d, source=%s, risk=%s)",
+                    api_name, len(x5sec), source, risk_triggered,
+                )
+                return x5sec
+            logger.debug(
+                "[方案K-Route3] MTOP API %s 未下发 x5sec (status=%d, risk=%s)",
+                api_name, resp.status_code, risk_triggered,
+            )
+        except Exception as e:
+            logger.debug("[方案K-Route3] MTOP API %s 调用失败: %s", api_name, e)
+
+    logger.info("[方案K-Route3] 所有 MTOP API 端点均未下发 x5sec")
+    return None
+
+
+def _trigger_x5sec_via_fireyejs_browser(cookie_str: str, m_h5_tk: str) -> Optional[str]:
+    """Route I：调用 crawler-service 浏览器执行 FireyeJS NC 链获取 x5sec。
+
+    原理：在真实浏览器中加载 FireyeJS，执行 getFYToken()/getUidToken()
+    获取真实设备指纹令牌，然后喂给 um.json → initialize.jsonp → analyze.jsonp
+    链路，触发服务端 Baxia 验证通过后下发 x5sec。
+
+    与 Route J（已废弃）的区别：
+    - Route J 在匿名 + 服务器 IP 条件下判定不可行（13.8 节结论）
+    - Route I 使用真实账号 Cookie + 住宅 IP 代理（useProxy=true）
+    - 这是 Route J 的修正版，复用 Plan E 的成功条件（真实 Cookie + 住宅 IP）
+
+    复用已有端点：POST /api/fireyejs/route-j-flow（crawler-service）
+    该端点已在 fireyejsToken.ts 中实现完整 NC 链。
+
+    Args:
+        cookie_str: Cookie 字符串
+        m_h5_tk: _m_h5_tk 值（未使用，保持接口一致）
+
+    Returns:
+        从 NC 链响应提取的 x5sec 值，或 None
+    """
+    crawler_url = os.environ.get("CRAWLER_SERVICE_URL", "http://localhost:3001")
+    endpoint = f"{crawler_url}/api/fireyejs/route-j-flow"
+
+    try:
+        import requests as _requests
+    except ImportError:
+        logger.debug("[方案K-RouteI] requests 模块不可用，跳过")
+        return None
+
+    # 超时分级：连接超时 5 秒（crawler-service 不可达时快速失败），
+    # 读取超时 45 秒（NC 链浏览器执行较慢，需要足够时间）
+    timeout = (5, 45)
+
+    try:
+        resp = _requests.post(
+            endpoint,
+            json={
+                "cookie": cookie_str,
+                "useProxy": True,
+                "debug": False,
+            },
+            timeout=timeout,
+        )
+    except _requests.exceptions.ConnectTimeout:
+        logger.warning("[方案K-RouteI] crawler-service 连接超时（5s），服务不可达，跳过")
+        return None
+    except _requests.exceptions.ReadTimeout:
+        logger.warning("[方案K-RouteI] crawler-service 读取超时（45s），NC 链未完成")
+        return None
+    except _requests.exceptions.ConnectionError as e:
+        logger.warning("[方案K-RouteI] crawler-service 连接失败: %s", str(e)[:150])
+        return None
+    except Exception as e:
+        logger.warning("[方案K-RouteI] crawler-service 请求异常: %s", str(e)[:150])
+        return None
+
+    if resp.status_code != 200:
+        if resp.status_code == 422:
+            try:
+                data = resp.json()
+                logger.debug(
+                    "[方案K-RouteI] route-j-flow 返回 422: %s",
+                    str(data.get("error", ""))[:150],
+                )
+            except Exception:
+                logger.debug("[方案K-RouteI] route-j-flow 返回 422（无 JSON 体）")
+        else:
+            logger.debug("[方案K-RouteI] crawler-service 返回 %d", resp.status_code)
+        return None
+
+    try:
+        data = resp.json()
+    except Exception as e:
+        logger.warning("[方案K-RouteI] 响应非 JSON: %s", str(e)[:150])
+        return None
+
+    if not data.get("ok"):
+        logger.debug(
+            "[方案K-RouteI] route-j-flow ok=false: %s",
+            str(data.get("error", ""))[:150],
+        )
+        return None
+
+    # 主路径：x5sec 字段直接提取
+    x5sec = data.get("x5sec")
+    x5sec_source = data.get("x5secSource", "direct")
+
+    # 回退路径：从 finalCookies 提取（浏览器最终所有 cookie）
+    if not x5sec:
+        final_cookies = data.get("finalCookies") or ""
+        if final_cookies:
+            x5sec = extract_x5sec_from_response_headers(final_cookies)
+            if x5sec:
+                x5sec_source = "final_cookies"
+
+    # 住宅 IP 代理使用检测：
+    # Route I 请求 useProxy=true，若 proxyUsed=false 说明住宅代理池为空，
+    # fallback 到服务器 IP。Route J 已证明服务器 IP 下 NC 链不可行（13.8 节），
+    # 此条件下即使返回 x5sec 也可能是无效的，不信任结果。
+    proxy_used = data.get("proxyUsed")
+    if proxy_used is False:
+        logger.warning(
+            "[方案K-RouteI] 住宅代理未实际使用（proxyUsed=false，fallback 服务器 IP），"
+            "Route J 已证明此条件不可行，不信任结果"
+        )
+        return None
+
+    if x5sec and len(x5sec) > 5:
+        logger.info(
+            "[方案K-RouteI] ✓ FireyeJS 浏览器 NC 链提取 x5sec 成功 "
+            "(长度=%d, source=%s, proxyUsed=%s)",
+            len(x5sec), x5sec_source, proxy_used,
+        )
+        return x5sec
+
+    logger.info(
+        "[方案K-RouteI] route-j-flow ok 但无 x5sec (analyzeCode=%s, sig=%s, proxyUsed=%s)",
+        data.get("analyzeResultCode"), bool(data.get("analyzeSig")), proxy_used,
+    )
+    return None
+
+
+def generate_x5sec_locally(cookie_str: str, m_h5_tk: str) -> Optional[str]:
+    """方案 K 核心：尝试多种路线生成/获取有效 x5sec。
+
+    **实现状态（2026-08-05 迭代）**：
+    - Route 1（模板替换）：已实现 —— 从缓存 x5sec 替换时间戳刷新（无网络请求）
+    - Route 2（完整逆向）：未实现 —— Baxia 加密算法逆向未完成
+      （研究结论：x5sec 服务端生成，静态 JS 中不含 x5sec 关键字）
+    - Route 3（MTOP API 触发）：已实现 —— 调用轻量 MTOP API 触发服务端下发
+    - Route I（FireyeJS 浏览器）：已实现 —— 调用 crawler-service NC 链（useProxy）
+
+    按优先级尝试（从快到慢）：
+    1. Route 1：模板替换（无网络请求，最快，成功率低）
+    2. Route 3：MTOP API 触发（轻量 HTTP 请求，~1s，成功率中等）
+    3. Route I：FireyeJS 浏览器（重量级，~10-30s，成功率取决于住宅 IP）
+
+    任一路线成功则返回 x5sec，由 try_plan_k_x5sec 注入后调用 Token API 验证。
+    所有路线失败返回 None，优先级链继续到优先级 2（x5sec 缓存注入）。
+
+    Args:
+        cookie_str: Cookie 字符串
+        m_h5_tk: _m_h5_tk 值
+
+    Returns:
+        生成的 x5sec 值，或 None（所有路线失败）
+    """
     if not PLAN_K_ENABLED:
         return None
 
     if not cookie_str or not m_h5_tk:
         return None
 
-    # TODO: 逆向完成后填充以下逻辑
-    # 1. 提取用户标识（unb / _m_h5_tk token）
-    # 2. 构造 x5sec payload（参考 analyze_x5sec_structure 的字段分析）
-    # 3. 生成签名（待逆向 Baxia 签名算法）
-    # 4. base64 编码并返回
+    # Route 1：模板替换（无网络请求，最快）
+    try:
+        x5sec = _refresh_x5sec_via_template(cookie_str, m_h5_tk)
+        if x5sec:
+            logger.info("[方案K] Route 1（模板替换）生成 x5sec 成功")
+            return x5sec
+    except Exception as e:
+        logger.debug("[方案K] Route 1 异常: %s", e)
 
-    logger.debug("[方案K] generate_x5sec_locally: 逆向未完成，返回 None")
+    # Route 3：MTOP API 触发（轻量 HTTP 请求）
+    try:
+        x5sec = _trigger_x5sec_via_mtop_api(cookie_str, m_h5_tk)
+        if x5sec:
+            logger.info("[方案K] Route 3（MTOP API 触发）获取 x5sec 成功")
+            return x5sec
+    except Exception as e:
+        logger.debug("[方案K] Route 3 异常: %s", e)
+
+    # Route I：FireyeJS 浏览器（重量级，最后尝试）
+    try:
+        x5sec = _trigger_x5sec_via_fireyejs_browser(cookie_str, m_h5_tk)
+        if x5sec:
+            logger.info("[方案K] Route I（FireyeJS 浏览器）获取 x5sec 成功")
+            return x5sec
+    except Exception as e:
+        logger.debug("[方案K] Route I 异常: %s", e)
+
+    logger.debug("[方案K] generate_x5sec_locally: 所有路线失败，返回 None")
     return None
 
 
@@ -338,7 +762,10 @@ def generate_x5sec_locally(cookie_str: str, m_h5_tk: str) -> Optional[str]:
 def try_plan_k_x5sec(cookie_str: str, m_h5_tk: str) -> Tuple[Optional[str], Optional[str]]:
     """方案 K 入口：尝试本地生成 x5sec 并注入后调用 Token API。
 
-    **当前状态：研究阶段，始终返回 (None, None)**
+    **实现状态（2026-08-05 迭代）**：
+    generate_x5sec_locally 已实现 Route 1/3/I 三条路线，本函数不再
+    始终返回 (None, None)。当 PLAN_K_ENABLED=true 时会按优先级尝试
+    各路线，成功则注入 x5sec 并调用 Token API 验证。
 
     在优先级链中作为优先级 1.5 调用：
     - 优先级 1：直接 Token API（无 x5sec）

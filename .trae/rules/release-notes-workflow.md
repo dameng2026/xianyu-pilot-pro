@@ -10,6 +10,9 @@
 - **展示页面**：`apps/user-web/src/pages/settings/AboutSettings.vue`
 - **数据源**：`apps/user-web/src/data/releaseNotes.js`（唯一数据源，最新版本在前）
 - **版本号注入**：`apps/user-web/package.json` 的 `version` 字段 → vite 注入 `__APP_VERSION__` → `apps/user-web/src/utils/appMeta.js` 的 `APP_VERSION`
+- **后端接口**：`apps/core-api/src/main/resources/release-notes.json` 是发布时从 `releaseNotes.js` 生成的同步产物；
+  core-api 通过 `GET /api/content/release-notes` 对外提供，AI 客服「小梦」与前台「关于」页共用该接口。
+  每次修改 `releaseNotes.js` 后必须重新生成该 JSON（见步骤 4），否则 AI 客服查询到的是旧版本日志。
 
 ## 二、版本号递增规则（语义化版本 SemVer）
 
@@ -101,11 +104,23 @@ AI 需阅读 diff 输出，识别前台功能变动：
 1. 在 `apps/user-web/src/data/releaseNotes.js` 的 `releaseNotes` 数组最前面追加新条目
 2. 同步更新 `apps/user-web/src/data/releaseNotes.js` 的 `CURRENT_VERSION` 常量
 3. 同步更新 `apps/user-web/package.json` 的 `version` 字段为新版本号
+4. 重新生成 core-api 更新日志资源（从 `releaseNotes.js` 同步）：
+
+   ```powershell
+   @'
+   import { pathToFileURL } from 'node:url';
+   import path from 'node:path';
+   const m = await import(pathToFileURL(path.resolve('apps/user-web/src/data/releaseNotes.js')).href);
+   const payload = { currentVersion: m.CURRENT_VERSION, updatedAt: new Date().toISOString().slice(0, 10), releaseNotes: m.releaseNotes };
+   const fs = await import('node:fs');
+   fs.writeFileSync(path.resolve('apps/core-api/src/main/resources/release-notes.json'), JSON.stringify(payload, null, 2), 'utf8');
+   '@ | node --input-type=module -
+   ```
 
 **步骤 5：提交并推送私人仓库**
 
 ```bash
-git add apps/user-web/src/data/releaseNotes.js apps/user-web/package.json
+git add apps/user-web/src/data/releaseNotes.js apps/user-web/package.json apps/core-api/src/main/resources/release-notes.json
 git commit -m "chore(release): bump user-web to <新版本号>"
 git push mirror master
 ```

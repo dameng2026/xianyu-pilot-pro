@@ -62,6 +62,25 @@ _MAX_MESSAGE_CHARS = 8000
 # 工具调用 JSON 代码块标记
 _TOOL_CALL_MARKER = "tool_call"
 
+# 知识库清洗：移除包含内部 API 路径/字段协议的行，防止 LLM 在回答中泄露技术细节
+_KB_API_PATH_PATTERN = re.compile(
+    r"(GET|POST|PUT|DELETE|PATCH)\s+/|/api/|/admin-api/|\.html\?|session_token|compressed_summary",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_kb_content(content: str) -> str:
+    """过滤知识库内容中暴露内部 API 路径/协议字段的行。"""
+    if not content:
+        return ""
+    lines = content.split("\n")
+    kept = []
+    for line in lines:
+        if _KB_API_PATH_PATTERN.search(line):
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
 
 # ============================================================
 # 工具方法
@@ -159,6 +178,10 @@ async def build_system_prompt(
         "  4. 不要绕圈子：用户问「我有多少商品」直接调 get_product_summary；用户问「帮我搜XXX」直接调 search_goods_online；用户问「订单怎么样」直接调 list_orders。不要先问用户更多信息。",
         "  5. 数据必须来自工具：任何具体数字（商品数、订单数、金额、余额等）必须通过工具查询，绝不能编造或凭空回答。",
         "  6. 查询失败要说明：如果工具返回失败，如实告诉用户「查询暂时不可用」，不要假装查到了。",
+        "  7. 禁止凭空断言用户「没有」数据：即使你怀疑用户没有数据，也必须先调用工具核实。工具返回空结果才能说「没有查到」。",
+        "  8. 实时信息必须走接口：会员价格、店铺数量限制、功能对比、更新日志、平台公告等随时可能变化的信息，",
+        "     一律调用 get_vip_price / get_store_limit / get_feature_comparison / get_release_notes / get_announcements 查询，",
+        "     禁止凭知识库里的旧文案回答「会员几档」「能绑几个店」「有什么功能」等问题。",
         "",
         "【能力边界】你可以帮助用户：",
         "  - 查询账号状态、商品列表/总数/详情、订单、发货记录、退款记录、Token 余额、数据面板",
@@ -173,6 +196,15 @@ async def build_system_prompt(
         "  - 生成扫码登录二维码、润色商品标题",
         "  - 重试失败发货、立即运行定时任务、同步订单",
         "  - 解答闲鱼运营相关问题，包括账号、商品、订单、自动化、会员、计费等",
+        "  - 查询最新更新日志、平台公告、会员套餐价格、店铺数量限制、各等级功能对比（全部走实时接口）",
+        "【销管引导——尺度要求】",
+        "  你是平台的智能客服，同时承担轻度销售角色，但必须把握尺度：",
+        "  1. 用户问会员/套餐/价格/店铺上限/功能权益/Token 充值时：调用对应工具拿到实时数据后，如实报价并给出建议，",
+        "     例如「您现在普通用户只能绑定 1 个店铺，升级 VIP 后不限店铺数量，月付 19.99 元起，需要我帮您打开会员中心吗？」",
+        "  2. 升级建议要贴合用户现状：普通用户→建议 VIP（单店版）或 VIP；VIP（单店版）→建议 VIP；VIP→建议 SVP；SVP→无需再推销。",
+        "  3. 用户 Token 余额低或接近用尽时，自然提醒充值，说明充值入口（个人中心/会员中心），不夸大不催促。",
+        "  4. 禁止虚假承诺、夸大权益、诱导冲动消费；一次对话最多主动引导一次，用户拒绝后不得反复推销。",
+        "  5. 用户没有购买意图时，优先解决实际问题，不要见缝插针推销。",
         "【硬性约束】",
         "  - 必须用自然语言回复用户，绝不能返回代码、JSON、SQL、命令行或任何技术细节",
         "  - 不得编造价格、库存、订单等具体业务数据，必要时调用工具查询",
@@ -261,6 +293,15 @@ async def build_system_prompt(
         "  - 用户问「帮我删除商品X」「下架商品X」→ 先用 list_products 查到 goodsId，再调 delete_product / toggle_product_status",
         "  - 用户问「帮我配置发货声明」→ 调用 update_delivery_statement，传 enabled 与 content",
         "  - 用户问「帮我发布一个商品」→ 调用 prepare_product_publish，传标题/描述/价格/图片URL，引导用户前往发布页",
+        "  - 用户问「最近更新了什么」「新版本」「更新日志」→ 直接调用 get_release_notes（limit 默认5）",
+        "  - 用户问「有没有公告」「平台通知」「最新公告」→ 直接调用 get_announcements",
+        "  - 用户问「能绑定几个店铺」「还能加账号吗」「店铺上限」→ 直接调用 get_store_limit",
+        "  - 用户问「普通和VIP有什么区别」「VIP有什么功能」「功能对比」→ 直接调用 get_feature_comparison",
+        "  - 用户问「会员多少钱」「VIP价格」「开通会员」「套餐价格」→ 直接调用 get_vip_price，",
+        "    按实时报价回答，并结合用户当前等级给出升级建议",
+        "  - 用户问「有什么促销活动」「限时活动」「活动价」「会员优惠」→ 直接调用 get_promotions",
+        "  - 用户问「Token 怎么消耗」「扣费规则」「各等级扣多少」→ 调用 get_token_balance，",
+        "    按返回的等级定价表如实说明，禁止凭记忆编造普通/VIP/SVP 的扣费数字",
         "  - 用户问「最近有没有退款」→ 直接调用 list_refunds（days=7），用自然语言总结退款数量、金额、状态",
         "  - 用户发来一堆卡密说「帮我建一个卡密仓库叫XXX，把这些卡密导进去」",
         "    → 调用 create_card_group，groupName=XXX，cards=[\"卡密1\",\"卡密2\",...]，一次完成创建+导入",
@@ -336,7 +377,8 @@ async def build_system_prompt(
         "    → 评价同步与自动评价需用户在前端操作",
         "",
         "  VIP 会员（VIP 页）：VIP 套餐展示、购买、促销活动、功能对比",
-        "    → 涉及支付，需用户手动完成付款",
+        "    → 工具：get_vip_price（实时套餐价格与权益）、get_store_limit（店铺数量上限）、",
+        "      get_feature_comparison（各等级功能对比）；涉及支付，需用户手动完成付款",
         "",
         "  个人中心（个人中心页）：账号安全、Token 消耗、充值记录、Token 流水/趋势、修改密码/邮箱/手机",
         "    → 工具：get_token_balance（查 Token 余额）",
@@ -420,7 +462,7 @@ async def build_system_prompt(
                     parts.append(rule["content"])
                 user_rule_count = len(rule_items)
     except Exception as exc:
-        logger.debug(
+        logger.warning(
             "build_system_prompt load user cfg failed tenantId=%d errorType=%s",
             tenant_id, type(exc).__name__,
         )
@@ -446,7 +488,7 @@ async def build_system_prompt(
             for row in kb_rows:
                 category = _safe_str(row.get("category"))
                 title = _safe_str(row.get("title"))
-                content = _safe_str(row.get("content"))
+                content = _sanitize_kb_content(_safe_str(row.get("content")))
                 if not content:
                     continue
                 entry_chars = len(content) + len(title) + len(category) + 10
@@ -464,7 +506,7 @@ async def build_system_prompt(
                 kb_char_total += entry_chars
                 global_kb_count += 1
     except Exception as exc:
-        logger.debug(
+        logger.warning(
             "build_system_prompt load global knowledge failed tenantId=%d errorType=%s",
             tenant_id, type(exc).__name__,
         )
@@ -493,13 +535,19 @@ async def build_system_prompt(
     parts.append("  - 用户问「最近有没有退款」「退款管理」「退款状态」时，调用 list_refunds 查询（默认查最近 7 天），然后用自然语言总结")
     parts.append("  - 用户发来一组卡密（每行一个或逗号分隔）并要求「新建仓库」「建卡密分组」时，调用 create_card_group 并把卡密作为 cards 数组传入，一次完成")
     parts.append("  - 用户要求向已存在的卡密分组追加卡密时，先用 list_card_groups 查到分组ID，再调用 import_cards")
+    parts.append("  - 会员价格、店铺限制、功能对比、更新日志、平台公告等实时信息：必须调用 get_vip_price / get_store_limit /")
+    parts.append("    get_feature_comparison / get_release_notes / get_announcements 查询，禁止凭旧知识或记忆回答")
     parts.append("")
     parts.append("【关键强制规则——违反即为失败】")
     parts.append("  1. 任何用户请求只要能通过工具完成，必须立即调用工具，禁止只用文字回答「请去XX页面操作」")
     parts.append("  2. 用户提到具体名词（商品/订单/账号/退款/卡密/工作流/消息/数据/Token）时，必须调用对应查询工具")
     parts.append("  3. 禁止回答「我没明白」「你能具体说说吗」——理解用户意图是你的职责，不是用户的职责")
     parts.append("  4. 禁止在没有调用工具的情况下编造任何具体数字（商品数、订单数、金额、余额等）")
-    parts.append("  5. 工具调用失败时，如实告诉用户「查询暂时不可用，请稍后重试」，不要假装查到了")
+    parts.append("  5. 禁止在没有调用工具的情况下断言用户「有」或「没有」任何数据：")
+    parts.append("     - 用户问「我有多少商品/订单/Token/退款」→ 必须调用工具查询，不能凭空回答「看起来你没有」")
+    parts.append("     - 工具返回空结果时，如实告诉用户「没有查到相关数据」或「暂无数据」")
+    parts.append("     - 工具失败时，如实告诉用户「查询暂时不可用，请稍后重试」，不要假装查到了")
+    parts.append("     - 绝不能编造「你当前没有」「你有 X 个」等答案，必须基于工具返回的真实数据")
     parts.append("  6. 用户说「有哪个用哪个」「随便」「都行」时，理解为「自动选择」，直接调用工具，不要追问")
     parts.append("")
     parts.append("【list_accounts 返回字段说明】")
@@ -696,6 +744,7 @@ async def compress_context(
         user_prompt=user_prompt,
         temperature=0.3,
         request_id=f"ai_cs_compress_{session_id}_{uuid.uuid4().hex[:8]}",
+        timeout=120,
     )
     if not result.get("ok"):
         logger.info(
@@ -822,7 +871,11 @@ _SUMMARY_SYSTEM_PROMPT = (
     "并主动询问或建议下一步（如「需要我帮你扫码登录绑定一个新账号吗？」）；\n"
     "6) 如果有多个条目，用列表形式简洁展示关键字段，不要把所有字段都列出来；\n"
     "7) 如果工具执行失败，用友好语气告诉用户失败原因，并建议重试或换种方式；\n"
-    "8) 末尾根据结果主动询问用户下一步需要做什么。"
+    "8) 末尾根据结果主动询问用户下一步需要做什么。\n\n"
+    "【销管引导（注意尺度）】\n"
+    "  - 会员价格/店铺限制/功能对比/Token 余额类结果：如实陈述实时数据，并结合用户当前等级给一条自然建议；\n"
+    "  - 用户等级不高或余额不足时，可温和引导升级/充值（如「升级 VIP 后不限店铺数量，需要我帮您打开会员中心吗？」）；\n"
+    "  - 禁止虚假承诺、夸大权益、反复推销；用户未表现出购买意向时，先解决问题本身。"
 )
 
 
@@ -861,6 +914,7 @@ async def generate_summary(
             user_prompt=user_prompt,
             temperature=0.5,
             request_id=request_id,
+            timeout=60,
         )
     except Exception as exc:
         logger.warning(
@@ -1017,6 +1071,7 @@ async def _generate_write_tool_from_query_results(
             user_prompt=user_prompt,
             temperature=0.1,
             request_id=f"ai_cs_2nd_{session_id}_{uuid.uuid4().hex[:8]}",
+            timeout=60,
         )
         if not result.get("ok"):
             return None, None
@@ -1071,6 +1126,34 @@ _TRANSITIONAL_REPLY_PATTERNS = (
     "我看看", "马上帮", "先帮你", "我先帮你", "好的，我",
 )
 
+# 回避/未理解类回复：用户消息命中查询意图但 AI 回复「没看明白」时，系统应主动补查
+_EVASIVE_REPLY_PATTERNS = (
+    "没看明白", "没明白", "不太明白", "没听懂", "不太懂", "没理解",
+    "能具体说说", "重新描述", "请重新", "再说一遍",
+    "一串问号", "消息没有发完整", "是不是消息", "发来了一串",
+)
+
+
+def _is_evasive_reply(text: str) -> bool:
+    """判断 AI 回复是否为「没看明白」等回避性回复。"""
+    if not text:
+        return False
+    return any(p in text for p in _EVASIVE_REPLY_PATTERNS)
+
+
+_GENERIC_HELP_REPLY_PATTERNS = (
+    "有什么可以帮", "需要什么帮助", "直接告诉我", "我来帮你搞定",
+    "有什么需要", "可以帮你做", "请告诉我",
+)
+
+
+def _is_generic_help_reply(text: str) -> bool:
+    """判断 AI 回复是否为泛泛的「需要帮助请告诉我」式回复（未实质响应问题）。"""
+    if not text:
+        return False
+    return any(p in text for p in _GENERIC_HELP_REPLY_PATTERNS)
+
+
 # 二次回复专用系统提示：同时生成自然语言摘要 + 写操作工具调用
 _SECOND_REPLY_SYSTEM_PROMPT = (
     "你是闲鱼运营助手的智能客服小梦。你刚才告诉用户「我先查一下」，"
@@ -1085,6 +1168,9 @@ _SECOND_REPLY_SYSTEM_PROMPT = (
     "6) 如果查询结果不足以生成有效写操作（如目标对象不存在、列表为空），"
     "不要输出 tool_call 块，而是在自然语言中告诉用户原因并建议下一步；\n"
     "7) 末尾根据结果主动询问用户下一步需要做什么。\n\n"
+    "【销管引导（注意尺度）】\n"
+    "  - 若查询结果涉及会员/套餐/店铺限制/Token，如实说明后结合用户等级给一条自然建议；\n"
+    "  - 不夸大、不虚假承诺、不频繁推销。\n\n"
     "【写操作工具选择规则——必须严格遵守】\n"
     "  ▸ 用户说「向分组X追加卡密」「把卡密加到分组Y」「向仓库导入卡密」\n"
     "    → 必须调用 import_cards（不是 create_delivery_rule！）\n"
@@ -1246,6 +1332,7 @@ async def generate_second_reply(
             user_prompt=user_prompt,
             temperature=0.4,
             request_id=f"ai_cs_2nd_reply_{session_id}_{uuid.uuid4().hex[:8]}",
+            timeout=60,
         )
     except Exception as exc:
         logger.warning(
@@ -1310,6 +1397,8 @@ _WRITE_INTENT_QUERY_MAP: list[tuple[tuple[str, ...], str, dict]] = [
     # 自动发货规则创建/更新 → 先查账号 + 商品（用于参数补全）
     (("创建 自动发货", "新建 自动发货", "配置 自动发货", "更新 自动发货规则",
       "修改 自动发货规则"), "list_accounts", {}),
+    (("创建 自动发货", "新建 自动发货", "配置 自动发货", "更新 自动发货规则",
+      "修改 自动发货规则"), "list_products", {}),
     # 发货声明更新 → 无需查询，直接调 update_delivery_statement
     # 工作流更新/启用 → 先查工作流列表
     (("更新 工作流", "修改 工作流", "启用 工作流", "禁用 工作流",
@@ -1329,6 +1418,68 @@ _WRITE_INTENT_QUERY_MAP: list[tuple[tuple[str, ...], str, dict]] = [
 ]
 
 
+# 查询意图 → 必需的查询工具映射（AI 首回复说「我帮你查一下」但漏输出 tool_call 时兜底触发）
+_QUERY_INTENT_QUERY_MAP: list[tuple[tuple[str, ...], str, dict]] = [
+    # 公告/通知
+    (("公告", "通知", "官方消息", "平台消息"), "get_announcements", {}),
+    # 更新日志/版本
+    (("更新日志", "更新了什么", "新版本", "版本记录", "升级了什么", "发布日志",
+      "最近更新", "更新了", "版本"), "get_release_notes", {}),
+    # 会员/套餐/价格
+    (("会员", "套餐", "升级", "开通", "vip", "svip", "svp",
+      "加入会员", "购买会员", "会员价", "套餐价"), "get_vip_price", {}),
+    # 店铺数量限制
+    (("店铺", "绑定", "账号数量", "店铺上限", "几个店", "能绑", "添加账号",
+      "加账号", "上限"), "get_store_limit", {}),
+    # 功能对比/权益
+    (("功能对比", "有什么区别", "功能区别", "权益", "哪些功能", "普通和", "对比表"), "get_feature_comparison", {}),
+    # 促销活动
+    (("促销", "活动价", "限时", "优惠", "打折", "返现", "会员活动"), "get_promotions", {}),
+    # Token 余额
+    (("token", "Token", "余额", "扣费", "充值", "消耗"), "get_token_balance", {}),
+    # 账号/商品/订单/发货/退款等常用查询
+    (("发货记录", "发货", "重发", "发货状态"), "list_delivery_records", {}),
+    (("订单", "成交", "已付款", "待发货", "交易"), "list_orders", {}),
+    (("退款", "售后", "维权"), "list_refunds", {"days": 7}),
+    (("商品汇总", "商品统计", "多少商品", "商品总数"), "get_product_summary", {}),
+    (("我的商品", "商品列表", "在售商品", "下架商品"), "list_products", {}),
+    (("我的账号", "账号状态", "有几个账号", "账号怎么样"), "list_accounts", {}),
+    (("未读", "最近会话", "在线消息", "买家消息", "谁找我"), "list_recent_conversations", {}),
+    (("工作流", "流程"), "list_workflows", {}),
+    (("定时任务", "任务列表"), "list_scheduled_tasks", {}),
+    (("卡密", "货源库", "分组"), "list_card_groups", {}),
+    (("自动回复", "回复规则"), "list_auto_reply_rules", {}),
+    (("数据面板", "数据总览", "运营数据", "总览"), "get_dashboard_summary", {}),
+]
+
+
+def _detect_required_query_for_query_intent(
+    user_message: str,
+) -> list[tuple[str, dict]]:
+    """根据用户消息中的查询意图，返回需要主动执行的查询工具列表。"""
+    if not user_message:
+        return []
+    msg = user_message.strip().lower().replace("，", " ").replace("、", " ")
+    matched: list[tuple[str, dict]] = []
+    for keywords, tool_name, default_args in _QUERY_INTENT_QUERY_MAP:
+        for kw in keywords:
+            if " " in kw:
+                parts = kw.split()
+                if all(p in msg for p in parts):
+                    matched.append((tool_name, dict(default_args)))
+                    break
+            elif kw.lower() in msg:
+                matched.append((tool_name, dict(default_args)))
+                break
+    seen: set[str] = set()
+    unique: list[tuple[str, dict]] = []
+    for tn, args in matched:
+        if tn not in seen:
+            seen.add(tn)
+            unique.append((tn, args))
+    return unique
+
+
 def _detect_required_query_for_write_intent(
     user_message: str,
 ) -> list[tuple[str, dict]]:
@@ -1341,6 +1492,20 @@ def _detect_required_query_for_write_intent(
         return []
     msg = user_message.strip()
     msg_normalized = msg.replace("，", " ").replace("、", " ")
+
+    # 否定词过滤：如果用户消息包含否定词，跳过匹配（避免"不想删除"、"不要下架"等否定句触发不必要的查询）
+    _NEGATION_WORDS = ["不", "别", "没", "不要", "不想", "不用", "无需", "禁止"]
+    for neg in _NEGATION_WORDS:
+        if neg in msg_normalized:
+            # 检查是否是否定词 + 写操作关键词的组合
+            for kw_group, _, _ in _WRITE_INTENT_QUERY_MAP:
+                for kw in kw_group:
+                    if kw in msg_normalized:
+                        # 否定词在关键词之前，认为是否定句
+                        neg_idx = msg_normalized.find(neg)
+                        kw_idx = msg_normalized.find(kw)
+                        if neg_idx >= 0 and kw_idx >= 0 and neg_idx < kw_idx:
+                            return []
     matched: list[tuple[str, dict]] = []
     for keywords, tool_name, default_args in _WRITE_INTENT_QUERY_MAP:
         for kw in keywords:
@@ -1363,6 +1528,171 @@ def _detect_required_query_for_write_intent(
     return unique
 
 
+def _build_write_tool_from_query_results(
+    user_message: str,
+    query_results: List[Dict[str, Any]],
+) -> tuple:
+    """确定性兜底：二次推理未生成写工具时，按用户意图 + 查询结果构造写工具调用。
+
+    返回 (tool_name, arguments) 或 (None, None)。
+    仅当查询结果中存在可操作对象且用户意图明确时生成，避免编造参数。
+    """
+    if not user_message or not query_results:
+        return None, None
+    msg = user_message.strip().replace("，", " ").replace("、", " ")
+
+    def first_data(tool_name: str) -> Dict[str, Any]:
+        for tr in query_results:
+            if tr.get("tool") == tool_name:
+                d = (tr.get("result") or {}).get("data")
+                return d if isinstance(d, dict) else {}
+        return {}
+
+    # 商品：上架/下架/删除
+    if any(k in msg for k in ("上架", "下架", "删除商品", "删除 商品", "删掉这个商品", "删除一个")):
+        data = first_data("list_products")
+        products = data.get("products") or []
+        if products:
+            if "删除" in msg:
+                return "delete_product", {"goodsId": products[0].get("id")}
+            if "上架" in msg and "下架" not in msg:
+                target = next((p for p in products if int(p.get("status") or 0) == 0), None)
+                if target:
+                    return "toggle_product_status", {"goodsId": target.get("id"), "onShelf": True}
+            elif "下架" in msg:
+                target = next((p for p in products if int(p.get("status") or 0) == 1), None)
+                if target:
+                    return "toggle_product_status", {"goodsId": target.get("id"), "onShelf": False}
+
+    # 工作流：启用/禁用/发布（未提供新内容时不编造描述）
+    if any(k in msg for k in ("启用工作流", "禁用工作流", "发布工作流", "停用工作流")):
+        data = first_data("list_workflows")
+        workflows = data.get("workflows") or data.get("items") or []
+        if workflows:
+            target = workflows[0]
+            wid = target.get("id") or target.get("workflowId")
+            if wid:
+                if "启用" in msg or "发布" in msg:
+                    return "update_workflow", {"workflowId": wid, "status": "published"}
+                return "update_workflow", {"workflowId": wid, "status": "disabled"}
+
+    # 自动回复规则：禁用/启用
+    if (("禁用" in msg or "停用" in msg or "启用" in msg) and "自动回复" in msg) \
+            or any(k in msg for k in ("禁用规则", "启用规则")):
+        data = first_data("list_auto_reply_rules")
+        rules = data.get("rules") or []
+        if rules:
+            rid = rules[0].get("id") or rules[0].get("ruleId")
+            if rid:
+                return "toggle_auto_reply_rule", {"ruleId": rid, "enabled": "启用" in msg}
+
+    # 定时任务：禁用/启用
+    if (("禁用" in msg or "停用" in msg or "启用" in msg) and ("定时任务" in msg or "任务" in msg)) \
+            or any(k in msg for k in ("禁用任务", "启用任务", "停用任务")):
+        data = first_data("list_scheduled_tasks")
+        tasks = data.get("tasks") or data.get("items") or []
+        if tasks:
+            tid = tasks[0].get("id") or tasks[0].get("taskId")
+            if tid:
+                return "toggle_scheduled_task", {"taskId": tid, "enabled": "启用" in msg}
+
+    # 回复买家：从消息中提取回复内容
+    if "回复" in msg and ("买家" in msg or "会话" in msg or "消息" in msg):
+        data = first_data("list_recent_conversations")
+        conversations = data.get("conversations") or []
+        if conversations:
+            conv = conversations[0]
+            cid = conv.get("conversationId") or conv.get("id")
+            aid = conv.get("accountId") or conv.get("account_id")
+            if cid and aid:
+                content = ""
+                m = re.search(r"[「“\"']([^」”\"']+)[」”\"']", user_message)
+                if m:
+                    content = m.group(1).strip()
+                if not content:
+                    # 取「回复」之后的内容并去掉语气词
+                    idx = user_message.find("回复")
+                    if idx >= 0:
+                        content = user_message[idx + 2:].strip()
+                        for lead in ("买家", "一下", "消息", "会话", "他", "她", "：「", "：", "，", "帮"):
+                            if content.startswith(lead):
+                                content = content[len(lead):].strip()
+                        content = content.strip("「」”\"'，。 ")
+                if content:
+                    return "reply_buyer_message", {
+                        "accountId": aid,
+                        "conversationId": cid,
+                        "message": content[:500],
+                    }
+
+    # 重试失败发货
+    if any(k in msg for k in ("重试发货", "重新发货", "重发失败", "重试失败")):
+        data = first_data("list_delivery_records")
+        records = data.get("records") or data.get("items") or []
+        failed = next(
+            (r for r in records
+             if str(r.get("deliveryStatus") or r.get("status") or "").lower() == "failed"),
+            None,
+        ) or records[0]
+        rid = failed.get("id") or failed.get("recordId")
+        if rid:
+            return "retry_delivery_record", {"recordId": rid}
+
+    # 卡密：追加导入 / 删除分组
+    if "追加" in msg or "导入" in msg or ("删除" in msg and ("分组" in msg or "卡密" in msg or "货源库" in msg)):
+        data = first_data("list_card_groups")
+        groups = data.get("groups") or data.get("items") or []
+        if groups:
+            gid = groups[0].get("id") or groups[0].get("groupId")
+            if gid:
+                if "删除" in msg:
+                    return "delete_card_group", {"groupId": gid}
+                return None, None  # 追加卡密需要卡密内容，交由二次推理/用户补充
+
+    # 创建定时任务：从中文时间解析 cron + 默认任务类型（需账号信息）
+    if ("定时任务" in msg and ("创建" in msg or "新建" in msg or "配置" in msg)) \
+            or any(k in msg for k in ("创建任务", "新建任务", "配置任务")):
+        data = first_data("list_accounts")
+        accounts = data.get("accounts") or []
+        if accounts:
+            aid = accounts[0].get("id")
+            if aid:
+                cron = _parse_cron_from_message(msg)
+                if cron:
+                    return "create_scheduled_task", {
+                        "accountId": aid,
+                        "taskType": "sync_products",
+                        "cronExpr": cron,
+                        "taskName": "每日同步商品",
+                    }
+
+    return None, None
+
+
+def _parse_cron_from_message(msg: str) -> str:
+    """从中文调度描述解析 Cron 表达式（支持「每天 X 点」「每 N 分钟」）。"""
+    m = re.search(r"每天\s*(\d{1,2}):(\d{2})", msg)
+    if m:
+        hour = int(m.group(1))
+        minute = int(m.group(2))
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return f"0 {minute} {hour} * * ?"
+    m = re.search(r"每天\s*(\d{1,2})\s*点(?:(\d{1,2})分)?", msg)
+    if m:
+        hour = int(m.group(1))
+        minute = int(m.group(2) or 0)
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return f"0 {minute} {hour} * * ?"
+    m = re.search(r"每\s*(\d{1,3})\s*分钟", msg)
+    if m:
+        minutes = int(m.group(1))
+        if 1 <= minutes <= 120:
+            return f"0 */{minutes} * * * ?"
+    if "每天" in msg or "每日" in msg:
+        return "0 0 9 * * ?"
+    return ""
+
+
 # ============================================================
 # 多工具合并摘要（AgentLoop 多工具调用支持）
 # ============================================================
@@ -1377,7 +1707,10 @@ _SUMMARY_MULTI_SYSTEM_PROMPT = (
     "5) 把多个工具的结果综合归纳，找出关联信息（如「账号X的订单Y已发货，发货记录Z成功」）；"
     "   避免简单拼接每个工具结果，要为用户呈现一个连贯的总结；\n"
     "6) 如果某个工具失败，简要说明失败原因并继续展示其他工具的结果；\n"
-    "7) 末尾根据结果主动询问用户下一步需要做什么。"
+    "7) 末尾根据结果主动询问用户下一步需要做什么。\n\n"
+    "【销管引导（注意尺度）】\n"
+    "  - 若结果涉及会员等级、店铺限制、套餐价格或 Token 余额，给出贴合用户现状的一条升级/充值建议；\n"
+    "  - 建议自然、适度，不夸大不催促，用户拒绝后不得反复推销。"
 )
 
 
@@ -1434,6 +1767,7 @@ async def generate_summary_multi(
             user_prompt=user_prompt,
             temperature=0.5,
             request_id=request_id,
+            timeout=60,
         )
     except Exception as exc:
         logger.warning(
@@ -1719,10 +2053,126 @@ def build_fallback_summary(
         if balance is None:
             balance = data.get("tokenBalance")
         lines.append(f"您当前的 Token 余额为 {balance}。")
-        if balance is not None and int(balance or 0) <= 0:
-            lines.append("余额已不足，建议您尽快充值后再使用 AI 功能。")
+        remaining = data.get("remainingCalls")
+        if remaining is not None:
+            lines.append(f"通用模型每次调用约扣 {data.get('perCallTokens') or 3} Token，当前余额约可调用 {remaining} 次。")
+        tier_pricing = data.get("tierPricing") or []
+        if tier_pricing:
+            tier_text = "，".join(
+                f"{t.get('vipLabel')} {t.get('tokensPerCall')} Token/次" for t in tier_pricing
+            )
+            lines.append(f"通用模型按等级定价（后台实时配置）：{tier_text}。")
+        hint = data.get("rechargeHint")
+        if hint:
+            lines.append(hint)
+        lines.append("需要我帮您打开充值入口或查看会员套餐吗？")
+
+    elif tool_name == "get_vip_price":
+        current_plan = data.get("currentPlan") or {}
+        lines.append("为您查询到最新会员套餐价格：")
+        for p in data.get("plans") or []:
+            parts = [f"· {p.get('planName') or ''}"]
+            if (p.get("priceMonthCent") or 0) > 0:
+                parts.append(f"月付 {p['priceMonthCent'] / 100:.2f} 元")
+            if (p.get("priceQuarterCent") or 0) > 0:
+                parts.append(f"季付 {p['priceQuarterCent'] / 100:.2f} 元")
+            if (p.get("priceYearCent") or 0) > 0:
+                parts.append(f"年付 {p['priceYearCent'] / 100:.2f} 元")
+            parts.append(f"店铺限制：{p.get('storeLimitText') or '不限'}")
+            lines.append("，".join(parts))
+        if current_plan.get("levelLabel"):
+            lines.append(f"您当前是{current_plan['levelLabel']}。")
+        if data.get("upgradeTarget"):
+            lines.append(f"如需更多权益，可以考虑升级到 {data['upgradeTarget']}，需要我帮您打开会员中心吗？")
         else:
-            lines.append("余额充足，可以正常使用 AI 功能。请问还需要其他帮助吗？")
+            lines.append("您已是最高的 SVP 等级，可以畅享全部功能。还需要其他帮助吗？")
+
+    elif tool_name == "get_release_notes":
+        current_version = data.get("currentVersion") or "未知"
+        lines.append(f"当前最新版本：v{current_version}，最近更新如下：")
+        for n in data.get("releaseNotes") or []:
+            title = _safe_str(n.get("title"))
+            date = _safe_str(n.get("date"))
+            summary = _safe_str(n.get("summary"))
+            lines.append(f"- v{n.get('version') or ''}（{date}）{title}")
+            if summary:
+                lines.append(f"  {summary[:200]}")
+        if not data.get("releaseNotes"):
+            lines = ["暂时没有获取到更新日志，请稍后再试。"]
+
+    elif tool_name == "get_announcements":
+        items = data.get("announcements") or []
+        if not items:
+            lines = ["当前暂无平台公告。"]
+        else:
+            lines.append("为您查到最新平台公告：")
+            for item in items:
+                title = _safe_str(item.get("title") or item.get("name"))
+                content = _safe_str(item.get("content") or item.get("body") or item.get("desc"))
+                lines.append(f"- {title}")
+                if content:
+                    lines.append(f"  {content[:200]}")
+
+    elif tool_name == "get_store_limit":
+        limits = data.get("limits") or {}
+        lines.append("店铺数量限制（实时配置）：")
+        lines.append(
+            f"· 普通用户：{limits.get('normal') if limits.get('normal', 1) > 0 else '不限制'} 个"
+        )
+        lines.append(
+            f"· VIP（单店版）：{limits.get('vipSingle') if limits.get('vipSingle', 1) > 0 else '不限制'} 个"
+        )
+        lines.append(
+            f"· VIP：{limits.get('vip') if limits.get('vip', 0) > 0 else '不限制'} 个"
+        )
+        lines.append(
+            f"· SVP：{limits.get('svp') if limits.get('svp', 0) > 0 else '不限制'} 个"
+        )
+        plan = data.get("currentPlan") or {}
+        lines.append(
+            f"您当前是{plan.get('levelLabel') or '普通用户'}，"
+            f"已绑定 {data.get('accountCount') or 0} 个店铺"
+            f"（上限{'不限制' if data.get('unlimited') else data.get('currentLimit')}）。"
+        )
+        if not data.get("unlimited") and int(data.get("accountCount") or 0) >= int(data.get("currentLimit") or 1):
+            lines.append("店铺数量已满，如需绑定更多店铺，可升级更高会员等级。")
+
+    elif tool_name == "get_feature_comparison":
+        features = data.get("features") or []
+        if not features:
+            lines = ["暂时没有获取到功能对比数据，请稍后再试。"]
+        else:
+            lines.append("各会员等级功能对比（实时配置）：")
+            for f in features:
+                avail = " / ".join(
+                    lv for lv, ok in (f.get("levels") or {}).items() if ok
+                ) or "暂未开放"
+                lines.append(f"- {f.get('title') or f.get('key')}：{avail}")
+                if f.get("maintenance"):
+                    lines[-1] += "（维护中）"
+            lines.append("如需了解会员套餐价格，可以继续问我。")
+
+    elif tool_name == "get_promotions":
+        activities = data.get("activities") or []
+        if not activities:
+            lines = ["当前暂无进行中的促销活动，可以关注会员中心后续活动。"]
+        else:
+            lines.append("为您查到当前有效的会员促销活动：")
+            for act in activities:
+                lines.append(f"· {act.get('activityName') or '促销活动'}")
+                notice = act.get("notice") or {}
+                if notice.get("visible") and (notice.get("title") or notice.get("content")):
+                    if notice.get("title"):
+                        lines.append(f"  {notice['title']}")
+                    if notice.get("content"):
+                        lines.append(f"  {notice['content']}")
+                for p in act.get("plans") or []:
+                    tag = f"[{p.get('activityTag')}]" if p.get("activityTag") else ""
+                    lines.append(
+                        f"  {tag}{p.get('planName')} {p.get('periodType')} "
+                        f"活动价 {p.get('activityPriceYuan')} 元（原价 {p.get('originalPriceYuan')} 元，剩余 {p.get('remainText')}）"
+                    )
+            lines.append("需要我帮您打开会员中心参与活动吗？")
 
     elif tool_name == "get_dashboard_summary":
         goods_total = data.get("goodsTotal") or data.get("totalGoods")
@@ -2055,7 +2505,20 @@ async def stream_chat(
             # 截断过长内容，避免超出上下文
             if len(content) > 1200:
                 content = content[:1200] + "..."
-            history_messages.append({"role": msg_role, "content": content})
+            # 将 tool_calls 字段也纳入上下文，避免 AI 重复调用同一个工具
+            msg_entry: Dict[str, Any] = {"role": msg_role, "content": content}
+            tool_calls = row.get("tool_calls")
+            if tool_calls:
+                try:
+                    if isinstance(tool_calls, str):
+                        parsed = json.loads(tool_calls)
+                    else:
+                        parsed = tool_calls
+                    if isinstance(parsed, list) and len(parsed) > 0:
+                        msg_entry["tool_calls"] = parsed
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            history_messages.append(msg_entry)
     except Exception as exc:
         logger.warning(
             "stream_chat load history failed sessionId=%d errorType=%s",
@@ -2075,6 +2538,7 @@ async def stream_chat(
             temperature=0.7,
             request_id=request_id,
             messages=history_messages if history_messages else None,
+            timeout=60,
         )
     except Exception as exc:
         logger.warning(
@@ -2198,17 +2662,27 @@ async def stream_chat(
 
     if query_calls:
         tasks = [_exec_one_query(tn, args) for _, tn, args, _ in query_calls]
-        query_raw_results = await asyncio.gather(*tasks, return_exceptions=False)
-        # 提交事务（execute_tool 内可能有数据库写入）
         try:
-            await db.commit()
-        except Exception as exc:
-            logger.warning(
-                "stream_chat query tools commit failed errorType=%s",
-                type(exc).__name__,
-                exc_info=True,
+            query_raw_results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=False),
+                timeout=30.0,
             )
-            await db.rollback()
+            # 提交事务（execute_tool 内可能有数据库写入）
+            try:
+                await db.commit()
+            except Exception as exc:
+                logger.warning(
+                    "stream_chat query tools commit failed errorType=%s",
+                    type(exc).__name__,
+                    exc_info=True,
+                )
+                await db.rollback()
+        except asyncio.TimeoutError:
+            logger.warning(
+                "stream_chat query tools timeout tenantId=%d sessionId=%d",
+                tenant_id, sessionId,
+            )
+            query_raw_results = []
 
         for (_, tn, _, tcid), qres in zip(query_calls, query_raw_results):
             status = "executed" if qres.get("success") else "failed"
@@ -2252,17 +2726,97 @@ async def stream_chat(
                 session_id,
             )
             proactive_tasks = [_exec_one_query(tn, args) for tn, args in proactive_queries]
-            proactive_raw_results = await asyncio.gather(*proactive_tasks, return_exceptions=False)
             try:
-                await db.commit()
-            except Exception as exc:
-                logger.warning(
-                    "stream_chat proactive query commit failed errorType=%s",
-                    type(exc).__name__, exc_info=True,
+                proactive_raw_results = await asyncio.wait_for(
+                    asyncio.gather(*proactive_tasks, return_exceptions=False),
+                    timeout=30.0,
                 )
-                await db.rollback()
+                try:
+                    await db.commit()
+                except Exception as exc:
+                    logger.warning(
+                        "stream_chat proactive query commit failed errorType=%s",
+                        type(exc).__name__, exc_info=True,
+                    )
+                    await db.rollback()
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "stream_chat proactive query tools timeout tenantId=%d sessionId=%d",
+                    tenant_id, session_id,
+                )
+                proactive_raw_results = []
 
             for (tn, _), qres in zip(proactive_queries, proactive_raw_results):
+                status = "executed" if qres.get("success") else "failed"
+                proactive_complete = await call_java_complete(
+                    session_id=session_id,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    content="",
+                    tool_calls=[{
+                        "tool": tn,
+                        "arguments": {},
+                        "requiresConfirm": False,
+                        "description": f"小梦主动查询：{tn}",
+                    }],
+                )
+                proactive_tcids = proactive_complete.get("toolCallIds") or []
+                proactive_tcid = 0
+                if proactive_tcids and isinstance(proactive_tcids[0], dict):
+                    proactive_tcid = int(proactive_tcids[0].get("toolCallId") or 0)
+                await call_java_tool_result(
+                    tool_call_id=proactive_tcid,
+                    tenant_id=tenant_id,
+                    status=status,
+                    result=qres,
+                )
+                yield _format_sse_event("tool_result", {
+                    "type": "tool_result",
+                    "toolCallId": proactive_tcid,
+                    "tool": tn,
+                    "status": status,
+                    "result": qres,
+                    "message": qres.get("error") or "查询完成",
+                })
+                query_results.append({"tool": tn, "toolCallId": proactive_tcid, "result": qres})
+
+    # 10.5 主动查询补全（查询意图）：AI 首回复说「我帮你查一下/稍等」但漏输出工具调用时，
+    #      按用户消息关键词自动触发对应查询工具，避免用户被吊在半空
+    proactive_query_fired = False
+    if (not query_calls and not write_calls and not query_results
+            and (_is_transitional_reply(final_content) or _is_evasive_reply(final_content)
+                 or _is_generic_help_reply(final_content))
+            and not is_casual_chat(user_message)):
+        required_queries = _detect_required_query_for_query_intent(user_message)
+        if required_queries:
+            proactive_query_fired = True
+            logger.info(
+                "stream_chat proactive query for query intent tools=%s sessionId=%d",
+                ",".join(tn for tn, _ in required_queries),
+                session_id,
+            )
+            proactive_tasks = [_exec_one_query(tn, args) for tn, args in required_queries]
+            try:
+                proactive_raw_results = await asyncio.wait_for(
+                    asyncio.gather(*proactive_tasks, return_exceptions=False),
+                    timeout=30.0,
+                )
+                try:
+                    await db.commit()
+                except Exception as exc:
+                    logger.warning(
+                        "stream_chat proactive query intent commit failed errorType=%s",
+                        type(exc).__name__, exc_info=True,
+                    )
+                    await db.rollback()
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "stream_chat proactive query intent tools timeout tenantId=%d sessionId=%d",
+                    tenant_id, session_id,
+                )
+                proactive_raw_results = []
+
+            for (tn, _), qres in zip(required_queries, proactive_raw_results):
                 status = "executed" if qres.get("success") else "failed"
                 proactive_complete = await call_java_complete(
                     session_id=session_id,
@@ -2307,8 +2861,8 @@ async def stream_chat(
         if user_has_write_intent and not write_calls:
             # 场景B：写操作意图但首回复未生成写工具
             need_second_reply = True
-        elif _is_transitional_reply(final_content):
-            # 场景A/C：首回复是过渡性回复，需要完整的二次回复
+        elif _is_transitional_reply(final_content) or proactive_query_fired:
+            # 场景A/C：首回复是过渡性回复/回避性回复（已主动补查），需要完整的二次回复
             need_second_reply = True
 
     if need_second_reply:
@@ -2338,28 +2892,66 @@ async def stream_chat(
                     "stream_chat second reply persisted sessionId=%d deducted=%s",
                     session_id, second_reply_complete.get("deducted"),
                 )
+            elif not second_tool_name and query_results:
+                # 二次推理返回空（如 AI_PROVIDER_EMPTY_RESPONSE）：用确定性兜底摘要补全，
+                # 避免用户只看到「我先查一下」而拿不到查询结果
+                fallback = build_fallback_summary_multi(
+                    user_message=user_message,
+                    tool_results=query_results,
+                )
+                if fallback:
+                    logger.info(
+                        "stream_chat second reply empty, use fallback summary sessionId=%d",
+                        session_id,
+                    )
+                    yield _format_sse_event("delta", {
+                        "type": "delta",
+                        "content": fallback,
+                    })
+                    try:
+                        await call_java_complete(
+                            session_id=session_id,
+                            user_id=user_id,
+                            tenant_id=tenant_id,
+                            content=fallback,
+                            tool_calls=None,
+                        )
+                    except Exception:
+                        pass
             # 若二次回复生成了写操作工具调用，持久化并发送 tool_call 事件
-            if second_tool_name and second_tool_args is not None:
+            # 二次推理未生成时，用确定性兜底按「用户意图 + 查询结果」构造写工具
+            effective_tool_name = second_tool_name
+            effective_tool_args = second_tool_args
+            if not effective_tool_name and user_has_write_intent:
+                effective_tool_name, effective_tool_args = _build_write_tool_from_query_results(
+                    user_message, query_results,
+                )
+                if effective_tool_name:
+                    logger.info(
+                        "stream_chat deterministic write tool fallback tool=%s sessionId=%d",
+                        effective_tool_name, session_id,
+                    )
+            if effective_tool_name and effective_tool_args is not None:
                 second_tool_complete = await call_java_complete(
                     session_id=session_id,
                     user_id=user_id,
                     tenant_id=tenant_id,
                     content="",
                     tool_calls=[{
-                        "tool": second_tool_name,
-                        "arguments": second_tool_args,
+                        "tool": effective_tool_name,
+                        "arguments": effective_tool_args,
                         "requiresConfirm": True,
-                        "description": f"小梦请求执行工具：{second_tool_name}",
+                        "description": f"小梦请求执行工具：{effective_tool_name}",
                     }],
                 )
                 second_tcids = second_tool_complete.get("toolCallIds") or []
                 second_tcid = 0
                 if second_tcids and isinstance(second_tcids[0], dict):
                     second_tcid = int(second_tcids[0].get("toolCallId") or 0)
-                write_calls.append((len(tool_calls_parsed), second_tool_name, second_tool_args, second_tcid))
+                write_calls.append((len(tool_calls_parsed), effective_tool_name, effective_tool_args, second_tcid))
                 logger.info(
                     "stream_chat second reply write tool generated tool=%s sessionId=%d",
-                    second_tool_name, session_id,
+                    effective_tool_name, session_id,
                 )
         except Exception as exc:
             logger.warning(

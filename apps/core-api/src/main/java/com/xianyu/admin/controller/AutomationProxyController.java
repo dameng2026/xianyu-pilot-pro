@@ -28,6 +28,7 @@ import org.springframework.web.multipart.MultipartHttpServletRequest;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Base64;
+import java.io.InputStream;
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -2157,6 +2158,38 @@ public class AutomationProxyController {
     @GetMapping("/announcement/list")
     public Result<Object> announcementList() {
         return Result.ok(contentService.listCommercialHomeAnnouncements());
+    }
+
+    /**
+     * 前台更新日志（供 AI 客服小梦与前台「关于」页实时查询）。
+     *
+     * 数据源为 classpath:release-notes.json，由发布流程从
+     * apps/user-web/src/data/releaseNotes.js 同步生成，保证与前台展示一致。
+     * 1 分钟内存缓存，避免频繁读盘。
+     */
+    private static volatile Map<String, Object> releaseNotesCache;
+    private static volatile long releaseNotesCacheTs = 0L;
+
+    @GetMapping("/content/release-notes")
+    public Result<Object> releaseNotes() {
+        long now = System.currentTimeMillis();
+        Map<String, Object> cached = releaseNotesCache;
+        if (cached != null && now - releaseNotesCacheTs < 60_000L) {
+            return Result.ok(cached);
+        }
+        try (InputStream in = getClass().getClassLoader().getResourceAsStream("release-notes.json")) {
+            if (in == null) {
+                log.warn("release-notes.json not found on classpath");
+                return Result.ok(Map.of("currentVersion", "", "releaseNotes", List.of(), "message", "更新日志暂不可用"));
+            }
+            Map<String, Object> data = jsonMapper.readValue(in, new TypeReference<Map<String, Object>>() {});
+            releaseNotesCache = data;
+            releaseNotesCacheTs = now;
+            return Result.ok(data);
+        } catch (Exception e) {
+            log.warn("load release notes failed, errorType={}", e.getClass().getSimpleName(), e);
+            return Result.ok(Map.of("currentVersion", "", "releaseNotes", List.of(), "message", "更新日志暂不可用"));
+        }
     }
 
     // ==================== 退款管理 ====================

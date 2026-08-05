@@ -1904,6 +1904,12 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
                 + "SELECT NULL, 'membership', '会员权益说明', '会员分四档：普通用户（免费）/ VIP（单店版）/ VIP / SVIP。普通用户免费使用，可绑定 1 个闲鱼店铺；VIP（单店版）与 VIP 功能权限一致，限 1 个店铺；VIP 与 SVIP 不限店铺数量，其中 SVIP 为最高等级，享最高优先级与专属服务。Token 充值后可用于 AI 功能调用。升级路径：在个人中心或会员中心选择套餐升级。具体权益差异请以系统实际展示为准。', '会员,vip,svip,svp,vip单店版,普通,token,充值,升级,权益,店铺', 100, 1, 10, NOW(), NOW() "
                 + "WHERE NOT EXISTS (SELECT 1 FROM ai_cs_knowledge WHERE tenant_id IS NULL AND category='membership' AND title='会员权益说明')");
         executeQuietly("UPDATE ai_cs_knowledge SET content='会员分四档：普通用户（免费）/ VIP（单店版）/ VIP / SVIP。普通用户免费使用，可绑定 1 个闲鱼店铺；VIP（单店版）与 VIP 功能权限一致，限 1 个店铺；VIP 与 SVIP 不限店铺数量，其中 SVIP 为最高等级，享最高优先级与专属服务。Token 充值后可用于 AI 功能调用。升级路径：在个人中心或会员中心选择套餐升级。具体权益差异请以系统实际展示为准。', keywords='会员,vip,svip,svp,vip单店版,普通,token,充值,升级,权益,店铺', updated_time=NOW() WHERE tenant_id IS NULL AND category='membership' AND title='会员权益说明'");
+        // V1.70：刷新会员/Token 过期知识条目 + 新增实时信息查询规则（公告/更新日志/价格/店铺限制/功能对比一律走接口）
+        seedAiCsKnowledgeBaseFromMigrationV1_70();
+        // V1.72：确保会员促销三张表存在 + 刷新促销知识条目（促销活动实时查询）
+        seedAiCsKnowledgeBaseFromMigrationV1_72();
+        // V1.73：刷新 AI 客服计费描述（小梦对话免费）与上下文压缩条目（移除内部字段）
+        seedAiCsKnowledgeBaseFromMigrationV1_73();
         executeQuietly("INSERT INTO ai_cs_knowledge(tenant_id, category, title, content, keywords, priority, enabled, sort_order, created_time, updated_time) "
                 + "SELECT NULL, 'troubleshoot', '故障排查指南', '常见故障：1.Cookie 失效→重新登录账号 2.WS 掉线→检查网络或重启服务 3.滑块求解失败→切换求解方式或手动提取 Cookie 4.多账号同时掉线→检查 IP 是否被风控 5.消息不同步→检查 WS 连接状态。', '故障,排查,cookie,ws,滑块,掉线,风控', 100, 1, 11, NOW(), NOW() "
                 + "WHERE NOT EXISTS (SELECT 1 FROM ai_cs_knowledge WHERE tenant_id IS NULL AND category='troubleshoot' AND title='故障排查指南')");
@@ -2194,6 +2200,160 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
             log.info("V1.46 knowledge base seed: executed={}, skipped={}", executed, skipped);
         } catch (Exception e) {
             log.warn("V1.46 knowledge base seed failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 从 V1.70 迁移文件刷新 AI 客服知识库（会员四档/Token 计费/实时信息查询规则）。
+     *
+     * <p>SQL 文件位于 classpath:db/migration/V1.70__refresh_ai_cs_knowledge_realtime_info.sql，
+     * 包含 UPDATE（按标题刷新过期条目）与 INSERT ... WHERE NOT EXISTS（新增条目），幂等可重入。
+     * 读取文件并按分号分割后逐条执行，单条失败不影响其他语句。
+     */
+    private void seedAiCsKnowledgeBaseFromMigrationV1_70() {
+        try {
+            var resource = new org.springframework.core.io.ClassPathResource(
+                    "db/migration/V1.70__refresh_ai_cs_knowledge_realtime_info.sql"
+            );
+            if (!resource.exists()) {
+                log.debug("V1.70 knowledge base migration file not found on classpath, skipping");
+                return;
+            }
+            String sql;
+            try (var is = resource.getInputStream()) {
+                sql = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+            if (sql == null || sql.isBlank()) {
+                return;
+            }
+            int executed = 0;
+            int skipped = 0;
+            for (String stmt : sql.split(";")) {
+                StringBuilder clean = new StringBuilder();
+                for (String line : stmt.split("\n")) {
+                    String trimmedLine = line.trim();
+                    if (trimmedLine.startsWith("--") || trimmedLine.isEmpty()) {
+                        continue;
+                    }
+                    clean.append(line).append("\n");
+                }
+                String finalStmt = clean.toString().trim();
+                if (finalStmt.isEmpty()) {
+                    continue;
+                }
+                try {
+                    jdbcTemplate.execute(finalStmt);
+                    executed++;
+                } catch (Exception e) {
+                    skipped++;
+                    log.debug("V1.70 knowledge seed statement skipped: {}", e.getMessage());
+                }
+            }
+            log.info("V1.70 knowledge base seed: executed={}, skipped={}", executed, skipped);
+        } catch (Exception e) {
+            log.warn("V1.70 knowledge base seed failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 从 V1.72 迁移文件执行：确保会员促销三张表存在 + 刷新促销知识条目。
+     *
+     * <p>SQL 文件位于 classpath:db/migration/V1.72__ensure_member_promotion_tables_and_refresh_kb.sql，
+     * 包含 CREATE TABLE IF NOT EXISTS / UPDATE / INSERT ... WHERE NOT EXISTS，幂等可重入。
+     */
+    private void seedAiCsKnowledgeBaseFromMigrationV1_72() {
+        try {
+            var resource = new org.springframework.core.io.ClassPathResource(
+                    "db/migration/V1.72__ensure_member_promotion_tables_and_refresh_kb.sql"
+            );
+            if (!resource.exists()) {
+                log.debug("V1.72 migration file not found on classpath, skipping");
+                return;
+            }
+            String sql;
+            try (var is = resource.getInputStream()) {
+                sql = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+            if (sql == null || sql.isBlank()) {
+                return;
+            }
+            int executed = 0;
+            int skipped = 0;
+            for (String stmt : sql.split(";")) {
+                StringBuilder clean = new StringBuilder();
+                for (String line : stmt.split("\n")) {
+                    String trimmedLine = line.trim();
+                    if (trimmedLine.startsWith("--") || trimmedLine.isEmpty()) {
+                        continue;
+                    }
+                    clean.append(line).append("\n");
+                }
+                String finalStmt = clean.toString().trim();
+                if (finalStmt.isEmpty()) {
+                    continue;
+                }
+                try {
+                    jdbcTemplate.execute(finalStmt);
+                    executed++;
+                } catch (Exception e) {
+                    skipped++;
+                    log.debug("V1.72 seed statement skipped: {}", e.getMessage());
+                }
+            }
+            log.info("V1.72 seed: executed={}, skipped={}", executed, skipped);
+        } catch (Exception e) {
+            log.warn("V1.72 seed failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 从 V1.73 迁移文件刷新 AI 客服计费/上下文压缩知识条目。
+     *
+     * <p>SQL 文件位于 classpath:db/migration/V1.73__refresh_ai_cs_chat_charging_kb.sql，
+     * 仅包含 UPDATE，幂等可重入。
+     */
+    private void seedAiCsKnowledgeBaseFromMigrationV1_73() {
+        try {
+            var resource = new org.springframework.core.io.ClassPathResource(
+                    "db/migration/V1.73__refresh_ai_cs_chat_charging_kb.sql"
+            );
+            if (!resource.exists()) {
+                log.debug("V1.73 migration file not found on classpath, skipping");
+                return;
+            }
+            String sql;
+            try (var is = resource.getInputStream()) {
+                sql = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+            if (sql == null || sql.isBlank()) {
+                return;
+            }
+            int executed = 0;
+            int skipped = 0;
+            for (String stmt : sql.split(";")) {
+                StringBuilder clean = new StringBuilder();
+                for (String line : stmt.split("\n")) {
+                    String trimmedLine = line.trim();
+                    if (trimmedLine.startsWith("--") || trimmedLine.isEmpty()) {
+                        continue;
+                    }
+                    clean.append(line).append("\n");
+                }
+                String finalStmt = clean.toString().trim();
+                if (finalStmt.isEmpty()) {
+                    continue;
+                }
+                try {
+                    jdbcTemplate.execute(finalStmt);
+                    executed++;
+                } catch (Exception e) {
+                    skipped++;
+                    log.debug("V1.73 seed statement skipped: {}", e.getMessage());
+                }
+            }
+            log.info("V1.73 seed: executed={}, skipped={}", executed, skipped);
+        } catch (Exception e) {
+            log.warn("V1.73 seed failed: {}", e.getMessage());
         }
     }
 

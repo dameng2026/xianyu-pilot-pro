@@ -305,7 +305,9 @@ async def list_solve_records(
 # ============================================================
 
 # 允许的求解方案白名单（避免前端/crawler-service 注入任意字符串）
-_ALLOWED_SOLVE_SCHEMES = {"python_script", "playwright"}
+# no_captcha: 求解时未检测到 Baxia 弹窗（已通过验证/无需验证），免滑块直接成功
+# x5sec_cached: x5sec 缓存命中，免滑块直接成功
+_ALLOWED_SOLVE_SCHEMES = {"python_script", "playwright", "no_captcha", "x5sec_cached"}
 # 允许的拖动方法白名单
 _ALLOWED_DRAG_METHODS = {"in_container", "out_container", "none"}
 # 允许的速度策略白名单

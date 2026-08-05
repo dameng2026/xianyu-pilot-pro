@@ -43,8 +43,8 @@ X5SEC_REFRESH_MAX_ACCOUNTS = int(
 )
 
 
-async def _fetch_x5sec_via_http(cookie_str: str) -> str:
-    """纯 HTTP 提取 x5sec（方案 D 来源 2：GET 闲鱼首页 Set-Cookie）。
+async def _fetch_x5sec_via_homepage_only(cookie_str: str) -> str:
+    """回退方案：仅首页 GET（ws_token 辅助函数不可用时使用）。
 
     Returns:
         提取到的 x5sec 值；未提取到返回空字符串
@@ -75,6 +75,60 @@ async def _fetch_x5sec_via_http(cookie_str: str) -> str:
                 return m.group(1)
     except Exception as e:
         logger.debug("x5sec 主动刷新 HTTP 提取失败: %s", e)
+    return ""
+
+
+async def _fetch_x5sec_via_http(cookie_str: str) -> str:
+    """纯 HTTP 提取 x5sec（复用 ws_token 多端点探测逻辑，不含主动 CAPTCHA 触发）。
+
+    2026-08-05 强化：从单一首页 GET 扩展为多端点探测（首页 + im + personal + _m_h5_tk 刷新 API）。
+    不同端点在不同风控状态下可能下发 x5sec，多端点探测提升主动刷新命中率。
+
+    设计约束（遵守 cookie-valid-ws-persistence.md）：
+    - **不调用来源 6（主动 Token API）**：主动刷新场景下调用 Token API 可能加码风控，
+      违反"不主动触发滑块求解"原则。仅用 GET 端点探测 + _m_h5_tk 刷新 API。
+    - 不启动浏览器、不调用 crawler-service 滑块求解端点。
+
+    Returns:
+        提取到的 x5sec 值；未提取到返回空字符串
+    """
+    try:
+        from .ws_token import (
+            _X5SEC_GET_PROBE_URLS,
+            _fetch_x5sec_from_get_endpoint,
+            _fetch_x5sec_from_refresh_mh5tk,
+            extract_m_h5_tk_from_cookie,
+        )
+    except ImportError as e:
+        logger.debug("x5sec 主动刷新: ws_token 辅助函数不可用，回退首页 GET: %s", e)
+        return await _fetch_x5sec_via_homepage_only(cookie_str)
+
+    m_h5_tk = extract_m_h5_tk_from_cookie(cookie_str) or ""
+
+    # 多端点 GET 探测（首页 + im + personal）
+    for probe_url in _X5SEC_GET_PROBE_URLS:
+        x5sec = await asyncio.to_thread(
+            _fetch_x5sec_from_get_endpoint, probe_url, cookie_str, None
+        )
+        if x5sec:
+            logger.info(
+                "x5sec 主动刷新: ✓ 多端点探测命中 url=%s x5sec_len=%d",
+                probe_url, len(x5sec),
+            )
+            return x5sec
+
+    # _m_h5_tk 刷新 API 探测
+    if m_h5_tk:
+        x5sec = await asyncio.to_thread(
+            _fetch_x5sec_from_refresh_mh5tk, cookie_str, m_h5_tk, None
+        )
+        if x5sec:
+            logger.info(
+                "x5sec 主动刷新: ✓ _m_h5_tk 刷新 API 下发 x5sec len=%d",
+                len(x5sec),
+            )
+            return x5sec
+
     return ""
 
 

@@ -90,16 +90,119 @@ def _try_x5sec_injection(cookie_str: str, m_h5_tk: str, proxies: Optional[dict] 
         return None, None
 
 
+# ============================================================
+# 2026-08-05 强化：纯 HTTP 多端点 x5sec 探测（满足"仅凭 cookie"约束）
+# 不同端点在不同风控状态下可能下发 x5sec，多端点探测提升命中率。
+# 全部来源均无需缓存、无需浏览器、无需 cookie 自带 x5sec。
+# ============================================================
+
+# x5sec HTTP 探测端点（GET 类，按优先级排序）
+_X5SEC_GET_PROBE_URLS = (
+    "https://www.goofish.com/",
+    "https://www.goofish.com/im",
+    "https://www.goofish.com/personal?spm=a21ybx",
+)
+
+
+def _extract_x5sec_from_set_cookie(set_cookie: str) -> Optional[str]:
+    """从 Set-Cookie 头提取 x5sec 值（精确匹配，不匹配 x5secdata/x5sectag）。"""
+    if not set_cookie:
+        return None
+    m = re.search(r"x5sec=([^;]+)", set_cookie)
+    if m and m.group(1) and len(m.group(1)) > 5:
+        return m.group(1)
+    return None
+
+
+def _fetch_x5sec_from_get_endpoint(url: str, cookie_str: str, proxies: Optional[dict] = None) -> Optional[str]:
+    """通用 GET 端点探测：访问指定 URL，从 Set-Cookie 提取 x5sec。
+
+    满足"仅凭 cookie"约束：无需缓存、无需浏览器、无需 cookie 自带 x5sec。
+    """
+    try:
+        resp = requests.get(
+            url,
+            headers={**H_API, "Cookie": cookie_str, "Referer": "https://www.goofish.com/"},
+            timeout=8,
+            allow_redirects=False,
+            proxies=proxies,
+        )
+        set_cookie = resp.headers.get("set-cookie", "")
+        x5sec = _extract_x5sec_from_set_cookie(set_cookie)
+        if x5sec:
+            logger.info(
+                "_fetch_x5sec_from_get_endpoint: ✓ %s 下发 x5sec (长度=%d status=%d)",
+                url, len(x5sec), resp.status_code,
+            )
+            return x5sec
+        logger.debug(
+            "_fetch_x5sec_from_get_endpoint: %s 未下发 x5sec (status=%d setCookieLen=%d)",
+            url, resp.status_code, len(set_cookie),
+        )
+    except Exception as e:
+        log_service_failure(logger, e, operation=f"http_x5sec_get:{url}", level=logging.DEBUG)
+    return None
+
+
+def _fetch_x5sec_from_refresh_mh5tk(cookie_str: str, m_h5_tk: str, proxies: Optional[dict] = None) -> Optional[str]:
+    """_m_h5_tk 刷新 API 探测：调用 mtop.gaia.nodejs.gaia.idle.data.gw.v2.index.get。
+
+    此 API 用于刷新 _m_h5_tk，响应 Set-Cookie 可能附带下发 x5sec。
+    """
+    if not cookie_str or not m_h5_tk:
+        return None
+    token = m_h5_tk.split("_")[0] if "_" in m_h5_tk else m_h5_tk
+    if not token:
+        return None
+    try:
+        t_ms = int(time.time() * 1000)
+        data_str = "{}"
+        sign = _make_sign(token, t_ms, data_str)
+        params = {
+            "jsv": "2.7.2",
+            "appKey": APP_KEY,
+            "t": str(t_ms),
+            "sign": sign,
+            "v": "1.0",
+            "type": "originaljson",
+            "dataType": "json",
+            "api": REFRESH_MH5TK_API,
+            "sessionOption": "AutoLoginOnly",
+            "accountSite": "xianyu",
+        }
+        resp = requests.post(
+            REFRESH_MH5TK_URL,
+            params=params,
+            data={"data": data_str},
+            headers={**H_API, "Cookie": cookie_str, "Referer": "https://www.goofish.com/"},
+            timeout=10,
+            proxies=proxies,
+        )
+        set_cookie = resp.headers.get("set-cookie", "")
+        x5sec = _extract_x5sec_from_set_cookie(set_cookie)
+        if x5sec:
+            logger.info(
+                "_fetch_x5sec_from_refresh_mh5tk: ✓ 刷新 API 下发 x5sec (长度=%d)",
+                len(x5sec),
+            )
+            return x5sec
+        logger.debug("_fetch_x5sec_from_refresh_mh5tk: 刷新 API 未下发 x5sec")
+    except Exception as e:
+        log_service_failure(logger, e, operation="http_x5sec_refresh_mh5tk", level=logging.DEBUG)
+    return None
+
+
 def _try_http_x5sec_extract(cookie_str: str, m_h5_tk: str, proxies: Optional[dict] = None) -> Tuple[Optional[str], Optional[str]]:
     """x5sec 主方案（优先级 2.5）：纯 HTTP 提取 x5sec，注入后重试 Token API。
 
     无需浏览器，只需 HTTP 请求。是最快的 x5sec 获取方式（~1 秒）。
 
-    两个来源：
+    六个来源（2026-08-05 强化多端点探测，全部满足"仅凭 cookie"约束）：
     1. 复用刚发出的 Token API 请求的 CAPTCHA 响应 Set-Cookie（零额外请求）
        — _call_token_api 检测到 CAPTCHA_NEEDED 时，已将 Set-Cookie 中的 x5sec 存入 _last_captcha_x5sec
-    2. 主动 HTTP GET goofish.com 首页，检查 Set-Cookie 是否包含 x5sec
-       — 如果账号未被 punish，服务器可能在首页响应中设置 x5sec
+    2-4. 多端点 GET 探测（首页 + im 页 + personal 页），从 Set-Cookie 提取 x5sec
+    5. _m_h5_tk 刷新 API（mtop.gaia.nodejs.gaia.idle.data.gw.v2.index.get）探测
+    6. 主动调用 Token API：若账号未被 punish 直接返回 accessToken；否则从 CAPTCHA 响应提取 x5sec
 
     详见 .trae/rules/x5sec-research-knowledge.md 方案 D（纯 HTTP 提取）。
 
@@ -121,45 +224,58 @@ def _try_http_x5sec_extract(cookie_str: str, m_h5_tk: str, proxies: Optional[dic
         return None, None
 
     x5sec_value = None
+    x5sec_source = "unknown"
 
     # 来源 1：复用 CAPTCHA 响应中的 x5sec（零成本）
     global _last_captcha_x5sec
     if _last_captcha_x5sec:
         x5sec_value = _last_captcha_x5sec
+        x5sec_source = "captcha_response_reuse"
         logger.info("_try_http_x5sec_extract: ✓ 复用 CAPTCHA 响应 Set-Cookie 中的 x5sec (长度=%d)", len(x5sec_value))
         _last_captcha_x5sec = None  # 用后清空，避免重复使用
 
-    # 来源 2：主动 HTTP GET goofish.com 首页，检查 Set-Cookie
+    # 来源 2-4：多端点 GET 探测（首页 + im 页 + personal 页）
+    # 不同端点在不同风控状态下可能下发 x5sec，多端点探测提升命中率
     if not x5sec_value:
-        logger.info("_try_http_x5sec_extract: CAPTCHA 响应无 x5sec，尝试 HTTP GET goofish.com 首页")
-        try:
-            homepage_url = "https://www.goofish.com/"
-            resp = requests.get(
-                homepage_url,
-                headers={
-                    **H_API,
-                    "Cookie": cookie_str,
-                    "Referer": "https://www.goofish.com/",
-                },
-                timeout=8,
-                allow_redirects=False,  # 不跟随重定向（登录页重定向会丢失 Set-Cookie）
-                proxies=proxies,
+        logger.info("_try_http_x5sec_extract: CAPTCHA 响应无 x5sec，启动多端点 GET 探测")
+        for probe_url in _X5SEC_GET_PROBE_URLS:
+            x5sec_value = _fetch_x5sec_from_get_endpoint(probe_url, cookie_str, proxies)
+            if x5sec_value:
+                x5sec_source = f"get_endpoint:{probe_url}"
+                logger.info("_try_http_x5sec_extract: ✓ 多端点探测命中 url=%s", probe_url)
+                break
+
+    # 来源 5：_m_h5_tk 刷新 API 探测（响应 Set-Cookie 可能附带下发 x5sec）
+    if not x5sec_value:
+        x5sec_value = _fetch_x5sec_from_refresh_mh5tk(cookie_str, m_h5_tk, proxies)
+        if x5sec_value:
+            x5sec_source = "refresh_mh5tk"
+            logger.info("_try_http_x5sec_extract: ✓ _m_h5_tk 刷新 API 下发 x5sec")
+
+    # 来源 6：主动调用 Token API，可能直接成功或从 CAPTCHA 响应提取 x5sec
+    # 当前面 5 个来源都未获取到时，主动调一次 Token API：
+    #   - 若账号未被 punish，可能直接返回 accessToken（无需 x5sec）
+    #   - 若被 punish，CAPTCHA 响应 Set-Cookie 可能下发 x5sec
+    if not x5sec_value:
+        logger.info("_try_http_x5sec_extract: 多端点探测未获取 x5sec，主动调用 Token API 尝试")
+        direct_result = _call_token_api(cookie_str, m_h5_tk, proxies=proxies)
+        if direct_result and direct_result not in (CAPTCHA_NEEDED, SESSION_EXPIRED):
+            logger.info(
+                "_try_http_x5sec_extract: ✓ 主动调用 Token API 直接成功（无需 x5sec）accessToken长度=%d",
+                len(direct_result),
             )
-            set_cookie = resp.headers.get("set-cookie", "")
-            if set_cookie:
-                x5sec_match = re.search(r"x5sec=([^;]+)", set_cookie)
-                if x5sec_match and x5sec_match.group(1):
-                    x5sec_value = x5sec_match.group(1)
-                    logger.info("_try_http_x5sec_extract: ✓ HTTP GET 首页 Set-Cookie 包含 x5sec (长度=%d)", len(x5sec_value))
-                else:
-                    logger.debug("_try_http_x5sec_extract: HTTP GET 首页 Set-Cookie 无 x5sec (前200字符=%s)", set_cookie[:200])
-            else:
-                logger.debug("_try_http_x5sec_extract: HTTP GET 首页无 Set-Cookie 头")
-        except Exception as e:
-            log_service_failure(logger, e, operation="http_x5sec_homepage", level=logging.DEBUG)
+            return direct_result, cookie_str
+        if _last_captcha_x5sec:
+            x5sec_value = _last_captcha_x5sec
+            x5sec_source = "active_captcha_response"
+            _last_captcha_x5sec = None
+            logger.info(
+                "_try_http_x5sec_extract: ✓ 主动触发 CAPTCHA 响应下发 x5sec (长度=%d)",
+                len(x5sec_value),
+            )
 
     if not x5sec_value:
-        logger.info("_try_http_x5sec_extract: 纯 HTTP 提取未获取到 x5sec")
+        logger.info("_try_http_x5sec_extract: 纯 HTTP 多端点探测未获取到 x5sec")
         return None, None
 
     # 注入 x5sec 到 cookie 并重试 Token API
@@ -170,10 +286,16 @@ def _try_http_x5sec_extract(cookie_str: str, m_h5_tk: str, proxies: Optional[dic
 
     result = _call_token_api(injected_cookie, m_h5_tk, proxies=proxies)
     if result == CAPTCHA_NEEDED:
-        logger.warning("_try_http_x5sec_extract: 注入 HTTP 提取的 x5sec 后仍触发滑块（x5sec 可能已失效）")
+        logger.warning(
+            "_try_http_x5sec_extract: 注入 HTTP 提取的 x5sec 后仍触发滑块（x5sec 可能已失效）source=%s",
+            x5sec_source,
+        )
         return None, None
     elif result:
-        logger.info("_try_http_x5sec_extract: ✓ 纯 HTTP x5sec 注入成功! 获取到 accessToken (长度=%d)", len(result))
+        logger.info(
+            "_try_http_x5sec_extract: ✓ 纯 HTTP x5sec 注入成功! source=%s accessToken长度=%d",
+            x5sec_source, len(result),
+        )
         # 2026-08-03 新增：缓存 x5sec 到 Redis，后续 WS 重连可免滑块
         try:
             from .x5sec_cache_client import cache_x5sec
@@ -184,7 +306,7 @@ def _try_http_x5sec_extract(cookie_str: str, m_h5_tk: str, proxies: Optional[dic
         # 方案 K：记录 HTTP 提取的 x5sec 样本（用于离线逆向分析）
         try:
             from .mtop_sign_research import log_x5sec_sample
-            log_x5sec_sample(cookie_str, x5sec_value, source="http_extract")
+            log_x5sec_sample(cookie_str, x5sec_value, source=f"http_extract:{x5sec_source}")
         except Exception:
             pass
         return result, injected_cookie
@@ -348,8 +470,14 @@ H_API = {
     "Origin": "https://www.goofish.com",
     "Referer": "https://www.goofish.com/",
     "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    # 2026-08-05 强化：补全现代浏览器必发的 Client Hints 头，降低机器人特征评分
+    # sec-ch-ua-full-version-list 与 User-Agent 的 Chrome 版本必须一致
+    "sec-ch-ua-full-version-list": '"Not_A Brand";v="8.0.0.0", "Chromium";v="120.0.0.0", "Google Chrome";v="120.0.0.0"',
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"Windows"',
+    "sec-ch-ua-platform-version": '"15.0.0"',
+    "sec-ch-ua-arch": '"x86"',
+    "sec-ch-ua-bitness": '"64"',
     "sec-fetch-site": "same-site",
     "sec-fetch-mode": "cors",
     "sec-fetch-dest": "empty",
@@ -1019,7 +1147,7 @@ def get_ws_token_with_refreshed_m_h5_tk(
             return None, None, "session_expired", None
         if result == CAPTCHA_NEEDED:
             logger.warning("Cookie 中的 _m_h5_tk 触发滑块验证 (proxy=%s)", proxy_entry.get("ip") if proxy_entry else "direct")
-            # [优先级 1.5] 方案 K：本地生成 x5sec（待逆向完成，当前始终返回 None）
+            # [优先级 1.5] 方案 K：本地生成 x5sec（2026-08-05 已实现 Route 1/3/I）
             # 研究阶段：不消耗额外请求，仅在 PLAN_K_ENABLED=true 时尝试
             try:
                 from .mtop_sign_research import try_plan_k_x5sec

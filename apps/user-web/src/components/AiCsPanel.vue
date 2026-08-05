@@ -168,37 +168,6 @@
                 </div>
 
                 <div
-                  v-else-if="msg.type === 'quota_notice'"
-                  class="ai-cs-quota"
-                  :class="`quota-${msg.quotaType || 'exceeded'}`"
-                >
-                  <div class="ai-cs-quota-head">
-                    <span class="ai-cs-quota-icon" aria-hidden="true">
-                      <svg v-if="msg.quotaType === 'warning'" viewBox="0 0 24 24" width="14" height="14">
-                        <path d="M12 2 1 21h22L12 2zm0 4 8 14H4l8-14zm-1 5v4h2v-4h-2zm0 5v2h2v-2h-2z" fill="currentColor"/>
-                      </svg>
-                      <svg v-else viewBox="0 0 24 24" width="14" height="14">
-                        <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 4a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm-1 5h2v6h-2v-6z" fill="currentColor"/>
-                      </svg>
-                    </span>
-                    <strong>{{ msg.quotaType === 'warning' ? '免费额度即将用完' : '免费额度已用完' }}</strong>
-                  </div>
-                  <p class="ai-cs-quota-text">{{ msg.content }}</p>
-                  <div v-if="msg.perMessageTokens" class="ai-cs-quota-meta">
-                    <span class="ai-cs-quota-tag">今日已发 {{ msg.usedQuota || 0 }} 条 / 免费 {{ msg.dailyFreeQuota || 0 }} 条</span>
-                    <span class="ai-cs-quota-tag accent">扣费 {{ msg.perMessageTokens }} Token/条</span>
-                  </div>
-                  <button
-                    v-if="msg.quotaType === 'exceeded'"
-                    type="button"
-                    class="ai-cs-quota-btn"
-                    @click="onRecharge"
-                  >
-                    充值 Token
-                  </button>
-                </div>
-
-                <div
                   v-else-if="msg.type === 'tool_call'"
                   class="ai-cs-tool-card"
                   :class="`tool-${msg.status}`"
@@ -213,6 +182,12 @@
                   </div>
                   <p v-if="msg.description" class="ai-cs-tool-desc">{{ msg.description }}</p>
                   <pre v-if="msg.argumentsText && msg.expanded" class="ai-cs-tool-args">{{ msg.argumentsText }}</pre>
+
+                  <!-- 二维码图片（create_qr_login 工具结果） -->
+                  <div v-if="msg.qrImage" class="ai-cs-tool-qr">
+                    <img :src="msg.qrImage" alt="扫码登录二维码" class="ai-cs-qr-img" />
+                    <span class="ai-cs-qr-tip">请使用闲鱼 App 扫描二维码完成登录</span>
+                  </div>
 
                   <div v-if="msg.status === 'pending'" class="ai-cs-tool-actions">
                     <button type="button" class="ai-cs-tool-btn accept" @click="onToolConfirm(msg, true)">
@@ -262,6 +237,7 @@
             class="ai-cs-input"
             placeholder="输入消息，Enter 发送，Shift+Enter 换行"
             rows="1"
+            maxlength="2000"
             :disabled="!ready || streaming"
             @keydown.enter.exact.prevent="onSend"
             @input="autoResize"
@@ -344,7 +320,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['close'])
 
-const AVATAR = 'http://localhost:5174/xya/chat_ui_assets/chat_ui_assets_023.png'
+const AVATAR = '/xya/chat_ui_assets/chat_ui_assets_023.png'
 const avatar = AVATAR
 
 const messagesRef = ref(null)
@@ -367,30 +343,6 @@ const historyLoading = ref(false)
 const historyError = ref('')
 const historyList = ref([])
 const resumingSessionId = ref(null)
-
-// 免费额度提醒按日去重（跨会话、跨刷新仅提醒一次）
-// 使用 localStorage 按日记录，避免每次刷新页面或重开会话都重复提醒
-function getQuotaShownDate(key) {
-  try {
-    return localStorage.getItem(key) || ''
-  } catch (_) {
-    return ''
-  }
-}
-function setQuotaShownDate(key) {
-  try {
-    const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
-    localStorage.setItem(key, today)
-  } catch (_) {
-    // localStorage 不可用时静默降级（不影响主流程）
-  }
-}
-function isQuotaAlreadyShownToday(key) {
-  const today = new Date().toISOString().slice(0, 10)
-  return getQuotaShownDate(key) === today
-}
-const QUOTA_EXCEEDED_KEY = 'ai_cs_quota_exceeded_shown_date'
-const QUOTA_WARNING_KEY = 'ai_cs_quota_warning_shown_date'
 
 let abortStream = null
 let msgSeq = 0
@@ -590,6 +542,21 @@ async function runStream(text) {
   }
   pushMessage(assistantMsg)
 
+  // 60 秒超时保护：防止 SSE 流永久挂起
+  const streamTimeout = setTimeout(() => {
+    if (abortStream) {
+      try { abortStream() } catch (_) {}
+      abortStream = null
+    }
+    streaming.value = false
+    if (!assistantMsg.content) {
+      assistantMsg.content = '小梦响应超时，请重试。'
+    } else {
+      assistantMsg.content += '\n\n小梦响应超时，请重试。'
+    }
+    scrollToBottom()
+  }, 60000)
+
   abortStream = streamChat({
     sessionId: sessionId.value,
     message: text,
@@ -626,6 +593,7 @@ async function runStream(text) {
       scrollToBottom()
     },
     onClose: () => {
+      clearTimeout(streamTimeout)
       streaming.value = false
       abortStream = null
       refreshBalance()
@@ -685,12 +653,21 @@ function handleEvent(evt, assistantMsg) {
       const found = messages.value.find(
         (m) => m.type === 'tool_call' && m.toolCallId === data.toolCallId
       )
+      // 提取二维码图片 data（create_qr_login 工具返回）
+      let qrImage = ''
+      if (data.result && typeof data.result === 'object') {
+        const qrField = data.result.qrImage || (data.result.data && data.result.data.qrImage) || ''
+        if (qrField && typeof qrField === 'string' && qrField.length > 100) {
+          qrImage = qrField
+        }
+      }
       if (found) {
         found.status = data.status || 'executed'
         found.resultText = formatJsonLike(data.result)
+        if (qrImage) found.qrImage = qrImage
       } else {
         // 自动执行的查询工具：直接展示为已完成的工具卡片（默认折叠）
-        pushMessage({
+        const msg = {
           id: genId(),
           role: 'assistant',
           type: 'tool_call',
@@ -702,7 +679,9 @@ function handleEvent(evt, assistantMsg) {
           resultText: formatJsonLike(data.result),
           expanded: false,
           timestamp: Date.now()
-        })
+        }
+        if (qrImage) msg.qrImage = qrImage
+        pushMessage(msg)
       }
       break
     }
@@ -722,44 +701,6 @@ function handleEvent(evt, assistantMsg) {
       contextExceeded.value = {
         currentCount: data.currentCount,
         maxCount: data.maxCount
-      }
-      break
-    }
-    case 'quota_exceeded': {
-      // 今日免费额度已用完，后续每条扣费 N Token
-      // 去重策略：localStorage 按日记录，跨会话/跨刷新仅提醒一次
-      if (!isQuotaAlreadyShownToday(QUOTA_EXCEEDED_KEY)) {
-        setQuotaShownDate(QUOTA_EXCEEDED_KEY)
-        pushMessage({
-          id: genId(),
-          role: 'assistant',
-          type: 'quota_notice',
-          content: data.message || `今日免费额度已用完，后续每条消息将扣费 ${data.perMessageTokens || 3} Token`,
-          quotaType: 'exceeded',
-          dailyFreeQuota: data.dailyFreeQuota,
-          usedQuota: data.usedQuota,
-          perMessageTokens: data.perMessageTokens,
-          timestamp: Date.now()
-        })
-      }
-      break
-    }
-    case 'quota_warning': {
-      // 本条是免费额度最后一条，提醒用户下一条开始扣费
-      // 去重策略：localStorage 按日记录，跨会话/跨刷新仅提醒一次
-      if (!isQuotaAlreadyShownToday(QUOTA_WARNING_KEY)) {
-        setQuotaShownDate(QUOTA_WARNING_KEY)
-        pushMessage({
-          id: genId(),
-          role: 'assistant',
-          type: 'quota_notice',
-          quotaType: 'warning',
-          content: data.message || `今日免费额度还剩 0 条，下一条消息将开始扣费 ${data.perMessageTokens || 3} Token/条`,
-          dailyFreeQuota: data.dailyFreeQuota,
-          usedQuota: data.usedQuota,
-          perMessageTokens: data.perMessageTokens,
-          timestamp: Date.now()
-        })
       }
       break
     }
@@ -860,6 +801,11 @@ async function onToolConfirm(msg, accept) {
       msg.status = res.status || (accept ? 'executed' : 'rejected')
       if (res.result) {
         msg.resultText = formatJsonLike(res.result)
+        // 提取二维码图片（create_qr_login 工具返回）
+        const qrField = res.result.qrImage || (res.result.data && res.result.data.qrImage) || ''
+        if (qrField && typeof qrField === 'string' && qrField.length > 100) {
+          msg.qrImage = qrField
+        }
       }
       // 后端生成自然语言摘要，作为新的 assistant 消息展示
       if (res.summary) {
@@ -875,8 +821,16 @@ async function onToolConfirm(msg, accept) {
       // 执行操作可能扣费，刷新余额
       refreshBalance()
     }
-  } catch (_) {
+  } catch (e) {
+    console.warn('[AiCsPanel] 工具确认失败：', e?.message || e)
     msg.status = 'pending'
+    pushMessage({
+      id: genId(),
+      role: 'system',
+      type: 'text',
+      content: '工具确认失败，请重试。',
+      timestamp: Date.now()
+    })
   }
 }
 
@@ -989,7 +943,6 @@ async function switchToSession(targetSessionId) {
   contextExceeded.value = null
   try {
     sessionId.value = targetSessionId
-    sessionToken.value = ''
     // 拉取历史消息
     const historyRes = await listMessages(targetSessionId, 100)
     const history = historyRes?.data || historyRes
@@ -1037,8 +990,15 @@ async function onCompress() {
     if (res?.sessionId) {
       sessionId.value = res.sessionId
     }
-  } catch (_) {
-    // 静默失败，保持当前会话
+  } catch (e) {
+    console.warn('[AiCsPanel] 上下文压缩失败：', e?.message || e)
+    pushMessage({
+      id: genId(),
+      role: 'system',
+      type: 'text',
+      content: '上下文压缩失败，请稍后重试。',
+      timestamp: Date.now()
+    })
   } finally {
     compressing.value = false
   }
@@ -1653,91 +1613,6 @@ onBeforeUnmount(() => {
   box-shadow: 0 8px 18px rgba(255, 90, 54, 0.4);
 }
 
-/* 每日免费额度提示卡：warning=橙色（即将用完）、exceeded=蓝色（已用完，开始扣费） */
-.ai-cs-quota {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  max-width: 90%;
-  background: linear-gradient(135deg, rgba(239, 246, 255, 0.95), rgba(219, 234, 254, 0.85));
-  border: 1px solid rgba(59, 130, 246, 0.35);
-  border-left: 3px solid #3b82f6;
-}
-.ai-cs-quota.quota-warning {
-  background: linear-gradient(135deg, rgba(255, 247, 237, 0.95), rgba(254, 226, 199, 0.85));
-  border: 1px solid rgba(245, 158, 11, 0.4);
-  border-left: 3px solid #f59e0b;
-}
-.ai-cs-quota-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: #1e3a8a;
-  font-size: 12.5px;
-}
-.ai-cs-quota.quota-warning .ai-cs-quota-head {
-  color: #92400e;
-}
-.ai-cs-quota-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #3b82f6;
-  color: #fff;
-  flex-shrink: 0;
-}
-.ai-cs-quota.quota-warning .ai-cs-quota-icon {
-  background: #f59e0b;
-}
-.ai-cs-quota-text {
-  margin: 0;
-  font-size: 12.5px;
-  color: #334155;
-  line-height: 1.55;
-}
-.ai-cs-quota-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.ai-cs-quota-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  color: #475569;
-  background: rgba(241, 245, 249, 0.9);
-  border: 1px solid rgba(203, 213, 225, 0.6);
-}
-.ai-cs-quota-tag.accent {
-  color: #1d4ed8;
-  background: rgba(219, 234, 254, 0.9);
-  border-color: rgba(96, 165, 250, 0.5);
-}
-.ai-cs-quota-btn {
-  align-self: flex-start;
-  border: 0;
-  padding: 6px 14px;
-  border-radius: 999px;
-  background: linear-gradient(135deg, #3b82f6, #2563eb);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
-  transition: transform 0.15s, box-shadow 0.15s;
-}
-.ai-cs-quota-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.4);
-}
-
 .ai-cs-tool-card {
   padding: 12px 14px;
   background: rgba(248, 251, 255, 0.92);
@@ -1868,6 +1743,31 @@ onBeforeUnmount(() => {
 }
 
 /* 查看/收起详情按钮 */
+/* 二维码图片（create_qr_login 工具结果） */
+.ai-cs-tool-qr {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+.ai-cs-qr-img {
+  width: 200px;
+  height: 200px;
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid rgba(220, 232, 248, 0.8);
+}
+.ai-cs-qr-tip {
+  font-size: 12px;
+  color: #64748b;
+  text-align: center;
+  line-height: 1.5;
+}
+
 .ai-cs-tool-toggle {
   align-self: flex-start;
   border: 0;

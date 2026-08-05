@@ -1165,6 +1165,42 @@ async def handle_captcha_for_account(
                     logger, e, operation="persist_solve_attempts_detail",
                     tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
                 )
+        elif solve_record_id and auto_solve_result.get("solved"):
+            # 2026-08-05 修复：求解成功但 attemptsDetail 为空时，写入一条合成明细，
+            # 确保成功率统计能覆盖此类"免滑块"成功记录。
+            # 根因：sliderSolver 的"未检测到 Baxia 弹窗"分支返回 captchaDetected=false
+            # 且 attemptsDetail=[]，导致 batch_insert_solve_attempts 因明细数据为空而跳过写入，
+            # 后台成功率统计因此看不到这些成功记录。
+            # 同理：x5sec 缓存命中（cached=true）时 attemptsDetail 也为空，也需要合成明细。
+            try:
+                is_x5sec_cached = bool(auto_solve_result.get("cached"))
+                synthetic_detail = [{
+                    "attemptNo": 1,
+                    "solveScheme": "x5sec_cached" if is_x5sec_cached else "no_captcha",
+                    "dragMethod": "none",
+                    "speedStrategy": "none",
+                    "durationMs": auto_solve_result.get("durationMs") or 0,
+                    "success": True,
+                    "errorMessage": "",
+                }]
+                inserted = await batch_insert_solve_attempts(
+                    record_id=solve_record_id,
+                    tenant_id=tenant_id,
+                    account_id=account_id,
+                    attempts_detail=synthetic_detail,
+                )
+                if inserted:
+                    logger.info(
+                        "已记录'免滑块'成功尝试明细 recordId=%d accountId=%d scheme=%s durationMs=%s",
+                        solve_record_id, account_id,
+                        "x5sec_cached" if is_x5sec_cached else "no_captcha",
+                        auto_solve_result.get("durationMs"),
+                    )
+            except Exception as e:
+                log_service_failure(
+                    logger, e, operation="persist_solve_attempts_no_captcha",
+                    tenant_id=tenant_id, account_id=account_id, level=logging.WARNING,
+                )
 
         if auto_solve_result.get("solved"):
             logger.info("账号 %d 滑块自动求解成功", account_id)

@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -48,14 +49,15 @@ public class AiCsService {
             "我是闲鱼助手的 AI 客服，可以帮你完成权限范围内的任何事情：\n\n" +
             "🎯 系统使用指导\n   闲鱼账号登录（可让我直接发二维码给你扫码）、商品管理、自动回复、自动发货、工作流、定时任务、AI 客服配置、卡密配置等\n\n" +
             "🛠️ 辅助操作\n   帮你润色商品标题、生成封面图、配置卡密、创建自动回复规则、设计工作流等\n\n" +
-            "💬 问题解答\n   Cookie 掉线、WS 异常、滑块求解、会员权益（普通/VIP/SVP）、本系统任何功能问题\n\n" +
-            "📌 小提示\n   每条成功回复扣 3 Token；超出 50 条上下文会提示你新建会话或压缩上下文（压缩不扣费）；连续闲聊 5 条后我会礼貌提醒一次。\n\n" +
+            "💬 问题解答\n   Cookie 掉线、WS 异常、滑块求解、会员权益（普通/VIP（单店版）/VIP/SVP）、本系统任何功能问题\n\n" +
+            "📌 小提示\n   和我对话由系统额度承担，不扣您的 Token；工具触发的 AI 调用（如标题润色）按通用模型规则计费；" +
+            "超出 50 条上下文会提示您新建会话或压缩上下文（压缩不扣费）；连续闲聊 5 条后我会礼貌提醒一次。\n\n" +
             "有什么可以帮你的吗？😊";
 
     /** 闲聊提醒文案（仅提醒一次，不阻断后续对话）。 */
     public static final String DEFAULT_CASUAL_REMINDER =
             "💡 小梦小提示：我更擅长帮你操作系统功能（如配置自动回复、上架商品、设计工作流等）。" +
-            "如果你只是想闲聊，也可以继续，但建议把 Token 留给真正需要的工作哦～";
+            "如果你只是想闲聊，也可以继续，但也可以让我直接帮你处理运营工作哦～";
 
     private final JdbcTemplate jdbcTemplate;
     private final AiBillingService aiBillingService;
@@ -781,7 +783,12 @@ public class AiCsService {
         int safeSize = PageUtils.normalizeSize(size, 100);
         int offset = (safeCurrent - 1) * safeSize;
         List<Object> args = new ArrayList<>();
+        Long tenantId = UserContext.getTenantId();
         StringBuilder where = new StringBuilder(" WHERE 1=1");
+        if (tenantId != null) {
+            where.append(" AND (tenant_id IS NULL OR tenant_id=?)");
+            args.add(tenantId);
+        }
         if (StringUtils.hasText(category)) {
             where.append(" AND category=?");
             args.add(category.trim());
@@ -838,8 +845,8 @@ public class AiCsService {
         }
         long kid = Long.parseLong(String.valueOf(id));
         jdbcTemplate.update(
-                "UPDATE ai_cs_knowledge SET category=?, title=?, content=?, keywords=?, priority=?, enabled=?, sort_order=?, updated_time=NOW() WHERE id=?",
-                category, title, content, keywords, priority, enabled, sortOrder, kid);
+                "UPDATE ai_cs_knowledge SET category=?, title=?, content=?, keywords=?, priority=?, enabled=?, sort_order=?, updated_time=NOW() WHERE id=? AND (tenant_id IS NULL OR tenant_id=?)",
+                category, title, content, keywords, priority, enabled, sortOrder, kid, tenantId);
         return knowledgeDetail(kid);
     }
 
@@ -853,7 +860,9 @@ public class AiCsService {
 
     @Transactional
     public void deleteKnowledge(long id) {
-        jdbcTemplate.update("DELETE FROM ai_cs_knowledge WHERE id=?", id);
+        Long tenantId = UserContext.getTenantId();
+        if (tenantId == null) throw new BizException(401, "请先登录");
+        jdbcTemplate.update("DELETE FROM ai_cs_knowledge WHERE id=? AND (tenant_id IS NULL OR tenant_id=?)", id, tenantId);
     }
 
     // ==================== 后台统计/审计 ====================
@@ -992,17 +1001,12 @@ public class AiCsService {
     private void bumpDailyStat(Long userId, Long tenantId, String field, int delta) {
         try {
             String today = LocalDate.now().toString();
-            // upsert
-            int updated = jdbcTemplate.update(
-                    "UPDATE ai_cs_daily_stat SET " + dailyStatColumn(field) + "=" + dailyStatColumn(field) + "+?, updated_time=NOW() " +
-                            "WHERE stat_date=? AND user_id=?",
-                    delta, java.sql.Date.valueOf(today), userId);
-            if (updated == 0) {
-                jdbcTemplate.update(
-                        "INSERT INTO ai_cs_daily_stat(stat_date, user_id, tenant_id, " + dailyStatColumn(field) + ", created_time, updated_time) " +
-                                "VALUES(?,?,?,1,NOW(),NOW()) ON DUPLICATE KEY UPDATE " + dailyStatColumn(field) + "=" + dailyStatColumn(field) + "+?, updated_time=NOW()",
-                        java.sql.Date.valueOf(today), userId, tenantId, delta, delta);
-            }
+            // 单次 INSERT ... ON DUPLICATE KEY UPDATE，避免 UPDATE+INSERT 两步竞态
+            jdbcTemplate.update(
+                    "INSERT INTO ai_cs_daily_stat(stat_date, user_id, tenant_id, " + dailyStatColumn(field) + ", created_time, updated_time) " +
+                            "VALUES(?,?,?,?,NOW(),NOW()) ON DUPLICATE KEY UPDATE " +
+                            dailyStatColumn(field) + "=" + dailyStatColumn(field) + "+?, updated_time=NOW()",
+                    java.sql.Date.valueOf(today), userId, tenantId, delta, delta);
         } catch (Exception e) {
             log.warn("更新每日统计失败 userId={}, field={}, delta={}: {}", userId, field, delta, e.getMessage());
         }
@@ -1041,5 +1045,26 @@ public class AiCsService {
 
     private static String text(Object o) {
         return o == null ? "" : String.valueOf(o);
+    }
+
+    /**
+     * 过期工具调用清理：超过 24 小时仍未确认的 pending 记录标记为 expired。
+     *
+     * <p>这些调用已不可能被前端确认（会话早已结束或用户未操作），
+     * 保留 pending 会无限膨胀并干扰审计。每小时执行一次，幂等。
+     */
+    @Scheduled(fixedDelay = 3600_000L, initialDelay = 300_000L)
+    public void expireStalePendingToolCalls() {
+        try {
+            int updated = jdbcTemplate.update(
+                    "UPDATE ai_cs_tool_call SET status='expired' " +
+                            "WHERE status='pending' AND created_time < NOW() - INTERVAL 24 HOUR"
+            );
+            if (updated > 0) {
+                log.info("expired stale pending ai_cs_tool_call rows: {}", updated);
+            }
+        } catch (Exception e) {
+            log.warn("expire stale pending tool calls failed, errorType={}", e.getClass().getSimpleName(), e);
+        }
     }
 }

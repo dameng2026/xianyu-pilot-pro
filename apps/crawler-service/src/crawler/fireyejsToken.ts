@@ -1379,6 +1379,8 @@ export interface RouteJFlowResult {
   passiveUmId: string;
   durationMs: number;
   error?: string;
+  /** 是否实际使用了住宅 IP 代理（useProxy=true 但池为空时为 false） */
+  proxyUsed?: boolean;
 }
 
 /**

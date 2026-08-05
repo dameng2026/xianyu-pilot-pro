@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -203,7 +204,7 @@ public class AiCsController {
             return new Result<>(401, "缺少内部调用令牌", null);
         }
         String expectedToken = aiCsService.getInternalApiToken();
-        if (expectedToken == null || expectedToken.isBlank() || !expectedToken.equals(internalToken)) {
+        if (expectedToken == null || expectedToken.isBlank() || !MessageDigest.isEqual(expectedToken.getBytes(StandardCharsets.UTF_8), internalToken.getBytes(StandardCharsets.UTF_8))) {
             return new Result<>(401, "内部调用令牌无效", null);
         }
         // 从请求体获取 userId/tenantId（Python 端传入）
@@ -215,7 +216,8 @@ public class AiCsController {
         Long sessionId = parseLong(body.get("sessionId"));
         String content = text(body.get("content"));
         String toolCalls = text(body.get("toolCalls"));
-        if (content == null || content.isBlank()) {
+        // content 为空但携带 toolCalls 时（二次推理生成的写操作工具），仍需落库工具调用并返回真实 toolCallId
+        if ((content == null || content.isBlank()) && (toolCalls == null || toolCalls.isBlank())) {
             return Result.ok(Map.of("messageId", 0, "tokensCharged", 0, "deducted", false));
         }
         aiCsService.validateSessionOwnership(sessionId, userId, tenantId);
@@ -307,7 +309,7 @@ public class AiCsController {
             return new Result<>(401, "缺少内部调用令牌", null);
         }
         String expectedToken = aiCsService.getInternalApiToken();
-        if (expectedToken == null || expectedToken.isBlank() || !expectedToken.equals(internalToken)) {
+        if (expectedToken == null || expectedToken.isBlank() || !MessageDigest.isEqual(expectedToken.getBytes(StandardCharsets.UTF_8), internalToken.getBytes(StandardCharsets.UTF_8))) {
             return new Result<>(401, "内部调用令牌无效", null);
         }
         Long toolCallId = parseLong(body.get("toolCallId"));
