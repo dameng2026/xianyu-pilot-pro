@@ -27,17 +27,28 @@ let mediaSessionRequest: Promise<Record<string, unknown>> | null = null
 
 export function createAdminMediaSession() {
   if (!mediaSessionRequest) {
-    mediaSessionRequest = request.post<Record<string, unknown>>({
-      url: '/media/session',
-      // Callers render a single state-specific message; suppress the generic toast.
-      showErrorMessage: false
-    }).then((value) => {
-      const payload = requireRecordPayload<Record<string, unknown>>(value, '私有媒体会话')
-      if (payload.ready !== true) {
-        throw new Error('私有媒体会话未被服务端确认')
+    mediaSessionRequest = (async () => {
+      // Dynamic import avoids a static cycle: auth -> user store -> auth.
+      const { useUserStore } = await import('@/store/modules/user')
+      const accessToken = useUserStore().accessToken
+      const response = await fetch('/admin-api/media/session', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
+        }
+      })
+      if (!response.ok) {
+        throw new Error(`Private media session issuance failed: HTTP ${response.status}`)
       }
-      return payload
-    }).finally(() => {
+      const payload = await response.json().catch(() => null) as Record<string, unknown> | null
+      if (!payload || (payload as any)?.data?.ready !== true) {
+        throw new Error('Private media session was not confirmed by the server')
+      }
+      return (payload as any).data as Record<string, unknown>
+    })().finally(() => {
       mediaSessionRequest = null
     })
   }
