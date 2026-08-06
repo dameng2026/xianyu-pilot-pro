@@ -307,8 +307,7 @@ export function uploadAdminAvatar(file: File) {
   formData.append('file', file)
   return request.post<{ url: string; fileName: string }>({
     url: '/admin/avatar/upload',
-    params: formData,
-    headers: { 'Content-Type': 'multipart/form-data' }
+    data: formData
   }).then((value) => {
     const payload = requireRecordPayload<Record<string, unknown>>(value, '头像上传')
     if (typeof payload.url !== 'string' || !payload.url.trim()) {

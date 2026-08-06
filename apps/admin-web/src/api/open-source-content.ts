@@ -159,8 +159,7 @@ export function uploadOpenSourceContentImage(file: File) {
   formData.append('file', file)
   return request.post<{ url: string }>({
     url: '/open-source-admin/media/upload',
-    data: formData,
-    headers: { 'Content-Type': 'multipart/form-data' }
+    data: formData
   }).then(value => requireRecordPayload<{ url: string }>(value, '开源站内容图片上传'))
 }
 

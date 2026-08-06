@@ -157,8 +157,7 @@ export function uploadMallImage(file: File) {
   formData.append('file', file)
   return request.post<{ url: string }>({
     url: '/admin/carousel/upload',
-    data: formData,
-    headers: { 'Content-Type': 'multipart/form-data' }
+    data: formData
   }).then(value => requireRecordPayload<{ url: string }>(value, '商品封面图上传'))
 }
 
