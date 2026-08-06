@@ -42,7 +42,7 @@ function createStructuredError(message, requestId, extra = {}) {
 }
 
 const request = axios.create({
-  baseURL: '/api',
+  baseURL: import.meta.env.VITE_API_BASE || '/api',
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' }
 })

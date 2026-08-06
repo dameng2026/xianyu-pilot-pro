@@ -96,6 +96,7 @@ export function streamChat({ sessionId, message, onEvent, onOpen, onError, onClo
   const controller = signal ? null : new AbortController()
   const abortSignal = signal || controller.signal
   const token = getToken()
+  const apiBase = import.meta.env.VITE_API_BASE || '/api'
 
   let responseStatus = 0
 
@@ -115,7 +116,7 @@ export function streamChat({ sessionId, message, onEvent, onOpen, onError, onClo
     'X-Request-Id': createRequestId()
   }
 
-  fetch('/api' + BASE + '/chat', {
+  fetch(`${apiBase}${BASE}/chat`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ sessionId, message }),
