@@ -70,4 +70,4 @@ USER pwuser
 # 2026-08-01 优化：屏幕从 1280x800 增大到 1920x1080，配合 xdotool 系统级鼠标拖动
 # 原因：sliderSolve.py 的 WINDOW_WIDTH=1366，原 Xvfb 1280 宽度不够，浏览器窗口超出屏幕，
 #       xdotool 无法操作屏幕外区域。1920x1080 完全包含 1366x768 浏览器窗口。
-CMD ["xvfb-run", "-a", "-s", "-screen 0 1920x1080x24 -ac", "node", "dist/server.js"]
+CMD ["/bin/bash", "-lc", "set -euo pipefail; (while true; do find /tmp -maxdepth 1 -mindepth 1 \\( -name 'chrome-slider-temp-*' -o -name 'chrome-slider-warm-*' -o -name 'chrome-slider-seed-*' -o -name 'playwright-slider-*' \\) -mmin +30 -exec rm -rf {} + 2>/dev/null || true; find /tmp -maxdepth 1 -mindepth 1 \\( -name '.com.google.Chrome.*' -o -name 'com.google.Chrome.*' \\) -mmin +30 -exec rm -rf {} + 2>/dev/null || true; sleep 300; done) & exec xvfb-run -a -s '-screen 0 1920x1080x24 -ac' node dist/server.js"]

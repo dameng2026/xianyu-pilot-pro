@@ -1098,6 +1098,100 @@ def prepare_profile_dir(dest: str) -> str:
     return dest
 
 
+# ============================================================
+# Chrome 临时目录清理（2026-08-08 修复）
+# ------------------------------------------------------------
+# 根因：Python 子进程被 server.ts pkill -9 或异常退出时，finally 里的
+# shutil.rmtree 不会执行，chrome-slider-temp-* 会在 2GB tmpfs 中累积，
+# 最终所有 browserType.launchPersistentContext 因 "No space left on device"
+# 失败（线上 08-07 全部滑块求解失败、20:41 后无新记录）。
+# 这里在每次启动浏览器前清扫历史遗留的临时 profile 与 Chrome 单例锁文件，
+# 并保证 /tmp 有足够余量；xya-slider-seed-v2 / xya-slider-persistent-v3
+# 等预热/持久化 profile 和全局锁文件不在清理范围内。
+# ============================================================
+_TEMP_SWEEP_PATTERNS = (
+    "chrome-slider-temp-",
+    "chrome-slider-seed-",
+    "chrome-slider-warm-",
+    "playwright-slider-",
+)
+_TEMP_SWEEP_MAX_AGE_SEC = 1800  # 常规清扫：超过 30 分钟
+_TEMP_EMERGENCY_MAX_AGE_SEC = 300  # 空间不足时：超过 5 分钟（避免误删并发会话）
+_TEMP_MIN_FREE_MB = 512  # Chrome 启动前至少保留 512MB
+
+
+def _sweep_temp_entries(max_age_sec: float) -> int:
+    """删除超过 max_age_sec 的 Chrome 临时 profile / 单例锁文件。"""
+    root = os.environ.get("TEMP") or "/tmp"
+    removed = 0
+    now = time.time()
+    try:
+        with os.scandir(root) as it:
+            for entry in it:
+                name = entry.name
+                lower = name.lower()
+                try:
+                    is_dir = entry.is_dir()
+                except OSError:
+                    continue
+                is_temp_dir = is_dir and any(
+                    name.startswith(pattern) for pattern in _TEMP_SWEEP_PATTERNS
+                )
+                is_chrome_singleton = lower.startswith(".com.google.chrome.") or lower.startswith(
+                    "com.google.chrome."
+                )
+                if not (is_temp_dir or is_chrome_singleton):
+                    continue
+                try:
+                    age = now - entry.stat().st_mtime
+                except OSError:
+                    continue
+                if age < max_age_sec:
+                    continue
+                try:
+                    if is_dir:
+                        shutil.rmtree(entry.path, ignore_errors=True)
+                    else:
+                        os.unlink(entry.path)
+                    removed += 1
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return removed
+
+
+def ensure_temp_space(
+    min_free_mb: int = _TEMP_MIN_FREE_MB,
+    sweep_max_age_sec: int = _TEMP_SWEEP_MAX_AGE_SEC,
+) -> None:
+    """Chrome 启动前清理历史遗留临时文件，确保 /tmp 有足够空间。"""
+    root = os.environ.get("TEMP") or "/tmp"
+    try:
+        free_mb = shutil.disk_usage(root).free / (1024 * 1024)
+    except OSError:
+        return
+    if free_mb < min_free_mb:
+        removed = _sweep_temp_entries(_TEMP_EMERGENCY_MAX_AGE_SEC)
+        log(
+            f"/tmp 空间不足（free={free_mb:.0f}MB < {min_free_mb}MB），"
+            f"已紧急清理 {removed} 个近期临时项"
+        )
+    else:
+        removed = _sweep_temp_entries(sweep_max_age_sec)
+        if removed:
+            log(
+                f"已清理 {removed} 个超过 {sweep_max_age_sec}s 的 "
+                "Chrome 临时文件/目录"
+            )
+    try:
+        free_mb = shutil.disk_usage(root).free / (1024 * 1024)
+    except OSError:
+        return
+    if free_mb < min_free_mb:
+        log(f"/tmp 空间仍不足（free={free_mb:.0f}MB < {min_free_mb}MB）")
+
+
 async def ensure_seed_profile(playwright, chrome_path: str, ua: str) -> None:
     """首次全自动运行时预热 seed：访问闲鱼首页生成真实 LocalStorage/站点数据。"""
     seed = _SEED_PROFILE_DIR
@@ -3986,6 +4080,11 @@ async def silent_extract_x5sec(
         "durationMs": 0,
     }
 
+    try:
+        ensure_temp_space()
+    except Exception as e:
+        log(f"[silent] 清理临时目录失败（继续尝试）: {e}")
+
     user_data_dir = _resolve_profile_dir(profile_strategy, cookie_str=cookie_str)
     prepare_profile_dir(user_data_dir)
 
@@ -4707,6 +4806,7 @@ async def main_async(args) -> dict:
         #       服务器有 16GB 内存，支持 2 个 Chrome 进程并行。
         #       server.ts 层面有 MAX_PYTHON_FALLBACK_CONCURRENCY=2 控制并发上限。
         log("跳过全局锁（已移除），直接启动求解")
+        ensure_temp_space()
         async with async_playwright() as p:
             await ensure_seed_profile(p, chrome_path, ua)
 

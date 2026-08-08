@@ -175,9 +175,10 @@ services:
     tmpfs:
       # 2026-08-02 扩大 /tmp 到 2g：Chrome 启动+滑块求解需要大量临时空间
       # 原值 512m 会导致 Chrome "No space left on device" 崩溃
-      - /tmp:rw,noexec,nosuid,size=2g
+      # 2026-08-08 扩大到 4g：并发求解 + 残留 profile 清理不及时时会占满 2g
+      - /tmp:rw,noexec,nosuid,size=4g
       - /home/pwuser:rw,noexec,nosuid,size=128m
-    shm_size: "1gb"
+    shm_size: "2gb"
     depends_on:
       redis:
         condition: service_healthy
@@ -203,9 +204,11 @@ services:
     expose:
       - "3001"
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      # 2026-08-08 增加 /tmp 空间检查：临时目录被占满时提前标记 unhealthy，
+      # 避免 Chrome 启动全部失败（ENOSPC）导致滑块求解 100% 失败
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\" && [ \"$(df -P /tmp | awk 'NR==2{print $4}')\" -gt 262144 ]"]
       interval: 15s
-      timeout: 5s
+      timeout: 10s
       retries: 20
     networks:
       - app
@@ -224,9 +227,10 @@ services:
     tmpfs:
       # 2026-08-02 扩大 /tmp 到 2g：Chrome 启动+滑块求解需要大量临时空间
       # 原值 512m 会导致 Chrome "No space left on device" 崩溃
-      - /tmp:rw,noexec,nosuid,size=2g
+      # 2026-08-08 扩大到 4g：并发求解 + 残留 profile 清理不及时时会占满 2g
+      - /tmp:rw,noexec,nosuid,size=4g
       - /home/pwuser:rw,noexec,nosuid,size=128m
-    shm_size: "1gb"
+    shm_size: "2gb"
     depends_on:
       redis:
         condition: service_healthy
@@ -255,7 +259,8 @@ services:
     # 与 crawler-service 容器保持一致，不影响 sliderSolver.ts（它读 HEADLESS=true）。
     command: ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24 -ac", "node", "dist/worker.js"]
     healthcheck:
-      test: ["CMD", "node", "dist/healthcheck.js"]
+      # 2026-08-08 增加 /tmp 空间检查（同 crawler-service）
+      test: ["CMD-SHELL", "node dist/healthcheck.js && [ \"$(df -P /tmp | awk 'NR==2{print $4}')\" -gt 262144 ]"]
       interval: 30s
       timeout: 10s
       retries: 3
