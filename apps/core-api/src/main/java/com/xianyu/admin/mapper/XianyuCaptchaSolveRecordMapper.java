@@ -33,7 +33,8 @@ public interface XianyuCaptchaSolveRecordMapper {
  * - 超时：status='timeout' 或 failure_reason='stale_terminated'（retrying 超 15 分钟被清理）
  * - 预检验拒绝：status='precheck_rejected' 或 failure_reason IN ('precheck_rejected','cookie_invalid','account_inactive','account_disabled')
  *   （Cookie 过期 / 账号不活跃 / 账号禁用 均属预检验阶段拒绝，非求解本身失败）
- * - 服务不可用：failure_reason='service_unavailable'（hasLogin 不可用 / Chrome 启动失败）
+ * - 服务不可用/浏览器崩溃：failure_reason='service_unavailable' 或 'browser_crashed'
+ *   （hasLogin 不可用 / Chrome 启动失败 / 浏览器崩溃，均为环境性故障，非求解本身失败）
  * 因此：
  * - total（求解总次数）= 排除上述记录后的有效记录数（用于成功率分母）
  * - fail（失败次数）= status='fail' 且 failure_reason 不属于上述排除类的记录数
@@ -41,9 +42,9 @@ public interface XianyuCaptchaSolveRecordMapper {
  */
     @Select("<script>" +
             "SELECT " +
-            "SUM(CASE WHEN NOT (status IN ('timeout', 'precheck_rejected') OR COALESCE(failure_reason, '') IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled')) THEN 1 ELSE 0 END) AS total, " +
+            "SUM(CASE WHEN NOT (status IN ('timeout', 'precheck_rejected') OR COALESCE(failure_reason, '') IN ('service_unavailable', 'browser_crashed', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled')) THEN 1 ELSE 0 END) AS total, " +
             "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count, " +
-            "SUM(CASE WHEN status = 'fail' AND COALESCE(failure_reason, '') NOT IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled') THEN 1 ELSE 0 END) AS fail_count, " +
+            "SUM(CASE WHEN status = 'fail' AND COALESCE(failure_reason, '') NOT IN ('service_unavailable', 'browser_crashed', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled') THEN 1 ELSE 0 END) AS fail_count, " +
             "SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) AS timeout_count, " +
             "SUM(CASE WHEN status = 'precheck_rejected' THEN 1 ELSE 0 END) AS precheck_rejected_count, " +
             "SUM(CASE WHEN COALESCE(failure_reason, '') = 'service_unavailable' THEN 1 ELSE 0 END) AS service_unavailable_count " +
@@ -65,9 +66,9 @@ public interface XianyuCaptchaSolveRecordMapper {
      */
     @Select("<script>" +
             "SELECT DATE(created_at) AS date, " +
-            "SUM(CASE WHEN NOT (status IN ('timeout', 'precheck_rejected') OR COALESCE(failure_reason, '') IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled')) THEN 1 ELSE 0 END) AS total, " +
+            "SUM(CASE WHEN NOT (status IN ('timeout', 'precheck_rejected') OR COALESCE(failure_reason, '') IN ('service_unavailable', 'browser_crashed', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled')) THEN 1 ELSE 0 END) AS total, " +
             "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count, " +
-            "SUM(CASE WHEN status = 'fail' AND COALESCE(failure_reason, '') NOT IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled') THEN 1 ELSE 0 END) AS fail_count, " +
+            "SUM(CASE WHEN status = 'fail' AND COALESCE(failure_reason, '') NOT IN ('service_unavailable', 'browser_crashed', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled') THEN 1 ELSE 0 END) AS fail_count, " +
             "SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) AS timeout_count, " +
             "SUM(CASE WHEN status = 'precheck_rejected' THEN 1 ELSE 0 END) AS precheck_rejected_count, " +
             "SUM(CASE WHEN COALESCE(failure_reason, '') = 'service_unavailable' THEN 1 ELSE 0 END) AS service_unavailable_count " +
@@ -93,9 +94,9 @@ public interface XianyuCaptchaSolveRecordMapper {
     @Select("<script>" +
             "SELECT account_id, " +
             "MAX(account_name) AS account_name, " +
-            "SUM(CASE WHEN NOT (status IN ('timeout', 'precheck_rejected') OR COALESCE(failure_reason, '') IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled')) THEN 1 ELSE 0 END) AS total, " +
+            "SUM(CASE WHEN NOT (status IN ('timeout', 'precheck_rejected') OR COALESCE(failure_reason, '') IN ('service_unavailable', 'browser_crashed', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled')) THEN 1 ELSE 0 END) AS total, " +
             "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count, " +
-            "SUM(CASE WHEN status = 'fail' AND COALESCE(failure_reason, '') NOT IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled') THEN 1 ELSE 0 END) AS fail_count, " +
+            "SUM(CASE WHEN status = 'fail' AND COALESCE(failure_reason, '') NOT IN ('service_unavailable', 'browser_crashed', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled') THEN 1 ELSE 0 END) AS fail_count, " +
             "SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) AS timeout_count, " +
             "SUM(CASE WHEN status = 'precheck_rejected' THEN 1 ELSE 0 END) AS precheck_rejected_count, " +
             "SUM(CASE WHEN COALESCE(failure_reason, '') = 'service_unavailable' THEN 1 ELSE 0 END) AS service_unavailable_count, " +
@@ -161,9 +162,9 @@ public interface XianyuCaptchaSolveRecordMapper {
      */
     @Select("<script>" +
             "SELECT COALESCE(NULLIF(proxy_source, ''), 'unknown') AS proxy_source, " +
-            "SUM(CASE WHEN NOT (status IN ('timeout', 'precheck_rejected') OR COALESCE(failure_reason, '') IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled')) THEN 1 ELSE 0 END) AS total, " +
+            "SUM(CASE WHEN NOT (status IN ('timeout', 'precheck_rejected') OR COALESCE(failure_reason, '') IN ('service_unavailable', 'browser_crashed', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled')) THEN 1 ELSE 0 END) AS total, " +
             "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count, " +
-            "SUM(CASE WHEN status = 'fail' AND COALESCE(failure_reason, '') NOT IN ('service_unavailable', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled') THEN 1 ELSE 0 END) AS fail_count " +
+            "SUM(CASE WHEN status = 'fail' AND COALESCE(failure_reason, '') NOT IN ('service_unavailable', 'browser_crashed', 'precheck_rejected', 'timeout', 'stale_terminated', 'cookie_invalid', 'account_inactive', 'account_disabled') THEN 1 ELSE 0 END) AS fail_count " +
             "FROM xianyu_captcha_solve_record " +
             "WHERE COALESCE(deleted, 0) = 0 " +
             "<if test='startTime != null'> AND created_at &gt;= #{startTime} </if>" +

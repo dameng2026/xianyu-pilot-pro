@@ -72,7 +72,7 @@
     <ElAlert type="info" :closable="false" class="stats-scope-alert" show-icon>
       <template #title>
         <span>
-          统计口径：失败原因为「服务不可用」「预检验拒绝」「超时」的请求不计入成功率与失败次数统计。
+          统计口径：失败原因为「服务不可用」「浏览器崩溃/启动失败」「预检验拒绝」「超时」的请求不计入成功率与失败次数统计。
           当前范围已排除：
           <b>服务不可用 {{ stats.kpi.serviceUnavailable || 0 }}</b> 次、
           <b>预检验拒绝 {{ stats.kpi.precheckRejected || 0 }}</b> 次、
@@ -468,7 +468,7 @@
           <template #header>
             <div class="table-header">
               <span>按代理来源聚合（住址IP vs 服务器IP 成功率对比）</span>
-              <span class="muted small">统计口径与概览KPI一致：排除超时/预检验拒绝/服务不可用；空值归为 unknown（修复前历史记录）</span>
+              <span class="muted small">统计口径与概览KPI一致：排除超时/预检验拒绝/服务不可用/浏览器崩溃启动失败；空值归为 unknown（修复前历史记录）</span>
             </div>
           </template>
           <ElTable :data="stats.byProxySource" border stripe>
