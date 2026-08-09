@@ -29,6 +29,18 @@ APP_KEY = "34839810"
 H5_API_BASE = "https://h5api.m.goofish.com/h5"
 JSV = "2.7.2"
 MAX_TOKEN_RETRY = 1
+# 确认发货最大尝试次数（普通发货 consign.dummy 与免拼发货 freeshipping 统一，
+# 与成熟项目 confirm_service/freeshipping_service 的 MAX_RETRY=4 对齐，含网络异常重试）
+MAX_CONFIRM_RETRY = 4
+# 免拼发货不可重试错误：命中后直接返回失败，避免对不可恢复错误做无意义重试
+_FREESHIPPING_NO_RETRY_ERRORS = (
+    "GROUPON_ACTIVITY_ITEM_CHECK_ERROR",
+    "ITEM_NOT_FOUND",
+    "ITEM_DELETED",
+    "ORDER_NOT_EXIST",
+    "BUYER_NOT_EXIST",
+    "ORDER_STATUS_ERROR",
+)
 
 
 def _make_sign(token: str, t_ms: int, data_str: str) -> str:
@@ -1024,11 +1036,15 @@ def _legacy_fetch_conversation_user_info(
     }
 
 
-def confirm_shipment(account_id: int, order_id: str) -> Optional[dict]:
+def confirm_shipment(account_id: int, order_id: str, retry_count: int = 0) -> Optional[dict]:
     """调用闲鱼 MTOP API 确认发货（无物流虚拟发货）。
 
     API: mtop.taobao.idle.logistic.consign.dummy
     请求体: {"orderId":"<order_id>","tradeText":"","picList":[],"newUnconsign":true}
+
+    失败重试策略（与成熟项目 confirm_service.auto_confirm 对齐）：
+    - 最大尝试 MAX_CONFIRM_RETRY=4 次（含网络异常重试）
+    - 已发货（ORDER_ALREADY_DELIVERY / 已发货成功）视为幂等成功，不重试
     """
     if not order_id:
         return {"success": False, "error": "MISSING_ORDER_ID", "message": "订单号为空"}
@@ -1064,9 +1080,17 @@ def confirm_shipment(account_id: int, order_id: str) -> Optional[dict]:
         logger.info("订单已发货（幂等成功）: accountId=%d orderId=%s", account_id, order_id)
         return {"success": True, "account_id": account_id, "order_id": order_id, "idempotent": True}
 
+    # 失败重试：未达上限时递归重试（网络异常/风控等瞬时错误可恢复）
+    if retry_count + 1 < MAX_CONFIRM_RETRY:
+        logger.warning(
+            "确认发货失败，准备第 %d 次重试: accountId=%d orderId=%s error=%s ret=%s",
+            retry_count + 2, account_id, order_id, result.get("error", ""), ret_str[:200],
+        )
+        return confirm_shipment(account_id, order_id, retry_count + 1)
+
     logger.warning(
-        "确认发货失败: accountId=%d orderId=%s error=%s ret=%s",
-        account_id, order_id, result.get("error", ""), ret_str[:200],
+        "确认发货失败（已达最大重试 %d 次）: accountId=%d orderId=%s error=%s ret=%s",
+        MAX_CONFIRM_RETRY, account_id, order_id, result.get("error", ""), ret_str[:200],
     )
     return {
         "success": False,
@@ -1096,6 +1120,7 @@ def confirm_freeshipping(
     order_id: str,
     item_id: Any,
     buyer_id: Any,
+    retry_count: int = 0,
 ) -> Optional[dict]:
     """调用闲鱼 MTOP 免拼发货接口（小刀订单专用）。
 
@@ -1104,6 +1129,10 @@ def confirm_freeshipping(
 
     小刀订单必须走免拼发货接口，普通 consign.dummy 会被闲鱼拒绝。
     已发货（ORDER_ALREADY_DELIVERY / 已发货成功）视为幂等成功。
+
+    失败重试策略（与成熟项目 freeshipping_service.auto_freeshipping 对齐）：
+    - 最大尝试 MAX_CONFIRM_RETRY=4 次
+    - 不可重试错误（_FREESHIPPING_NO_RETRY_ERRORS）直接返回失败，不重试
     """
     if not order_id:
         return {"success": False, "error": "MISSING_ORDER_ID", "message": "订单号为空"}
@@ -1177,9 +1206,35 @@ def confirm_freeshipping(
             "idempotent": True,
         }
 
+    # 不可重试错误：直接返回失败（商品已删除/订单不存在等不会因重试而恢复）
+    if any(err in ret_str for err in _FREESHIPPING_NO_RETRY_ERRORS):
+        logger.warning(
+            "免拼发货失败（不可重试错误）: accountId=%d orderId=%s error=%s ret=%s",
+            account_id, order_id, result.get("error", ""), ret_str[:200],
+        )
+        return {
+            "success": False,
+            "error": result.get("error") or "FREESHIPPING_FAILED",
+            "message": result.get("error") or "免拼发货失败",
+            "no_retry": True,
+            "ret": ret,
+            "account_id": account_id,
+            "order_id": order_id,
+        }
+
+    # 失败重试：未达上限时递归重试（网络异常/风控等瞬时错误可恢复）
+    if retry_count + 1 < MAX_CONFIRM_RETRY:
+        logger.warning(
+            "免拼发货失败，准备第 %d 次重试: accountId=%d orderId=%s error=%s ret=%s",
+            retry_count + 2, account_id, order_id, result.get("error", ""), ret_str[:200],
+        )
+        return confirm_freeshipping(
+            account_id, order_id, item_id, buyer_id, retry_count + 1,
+        )
+
     logger.warning(
-        "免拼发货失败: accountId=%d orderId=%s error=%s ret=%s",
-        account_id, order_id, result.get("error", ""), ret_str[:200],
+        "免拼发货失败（已达最大重试 %d 次）: accountId=%d orderId=%s error=%s ret=%s",
+        MAX_CONFIRM_RETRY, account_id, order_id, result.get("error", ""), ret_str[:200],
     )
     return {
         "success": False,
