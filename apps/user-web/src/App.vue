@@ -750,10 +750,8 @@ async function boot() {
       scheduleWarmups()
       // 功能开关预热：与用户信息并行，首次路由切换时直接命中 30s 内存缓存
       getFeatureSwitchStatus().catch(() => {})
-      // 媒体会话后台异步：仅用于私有图片预览，失败时提示但不阻塞首屏
-      initializeMediaSession().catch(() => {
-        showNotice('私有图片会话初始化失败，图片预览暂不可用', 'warn')
-      })
+      // 媒体会话后台异步：仅用于私有图片预览，失败时静默降级，不阻塞首屏、不打扰用户
+      initializeMediaSession().catch(() => {})
       // 首页数据预热：与用户信息并行，DashboardPage 进入时直接命中缓存避免"加载中"卡顿
       getNavigationHome({ limit: 5 }).catch(() => {})
       await loadCurrentUser()
