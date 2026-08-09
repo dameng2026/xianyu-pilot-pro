@@ -44,7 +44,7 @@ possible security incident is handled at the higher severity until disproved.
 
 | Symptom | Safe checks | Escalation/action |
 | --- | --- | --- |
-| Public web/API unavailable | independent DNS/TLS probe, `public-availability`, US Nginx/tunnel, origin readiness | edge/network owner, then application owner; preserve request IDs |
+| Public web/API unavailable | independent DNS/TLS probe, `public-availability`, Hong Kong Nginx/tunnel, origin readiness | edge/network owner, then application owner; preserve request IDs |
 | Core/database/Redis not ready | dependency metrics, container health, saturation/OOM, recent schema/change ticket | stop unsafe writers; database/cache owner; use restore runbook if integrity is uncertain |
 | Worker backlog or duplicate actions | queue depth, heartbeat, lease/fencing, idempotency and provider callbacks | pause publication/retries; Worker/domain owner; never purge a queue to make a graph green |
 | Upload/media errors | quota/rate/concurrency metrics, `tenant_storage_asset`, shared-volume capacity/inodes, core delivery logs | freeze cleanup; reconcile DB/files; never expose the volume through static Nginx/Python |

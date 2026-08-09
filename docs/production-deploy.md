@@ -3,7 +3,7 @@
 This project has one supported **single-stack** deploy flow for the current production layout:
 
 - China server: backend stack only (`/home/ubuntu/project`, Docker Compose)
-- US server: user/admin frontends only (`/var/www/user-web`, `/var/www/admin-web`, Nginx)
+- Hong Kong server (`64.90.31.68`): user/admin frontends only (`/var/www/user-web`, `/var/www/admin-web`, Nginx)
 
 ## Files
 
@@ -24,7 +24,7 @@ This topology is **not blue/green**. `scripts/prod_deploy.py` stages both backen
 
 Backend source activation is atomic at the directory-rename boundary. The uploaded archive is checksum-verified and extracted only into a new sibling staging directory; `tar` never writes into the live source tree. The server-owned env file is validated before activation. A relative env path, including an absolute spelling that resolves inside `project_dir`, is held outside the renamed trees and restored; a genuinely external absolute env path is never moved. Activation errors and HUP/INT/TERM restore the old source and env. Build, recreate, Docker-health, monitoring-health, or public backend-health failure restores the previous source, reapplies its infrastructure Compose model, rebuilds/recreates its runtime, and health-gates the rollback. A failed release remains under a timestamped `.failed-*` path for operator forensics.
 
-The deploy entrypoint retains a version-guarded compensating action after each successful cutover until every selected component and the final public smoke gate have passed. If a later frontend build/cutover or smoke check fails, or the operator interrupts that final gate with Ctrl+C, it rolls completed cutovers back in reverse order: US frontend files and Nginx first, then China backend source/runtime. One rollback failure does not prevent the other rollback from being attempted. Any incomplete compensation is reported explicitly and keeps the release failed; a nonzero command must never be interpreted as “nothing changed.” A process kill, host loss, or network partition can still prevent automatic compensation, so retained rollback state and the external incident runbook remain mandatory.
+The deploy entrypoint retains a version-guarded compensating action after each successful cutover until every selected component and the final public smoke gate have passed. If a later frontend build/cutover or smoke check fails, or the operator interrupts that final gate with Ctrl+C, it rolls completed cutovers back in reverse order: Hong Kong frontend files and Nginx first, then China backend source/runtime. One rollback failure does not prevent the other rollback from being attempted. Any incomplete compensation is reported explicitly and keeps the release failed; a nonzero command must never be interpreted as “nothing changed.” A process kill, host loss, or network partition can still prevent automatic compensation, so retained rollback state and the external incident runbook remain mandatory.
 
 This is process-level rollback, not a database rollback or an immutable-image rollback. The prior source is rebuilt, so mutable base-image resolution, registry availability, or dependency availability can still prevent byte-identical recovery until the approved registry/signing gate retains digest-pinned application images. The very first deployment has no previous source to restore and therefore reports rollback failure explicitly. Do not delete `.previous-*`, `.failed-*`, or `.env-hold-*` paths until the incident is resolved and the live env location has been verified.
 
@@ -59,7 +59,7 @@ rate, concurrency, and retention limits before Compose build or source cutover.
 This early validation complements, but does not replace, the Java and Python
 startup guards.
 
-The supported `deploy/nginx/us-nginx-full.conf` routes backend traffic through a loopback-only, pinned-host-key SSH tunnel. A frontend deploy checks that `xianyupilot-origin-tunnel.service` is active and that `/api/health` returns `UP` through the tunnel before it uploads or cuts over files. Public application vhosts accept decrypted HTTP only from a same-host loopback TLS terminator; direct port-80 requests are redirected to HTTPS except ACME challenges. The legacy `deploy/nginx/xianyupilot-ssl.conf` still contains a public plaintext origin and is intentionally blocked. Client-facing TLS and `X-Forwarded-Proto: https` do not encrypt the US-to-China origin hop. Supported designs are:
+The supported `deploy/nginx/us-nginx-full.conf` routes backend traffic through a loopback-only, pinned-host-key SSH tunnel. A frontend deploy checks that `xianyupilot-origin-tunnel.service` is active and that `/api/health` returns `UP` through the tunnel before it uploads or cuts over files. Public application vhosts accept decrypted HTTP only from a same-host loopback TLS terminator; direct port-80 requests are redirected to HTTPS except ACME challenges. The legacy `deploy/nginx/xianyupilot-ssl.conf` still contains a public plaintext origin and is intentionally blocked. Client-facing TLS and `X-Forwarded-Proto: https` do not encrypt the Hong Kong-to-China origin hop. Supported designs are:
 
 - Verified HTTPS to the origin: use `https://`, `proxy_ssl_verify on`, `proxy_ssl_server_name on`, a trusted CA bundle, and preferably mTLS client authentication.
 - The tracked managed SSH tunnel: loopback HTTP is carried inside SSH with strict host-key verification. The origin account must be restricted to the single `127.0.0.1:18080` forward.
@@ -75,7 +75,7 @@ The current QR session manager owns live browser handles in one crawler process.
 2. Confirm the China server already has a valid `/home/ubuntu/project/.env.production`, owned by the deployment operator and mode `0400` or `0600`. Generate every direct password/token/secret independently as at least 32 URL-safe ASCII characters; values containing dotenv/shell metacharacters, privileged database usernames (`root`, `mysql`, `postgres`), reused credentials, placeholders or wildcard/non-HTTPS origins fail preflight. Set `AI_PROVIDER_ALLOWED_HOSTS` to the exact reviewed provider domains; use an explicit `*.` rule only when every subdomain is controlled and approved. Both saved provider URLs and every outbound text/image request are revalidated against this allowlist, use HTTPS/443, reject private/reserved DNS answers, and never follow redirects. The tracked example is the key allowlist: undocumented variables (including `COMPOSE_*`/`DOCKER_*` controls) are rejected, and deploy commands force the local default Docker context so an ambient shell cannot redirect the release to another project or daemon. Do not hand-edit a rendered Compose file or print the environment to debug a failure.
 3. Verify each production SSH host fingerprint out of band and add it to the operator account's `~/.ssh/known_hosts` (or set `known_hosts_file` in the local host config). Unknown host keys are rejected; never restore trust-on-first-use for convenience.
 4. Provision the managed tunnel before the first frontend release:
-   - Create the unprivileged `xianyupilot-tunnel` system user/group on the US host.
+   - Create the unprivileged `xianyupilot-tunnel` system user/group on the Hong Kong host.
    - Install its private key as `/etc/xianyupilot-origin-tunnel/id_ed25519` and a fingerprint verified out of band as `/etc/xianyupilot-origin-tunnel/known_hosts`; make both readable only by that account.
    - On the China origin, restrict the public key with `restrict,permitopen="127.0.0.1:18080"` and do not grant shell or unrelated forwarding access.
    - Replace `__ORIGIN_USER__` in `deploy/systemd/xianyupilot-origin-tunnel.service.template`, install it as `/etc/systemd/system/xianyupilot-origin-tunnel.service`, run `systemctl daemon-reload`, enable/start it, and verify `curl --fail http://127.0.0.1:18081/api/health` returns an `UP` status.
@@ -151,7 +151,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy-prod.ps1 -Target front
 2. Builds `apps/user-web`.
 3. Runs `typecheck` + `build` for `apps/admin-web`.
 4. Secret-scans and packs both `dist/` folders with the artifact denylist, then rechecks that builds/packaging did not change the selected tracked source revision.
-5. Uploads the staged bundles and the validated US Nginx site config.
+5. Uploads the staged bundles and the validated Hong Kong Nginx site config.
 6. Replaces `/var/www/user-web` and `/var/www/admin-web` from staged directories and retains the prior directories under `/var/www/backups`.
 7. Writes an Nginx config backup beside the live site file.
 8. Retains a private rollback-state directory containing the exact Git revision, a per-cutover transaction marker, the live directory identities, and whether prior roots/Nginx existed. These markers are not placed in the public document roots.
@@ -164,8 +164,8 @@ After deploy, the script verifies:
 
 - Public user API health
 - Public admin API health
-- US user homepage
-- US admin homepage
+- Hong Kong user homepage
+- Hong Kong admin homepage
 - Public user login
 - Public admin login
 - User token accepted by `/api/system/currentUser`

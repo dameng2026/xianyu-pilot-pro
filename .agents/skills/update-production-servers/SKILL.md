@@ -1,6 +1,6 @@
 ---
 name: update-production-servers
-description: "Deploy this repository to the current production topology: China backend Docker Compose at `/home/ubuntu/project` and US user/admin frontends served by Nginx from `/var/www/user-web` and `/var/www/admin-web`. Use when the user asks to update server code, sync local changes to production, deploy or redeploy, publish online, verify production, update the China backend, update the US frontend, 更新服务器代码, 同步到服务器, 同步到生产, 发布上线, 重新部署, 更新国内后端, 更新美国前端, or perform a post-deploy smoke check."
+description: "Deploy this repository to the current production topology: China backend Docker Compose at `/home/ubuntu/project` and Hong Kong user/admin frontends served by Nginx from `/var/www/user-web` and `/var/www/admin-web` on `64.90.31.68`. Use when the user asks to update server code, sync local changes to production, deploy or redeploy, publish online, verify production, update the China backend, update the Hong Kong frontend, 更新服务器代码, 同步到服务器, 同步到生产, 发布上线, 重新部署, 更新国内后端, 更新香港前端, or perform a post-deploy smoke check."
 ---
 
 # Update Production Servers
@@ -12,7 +12,7 @@ Use this skill to push local changes to the real production servers and verify t
 - Run from the repo root.
 - Infer the smallest safe deploy target:
   - `backend` for `apps/core-api`, schema, Docker Compose, automation, crawler, or backend config changes.
-  - `frontend` for `apps/user-web`, `apps/admin-web`, or US static or Nginx-facing frontend changes.
+  - `frontend` for `apps/user-web`, `apps/admin-web`, or Hong Kong static or Nginx-facing frontend changes.
   - `all` when the scope is mixed or unclear.
 - Execute with the project wrapper:
   - `powershell -ExecutionPolicy Bypass -File .\scripts\deploy-prod.ps1 -Target all`
@@ -31,14 +31,14 @@ Use this skill to push local changes to the real production servers and verify t
 
 ## Verification Checklist
 
-- Verify the official user frontend at `http://154.9.254.86:81/#/login`.
-- Verify the official admin frontend at `http://154.9.254.86:82/#/auth/login`.
-- Verify China backend health at `http://1.12.66.249:18080/api/health`.
-- Verify China admin health at `http://1.12.66.249:18080/admin-api/health`.
+- Verify the official user frontend at `http://64.90.31.68:81/#/login`.
+- Verify the official admin frontend at `http://64.90.31.68:82/#/auth/login`.
+- Verify China backend health at `http://211.161.232.54:18080/api/health`.
+- Verify China admin health at `http://211.161.232.54:18080/admin-api/health`.
 - Verify user login and admin login API after deploy.
 - Verify the touched modules, not just the homepage.
 - Check fresh backend logs after exercising changed modules; do not ignore new `bad SQL grammar`, `Unhandled exception`, or repeated 4xx or 5xx errors.
-- Check US Nginx logs when auth, CORS, SSE, or proxy behavior changed.
+- Check Hong Kong Nginx logs when auth, CORS, SSE, or proxy behavior changed.
 - For admin billing changes, verify:
   - `GET /admin-api/ai-billing/summary`
   - `GET /admin-api/ai-billing/model-prices/page?current=1&size=20`
@@ -48,8 +48,8 @@ Use this skill to push local changes to the real production servers and verify t
 
 ## Known Failure Modes
 
-- Login `403` on the US frontend usually means the China backend CORS whitelist no longer includes `http://154.9.254.86:81` or `http://154.9.254.86:82`.
-- SSE failures on `/api/sse/subscribe` usually point to the US Nginx proxy config in `/etc/nginx/sites-enabled/nginx-full.conf`.
+- Login `403` on the Hong Kong frontend usually means the China backend CORS whitelist no longer includes `http://64.90.31.68:81` or `http://64.90.31.68:82`.
+- SSE failures on `/api/sse/subscribe` usually point to the Hong Kong Nginx proxy config in `/etc/nginx/sites-enabled/nginx-full.conf`.
 - Admin dashboard warnings after deploy usually mean production schema drift; inspect `SchemaCompatibilityRunner` and recent backend logs.
 - If the admin browser login is blocked by the slider gate, verify admin availability through `POST /admin-api/auth/login`, dashboard APIs, and, when needed, a browser session with injected login state.
 - `Unknown column 'xm.msg_time'` on online messages usually means production `xianyu_message` schema drift; confirm `SchemaCompatibilityRunner` has patched the table before assuming the page code is wrong.

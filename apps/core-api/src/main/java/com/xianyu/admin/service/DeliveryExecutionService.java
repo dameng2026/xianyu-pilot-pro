@@ -93,13 +93,14 @@ public class DeliveryExecutionService {
         int success = 0;
         int failed = 0;
         for (Map<String, Object> record : pendingRecords) {
-            Long recordId = ((Number) record.get("id")).longValue();
-            Long tenantId = ((Number) record.get("tenant_id")).longValue();
+            Long recordId = toLong(record.get("id"));
+            Long tenantId = toLong(record.get("tenant_id"));
             try {
                 transactionTemplate.executeWithoutResult(status -> executeDelivery(record));
                 success++;
             } catch (Exception e) {
-                log.error("发货执行失败 recordId={}, errorType={}", recordId, e.getClass().getSimpleName());
+                log.error("发货执行失败 recordId={}, errorType={}, message={}",
+                        recordId, e.getClass().getSimpleName(), e.getMessage(), e);
                 markRecordFailed(recordId, tenantId, publicDeliveryFailure(e));
                 failed++;
             }
@@ -124,9 +125,12 @@ public class DeliveryExecutionService {
      */
     @Transactional
     public void executeDelivery(Map<String, Object> record) {
-        Long recordId = ((Number) record.get("id")).longValue();
-        Long tenantId = ((Number) record.get("tenant_id")).longValue();
-        Long orderId = ((Number) record.get("order_id")).longValue();
+        Long recordId = toLong(record.get("id"));
+        Long tenantId = toLong(record.get("tenant_id"));
+        Long orderId = toLong(record.get("order_id"));
+        if (recordId == null || tenantId == null || orderId == null) {
+            throw new BizException(422, "发货记录关键字段缺失，无法执行发货");
+        }
         Long claimedCardItemId = null;
         Long claimedCardGroupId = null;
         boolean cardConsumed = false;
@@ -255,20 +259,21 @@ public class DeliveryExecutionService {
                     throw new BizException(422, "商品未配置自动发货规则");
                 }
 
-                @SuppressWarnings("unchecked")
-                Map<String, Object> timingConfig = (Map<String, Object>) goodsConfig.get(timingKey);
-                if (timingConfig == null) {
-                    throw new BizException(422, "未找到当前发货时机的配置");
+                Object timingConfigRaw = goodsConfig.get(timingKey);
+                if (!(timingConfigRaw instanceof Map<?, ?> timingConfigMap)) {
+                    throw new BizException(422, "未找到当前发货时机的配置或配置格式异常");
                 }
+                Map<String, Object> timingConfig = new LinkedHashMap<>();
+                timingConfigMap.forEach((k, v) -> timingConfig.put(String.valueOf(k), v));
                 Object enabled = timingConfig.get("enabled");
                 if (enabled == null || "0".equals(String.valueOf(enabled)) || Boolean.FALSE.equals(enabled)) {
                     throw new BizException(422, "当前发货时机已禁用");
                 }
 
-                mode = (String) timingConfig.getOrDefault("mode", "text");
-                header = (String) timingConfig.getOrDefault("header", "");
-                content = (String) timingConfig.getOrDefault("content", "");
-                footer = (String) timingConfig.getOrDefault("footer", "");
+                mode = textFromConfig(timingConfig, "mode", "text");
+                header = textFromConfig(timingConfig, "header", "");
+                content = textFromConfig(timingConfig, "content", "");
+                footer = textFromConfig(timingConfig, "footer", "");
                 segmentSend = timingConfig.getOrDefault("segmentSend", false);
                 Long sourceId = toLong(timingConfig.get("sourceId"));
 
@@ -282,10 +287,10 @@ public class DeliveryExecutionService {
                 // 4. 卡密模式：原子认领一张未使用卡密（仅首次发货时执行）
                 if ("card".equals(mode)) {
                     Object cardGroupIdObj = timingConfig.get("cardGroupId");
-                    if (cardGroupIdObj == null) {
-                        throw new BizException(422, "卡密模式未绑定卡密分组，请在商品发货配置中绑定卡密分组");
+                    Long cardGroupId = toLong(cardGroupIdObj);
+                    if (cardGroupId == null || cardGroupId <= 0) {
+                        throw new BizException(422, "卡密模式未绑定有效的卡密分组，请在商品发货配置中绑定卡密分组");
                     }
-                    Long cardGroupId = ((Number) cardGroupIdObj).longValue();
                     claimedCardGroupId = cardGroupId;
                     CardItem claimed = claimCard(tenantId, cardGroupId, orderId);
                     if (claimed == null) {
@@ -325,7 +330,7 @@ public class DeliveryExecutionService {
                         throw new BizException(409, "卡密内容解析失败，请检查卡密数据格式");
                     }
                     // 使用卡密模板
-                    String cardTemplate = (String) timingConfig.getOrDefault("cardTemplate", "");
+                    String cardTemplate = textFromConfig(timingConfig, "cardTemplate", "");
                     if (!cardTemplate.isBlank()) {
                         try {
                             cardContent = cardTemplate
@@ -382,7 +387,9 @@ public class DeliveryExecutionService {
             }
 
             // 8. 发送消息（支持分段发送）
-            boolean segmented = segmentSend != null && (Boolean.TRUE.equals(segmentSend) || "true".equals(String.valueOf(segmentSend)));
+            // segmentSend 在 config_json 中可能是 Boolean（旧逻辑期望）或 Integer（0/1，当前写入路径）。
+            // 这里同时兼容两种类型，避免 segmentSend=1 时分段发送失效。
+            boolean segmented = isSegmentSendEnabled(segmentSend);
             List<String> messages = segmented ? splitBySegment(resolvedContent) : List.of(resolvedContent);
 
             for (String msg : messages) {
@@ -1034,6 +1041,34 @@ public class DeliveryExecutionService {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    /**
+     * 从 config_json 反序列化出的 Map 中读取字符串字段。
+     * 兼容 Jackson 反序列化后的 String / Number / Boolean 类型，
+     * 避免直接 (String) 强转导致 ClassCastException（config_json 数据质量不可控）。
+     */
+    private String textFromConfig(Map<String, Object> config, String key, String defaultValue) {
+        if (config == null) return defaultValue;
+        Object value = config.get(key);
+        if (value == null) return defaultValue;
+        if (value instanceof String s) return s;
+        return String.valueOf(value);
+    }
+
+    /**
+     * 判断 config_json 中的 segmentSend 是否启用分段发送。
+     * 兼容三种存储形式：
+     *   - Boolean true/false（旧逻辑期望）
+     *   - Integer 1/0（DeliveryGoodsConfigService.parsePatch 当前写入路径）
+     *   - String "true"/"1"（外部直接写入的边界数据）
+     * 避免因类型不匹配导致 segmentSend=1 时分段发送失效。
+     */
+    private boolean isSegmentSendEnabled(Object segmentSend) {
+        if (segmentSend == null) return false;
+        if (Boolean.TRUE.equals(segmentSend)) return true;
+        String text = String.valueOf(segmentSend);
+        return "1".equals(text) || "true".equalsIgnoreCase(text);
     }
 
     /**

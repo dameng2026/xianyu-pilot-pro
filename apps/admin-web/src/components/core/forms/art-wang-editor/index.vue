@@ -132,10 +132,7 @@
 
             const response = await request.post<{ url: string; alt: string; href: string }>({
               url: server,
-              data: formData,
-              headers: {
-                'Content-Type': 'multipart/form-data'
-              }
+              data: formData
             })
 
             const { url, alt, href } = response

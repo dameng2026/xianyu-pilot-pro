@@ -2,9 +2,9 @@
 
 - China backend host: `/home/ubuntu/project`
 - China backend runtime: `docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.production`
-- US user frontend root: `/var/www/user-web`
-- US admin frontend root: `/var/www/admin-web`
-- US Nginx config: `/etc/nginx/sites-enabled/nginx-full.conf`
+- Hong Kong user frontend root: `/var/www/user-web`
+- Hong Kong admin frontend root: `/var/www/admin-web`
+- Hong Kong Nginx config: `/etc/nginx/sites-enabled/nginx-full.conf`
 
 # Deploy Commands
 
@@ -19,10 +19,10 @@
 
 # Official URLs
 
-- User frontend: `http://154.9.254.86:81/#/login`
-- Admin frontend: `http://154.9.254.86:82/#/auth/login`
-- China user health: `http://1.12.66.249:18080/api/health`
-- China admin health: `http://1.12.66.249:18080/admin-api/health`
+- User frontend: `http://64.90.31.68:81/#/login`
+- Admin frontend: `http://64.90.31.68:82/#/auth/login`
+- China user health: `http://211.161.232.54:18080/api/health`
+- China admin health: `http://211.161.232.54:18080/admin-api/health`
 
 # Log Locations
 
@@ -30,9 +30,9 @@
   - `cd /home/ubuntu/project && docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.production logs --tail=400 backend`
 - China automation logs:
   - `cd /home/ubuntu/project && docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.production logs --tail=400 automation`
-- US Nginx access log:
+- Hong Kong Nginx access log:
   - `/var/log/nginx/access.log`
-- US Nginx error log:
+- Hong Kong Nginx error log:
   - `/var/log/nginx/error.log`
 
 # High-Value Checks
@@ -45,9 +45,9 @@
 # Focused Smoke Tests
 
 - Admin login payload uses `userName`, not `username`:
-  - `POST http://154.9.254.86:82/admin-api/auth/login`
+  - `POST http://64.90.31.68:82/admin-api/auth/login`
 - User login payload uses `username`:
-  - `POST http://154.9.254.86:81/api/login/login`
+  - `POST http://64.90.31.68:81/api/login/login`
 - Billing page smoke checks:
   - `GET /admin-api/ai-billing/summary`
   - `GET /admin-api/ai-billing/model-prices/page?current=1&size=20`
@@ -57,13 +57,13 @@
 
 # Known Failure Modes
 
-- US login `403`:
+- Hong Kong login `403`:
   - Usually caused by China backend CORS whitelist drift.
   - Check `.env.production` on the China host for:
     - `USER_CORS_ALLOWED_ORIGINS`
     - `ADMIN_CORS_ALLOWED_ORIGINS`
 - SSE `504` on user frontend:
-  - Usually caused by missing special-case proxy handling for `/api/sse/subscribe` in US Nginx.
+  - Usually caused by missing special-case proxy handling for `/api/sse/subscribe` in Hong Kong Nginx.
 - Admin dashboard warnings:
   - Usually caused by production schema drift.
   - Check `SchemaCompatibilityRunner` and recent backend logs.

@@ -492,7 +492,12 @@ const currentPlanName = computed(() => {
 
 const currentPlanPeriod = computed(() => {
   const endTime = props.user?.activePlan?.endTime || props.user?.expireTime || props.user?.planExpireTime
-  if (!endTime) return '以后台权益为准'
+  if (!endTime) {
+    // 已开通会员但无固定到期日：永久有效；免费/未知才显示"以后台权益为准"
+    const rawCode = props.user?.activePlan?.planCode || props.user?.planCode
+    const isPaid = rawCode && normalizeLevel({ planCode: String(rawCode).trim().toLowerCase() }) !== 'normal'
+    return isPaid ? '永久' : '以后台权益为准'
+  }
   const date = new Date(endTime)
   if (Number.isNaN(date.getTime())) return '以后台权益为准'
   const year = date.getFullYear()
@@ -503,9 +508,9 @@ const currentPlanPeriod = computed(() => {
 
 const currentPlanStart = computed(() => {
   const startTime = props.user?.activePlan?.startTime
-  if (!startTime) return '未记录'
+  if (!startTime) return '—'
   const date = new Date(startTime)
-  if (Number.isNaN(date.getTime())) return '未记录'
+  if (Number.isNaN(date.getTime())) return '—'
   const year = date.getFullYear()
   const month = `${date.getMonth() + 1}`.padStart(2, '0')
   const day = `${date.getDate()}`.padStart(2, '0')
@@ -515,7 +520,7 @@ const currentPlanStart = computed(() => {
 // 当前权益描述：不再展示账号数/商品数等数量限制，改为展示套餐功能特性摘要
 const currentPlanQuota = computed(() => {
   const rawCurrentCode = props.user?.activePlan?.planCode || props.user?.planCode
-  if (!rawCurrentCode) return '额度状态未提供'
+  if (!rawCurrentCode) return '以套餐配置为准'
   const currentCode = String(rawCurrentCode).trim().toLowerCase()
   const currentLevel = normalizeLevel({ planCode: currentCode })
   const current = displayPlans.value.find(plan => String(plan.planCode || '').trim().toLowerCase() === currentCode || plan.level === currentLevel)

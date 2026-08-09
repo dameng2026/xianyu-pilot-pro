@@ -1525,12 +1525,14 @@ function handleHeaderRefresh() {
 }
 const planPeriodText = computed(() => {
   if (!overview.activePlan) return '套餐状态暂不可用'
-  return overview.activePlan.endTime ? `有效期至 ${displayDateOnly(overview.activePlan.endTime)}` : '有效期以后台权益为准'
+  if (overview.activePlan.endTime) return `有效期至 ${displayDateOnly(overview.activePlan.endTime)}`
+  // 已开通会员但无固定到期日（永久有效）；免费/未知才显示"以后台权益为准"
+  return planBadge.value === 'FREE' || planBadge.value === 'UNKNOWN' ? '有效期以后台权益为准' : '永久'
 })
 
 const planStartText = computed(() => {
   const startTime = overview.activePlan?.startTime
-  return startTime ? displayDateOnly(startTime) : '未记录'
+  return startTime ? displayDateOnly(startTime) : '—'
 })
 
 // 会员等级展示文案：FREE/UNKNOWN 显示"普通会员"，其他显示 planName
@@ -1569,8 +1571,9 @@ const phoneVerifiedTone = computed(() => {
 const planExpireInfo = computed(() => {
   const endTime = overview.activePlan?.endTime
   if (!endTime) {
-    // 手动 vip_level 或无订阅：无固定到期日
-    return { hasEnd: false, days: null, dateText: '有效期以后台权益为准' }
+    // 已开通会员（手动/订阅）无固定到期日：永久有效；免费/未知：以后台权益为准
+    const isPaid = planBadge.value !== 'FREE' && planBadge.value !== 'UNKNOWN'
+    return { hasEnd: false, days: null, dateText: isPaid ? '永久有效' : '有效期以后台权益为准' }
   }
   const end = new Date(endTime)
   if (Number.isNaN(end.getTime())) {

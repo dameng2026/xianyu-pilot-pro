@@ -48,7 +48,8 @@ const emit = defineEmits(['logout', 'open-profile-center', 'open-ai-cs'])
 const displayName = computed(() => props.user?.nickname || props.user?.username || props.user?.displayName || props.user?.name || '当前用户')
 const levelLabel = computed(() => {
   if (props.user?.profileUnavailable) return '套餐状态未知'
-  return props.user?.activePlan?.planName || props.user?.planName || props.user?.levelName || '套餐状态未知'
+  const plan = props.user?.activePlan
+  return plan?.planName || props.user?.planName || props.user?.levelName || (plan?.planCode === 'normal' ? '普通用户' : '套餐状态未知')
 })
 const sseLabel = computed(() => ({
   connected: '在线',

@@ -7,6 +7,7 @@ import com.xianyu.admin.security.AdminContext;
 import com.xianyu.admin.security.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -250,6 +251,7 @@ public class SysUserService {
     @Transactional
     public Map<String, Object> update(long id, Map<String, Object> data) {
         Map<String, Object> existing = detail(id);
+        Integer oldVipLevel = currentVipLevel(id);
 
         String username = String.valueOf(data.getOrDefault("username", existing.get("username"))).trim();
         String nickname = String.valueOf(data.getOrDefault("nickname", existing.getOrDefault("nickname", "")));
@@ -344,9 +346,17 @@ public class SysUserService {
         }
 
         // VIP 等级：单事务内一并更新（字段由 DataInitializer 统一初始化）
+        Integer newVipLevel = null;
+        Integer vipDurationDays = null;
         if (data.containsKey("vipLevel")) {
+            newVipLevel = parseInt(data.get("vipLevel"));
             sql.append(", vip_level=?");
-            args.add(parseInt(data.get("vipLevel")));
+            args.add(newVipLevel);
+        }
+        // 手动开通天数：与 VIP 等级一起下发，用于生成真实订阅到期时间
+        if (data.containsKey("vipDurationDays")) {
+            Long days = parseLong(data.get("vipDurationDays"));
+            vipDurationDays = days == null ? null : days.intValue();
         }
 
         // Token 余额：单事务内一并更新
@@ -362,6 +372,11 @@ public class SysUserService {
         int rows = jdbcTemplate.update(sql.toString(), args.toArray());
         if (rows == 0) {
             throw new BizException(404, "用户不存在");
+        }
+
+        // 手动会员等级变更（或显式下发开通天数）时同步订阅记录，提供真实的开通/到期时间数据
+        if (newVipLevel != null && (data.containsKey("vipDurationDays") || !Objects.equals(oldVipLevel, newVipLevel))) {
+            syncManualVipSubscription(id, newVipLevel, vipDurationDays);
         }
 
         log.info("更新用户成功: id={}", id);
@@ -436,15 +451,75 @@ public class SysUserService {
     }
 
     @Transactional
-    public void updateVipLevel(long id, int vipLevel) {
+    public void updateVipLevel(long id, int vipLevel, Integer vipDurationDays) {
         int rows = jdbcTemplate.update(
                 "UPDATE sys_user SET vip_level=?, updated_time=NOW() WHERE id=? AND deleted=0",
                 vipLevel, id);
         if (rows == 0) {
             throw new BizException(404, "用户不存在");
         }
-        log.info("更新用户 VIP 等级: id={}, vipLevel={}", id, vipLevel);
+        log.info("更新用户 VIP 等级: id={}, vipLevel={}, vipDurationDays={}", id, vipLevel, vipDurationDays);
         auditLogRequired(id, "USER_UPDATE_VIP_LEVEL", "更新用户 VIP 等级: " + vipLevel);
+        syncManualVipSubscription(id, vipLevel, vipDurationDays);
+    }
+
+    private Integer currentVipLevel(long userId) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    "SELECT vip_level FROM sys_user WHERE id=? AND deleted=0", Integer.class, userId);
+        } catch (DataAccessException e) {
+            // vip_level 字段缺失等兼容场景
+            return null;
+        }
+    }
+
+    /**
+     * 手动开通/变更会员等级时同步订阅记录，为前台提供真实的开通/到期时间数据。
+     * vipLevel>0 时创建订阅（vipDurationDays 为开通天数，null/0 视为永久有效）；
+     * vipLevel<=0 时停用该用户的手动订阅，回退为普通用户。
+     */
+    private void syncManualVipSubscription(long userId, int vipLevel, Integer vipDurationDays) {
+        // 先停用该用户已有的手动订阅
+        jdbcTemplate.update(
+                "UPDATE billing_subscription SET status=0, updated_time=NOW() " +
+                        "WHERE user_id=? AND target_type='user_account' AND source='admin_manual' AND status=1",
+                userId);
+        if (vipLevel <= 0) return;
+        String planCode = vipLevel == 3 ? "vip-single" : (vipLevel >= 2 ? "svp" : "vip");
+        List<Map<String, Object>> plans = jdbcTemplate.queryForList(
+                "SELECT id FROM billing_plan WHERE plan_code=? AND deleted=0 ORDER BY id ASC LIMIT 1", planCode);
+        if (plans.isEmpty()) {
+            log.warn("同步手动会员订阅失败：未找到套餐 plan_code={}, userId={}", planCode, userId);
+            return;
+        }
+        Long planId = ((Number) plans.get(0).get("id")).longValue();
+        Long tenantId = currentTenantId(userId);
+        if (tenantId == null) {
+            log.warn("同步手动会员订阅失败：用户缺少 tenant_id, userId={}", userId);
+            return;
+        }
+        int days = vipDurationDays == null ? 0 : Math.max(0, vipDurationDays);
+        if (days > 0) {
+            jdbcTemplate.update(
+                    "INSERT INTO billing_subscription(tenant_id, user_id, plan_id, target_type, target_id, start_time, end_time, status, source, created_time, updated_time) " +
+                            "VALUES(?,?,?,'user_account',NULL,NOW(),DATE_ADD(NOW(), INTERVAL ? DAY),1,'admin_manual',NOW(),NOW())",
+                    tenantId, userId, planId, days);
+        } else {
+            jdbcTemplate.update(
+                    "INSERT INTO billing_subscription(tenant_id, user_id, plan_id, target_type, target_id, start_time, end_time, status, source, created_time, updated_time) " +
+                            "VALUES(?,?,?,'user_account',NULL,NOW(),NULL,1,'admin_manual',NOW(),NOW())",
+                    tenantId, userId, planId);
+        }
+        log.info("同步手动会员订阅: userId={}, vipLevel={}, vipDurationDays={}, planId={}", userId, vipLevel, days, planId);
+    }
+
+    private Long currentTenantId(long userId) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    "SELECT tenant_id FROM sys_user WHERE id=? AND deleted=0", Long.class, userId);
+        } catch (DataAccessException e) {
+            return null;
+        }
     }
 
     public void enrichUserLevels(List<Map<String, Object>> records) {

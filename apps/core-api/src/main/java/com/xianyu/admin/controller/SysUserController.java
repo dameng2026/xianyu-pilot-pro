@@ -193,7 +193,8 @@ public class SysUserController {
     @PutMapping("/{id}/vip-level")
     public Result<Void> updateVipLevel(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         int vipLevel = ((Number) body.get("vipLevel")).intValue();
-        sysUserService.updateVipLevel(id, vipLevel);
+        Integer vipDurationDays = body.get("vipDurationDays") instanceof Number n ? n.intValue() : null;
+        sysUserService.updateVipLevel(id, vipLevel, vipDurationDays);
         return Result.ok(null);
     }
 }

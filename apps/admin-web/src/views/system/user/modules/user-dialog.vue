@@ -95,6 +95,10 @@
             <ElOption label="SVP" :value="2" />
           </ElSelect>
         </ElFormItem>
+        <ElFormItem label="开通天数" prop="vipDurationDays">
+          <ElInputNumber v-model="form.vipDurationDays" :min="0" :max="36500" style="width: 100%" placeholder="留空或 0 表示永久有效" />
+          <div class="text-xs text-gray-400 mt-1">手动开通会员的到期时间；0 或不填表示永久有效</div>
+        </ElFormItem>
         <ElFormItem label="Token 余额" prop="tokenBalance">
           <ElInputNumber v-model="form.tokenBalance" :min="0" style="width: 100%" placeholder="输入 Token 余额" />
         </ElFormItem>
@@ -167,6 +171,7 @@
     tenantId: '',
     status: '正常',
     vipLevel: 0,
+    vipDurationDays: 0,
     tokenBalance: 0
   })
 
@@ -270,6 +275,7 @@
       // VIP 等级映射：从 userLevel 字符串转换成数值
       const levelMap: Record<string, number> = { svp: 2, vip: 1, 'vip-single': 3 }
       form.vipLevel = levelMap[data.userLevel || ''] || 0
+      form.vipDurationDays = 0
       form.tokenBalance = data.tokenBalance ?? 0
     } else {
       form.username = ''
@@ -281,6 +287,7 @@
       form.tenantId = ''
       form.status = '正常'
       form.vipLevel = 0
+      form.vipDurationDays = 0
       form.tokenBalance = 0
     }
   }
@@ -339,6 +346,7 @@
     form.tenantId = ''
     form.status = '正常'
     form.vipLevel = 0
+    form.vipDurationDays = 0
     form.tokenBalance = 0
   }
 
@@ -404,6 +412,7 @@
           tenantId: form.tenantId,
           status: form.status === '正常' ? 1 : 0,
           vipLevel: form.vipLevel,
+          vipDurationDays: form.vipDurationDays || 0,
           tokenBalance: form.tokenBalance
         }
         // PII 字段：仅当用户主动输入新值时才传给后端（避免脱敏值写回）

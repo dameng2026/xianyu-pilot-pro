@@ -20,15 +20,15 @@
 | 角色 | IP | SSH 用户 | SSH 密码 | 部署路径 | 说明 |
 |------|-----|---------|---------|---------|------|
 | 国内商业版后端 | `211.161.232.54` | `root` | `0F8lwPsBuRqoVRYq` | `/home/ubuntu/project` | 所有后端服务（MySQL、Redis、PostgreSQL、core-api、automation、crawler、user-web、admin-web） |
-| 美国商业版前端 | `154.9.254.86` | `root` | `IkyuM1cakgilY5Vz` | `/var/www/user-web`、`/var/www/admin-web` | Nginx 反代 + 静态前端，通过 SSH 隧道连接国内后端 |
+| 香港商业版前端 | `64.90.31.68` | `root` | `LukOc60yfkCbcagI` | `/var/www/user-web`、`/var/www/admin-web` | Nginx 反代 + 静态前端，通过 SSH 隧道连接国内后端 |
 
-### 1.5.1 美国前端 → 国内后端 SSH 隧道
+### 1.5.1 香港前端 → 国内后端 SSH 隧道
 
-美国服务器通过 systemd 服务 `xianyupilot-origin-tunnel.service` 建立到国内后端的 SSH 隧道：
+香港服务器通过 systemd 服务 `xianyupilot-origin-tunnel.service` 建立到国内后端的 SSH 隧道：
 
 - **隧道命令**：`ssh -N -i /etc/xianyupilot-origin-tunnel/id_ed25519 ... -L 127.0.0.1:18081:127.0.0.1:18080 root@211.161.232.54`
 - **本地端口**：`127.0.0.1:18081` → 国内后端 `127.0.0.1:18080`
-- **密钥文件**：`/etc/xianyupilot-origin-tunnel/id_ed25519`（美国服务器）
+- **密钥文件**：`/etc/xianyupilot-origin-tunnel/id_ed25519`（香港服务器）
 - **known_hosts**：`/etc/xianyupilot-origin-tunnel/known_hosts`（已包含 `211.161.232.54` 主机密钥）
 - **服务管理**：`systemctl restart xianyupilot-origin-tunnel.service`
 
@@ -36,8 +36,8 @@
 
 开源版通过域名 `https://www.xianyupilot.com` 桥接商业版后端（不直接用 IP）：
 
-- 域名解析到美国服务器（`154.9.254.86`）
-- 美国服务器 Nginx 反代到 `127.0.0.1:18081`（SSH 隧道）
+- 域名解析到香港服务器（`64.90.31.68`）
+- 香港服务器 Nginx 反代到 `127.0.0.1:18081`（SSH 隧道）
 - 隧道转发到国内后端 `127.0.0.1:18080`
 - 开源版配置项：`COMMERCIAL_BACKEND_BASE_URL=https://www.xianyupilot.com`
 

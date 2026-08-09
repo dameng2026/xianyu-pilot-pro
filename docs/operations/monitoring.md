@@ -14,7 +14,7 @@ production topology.
   automation-service and crawler-service on the private Compose network.
 - The `public-availability` job probes the user frontend, public API health and
   admin frontend over real HTTPS. It therefore covers DNS, certificate
-  validation, the US edge, the loopback origin tunnel and China origin path.
+  validation, the Hong Kong edge, the loopback origin tunnel and China origin path.
 - Grafana provisions the production dashboard as non-editable and
   non-deletable, disables anonymous access/telemetry, and requires Secure,
   SameSite=Strict session cookies. All monitoring UIs bind to loopback. Grafana
@@ -35,7 +35,7 @@ responds.
 
 | Alert | First response |
 | --- | --- |
-| `PublicEndpointDown` | Confirm from an independent network, check DNS/TLS/edge, US Nginx and tunnel, then origin readiness; do not restart blindly |
+| `PublicEndpointDown` | Confirm from an independent network, check DNS/TLS/edge, Hong Kong Nginx and tunnel, then origin readiness; do not restart blindly |
 | `PublicEndpointProbeMissing` | Treat monitoring configuration/scrape loss as an outage in observability and verify target discovery |
 | `PublicTlsCertificateExpiresSoon` | Verify the reported certificate chain and renewal owner; renew and test before the 14-day threshold becomes an outage |
 | `CriticalServiceNotReady` / `CriticalServiceProbeMissing` | Inspect the named service and its dependencies; preserve logs and request IDs |

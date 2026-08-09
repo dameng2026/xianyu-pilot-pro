@@ -67,8 +67,8 @@
       <div v-if="overview.activePlan" class="m-token-plan">
         <div class="m-token-plan-info">
           <span class="m-token-plan-name">{{ overview.activePlan.planName || '当前套餐' }}</span>
-          <span v-if="overview.activePlan.expireTime || overview.expireTime" class="m-token-plan-expire">
-            到期 {{ formatDateOnly(overview.activePlan.expireTime || overview.expireTime) }}
+          <span v-if="overview.activePlan.endTime || overview.activePlan.expireTime || overview.expireTime" class="m-token-plan-expire">
+            到期 {{ formatDateOnly(overview.activePlan.endTime || overview.activePlan.expireTime || overview.expireTime) }}
           </span>
         </div>
         <button class="m-token-renew" @click="paymentVisible = true">续费</button>

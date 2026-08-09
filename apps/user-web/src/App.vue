@@ -347,7 +347,6 @@ async function initializeMediaSession({ silent = false } = {}) {
     }, 10 * 60 * 1000)
   } catch (error) {
     if (silent) {
-      showNotice('私有图片会话刷新失败，图片预览暂不可用；请重新登录后重试', 'warn')
       recordClientError(error, { source: 'media_session_refresh' })
       return false
     }
@@ -692,9 +691,8 @@ async function handleLoginSuccess(payload) {
     scheduleWarmups()
     // 功能开关预热 + 媒体会话后台异步，不阻塞进入首页
     getFeatureSwitchStatus().catch(() => {})
-    initializeMediaSession().catch(() => {
-      showNotice('私有图片会话初始化失败，图片预览暂不可用', 'warn')
-    })
+    // 媒体会话后台异步：仅用于私有图片预览，失败时静默降级，不打扰用户
+    initializeMediaSession().catch(() => {})
     await loadCurrentUser(true)
     navigate(defaultPage)
     authNotice.value = ''

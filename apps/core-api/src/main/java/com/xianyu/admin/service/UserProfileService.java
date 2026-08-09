@@ -432,16 +432,12 @@ public class UserProfileService {
                     Integer.class, userId);
             if (vipLevel != null && vipLevel > 0) {
                 Map<String, Object> plan = new LinkedHashMap<>();
-                if (vipLevel == 3) {
-                    plan.put("planCode", "vip-single");
-                    plan.put("planName", "VIP（单店版） (手动)");
-                } else {
-                    plan.put("planCode", vipLevel >= 2 ? "svp" : "vip");
-                    plan.put("planName", vipLevel >= 2 ? "SVP (手动)" : "VIP (手动)");
-                }
+                String code = vipLevel == 3 ? "vip-single" : (vipLevel >= 2 ? "svp" : "vip");
+                plan.put("planCode", code);
+                plan.put("planName", manualPlanName(code));
                 plan.put("startTime", null);
                 plan.put("endTime", null);
-                // 手动等级覆盖优先于订阅，但充值/到期时间仍以真实订阅为准
+                // 手动等级覆盖优先于订阅，但开通/到期时间仍以真实订阅为准（手动开通会同步生成 admin_manual 订阅）
                 try {
                     List<Map<String, Object>> subs = jdbcTemplate.queryForList(
                             "SELECT s.start_time, s.end_time FROM billing_subscription s " +
@@ -482,6 +478,25 @@ public class UserProfileService {
             throw unavailable("订阅套餐", e);
         }
         return new LinkedHashMap<>(Map.of("planCode", "normal", "planName", "普通用户"));
+    }
+
+    /**
+     * 手动会员等级的展示名称：优先取 billing_plan 中配置的真实套餐名，避免前台出现"(手动)"内部标记。
+     */
+    private String manualPlanName(String planCode) {
+        try {
+            List<String> names = jdbcTemplate.queryForList(
+                    "SELECT plan_name FROM billing_plan WHERE plan_code=? AND deleted=0 ORDER BY id ASC LIMIT 1",
+                    String.class, planCode);
+            if (!names.isEmpty() && names.get(0) != null && !names.get(0).isBlank()) {
+                return names.get(0);
+            }
+        } catch (Exception ignored) {
+            // 套餐表缺失等异常回退到默认名称
+        }
+        if ("vip-single".equals(planCode)) return "VIP（单店版）";
+        if ("svp".equals(planCode)) return "SVP";
+        return "VIP";
     }
 
     public String currentPlanCode(Long userId) {
