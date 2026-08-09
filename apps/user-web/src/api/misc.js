@@ -4,7 +4,11 @@ export const uploadImage = (accountId, file) => {
   const form = new FormData()
   form.append('accountId', String(accountId))
   form.append('file', file)
-  return request.post('/image/upload', form)
+  // 超时 120 秒：与 Java 网关 uploadInternalForData 的 120 秒超时对齐。
+  // 封面图上传链路 = 浏览器上传 multipart → Java 网关转发 → Python 保存图片，
+  // 大图（接近 5MB 上限）或网络抖动时，默认 30 秒会先于 Java 网关超时，
+  // 触发"请求超时，请稍后重试"，导致封面图上传失败。
+  return request.post('/image/upload', form, { timeout: 120000 })
 }
 export const uploadImageFromUrl = data => request.post('/image/uploadFromUrl', data)
 export const detectCaptcha = data => request.post('/captcha/detect', data)
