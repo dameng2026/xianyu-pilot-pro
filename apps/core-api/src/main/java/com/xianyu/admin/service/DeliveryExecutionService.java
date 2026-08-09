@@ -121,7 +121,9 @@ public class DeliveryExecutionService {
      *    确认发货失败不影响 delivery_record 成功状态（避免被 retryFailedDeliveries 重置后再次认领新卡密）
      * 3. 补发逻辑修复：重试时若 delivery_record 已有 delivery_content（首次发送的卡密内容），
      *    直接重发该内容，不再认领新卡密
-     * 4. 鱼小铺 vs 普通用户：fishShopUser=true 调用闲鱼 API 确认发货；false 只发 WS 消息
+     * 4. 确认发货：所有账号（普通用户与鱼小铺用户一致）在消息发送成功后调用闲鱼 API 确认发货，
+     *    将平台订单从"待发货"变更为"已发货"；无鱼小铺专属发货 API，鱼小铺用户复用普通发货逻辑，
+     *    待后续提供鱼小铺发货 API 后作为其背景发货能力
      */
     @Transactional
     public void executeDelivery(Map<String, Object> record) {
@@ -418,51 +420,46 @@ public class DeliveryExecutionService {
             log.info("发货消息发送成功，delivery_record 已标记为成功 recordId={}, orderId={}, mode={}, timing={}, isRedelivery={}",
                     recordId, orderId, mode, timing, isRedeliveryWithContent);
 
-            // 9. 调用闲鱼确认发货 API（区分鱼小铺/普通用户）
-            // - 鱼小铺用户（fishShopUser=true）：调用闲鱼 API 确认发货（平台标记为已发货）
-            // - 普通用户（fishShopUser=false）：不调用 API，仅发送 WS 消息（闲鱼 WS 会推送待发货通知，
-            //   买家点击"无需寄件"按钮即可完成发货）
-            // 确认发货失败不影响 delivery_record 成功状态（消息已发给买家）
-            Boolean isFishShopUser = isFishShopUser(tenantId, accountId);
-            if (Boolean.TRUE.equals(isFishShopUser)) {
-                try {
-                    Map<String, Object> confirmPayload = new LinkedHashMap<>();
-                    confirmPayload.put("tenantId", tenantId);
-                    confirmPayload.put("accountId", accountId);
-                    confirmPayload.put("externalOrderId", order.getExternalOrderId());
-                    confirmPayload.put("isBargain", Boolean.TRUE.equals(order.getIsBargain()));
-                    String itemId = firstItem.getExternalGoodsId() != null && !firstItem.getExternalGoodsId().isBlank()
-                            ? firstItem.getExternalGoodsId()
-                            : String.valueOf(firstItem.getGoodsId());
-                    confirmPayload.put("itemId", itemId);
-                    confirmPayload.put("buyerId", buyerId);
+            // 9. 调用闲鱼确认发货 API，将平台订单状态从"待发货"变更为"已发货"
+            // - 普通订单：consign.dummy（无物流确认发货）
+            // - 小刀订单：免拼发货（freeshipping），需携带 itemId / buyerId
+            // - 鱼小铺用户与普通用户一致使用上述普通发货逻辑（参考成熟项目，无鱼小铺专属发货 API）；
+            //   待闲鱼提供鱼小铺专属发货 API 后，此普通发货作为鱼小铺用户的背景发货能力（兜底）。
+            // 确认发货失败不影响 delivery_record 成功状态（消息已发给买家），仅记录日志，
+            // 后续可依靠订单状态同步/补发货机制重试，避免失败重试导致重复发卡。
+            try {
+                Map<String, Object> confirmPayload = new LinkedHashMap<>();
+                confirmPayload.put("tenantId", tenantId);
+                confirmPayload.put("accountId", accountId);
+                confirmPayload.put("externalOrderId", order.getExternalOrderId());
+                confirmPayload.put("isBargain", Boolean.TRUE.equals(order.getIsBargain()));
+                String itemId = firstItem.getExternalGoodsId() != null && !firstItem.getExternalGoodsId().isBlank()
+                        ? firstItem.getExternalGoodsId()
+                        : String.valueOf(firstItem.getGoodsId());
+                confirmPayload.put("itemId", itemId);
+                confirmPayload.put("buyerId", buyerId);
 
-                    Map<String, Object> confirmResult = automationClient.postInternalForData(
-                            "/api/internal/orders/confirm-shipment", confirmPayload, 30, tenantId);
+                Map<String, Object> confirmResult = automationClient.postInternalForData(
+                        "/api/internal/orders/confirm-shipment", confirmPayload, 30, tenantId);
 
-                    boolean confirmSuccess = confirmResult != null
-                            && (Boolean.TRUE.equals(confirmResult.get("success"))
-                                || "true".equals(String.valueOf(confirmResult.get("success"))));
-                    if (confirmSuccess) {
-                        // 确认发货成功，更新订单状态为已发货
-                        orderMapper.updateDeliveryStatus(tenantId, orderId, 1, 3);
-                        log.info("鱼小铺用户确认发货成功 orderId={}", orderId);
-                    } else {
-                        String confirmError = confirmResult != null
-                                ? String.valueOf(confirmResult.getOrDefault("message", "确认发货失败"))
-                                : "确认发货失败";
-                        log.warn("鱼小铺用户确认发货失败（delivery_record 已成功，不影响）orderId={} error={}",
-                                orderId, confirmError);
-                    }
-                } catch (Exception e) {
-                    // 确认发货失败不影响 delivery_record 成功状态，仅记录日志
-                    log.warn("鱼小铺用户确认发货异常（delivery_record 已成功，不影响）orderId={}, errorType={}, message={}",
-                            orderId, e.getClass().getSimpleName(), e.getMessage());
+                boolean confirmSuccess = confirmResult != null
+                        && (Boolean.TRUE.equals(confirmResult.get("success"))
+                            || "true".equals(String.valueOf(confirmResult.get("success"))));
+                if (confirmSuccess) {
+                    // 确认发货成功，更新订单状态为已发货
+                    orderMapper.updateDeliveryStatus(tenantId, orderId, 1, 3);
+                    log.info("闲鱼确认发货成功 orderId={}", orderId);
+                } else {
+                    String confirmError = confirmResult != null
+                            ? String.valueOf(confirmResult.getOrDefault("message", "确认发货失败"))
+                            : "确认发货失败";
+                    log.warn("闲鱼确认发货失败（delivery_record 已成功，不影响）orderId={} error={}",
+                            orderId, confirmError);
                 }
-            } else {
-                // 普通用户：不调用闲鱼 API，仅通过 WS 发送消息已完成发货
-                // 闲鱼 WS 会推送待发货通知给买家，买家点击"无需寄件"按钮即可完成发货
-                log.info("普通用户发货完成（仅 WS 消息，不调闲鱼 API）orderId={}", orderId);
+            } catch (Exception e) {
+                // 确认发货失败不影响 delivery_record 成功状态，仅记录日志
+                log.warn("闲鱼确认发货异常（delivery_record 已成功，不影响）orderId={}, errorType={}, message={}",
+                        orderId, e.getClass().getSimpleName(), e.getMessage());
             }
 
             log.info("发货成功 recordId={}, orderId={}, mode={}, timing={}", recordId, orderId, mode, timing);
@@ -471,22 +468,6 @@ public class DeliveryExecutionService {
                 releaseClaimedCard(tenantId, claimedCardGroupId, claimedCardItemId);
             }
             throw e;
-        }
-    }
-
-    /**
-     * 判断账号是否为鱼小铺用户
-     * - fishShopUser=true：鱼小铺用户，需调用闲鱼 API 确认发货
-     * - fishShopUser=false/null：普通用户，仅通过 WS 消息发货
-     */
-    private Boolean isFishShopUser(Long tenantId, Long accountId) {
-        try {
-            return jdbcTemplate.queryForObject(
-                    "SELECT COALESCE(fish_shop_user, 0) FROM xianyu_account WHERE id=? AND tenant_id=? AND deleted=0",
-                    Boolean.class, accountId, tenantId);
-        } catch (Exception e) {
-            log.debug("查询鱼小铺用户标识失败 accountId={} errorType={}", accountId, e.getClass().getSimpleName());
-            return false;
         }
     }
 
