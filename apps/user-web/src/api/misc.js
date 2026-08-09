@@ -1,14 +1,25 @@
 import request from '../utils/request.js'
 
-export const uploadImage = (accountId, file) => {
+export const uploadImage = (accountId, file, { retries = 2 } = {}) => {
   const form = new FormData()
   form.append('accountId', String(accountId))
   form.append('file', file)
-  // 超时 120 秒：与 Java 网关 uploadInternalForData 的 120 秒超时对齐。
-  // 封面图上传链路 = 浏览器上传 multipart → Java 网关转发 → Python 保存图片，
-  // 大图（接近 5MB 上限）或网络抖动时，默认 30 秒会先于 Java 网关超时，
-  // 触发"请求超时，请稍后重试"，导致封面图上传失败。
-  return request.post('/image/upload', form, { timeout: 120000 })
+  // 超时 60 秒 + 自动重试：封面图上传链路跨香港→中国内地，
+  // 网络抖动时连接中断（nginx 499, size=0）占 ~66%。
+  // 正常上传在 30 秒内完成；60 秒超时给大图余量，
+  // 自动重试 2 次应对瞬时网络中断（从线上数据看 200/499 交替出现，重试大概率成功）。
+  const doUpload = (attempt) =>
+    request.post('/image/upload', form, { timeout: 60000 }).catch(err => {
+      // 仅对网络/超时错误重试；业务错误（4xx）直接抛出
+      const isTransient = err?.timeout || err?.code === 'NETWORK_ERROR' ||
+        err?.code === 'ECONNABORTED' || err?.code === 'ERR_NETWORK'
+      if (isTransient && attempt < retries) {
+        return new Promise(resolve => setTimeout(resolve, 1000))
+          .then(() => doUpload(attempt + 1))
+      }
+      throw err
+    })
+  return doUpload(0)
 }
 export const uploadImageFromUrl = data => request.post('/image/uploadFromUrl', data)
 export const detectCaptcha = data => request.post('/captcha/detect', data)
