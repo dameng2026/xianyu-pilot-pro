@@ -10,11 +10,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services import ws_delivery_handler
+from app.services import ws_delivery_handler, xianyu_api_service
 from app.services.xianyu_api_service import (
+    MAX_CONFIRM_RETRY,
     _normalize_numeric_id,
     confirm_freeshipping,
     confirm_order_shipment,
+    confirm_shipment,
 )
 
 
@@ -273,7 +275,7 @@ async def test_text_delivery_sends_message_before_confirm(monkeypatch):
 
     async def _fake_send(account_id, s_id, buyer_user_id, content):
         call_order.append("send_message")
-        return True
+        return (True, False)
 
     async def _fake_insert(*args, **kwargs):
         call_order.append("insert_record")
@@ -321,6 +323,114 @@ async def test_text_delivery_sends_message_before_confirm(monkeypatch):
     assert send_idx < confirm_idx, f"发送消息({send_idx})必须在确认发货({confirm_idx})之前"
 
 
+# ============================================================
+# 确认发货重试策略测试（与成熟项目 MAX_RETRY=4 对齐）
+# ============================================================
+
+def _patch_auth_and_post(monkeypatch, post_fn):
+    """Mock 账号认证与 MTOP 请求，供确认发货重试测试复用。"""
+    monkeypatch.setattr(
+        xianyu_api_service,
+        "_get_account_auth",
+        lambda account_id: {"encrypted_cookie": "enc"},
+    )
+    monkeypatch.setattr(
+        xianyu_api_service,
+        "_decrypt_value",
+        lambda v: "_m_h5_tk=token_abc",
+    )
+    monkeypatch.setattr(
+        xianyu_api_service,
+        "_post_mtop_with_token_retry",
+        post_fn,
+    )
+
+
+def test_confirm_shipment_retries_up_to_max_then_fails(monkeypatch):
+    """普通发货持续失败时最多尝试 MAX_CONFIRM_RETRY 次后返回失败。"""
+    calls = {"n": 0}
+
+    def _fake_post(*_args, **_kwargs):
+        calls["n"] += 1
+        return {"success": False, "error": "FAIL::临时错误", "ret": ["FAIL::临时错误"]}
+
+    _patch_auth_and_post(monkeypatch, _fake_post)
+    result = confirm_shipment(1, "order-1")
+
+    assert result["success"] is False
+    assert calls["n"] == MAX_CONFIRM_RETRY
+
+
+def test_confirm_shipment_succeeds_on_retry(monkeypatch):
+    """普通发货瞬时失败后第 3 次成功，应返回成功并停止重试。"""
+    calls = {"n": 0}
+
+    def _fake_post(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return {"success": False, "error": "FAIL::临时错误", "ret": ["FAIL::临时错误"]}
+        return {"success": True, "ret": ["SUCCESS::调用成功"]}
+
+    _patch_auth_and_post(monkeypatch, _fake_post)
+    result = confirm_shipment(1, "order-1")
+
+    assert result["success"] is True
+    assert calls["n"] == 3
+
+
+def test_confirm_freeshipping_no_retry_error_returns_immediately(monkeypatch):
+    """免拼发货命中不可重试错误时直接返回失败（no_retry=True），不做重试。"""
+    calls = {"n": 0}
+
+    def _fake_post(*_args, **_kwargs):
+        calls["n"] += 1
+        return {
+            "success": False,
+            "error": "FAIL::GROUPON_ACTIVITY_ITEM_CHECK_ERROR",
+            "ret": ["FAIL::GROUPON_ACTIVITY_ITEM_CHECK_ERROR"],
+        }
+
+    _patch_auth_and_post(monkeypatch, _fake_post)
+    result = confirm_freeshipping(1, "ORDER-001", "1060794911332", "3672669710")
+
+    assert result["success"] is False
+    assert result.get("no_retry") is True
+    assert calls["n"] == 1
+
+
+def test_confirm_freeshipping_retries_up_to_max_then_fails(monkeypatch):
+    """免拼发货瞬时失败时最多尝试 MAX_CONFIRM_RETRY 次后返回失败。"""
+    calls = {"n": 0}
+
+    def _fake_post(*_args, **_kwargs):
+        calls["n"] += 1
+        return {"success": False, "error": "FAIL::系统繁忙", "ret": ["FAIL::系统繁忙"]}
+
+    _patch_auth_and_post(monkeypatch, _fake_post)
+    result = confirm_freeshipping(1, "ORDER-001", "1060794911332", "3672669710")
+
+    assert result["success"] is False
+    assert calls["n"] == MAX_CONFIRM_RETRY
+
+
+def test_confirm_freeshipping_succeeds_on_retry(monkeypatch):
+    """免拼发货瞬时失败后第 2 次成功，应返回成功并停止重试。"""
+    calls = {"n": 0}
+
+    def _fake_post(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            return {"success": False, "error": "FAIL::系统繁忙", "ret": ["FAIL::系统繁忙"]}
+        return {"success": True, "ret": ["SUCCESS::调用成功"]}
+
+    _patch_auth_and_post(monkeypatch, _fake_post)
+    result = confirm_freeshipping(1, "ORDER-001", "1060794911332", "3672669710")
+
+    assert result["success"] is True
+    assert result.get("ship_method") == "freeshipping"
+    assert calls["n"] == 2
+
+
 @pytest.mark.asyncio
 async def test_kami_delivery_sends_message_before_confirm(monkeypatch):
     """卡密发货：先发消息、再确认发货（确保不漏发）。"""
@@ -328,7 +438,7 @@ async def test_kami_delivery_sends_message_before_confirm(monkeypatch):
 
     async def _fake_send(account_id, s_id, buyer_user_id, content):
         call_order.append("send_message")
-        return True
+        return (True, False)
 
     async def _fake_insert(*args, **kwargs):
         call_order.append("insert_record")
@@ -343,11 +453,17 @@ async def test_kami_delivery_sends_message_before_confirm(monkeypatch):
     class _KamiDeliveryDB:
         async def execute(self, statement, params=None):
             sql = " ".join(str(statement).split())
-            if "UPDATE card_item" in sql and "status = 1" in sql:
-                # 模拟认领 1 张卡密
+            sql_norm = sql.replace(",", " ,")
+            if "UPDATE card_item" in sql_norm and "SET status = 1" in sql_norm and "status = 0" in sql_norm:
+                # 模拟认领 1 张卡密（认领是 status 0→1；自愈是 status 1→0，不在此分支）
                 return MagicMock(rowcount=1)
+            if "UPDATE card_item" in sql_norm and "SET status = 0" in sql_norm and "status = 1" in sql_norm:
+                # 卡密自愈：回收孤儿卡密，无孤儿
+                return MagicMock(rowcount=0)
             if "SELECT id, card_key, card_value, extra_info FROM card_item" in sql:
                 return _FakeResult(rows=[{"id": 1, "card_key": "KEY-001", "card_value": "VAL-001", "extra_info": None}])
+            if "SELECT id FROM card_item" in sql and "claim_before" in sql:
+                return _FakeResult(rows=[{"id": 1}])
             if "UPDATE card_item" in sql and "status = 2" in sql:
                 call_order.append("mark_card_used")
             if "UPDATE card_group" in sql:
