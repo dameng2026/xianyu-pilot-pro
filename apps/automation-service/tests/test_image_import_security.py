@@ -135,3 +135,17 @@ async def test_public_image_import_rejects_dns_rebinding_to_private_connected_pe
             policy=OutboundNetworkPolicy(resolver=_public_resolver),
             transport=httpx.MockTransport(rebound),
         )
+
+
+def test_validate_image_bytes_turns_pillow_syntax_error_into_value_error():
+    # Pillow's PngImagePlugin raises SyntaxError("broken PNG file (bad header checksum)")
+    # when verifying a corrupt PNG chunk header. This must be normalized to ValueError
+    # so the upload path returns a friendly 400 instead of leaking a 503.
+    corrupt_png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de"
+        "0000000d4944415404ff6730ffc33f001542027b87f4d50000000049454e44ae42"
+        "6082"
+    )
+
+    with pytest.raises(ValueError, match="content is invalid"):
+        validate_image_bytes(corrupt_png, declared_media_type="image/png")

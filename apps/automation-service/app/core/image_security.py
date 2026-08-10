@@ -71,7 +71,7 @@ def validate_image_bytes(
             if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
                 raise ValueError("image dimensions exceed the limit")
             image.verify()
-    except (Image.DecompressionBombError, UnidentifiedImageError, OSError) as exc:
+    except (Image.DecompressionBombError, UnidentifiedImageError, OSError, SyntaxError) as exc:
         raise ValueError("image content is invalid") from exc
 
     extension, detected_media_type = _FORMAT_METADATA[image_format]
