@@ -1083,14 +1083,14 @@ def confirm_shipment(account_id: int, order_id: str, retry_count: int = 0) -> Op
     # 失败重试：未达上限时递归重试（网络异常/风控等瞬时错误可恢复）
     if retry_count + 1 < MAX_CONFIRM_RETRY:
         logger.warning(
-            "确认发货失败，准备第 %d 次重试: accountId=%d orderId=%s error=%s ret=%s",
-            retry_count + 2, account_id, order_id, result.get("error", ""), ret_str[:200],
+            "确认发货失败，准备第 %d 次重试: accountId=%d orderId=%s",
+            retry_count + 2, account_id, order_id,
         )
         return confirm_shipment(account_id, order_id, retry_count + 1)
 
     logger.warning(
-        "确认发货失败（已达最大重试 %d 次）: accountId=%d orderId=%s error=%s ret=%s",
-        MAX_CONFIRM_RETRY, account_id, order_id, result.get("error", ""), ret_str[:200],
+        "确认发货失败（已达最大重试 %d 次）: accountId=%d orderId=%s",
+        MAX_CONFIRM_RETRY, account_id, order_id,
     )
     return {
         "success": False,
@@ -1209,8 +1209,8 @@ def confirm_freeshipping(
     # 不可重试错误：直接返回失败（商品已删除/订单不存在等不会因重试而恢复）
     if any(err in ret_str for err in _FREESHIPPING_NO_RETRY_ERRORS):
         logger.warning(
-            "免拼发货失败（不可重试错误）: accountId=%d orderId=%s error=%s ret=%s",
-            account_id, order_id, result.get("error", ""), ret_str[:200],
+            "免拼发货失败（不可重试错误）: accountId=%d orderId=%s",
+            account_id, order_id,
         )
         return {
             "success": False,
@@ -1225,16 +1225,16 @@ def confirm_freeshipping(
     # 失败重试：未达上限时递归重试（网络异常/风控等瞬时错误可恢复）
     if retry_count + 1 < MAX_CONFIRM_RETRY:
         logger.warning(
-            "免拼发货失败，准备第 %d 次重试: accountId=%d orderId=%s error=%s ret=%s",
-            retry_count + 2, account_id, order_id, result.get("error", ""), ret_str[:200],
+            "免拼发货失败，准备第 %d 次重试: accountId=%d orderId=%s",
+            retry_count + 2, account_id, order_id,
         )
         return confirm_freeshipping(
             account_id, order_id, item_id, buyer_id, retry_count + 1,
         )
 
     logger.warning(
-        "免拼发货失败（已达最大重试 %d 次）: accountId=%d orderId=%s error=%s ret=%s",
-        MAX_CONFIRM_RETRY, account_id, order_id, result.get("error", ""), ret_str[:200],
+        "免拼发货失败（已达最大重试 %d 次）: accountId=%d orderId=%s",
+        MAX_CONFIRM_RETRY, account_id, order_id,
     )
     return {
         "success": False,

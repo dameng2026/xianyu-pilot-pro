@@ -2477,7 +2477,7 @@ async function loadTokenBalanceValue() {
   tokenBalance.value = null
   tokenBalanceError.value = ''
   try {
-    const res = await getTokenBalance()
+    const res = await getTokenBalance({ cacheTtlMs: 30000 })
     const data = res?.data?.data || res?.data
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Token 余额响应格式异常')
     const rawBalance = data.balance ?? data.tokenBalance

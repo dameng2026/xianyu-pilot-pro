@@ -1,13 +1,30 @@
 import request from '../utils/request.js'
+import { invalidateRequestCache, withRequestCache } from '../utils/requestCache.js'
+
+const AUTO_REPLY_SCOPE_NAMESPACE = 'api:auto-reply-scope'
+const SCOPE_STATUS_KEY = 'api:auto-reply-scope/status'
+const SCOPE_PRODUCTS_KEY = 'api:auto-reply-scope/products'
+const SCOPE_CACHE_TTL_MS = 10000
+
+function invalidateScopeCache() {
+  invalidateRequestCache(AUTO_REPLY_SCOPE_NAMESPACE)
+}
 
 /**
  * 查询商品列表及每个商品的 effective auto_reply 状态。
  * @param {number} [accountId] 账号ID，不传则返回全部账号商品
+ * @param {Object} [options] { force?: boolean, cacheTtlMs?: number }
  */
-export function getAutoReplyScopeProducts(accountId) {
+export function getAutoReplyScopeProducts(accountId, options = {}) {
+  const force = options.force === true
   const params = {}
   if (accountId != null) params.accountId = accountId
-  return request.get('/auto-reply-scope/products', { params })
+  return withRequestCache({
+    keyParts: [SCOPE_PRODUCTS_KEY, params],
+    ttlMs: force ? 0 : (options.cacheTtlMs ?? SCOPE_CACHE_TTL_MS),
+    force,
+    request: () => request.get('/auto-reply-scope/products', { params }),
+  })
 }
 
 /**
@@ -19,7 +36,10 @@ export function updateProductAutoReplyScope(itemIdOrPayload, enabled) {
   const payload = typeof itemIdOrPayload === 'object' && itemIdOrPayload !== null
     ? itemIdOrPayload
     : { itemId: itemIdOrPayload, enabled }
-  return request.post('/auto-reply-scope/product', payload)
+  return request.post('/auto-reply-scope/product', payload).then(result => {
+    invalidateScopeCache()
+    return result
+  })
 }
 
 /**
@@ -28,7 +48,10 @@ export function updateProductAutoReplyScope(itemIdOrPayload, enabled) {
  * @param {boolean} enabled 启用状态
  */
 export function updateAccountAutoReplyScope(accountId, enabled) {
-  return request.post('/auto-reply-scope/account', { accountId, enabled })
+  return request.post('/auto-reply-scope/account', { accountId, enabled }).then(result => {
+    invalidateScopeCache()
+    return result
+  })
 }
 
 /**
@@ -36,17 +59,27 @@ export function updateAccountAutoReplyScope(accountId, enabled) {
  * @param {Object} body - {itemIds: [], enabled} 或 {accountIds: [], enabled}
  */
 export function batchUpdateAutoReplyScope(body) {
-  return request.post('/auto-reply-scope/batch', body)
+  return request.post('/auto-reply-scope/batch', body).then(result => {
+    invalidateScopeCache()
+    return result
+  })
 }
 
 /**
  * 查询全局开关和账号级作用域配置。
  * @param {number} [accountId] 账号ID
+ * @param {Object} [options] { force?: boolean, cacheTtlMs?: number }
  */
-export function getAutoReplyScopeStatus(accountId) {
+export function getAutoReplyScopeStatus(accountId, options = {}) {
+  const force = options.force === true
   const params = {}
   if (accountId != null) params.accountId = accountId
-  return request.get('/auto-reply-scope/status', { params })
+  return withRequestCache({
+    keyParts: [SCOPE_STATUS_KEY, params],
+    ttlMs: force ? 0 : (options.cacheTtlMs ?? SCOPE_CACHE_TTL_MS),
+    force,
+    request: () => request.get('/auto-reply-scope/status', { params }),
+  })
 }
 
 /**

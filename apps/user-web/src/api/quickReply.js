@@ -43,6 +43,13 @@ export function saveAiCsSetting(data) {
 }
 
 // Token 余额查询
-export function getTokenBalance() {
-  return request({ url: '/ai-billing/balance', method: 'get' })
+// 默认不缓存（aiTokenGuard 余额校验需实时），需要防抖的调用方传 { cacheTtlMs: 30000 }
+export function getTokenBalance(options = {}) {
+  const force = options.force === true
+  return withRequestCache({
+    keyParts: ['api:ai-billing/balance'],
+    ttlMs: force ? 0 : (options.cacheTtlMs ?? 0),
+    force,
+    request: () => request({ url: '/ai-billing/balance', method: 'get' }),
+  })
 }
