@@ -159,7 +159,7 @@
 	                <span class="m-ai-badge">AI 自动回复</span>
 	              </div>
 	              <div v-if="msg.imageUrl" class="m-bubble-image-wrap">
-	                <img :src="msg.imageUrl" class="m-bubble-image" alt="聊天图片" @click="previewImage(msg.imageUrl)" />
+	                <img :src="toThumbUrl(msg.imageUrl)" class="m-bubble-image" alt="聊天图片" @click="previewImage(msg.imageUrl)" />
 	              </div>
 	              <div v-else-if="msg.mediaBlocked" class="m-bubble-media-blocked" role="status">图片地址不受信任，已阻止加载</div>
 	              <div v-if="msg.content || msg.text || msg.msgContent || msg.displayText" class="m-bubble-text">{{ msg.content || msg.text || msg.displayText || msg.msgContent }}</div>
@@ -260,7 +260,7 @@ import { getLiteAccounts } from '../api/accounts.js'
 import { onlineConversations, messageContext, markConversationRead } from '../api/messages.js'
 import { sendMessage, sendImageMessage } from '../api/websocket.js'
 import { getRetentionInfo } from '../api/system.js'
-import { openTrustedMediaUrl, resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
+import { openTrustedMediaUrl, resolveTrustedMediaUrl, toThumbUrl } from '../utils/safeMediaUrl.js'
 import {
   toggleConversationAutoReply,
   getConversationAutoReplyStatus,

@@ -377,6 +377,7 @@ import { aiRewriteGoods } from '../api/workflow.js'
 import { ensureAiTokenBalance } from '../utils/aiTokenGuard.js'
 import { isPublishAddressComplete, normalizePublishAddress, formatPublishAddress } from '../utils/publishAddress.js'
 import { imageUploadValidationMessage } from '../utils/imageUploadPolicy.js'
+import { toThumbUrl } from '../utils/safeMediaUrl.js'
 import { createRequestGate } from '../utils/requestLifecycle.js'
 import { loadPublishDraft, savePublishDraft, clearPublishDraft } from '../utils/publishDraft.js'
 import { loadLastPublishAddress, saveLastPublishAddress } from '../utils/publishLastAddress.js'
@@ -853,7 +854,7 @@ function displayImageUrl(url) {
   if (/^data:image\//i.test(value)) return value
   if (value.startsWith('//')) return `https:${value}`
   if (value.startsWith('http://') || value.startsWith('https://')) return value
-  if (value.startsWith('/uploads/')) return value
+  if (value.startsWith('/uploads/')) return toThumbUrl(value)
   if (value.startsWith('uploads/')) return `/${value}`
   if (value.startsWith('/')) return `https://img.alicdn.com${value}`
   return value

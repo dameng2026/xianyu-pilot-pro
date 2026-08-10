@@ -176,7 +176,7 @@
                     @click="openImagePreview(img)"
                   >
                     <img
-                      :src="img"
+                      :src="toThumbUrl(img)"
                       class="xya-msg-image"
                       alt=""
                       draggable="false"
@@ -186,7 +186,7 @@
 
                 <div class="xya-msg-image-message-meta">
                   <span class="xya-msg-image-message-time">{{ formatMessageTime(m.messageTime) }}</span>
-                  <span v-if="m.sendStatus === 'failed'" class="danger-text">发送失败</span>
+                  <span v-if="m.sendStatus === 'failed'" class="danger-text">发送失败 <button type="button" class="xya-msg-retry-btn" @click="retrySendMessage(m)">重试</button></span>
                   <span v-else-if="m.sendStatus === 'sending'">发送中</span>
                 </div>
               </div>
@@ -220,7 +220,7 @@
 
                 <div class="xya-msg-bubble-meta">
                   <span>{{ formatMessageTime(m.messageTime) }}</span>
-                  <span v-if="m.sendStatus === 'failed'" class="danger-text">发送失败</span>
+                  <span v-if="m.sendStatus === 'failed'" class="danger-text">发送失败 <button type="button" class="xya-msg-retry-btn" @click="retrySendMessage(m)">重试</button></span>
                   <span v-else-if="m.sendStatus === 'sending'">发送中</span>
                 </div>
               </div>
@@ -621,7 +621,7 @@ import {
 } from '../utils/messagesPageState.js'
 import { createRequestGate } from '../utils/requestLifecycle.js'
 import { createSessionPrivacyStore } from '../utils/privacySession.js'
-import { resolveTrustedMediaUrl } from '../utils/safeMediaUrl.js'
+import { resolveTrustedMediaUrl, toThumbUrl } from '../utils/safeMediaUrl.js'
 import { useCaptchaSolver } from '../composables/useCaptchaSolver.js'
 
 const POLL_INTERVAL_SSE_HEALTHY = 15000
@@ -1955,6 +1955,9 @@ async function loadContext(scrollBottom = true, { silent = false } = {}) {
   const requestId = ++contextLoadRequestId
   const conversation = selected.value
   const accountId = Number(conversation?.xianyuAccountId || conversation?.accountId || selectedAccountId() || 0)
+  // ★ 保存加载前列表中的本地 pending 消息（发送中/发送失败），
+  //   服务端消息覆盖时合并保留，避免"发送成功但消息消失/失败消息丢失"
+  const previousMessages = contextMessages.value
   if (!conversation || !accountId) {
     contextMessages.value = []
     contextAvailable.value = false
@@ -2000,7 +2003,11 @@ async function loadContext(scrollBottom = true, { silent = false } = {}) {
       return
     }
 
-    contextMessages.value = normalizeContextMessageList(list)
+    // 合并保留本地 pending 消息（发送中/发送失败），服务端列表覆盖时不被丢弃
+    const pendingMessages = previousMessages.filter(
+      m => m.sendStatus === 'sending' || m.sendStatus === 'failed'
+    )
+    contextMessages.value = normalizeContextMessageList([...list, ...pendingMessages])
     contextAvailable.value = true
     schedulePersistCurrentAccountCache({
       accountId,
@@ -2175,6 +2182,104 @@ async function sendImage(file) {
       return { ...item, imageUrls: [normalizeDisplayImage(imageUrl)], sendStatus: 'sending' }
     })
 
+    const res = await sendImageMessage({
+      xianyuAccountId: accountId,
+      cid: selected.value.sid,
+      sid: selected.value.sid,
+      sId: selected.value.sid,
+      sessionId: selected.value.sid,
+      toId: receiverId,
+      peerUserId: receiverId,
+      imageUrl,
+      xyGoodsId: selected.value.xyGoodsId || selected.value.goodsId || '',
+    })
+    const sendAck = messageSendAckOf(res, selected.value.sid, '图片发送')
+    const realUuid = String(sendAck.uuid || '').trim()
+    contextMessages.value = contextMessages.value.map(item => {
+      if (item.id !== tempId) return item
+      return { ...item, id: realUuid || item.id, pnmId: realUuid || item.pnmId, sendStatus: 'sent' }
+    })
+    events.value.unshift({ text: '已发送图片', time: formatClock(Date.now()) })
+    events.value = events.value.slice(0, 20)
+  } catch (e) {
+    contextMessages.value = contextMessages.value.map(item => {
+      if (item.id !== tempId) return item
+      return { ...item, sendStatus: 'failed' }
+    })
+    updateConversationPreview(selected.value, item => ({ ...item, ...previewBeforeSend }))
+    error.value = e.message || '图片发送失败'
+  } finally {
+    sending.value = false
+    sendingImage.value = false
+    schedulePersistCurrentAccountCache()
+  }
+}
+
+async function retrySendMessage(message) {
+  if (!selected.value || sending.value || sendingImage.value) return
+  const isImageLike = Number(message?.contentType || 0) === 2
+    || (Array.isArray(message?.imageUrls) && message.imageUrls.length > 0)
+    || String(message?.msgContent || message?.text || '').includes('[图片]')
+  if (isImageLike) {
+    const imageUrls = Array.isArray(message?.imageUrls) ? message.imageUrls.filter(Boolean) : []
+    if (!imageUrls.length) {
+      error.value = '图片上传失败，请重新选择图片发送'
+      return
+    }
+    await retrySendImageMessage(message, imageUrls[0])
+    return
+  }
+  const accountId = Number(selected.value?.xianyuAccountId || selectedAccountId() || 0)
+  const text = String(message?.text || message?.content || '').trim()
+  if (!accountId || !text) return
+  // 移除旧的失败消息，恢复草稿后走正常发送流程（重新生成乐观消息）
+  contextMessages.value = contextMessages.value.filter(item => item.id !== message.id)
+  draft.value = text
+  error.value = ''
+  await sendCurrentMessage()
+}
+
+async function retrySendImageMessage(message, imageUrl) {
+  if (!selected.value || sending.value || sendingImage.value) return
+  const accountId = Number(selected.value?.xianyuAccountId || selectedAccountId() || 0)
+  const receiverId = resolveReceiverId(selected.value)
+  if (!accountId || !receiverId || !imageUrl) return
+
+  const tempId = `temp_image_${Date.now()}`
+  const previewBeforeSend = conversationPreviewSnapshot(selected.value)
+  const optimistic = normalizeMessage({
+    id: tempId,
+    pnmId: tempId,
+    sid: selected.value.sid,
+    sId: selected.value.sid,
+    direction: 'OUT',
+    contentType: 2,
+    imageUrls: [normalizeDisplayImage(imageUrl)],
+    msgContent: '[图片]',
+    displayText: '[图片]',
+    messageTime: Date.now(),
+    sendStatus: 'sending',
+  })
+  // 移除旧的失败消息，插入新的乐观发送消息
+  contextMessages.value = normalizeContextMessageList([
+    ...contextMessages.value.filter(item => item.id !== message.id),
+    optimistic,
+  ])
+  updateConversationPreview(selected.value, item => ({
+    ...item,
+    msg: '[图片]',
+    lastMessage: '[图片]',
+    lastContent: '[图片]',
+    lastMessageTime: Date.now(),
+    updatedAt: Date.now(),
+  }))
+  await nextTick()
+  scrollToBottom()
+
+  sending.value = true
+  sendingImage.value = true
+  error.value = ''
+  try {
     const res = await sendImageMessage({
       xianyuAccountId: accountId,
       cid: selected.value.sid,
@@ -4332,6 +4437,24 @@ onBeforeUnmount(() => {
 
 .danger-text {
   color: #d64545;
+}
+
+.xya-msg-retry-btn {
+  margin-left: 6px;
+  padding: 0 6px;
+  height: 18px;
+  line-height: 18px;
+  font-size: 11px;
+  color: #fff;
+  background: #d64545;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  vertical-align: baseline;
+}
+
+.xya-msg-retry-btn:hover {
+  background: #b83a3a;
 }
 
 .warning-text {

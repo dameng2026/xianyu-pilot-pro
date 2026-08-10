@@ -246,6 +246,7 @@ import { isPublishAddressComplete, normalizePublishAddress } from '../utils/publ
 import { setNavigationGuard, clearNavigationGuard } from '../utils/navigationGuard.js'
 import { guardFeatureAction } from '../composables/featureGuard.js'
 import { friendlyError } from '../utils/friendlyError.js'
+import { toThumbUrl } from '../utils/safeMediaUrl.js'
 
 const emit = defineEmits(['navigate'])
 
@@ -348,7 +349,7 @@ function displayImageUrl(url) {
   if (/^data:image\//i.test(v)) return v
   if (v.startsWith('//')) return `https:${v}`
   if (v.startsWith('http://') || v.startsWith('https://')) return v
-  if (v.startsWith('/uploads/')) return v
+  if (v.startsWith('/uploads/')) return toThumbUrl(v)
   if (v.startsWith('uploads/')) return `/${v}`
   if (v.startsWith('/')) return `https://img.alicdn.com${v}`
   return v

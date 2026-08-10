@@ -461,6 +461,7 @@ import { aiRewriteGoods } from '../api/workflow.js'
 import { ensureAiTokenBalance } from '../utils/aiTokenGuard.js'
 import { normalizePublishAddress } from '../utils/publishAddress.js'
 import { imageUploadValidationMessage } from '../utils/imageUploadPolicy.js'
+import { toThumbUrl } from '../utils/safeMediaUrl.js'
 
 const emit = defineEmits(['navigate', 'force-desktop', 'back'])
 
@@ -556,7 +557,7 @@ const selectedSourceTitle = computed(() => {
 function displayImageUrl(img) {
   if (!img) return ''
   if (img.startsWith('http')) return img
-  return `/uploads/${img}`
+  return toThumbUrl(`/uploads/${img}`)
 }
 
 function formatAddress(addr) {

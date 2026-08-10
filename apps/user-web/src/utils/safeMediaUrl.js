@@ -109,6 +109,18 @@ export function resolveTrustedMediaUrl(value, {
   return isTrustedHostname(parsed.hostname, hosts) ? parsed.href : ''
 }
 
+/**
+ * 将本地用户图片 URL 转换为缩略图 URL（{原图}_thumb.jpg）。
+ *
+ * <p>仅转换 /uploads/images/ 下的用户图片；缩略图由后端懒生成并落盘，
+ * 旧图首次访问时自动生成，不会裂图。动图（gif）与原图保持一致。</p>
+ */
+export function toThumbUrl(value) {
+  const raw = String(value || '').trim()
+  if (!raw || !raw.startsWith('/uploads/images/')) return raw
+  return raw.replace(/\.(jpg|jpeg|png|webp)$/i, '_thumb.jpg')
+}
+
 export function resolveAvatarUrl(value) {
   const raw = String(value || '').trim()
   if (!raw) return ''

@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Query
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete, and_, or_, text
+from sqlalchemy import select, func, delete, and_, or_, text, bindparam
 from ....core.database import get_db
 from ....core.http_failures import safe_route_failure
 from ....core.image_security import MAX_IMAGE_BYTES, ValidatedImage, download_public_image, validate_image_bytes
@@ -1080,75 +1080,120 @@ async def websocket_send_message(
         # - auto_reply_paused=1：暂停 AI 自动回复
         # - last_manual_reply_at：记录人工回复时间戳，用于1分钟自动恢复判断
         # - auto_reply_manual_disabled：保持原值（用户已手动关闭则依然只能手动开启）
-        # 通过 sId 反查消息表找到对端身份，再匹配 xianyu_conversation
-        # （external_buyer_id 可能存裸ID或带@goofish后缀，需多候选匹配）
-        peer_id_candidates = []
-        for candidate in (resolved_to_id, ws_to_id, resolved_goods_id or ""):
-            if candidate and candidate not in peer_id_candidates:
-                peer_id_candidates.append(candidate)
-        # 同时考虑 sId 关联：从最近消息中取 peer_external_uid 作为补充候选
-        sid_peer_row = (await db.execute(text("""
-            SELECT peer_external_uid, sender_user_id, receiver_user_id
-            FROM xianyu_chat_message
-            WHERE tenant_id = :tenant_id AND account_id = :account_id
-              AND deleted = 0
-              AND s_id COLLATE utf8mb4_unicode_ci IN (:sid, :sid_goofish)
-            ORDER BY id DESC LIMIT 1
-        """), {
-            "tenant_id": tenant_id,
-            "account_id": account_id,
-            "sid": ws_sid,
-            "sid_goofish": f"{ws_sid}@goofish" if ws_sid and not ws_sid.endswith("@goofish") else ws_sid,
-        })).mappings().first()
-        seller_uid_norm = (client.unb or "").strip()
-        if sid_peer_row:
-            for key in ("peer_external_uid", "sender_user_id", "receiver_user_id"):
-                v = str(sid_peer_row.get(key) or "").strip()
-                # 排除卖家自己
-                if v and v not in peer_id_candidates and v != seller_uid_norm and v != f"{seller_uid_norm}@goofish":
-                    peer_id_candidates.append(v)
+        # 会话暂停逻辑在独立 session 后台执行，不阻塞发送响应；
+        # 即使暂停逻辑遇到锁竞争或远程超时，也不会拖慢/拖挂消息发送链路。
+        asyncio.create_task(_pause_conversation_after_manual_reply(
+            tenant_id=tenant_id,
+            account_id=account_id,
+            ws_sid=ws_sid,
+            resolved_to_id=resolved_to_id,
+            ws_to_id=ws_to_id,
+            resolved_goods_id=resolved_goods_id,
+            seller_uid_norm=client.unb or "",
+            out_message_time=out_message_time,
+            message_text=str(message_text),
+        ))
+        return ResultObject.success({"message": "Sent", "uuid": result.get("uuid"), "sid": ws_sid, "toId": ws_to_id})
+    except Exception as e:
+        await db.rollback()
+        return safe_route_failure(
+            logger, e, operation="send websocket message", user_message="消息发送失败，请稍后重试"
+        )
 
-        conv_pause_row = None
-        if peer_id_candidates:
-            conv_pause_row = (await db.execute(text("""
-                SELECT id, auto_reply_manual_disabled
-                FROM xianyu_conversation
+
+async def _pause_conversation_after_manual_reply(
+    *,
+    tenant_id: int,
+    account_id: int,
+    ws_sid: str,
+    resolved_to_id: str,
+    ws_to_id: str,
+    resolved_goods_id: str,
+    seller_uid_norm: str,
+    out_message_time: int,
+    message_text: str,
+) -> None:
+    """人工发送消息后，在独立 session 中暂停会话级 AI 自动回复（后台执行，不阻塞发送响应）。
+
+    作用：
+    - auto_reply_paused=1：暂停 AI 自动回复
+    - last_manual_reply_at：记录人工回复时间戳，用于 1 分钟自动恢复判断
+    - auto_reply_manual_disabled：保持原值（用户已手动关闭则依然只能手动开启）
+
+    通过 sId 反查消息表找到对端身份，再匹配 xianyu_conversation
+    （external_buyer_id 可能存裸 ID 或带 @goofish 后缀，需多候选匹配）。
+    使用独立 session，避免与请求 session 共享事务/锁生命周期。
+    """
+    from ....core.database import async_session
+    paused_conv_id = None
+    try:
+        async with async_session() as bg_db:
+            peer_id_candidates = []
+            for candidate in (resolved_to_id, ws_to_id, resolved_goods_id or ""):
+                if candidate and candidate not in peer_id_candidates:
+                    peer_id_candidates.append(candidate)
+            # 同时考虑 sId 关联：从最近消息中取 peer_external_uid 作为补充候选
+            sid_peer_row = (await bg_db.execute(text("""
+                SELECT peer_external_uid, sender_user_id, receiver_user_id
+                FROM xianyu_chat_message
                 WHERE tenant_id = :tenant_id AND account_id = :account_id
                   AND deleted = 0
-                  AND (
-                      external_buyer_id IN (:peer_ids)
-                      OR peer_external_uid IN (:peer_ids)
-                      OR peer_key IN (:peer_ids)
-                  )
+                  AND s_id COLLATE utf8mb4_unicode_ci IN (:sid, :sid_goofish)
                 ORDER BY id DESC LIMIT 1
             """), {
                 "tenant_id": tenant_id,
                 "account_id": account_id,
-                "peer_ids": peer_id_candidates,
+                "sid": ws_sid,
+                "sid_goofish": f"{ws_sid}@goofish" if ws_sid and not ws_sid.endswith("@goofish") else ws_sid,
             })).mappings().first()
-        paused_conv_id = None
-        if conv_pause_row:
-            paused_conv_id = int(conv_pause_row["id"])
-            await db.execute(text("""
-                UPDATE xianyu_conversation
-                SET auto_reply_paused = 1,
-                    last_manual_reply_at = :last_manual_at,
-                    last_message_time = NOW(),
-                    last_message_content = :content,
-                    updated_time = NOW()
-                WHERE id = :conversation_id
-            """), {
-                "conversation_id": paused_conv_id,
-                "last_manual_at": out_message_time,
-                "content": str(message_text),
-            })
+            seller_uid_norm = (seller_uid_norm or "").strip()
+            if sid_peer_row:
+                for key in ("peer_external_uid", "sender_user_id", "receiver_user_id"):
+                    v = str(sid_peer_row.get(key) or "").strip()
+                    # 排除卖家自己
+                    if v and v not in peer_id_candidates and v != seller_uid_norm and v != f"{seller_uid_norm}@goofish":
+                        peer_id_candidates.append(v)
 
-        await db.commit()
-        # 不在此处广播消息 SSE：IM 推送回环会触发 ws_client._handle_message 广播，
-        # 此处再广播会导致前端收到两条 SSE，造成消息重复显示。
-        # 但需要广播"会话自动回复状态变更"事件，让前端实时更新开关按钮文案
-        if paused_conv_id is not None:
-            try:
+            conv_pause_row = None
+            if peer_id_candidates:
+                # 使用 expanding bind parameter 支持 list 参数（SQLAlchemy 2.0 标准用法）
+                conv_pause_row = (await bg_db.execute(
+                    text("""
+                        SELECT id, auto_reply_manual_disabled
+                        FROM xianyu_conversation
+                        WHERE tenant_id = :tenant_id AND account_id = :account_id
+                          AND deleted = 0
+                          AND (
+                              external_buyer_id IN (:peer_ids)
+                              OR peer_external_uid IN (:peer_ids)
+                              OR peer_key IN (:peer_ids)
+                          )
+                        ORDER BY id DESC LIMIT 1
+                    """).bindparams(bindparam("peer_ids", expanding=True)),
+                    {
+                        "tenant_id": tenant_id,
+                        "account_id": account_id,
+                        "peer_ids": peer_id_candidates,
+                    }
+                )).mappings().first()
+
+            if conv_pause_row:
+                paused_conv_id = int(conv_pause_row["id"])
+                await bg_db.execute(text("""
+                    UPDATE xianyu_conversation
+                    SET auto_reply_paused = 1,
+                        last_manual_reply_at = :last_manual_at,
+                        last_message_time = NOW(),
+                        last_message_content = :content,
+                        updated_time = NOW()
+                    WHERE id = :conversation_id
+                """), {
+                    "conversation_id": paused_conv_id,
+                    "last_manual_at": out_message_time,
+                    "content": message_text,
+                })
+            await bg_db.commit()
+            if paused_conv_id is not None:
                 await broadcaster.broadcast(tenant_id, "conversation_auto_reply_state", {
                     "conversationId": paused_conv_id,
                     "accountId": account_id,
@@ -1159,16 +1204,10 @@ async def websocket_send_message(
                     "lastManualReplyAt": out_message_time,
                     "reason": "manual_intervention",
                 })
-            except Exception as sse_exc:
-                logger.warning(
-                    "广播会话暂停状态失败（不影响主流程）accountId=%d convId=%s: %s",
-                    account_id, paused_conv_id, sse_exc,
-                )
-        return ResultObject.success({"message": "Sent", "uuid": result.get("uuid"), "sid": ws_sid, "toId": ws_to_id})
-    except Exception as e:
-        await db.rollback()
-        return safe_route_failure(
-            logger, e, operation="send websocket message", user_message="消息发送失败，请稍后重试"
+    except Exception as exc:
+        logger.warning(
+            "后台暂停会话自动回复失败（不影响主流程）accountId=%d convId=%s errorType=%s: %s",
+            account_id, paused_conv_id, type(exc).__name__, exc,
         )
 
 

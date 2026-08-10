@@ -3,6 +3,7 @@ package com.xianyu.admin.controller;
 import com.xianyu.admin.config.UploadPathConfig;
 import com.xianyu.admin.security.MediaSessionCookieService;
 import com.xianyu.admin.service.PublicMediaPolicy;
+import com.xianyu.admin.service.ThumbnailService;
 import com.xianyu.admin.service.UploadedImageValidator;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -51,6 +52,7 @@ public class MediaAssetController {
     private final MediaSessionCookieService mediaSessions;
     private final UploadPathConfig uploadPaths;
     private final UploadedImageValidator imageValidator;
+    private final ThumbnailService thumbnailService;
     private final Map<String, String> validatedMediaDigests =
             java.util.Collections.synchronizedMap(new LinkedHashMap<>(256, 0.75f, true) {
                 @Override
@@ -63,11 +65,13 @@ public class MediaAssetController {
             JdbcTemplate jdbcTemplate,
             MediaSessionCookieService mediaSessions,
             UploadPathConfig uploadPaths,
-            UploadedImageValidator imageValidator) {
+            UploadedImageValidator imageValidator,
+            ThumbnailService thumbnailService) {
         this.jdbcTemplate = jdbcTemplate;
         this.mediaSessions = mediaSessions;
         this.uploadPaths = uploadPaths;
         this.imageValidator = imageValidator;
+        this.thumbnailService = thumbnailService;
     }
 
     @RequestMapping(
@@ -129,6 +133,10 @@ public class MediaAssetController {
                 "SELECT * FROM tenant_storage_asset WHERE public_url=? AND storage_key=? LIMIT 2",
                 publicPath, expectedStorageKey);
         if (rows.size() != 1) {
+            // 缩略图请求（{原图}_thumb.jpg）在 DB 中无独立记录，基于原图记录派生校验并懒生成
+            if (serveDerivedThumbnail(request, response, publicPath, namespace, relativePath, pathTenantId)) {
+                return;
+            }
             notFound(response);
             return;
         }
@@ -185,6 +193,103 @@ public class MediaAssetController {
         writeMedia(
                 request, response, content, contentType, fileName(relativePath),
                 isPublic, expectedSha256);
+    }
+
+    /**
+     * 服务缩略图请求：{原图}_thumb.jpg 在 DB 中无独立记录，安全模型基于原图记录。
+     *
+     * <p>校验链路与原图一致（status/tenant/visibility/会话/size/sha256/可解码），
+     * 通过后由 {@link ThumbnailService} 懒生成等比缩略图并落盘（共享卷），
+     * 下一分钟 rsync 同步至香港节点，后续命中本地 alias 缓存。</p>
+     */
+    private boolean serveDerivedThumbnail(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            String publicPath,
+            String namespace,
+            String thumbRelative,
+            Long pathTenantId) throws IOException {
+        if (!"images".equals(namespace)
+                || !thumbRelative.endsWith(ThumbnailService.THUMB_SUFFIX)
+                || pathTenantId == null) {
+            return false;
+        }
+        String originalBase = thumbRelative.substring(
+                0, thumbRelative.length() - ThumbnailService.THUMB_SUFFIX.length());
+        int slash = originalBase.lastIndexOf('/');
+        if (slash <= 0 || !originalBase.substring(0, slash).matches("tenant-[1-9][0-9]*")) {
+            return false;
+        }
+
+        List<Map<String, Object>> originals = jdbcTemplate.queryForList(
+                "SELECT * FROM tenant_storage_asset WHERE storage_key LIKE ? AND status='active' LIMIT 2",
+                originalBase + ".%");
+        if (originals.size() != 1) {
+            return false;
+        }
+        Map<String, Object> original = originals.get(0);
+        long tenantId = positiveLong(original.get("tenant_id"));
+        if (tenantId != pathTenantId) {
+            return false;
+        }
+        String originalKey = text(original.get("storage_key"));
+        if (!originalKey.startsWith(originalBase + ".")) {
+            return false;
+        }
+        boolean isPublic = "public".equalsIgnoreCase(text(original.get("visibility")));
+        if (isPublic && !isApprovedPublicContent(original)) {
+            return false;
+        }
+        if (!isPublic) {
+            Optional<MediaSessionCookieService.UserMediaPrincipal> principal =
+                    mediaSessions.authenticateUser(request);
+            if (principal.isEmpty() || principal.get().tenantId() != tenantId) {
+                return false;
+            }
+        }
+
+        long expectedSize = positiveLong(original.get("size_bytes"));
+        if (expectedSize > MAX_MANAGED_MEDIA_BYTES) {
+            return false;
+        }
+        String expectedSha256 = text(original.get("sha256")).toLowerCase(Locale.ROOT);
+        if (!expectedSha256.matches("[0-9a-f]{64}")) {
+            return false;
+        }
+        String originalType = safeContentType(original.get("media_type"), originalKey);
+        if (originalType == null) {
+            return false;
+        }
+        byte[] originalBytes = readCanonicalFile(namespace, originalKey, expectedSize);
+        if (!sha256(originalBytes).equals(expectedSha256)) {
+            return false;
+        }
+        if (!isDecodableImage(originalBytes, originalType, expectedSha256)) {
+            return false;
+        }
+
+        Optional<Path> thumbOpt = thumbnailService.ensureThumbnailContain(namespace, originalKey);
+        if (thumbOpt.isEmpty()) {
+            return false;
+        }
+        Path thumbPath = thumbOpt.get();
+        byte[] thumbBytes;
+        try {
+            if (Files.size(thumbPath) <= 0 || Files.size(thumbPath) > MAX_MANAGED_MEDIA_BYTES) {
+                return false;
+            }
+            thumbBytes = Files.readAllBytes(thumbPath);
+        } catch (IOException exception) {
+            return false;
+        }
+        String thumbSha256 = sha256(thumbBytes);
+        if (!isDecodableImage(thumbBytes, "image/jpeg", thumbSha256)) {
+            return false;
+        }
+        writeMedia(
+                request, response, thumbBytes, "image/jpeg", fileName(thumbRelative),
+                isPublic, isPublic ? thumbSha256 : null);
+        return true;
     }
 
     private boolean isApprovedPublicContent(Map<String, Object> row) {

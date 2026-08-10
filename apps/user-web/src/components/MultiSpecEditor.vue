@@ -291,6 +291,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { toThumbUrl } from '../utils/safeMediaUrl.js'
 
 const props = defineProps({
   modelValue: {
@@ -541,7 +542,7 @@ function displayUrl(url) {
   if (/^data:image\//i.test(v)) return v
   if (v.startsWith('//')) return `https:${v}`
   if (v.startsWith('http://') || v.startsWith('https://')) return v
-  if (v.startsWith('/uploads/')) return v
+  if (v.startsWith('/uploads/')) return toThumbUrl(v)
   if (v.startsWith('/')) return `https://img.alicdn.com${v}`
   return v
 }

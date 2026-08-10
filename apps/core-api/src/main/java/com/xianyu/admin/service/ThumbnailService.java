@@ -10,7 +10,9 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 缩略图生成服务。
@@ -68,6 +70,55 @@ public class ThumbnailService {
             return Optional.of(thumb);
         } catch (IOException e) {
             log.warn("缩略图生成失败, relativePath={}, errorType={}", relativePath, e.getClass().getSimpleName());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * 为指定原图生成等比缩放缩略图（最长边 480，保持宽高比，不裁剪）。
+     *
+     * <p>用于商品图/消息图等列表预览：原图可能为 3MB webp，缩略图约 20-60KB，
+     * 首屏加载量可降低数十倍。缩略图经临时文件原子落盘，避免并发请求写冲突。</p>
+     *
+     * @param namespace            存储命名空间，如 "images"
+     * @param originalRelativePath 原图相对路径，如 "tenant-1/img_abc.webp"
+     * @return 缩略图绝对路径；生成失败返回 empty
+     */
+    public Optional<Path> ensureThumbnailContain(String namespace, String originalRelativePath) {
+        try {
+            Path original = uploadPaths.resolve(namespace, originalRelativePath);
+            if (!Files.isRegularFile(original) || !Files.isReadable(original)) {
+                return Optional.empty();
+            }
+            String thumbRelative = thumbRelativePath(originalRelativePath);
+            Path thumb = uploadPaths.resolve(namespace, thumbRelative);
+            if (Files.isRegularFile(thumb) && Files.size(thumb) > 0) {
+                return Optional.of(thumb);
+            }
+            Path parent = thumb.toAbsolutePath().normalize().getParent();
+            if (parent == null || !Files.isDirectory(parent) || !Files.isWritable(parent)) {
+                log.warn("缩略图目录不可写, namespace={}, relativePath={}", namespace, originalRelativePath);
+                return Optional.empty();
+            }
+            Path tmp = parent.resolve(UUID.randomUUID().toString().substring(0, 8) + ".jpg");
+            try {
+                Thumbnails.of(original.toFile())
+                        .size(THUMB_WIDTH, THUMB_HEIGHT)
+                        .keepAspectRatio(true)
+                        .outputFormat("jpg")
+                        .outputQuality(0.85)
+                        .toFile(tmp.toFile());
+                if (!Files.isRegularFile(tmp) || Files.size(tmp) <= 0) {
+                    return Optional.empty();
+                }
+                Files.move(tmp, thumb, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                log.debug("等比缩略图已生成: {}", thumb);
+                return Optional.of(thumb);
+            } finally {
+                Files.deleteIfExists(tmp);
+            }
+        } catch (IOException e) {
+            log.warn("等比缩略图生成失败, relativePath={}, errorType={}", originalRelativePath, e.getClass().getSimpleName());
             return Optional.empty();
         }
     }

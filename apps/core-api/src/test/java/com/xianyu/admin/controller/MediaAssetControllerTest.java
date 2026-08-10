@@ -2,6 +2,7 @@ package com.xianyu.admin.controller;
 
 import com.xianyu.admin.config.UploadPathConfig;
 import com.xianyu.admin.security.MediaSessionCookieService;
+import com.xianyu.admin.service.ThumbnailService;
 import com.xianyu.admin.service.UploadedImageValidator;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
@@ -46,7 +47,8 @@ class MediaAssetControllerTest {
         when(mediaSessions.authenticateUser(any())).thenReturn(Optional.empty());
         when(mediaSessions.authenticateAdmin(any())).thenReturn(Optional.empty());
         controller = new MediaAssetController(
-                jdbc, mediaSessions, uploadPaths, new UploadedImageValidator());
+                jdbc, mediaSessions, uploadPaths, new UploadedImageValidator(),
+                new ThumbnailService(uploadPaths));
     }
 
     @Test
@@ -388,6 +390,41 @@ class MediaAssetControllerTest {
         assertArrayEquals(webp, serve("GET", webpPath).getContentAsByteArray());
     }
 
+    @Test
+    void thumbnailRequestDerivesFromOriginalAsset() throws Exception {
+        byte[] content = png600x800();
+        String originalPath = "/uploads/images/tenant-7/img_demo.png";
+        write("images/tenant-7/img_demo.png", content);
+        Map<String, Object> original = asset(
+                originalPath, "tenant-7/img_demo.png", 7, "public", content);
+        jdbc.assetRows = List.of();
+        jdbc.thumbnailOriginRows = List.of(original);
+
+        String thumbPath = "/uploads/images/tenant-7/img_demo_thumb.jpg";
+        MockHttpServletResponse response = serve("GET", thumbPath);
+
+        assertEquals(200, response.getStatus());
+        assertEquals("image/jpeg", response.getContentType());
+        byte[] thumb = response.getContentAsByteArray();
+        assertTrue(thumb.length > 0);
+        assertNotEquals(java.util.Arrays.toString(content), java.util.Arrays.toString(thumb));
+        assertTrue(Files.isRegularFile(tempDir.resolve("images/tenant-7/img_demo_thumb.jpg")));
+    }
+
+    @Test
+    void thumbnailRequestWithoutOriginalReturns404() throws Exception {
+        jdbc.assetRows = List.of();
+        jdbc.thumbnailOriginRows = List.of();
+        assertEquals(404, serve("GET", "/uploads/images/tenant-7/nonexist_thumb.jpg").getStatus());
+    }
+
+    @Test
+    void thumbnailRequestRejectsNonImagesNamespace() throws Exception {
+        jdbc.assetRows = List.of();
+        jdbc.thumbnailOriginRows = List.of();
+        assertEquals(404, serve("GET", "/uploads/cache/tenant-7/cache_demo_thumb.jpg").getStatus());
+    }
+
     private MockHttpServletResponse serve(String method, String path) throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest(method, path);
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -432,6 +469,20 @@ class MediaAssetControllerTest {
         return output.toByteArray();
     }
 
+    private byte[] png100x80() throws IOException {
+        BufferedImage image = new BufferedImage(100, 80, BufferedImage.TYPE_INT_RGB);
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        assertTrue(ImageIO.write(image, "png", output));
+        return output.toByteArray();
+    }
+
+    private byte[] png600x800() throws IOException {
+        BufferedImage image = new BufferedImage(600, 800, BufferedImage.TYPE_INT_RGB);
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        assertTrue(ImageIO.write(image, "png", output));
+        return output.toByteArray();
+    }
+
     private byte[] jpegBytes() throws IOException {
         BufferedImage image = new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB);
         java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
@@ -457,6 +508,7 @@ class MediaAssetControllerTest {
     private static final class StubJdbc extends JdbcTemplate {
         List<Map<String, Object>> assetRows = List.of();
         List<Map<String, Object>> avatarRows = List.of();
+        List<Map<String, Object>> thumbnailOriginRows = List.of();
         final List<QueryCall> calls = new ArrayList<>();
         boolean fail;
 
@@ -464,6 +516,7 @@ class MediaAssetControllerTest {
         public List<Map<String, Object>> queryForList(String sql, Object... args) {
             calls.add(new QueryCall(sql, args.clone()));
             if (fail) throw new DataAccessResourceFailureException("database unavailable");
+            if (sql.contains("storage_key LIKE")) return thumbnailOriginRows;
             return sql.contains("sys_admin_user") ? avatarRows : assetRows;
         }
     }

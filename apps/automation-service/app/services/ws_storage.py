@@ -365,7 +365,26 @@ def _parse_live_history_message(
 async def _fetch_remote_conversation_user_info(account_id: int, sid: str) -> dict[str, str]:
     from .xianyu_api_service import fetch_conversation_user_info
 
-    result = await asyncio.to_thread(fetch_conversation_user_info, account_id, sid)
+    # 远程调用必须设超时：若挂起无响应，会阻塞 _hydrate_online_conversation_avatars 的
+    # gather，导致已成功执行的 _save_conversation_user_info 行锁无法通过 db.commit()
+    # 释放，形成"幽灵持锁"，拖垮消息发送/会话更新（锁等待 1205 超时）。
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(fetch_conversation_user_info, account_id, sid),
+            timeout=5.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "拉取远程会话用户信息超时（放弃等待，避免持有会话行锁）: accountId=%d sid=%s",
+            account_id, sid,
+        )
+        return {}
+    except Exception as exc:
+        logger.warning(
+            "拉取远程会话用户信息失败（可忽略）: accountId=%d sid=%s errorType=%s",
+            account_id, sid, type(exc).__name__,
+        )
+        return {}
     if not result or not result.get("success"):
         return {}
     data = result.get("data") or {}
@@ -1147,7 +1166,15 @@ async def _fetch_live_online_conversations(
         conversations: list[dict[str, Any]] = []
 
         while len(conversations) < max(int(limit or 50), 1) and page < 3:
-            body = await client.list_conversations(start_timestamp=cursor, limit=page_limit)
+            # IM 调用加 2 秒超时，避免 IM 慢响应导致后台刷新任务悬挂堆积
+            try:
+                body = await asyncio.wait_for(
+                    client.list_conversations(start_timestamp=cursor, limit=page_limit),
+                    timeout=2.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("IM list_conversations 超时 accountId=%d page=%d", account_id, page)
+                break
             items = body.get("userConvs", []) if isinstance(body, dict) else []
             if not items:
                 break
@@ -1774,68 +1801,88 @@ async def save_chat_message(
     raw_payload = _serialize_json_document(msg.get("rawPayload", msg.get("raw_payload")))
 
     # 插入消息（捕获 IntegrityError 做幂等处理，避免并发去重窗口导致整条消息丢失）
+    # 使用 savepoint 隔离插入尝试：并发唯一键冲突时仅回滚 savepoint，
+    # 不影响调用方事务中已有的其他写操作（如 automation_runtime 已插入的 xianyu_message）。
     try:
-        result = await db.execute(
-            text("""
-            INSERT INTO xianyu_chat_message (
-                tenant_id, account_id, seller_external_uid, pnm_id, message_uid,
-                s_id, content_type, msg_content,
-                sender_user_id, receiver_user_id, sender_user_name,
-                peer_external_uid, xy_goods_id, message_time,
-                direction, is_auto_reply, parse_status, reminder_content, reminder_url,
-                complete_msg, raw_payload, read_status, deleted, created_time, updated_time
-            ) VALUES (
-                :tenant_id, :account_id, :seller_external_uid, :pnm_id, :message_uid,
-                :s_id, :content_type, :msg_content,
-                :sender_user_id, :receiver_user_id, :sender_user_name,
-                :peer_external_uid, :xy_goods_id, :message_time,
-                :direction, :is_auto_reply, :parse_status, :reminder_content, :reminder_url,
-                :complete_msg, :raw_payload, :read_status, 0, NOW(), NOW()
+        async with db.begin_nested():
+            result = await db.execute(
+                text("""
+                INSERT INTO xianyu_chat_message (
+                    tenant_id, account_id, seller_external_uid, pnm_id, message_uid,
+                    s_id, content_type, msg_content,
+                    sender_user_id, receiver_user_id, sender_user_name,
+                    peer_external_uid, xy_goods_id, message_time,
+                    direction, is_auto_reply, parse_status, reminder_content, reminder_url,
+                    complete_msg, raw_payload, read_status, deleted, created_time, updated_time
+                ) VALUES (
+                    :tenant_id, :account_id, :seller_external_uid, :pnm_id, :message_uid,
+                    :s_id, :content_type, :msg_content,
+                    :sender_user_id, :receiver_user_id, :sender_user_name,
+                    :peer_external_uid, :xy_goods_id, :message_time,
+                    :direction, :is_auto_reply, :parse_status, :reminder_content, :reminder_url,
+                    :complete_msg, :raw_payload, :read_status, 0, NOW(), NOW()
+                )
+            """),
+            {
+                "tenant_id": tenant_id,
+                "account_id": account_id,
+                "seller_external_uid": seller_external_uid or None,
+                "pnm_id": pnm_id or None,
+                "message_uid": message_uid or None,
+                "s_id": msg.get("sId", ""),
+                "content_type": msg.get("contentType", 1),
+                "msg_content": msg.get("msgContent", ""),
+                "sender_user_id": msg.get("senderUserId", ""),
+                "receiver_user_id": msg.get("receiverUserId", ""),
+                "sender_user_name": normalize_peer_name(msg.get("senderUserName", "")),
+                "peer_external_uid": peer_external_uid or None,
+                "xy_goods_id": msg.get("xyGoodsId", ""),
+                "message_time": message_time,
+                "direction": direction,
+                "is_auto_reply": int(is_auto_reply or 0),
+                "parse_status": parse_status,
+                "reminder_content": msg.get("reminderContent", ""),
+                "reminder_url": msg.get("reminderUrl", ""),
+                "complete_msg": complete_msg,
+                "raw_payload": raw_payload,
+                "read_status": 1 if direction == "OUT" else int(msg.get("readStatus", 0) or 0),
+                }
             )
-        """),
-        {
-            "tenant_id": tenant_id,
-            "account_id": account_id,
-            "seller_external_uid": seller_external_uid or None,
-            "pnm_id": pnm_id or None,
-            "message_uid": message_uid or None,
-            "s_id": msg.get("sId", ""),
-            "content_type": msg.get("contentType", 1),
-            "msg_content": msg.get("msgContent", ""),
-            "sender_user_id": msg.get("senderUserId", ""),
-            "receiver_user_id": msg.get("receiverUserId", ""),
-            "sender_user_name": normalize_peer_name(msg.get("senderUserName", "")),
-            "peer_external_uid": peer_external_uid or None,
-            "xy_goods_id": msg.get("xyGoodsId", ""),
-            "message_time": message_time,
-            "direction": direction,
-            "is_auto_reply": int(is_auto_reply or 0),
-            "parse_status": parse_status,
-            "reminder_content": msg.get("reminderContent", ""),
-            "reminder_url": msg.get("reminderUrl", ""),
-            "complete_msg": complete_msg,
-            "raw_payload": raw_payload,
-            "read_status": 1 if direction == "OUT" else int(msg.get("readStatus", 0) or 0),
-            }
-        )
-        await db.flush()
-        new_id = result.lastrowid
+            await db.flush()
+            new_id = result.lastrowid
     except IntegrityError:
         # 并发去重窗口：两个任务都通过了上面的 SELECT 去重检查，
-        # 第二个 INSERT 会触发唯一键冲突。旧实现直接抛错导致整条消息丢失。
-        # 此处回滚事务并返回 None，消息已由先到达的插入保存，不丢失数据。
-        await db.rollback()
+        # 第二个 INSERT 会触发唯一键冲突。savepoint 已自动回滚本次插入尝试，
+        # 消息已由先到达的插入保存，不丢失数据。
         logger.info(
             "消息插入冲突（已存在），跳过: accountId=%d pnmId=%s msgUid=%s",
             account_id, pnm_id, message_uid
         )
         return None
 
-    # 更新会话（xianyu_conversation）— 只有解析成功或可降级的消息才进入会话
+    # ★ 立即提交消息插入：确保消息已持久化，与后续会话更新解耦。
+    #   若后续 _upsert_conversation 发生锁等待超时（1205）导致事务被标记
+    #   rollback-only，已提交的消息不会被回滚（修复"发送成功但消息消失"的根因之一）。
+    try:
+        await db.commit()
+    except Exception as commit_err:
+        logger.error(
+            "提交消息插入失败（消息可能丢失）: accountId=%d sId=%s pnmId=%s error=%s",
+            account_id, s_id, pnm_id, commit_err
+        )
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        return None
+
+    # 更新会话（xianyu_conversation）— 用 savepoint 隔离，
+    # 会话更新失败（如锁等待）仅回滚 savepoint，不影响已提交的消息。
     s_id = msg.get("sId", "")
     if s_id and parse_status in ("ok", "partial"):
         try:
-            await _upsert_conversation(db, tenant_id, account_id, msg, seller_external_uid)
+            async with db.begin_nested():
+                await _upsert_conversation(db, tenant_id, account_id, msg, seller_external_uid)
         except Exception as conv_err:
             logger.error(
                 "更新会话失败（消息已保存，会话创建失败不影响消息存储）: "
