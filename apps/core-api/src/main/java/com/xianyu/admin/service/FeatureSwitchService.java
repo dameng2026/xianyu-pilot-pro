@@ -283,19 +283,18 @@ public class FeatureSwitchService {
      *   {
      *     "level": "normal|vip|svp",
      *     "accessible": { "<pageKey>": true, ... },
-     *     "blocked": { "<pageKey>": { "reason": "disabled|level|maintenance|blocked", "required_level": "vip", "reason_text"?: "..." } },
-     *     "preview": { "<pageKey>": { "reason": "preview", "reason_text": "..." } }
+     *     "blocked": { "<pageKey>": { "reason": "disabled|level|maintenance|blocked|preview", "required_level": "vip", "reason_text"?: "..." } },
+     *     "preview": { ... }  // 兼容保留，新语义下恒为空
      *   }
      *
      * 判定逻辑（按优先级）：
      *   1. 维护开关 maintenance=true → 所有用户拦截，reason=maintenance
-     *   2. 限制模式 limitMode=blocked → 不可进入，reason=blocked
-     *   3. 用户等级对应的开关为 false：
-     *     - 存在更高级别开关为 true → reason=level, required_level=第一个开启的更高级别
-     *     - 所有级别都为 false → reason=disabled
-     *   4. 用户等级对应的开关为 true：
-     *     - limitMode=preview → 可进入页面但预览模式（不可执行业务操作），记入 preview map
-     *     - limitMode=none → 正常访问
+     *   2. 用户等级对应的开关为 true → 正常使用，不受限制模式影响（limitMode 只作用于等级未开启的用户）
+     *   3. 用户等级对应的开关为 false，按限制模式决定待遇：
+     *     - limitMode=preview → 可进入页面但预览模式（不可执行业务操作），reason=preview
+     *     - limitMode=blocked → 不可进入，reason=blocked
+     *     - limitMode=none → 存在更高级别开关为 true 时 reason=level（required_level=第一个开启的更高级别），
+     *                        所有级别都为 false 时 reason=disabled
      */
     public Map<String, Object> getStatusForCurrentUser(Long userId) {
         Map<String, Object> status = new LinkedHashMap<>();
@@ -324,50 +323,48 @@ public class FeatureSwitchService {
                 blocked.put(key, info);
                 continue;
             }
-            // 2. 限制模式=不可进入：对所有用户拦截（语义为管理员主动限制不可访问）
+            // 2. 等级开关判定：等级开启的用户正常使用，不受限制模式（preview/blocked）影响。
+            //    限制模式只作用于等级开关未开启的用户，由管理员针对低等级用户设置。
+            Map<String, Boolean> levelSwitches = resolveLevelSwitches(key, def, stored);
+            boolean userAllowed = boolOr(levelSwitches.get(normalizeLevel(userLevel)), true);
+            if (userAllowed) {
+                accessible.put(key, true);
+                continue;
+            }
+            // 3. 等级不足：按限制模式决定该用户的待遇
+            accessible.put(key, false);
+            Map<String, Object> info = new LinkedHashMap<>();
             String limitMode = resolveLimitMode(key, def, stored);
+            if (LIMIT_MODE_PREVIEW.equals(limitMode)) {
+                info.put("reason", "preview");
+                info.put("required_level", normalizeLevel(userLevel));
+                info.put("reason_text", DEFAULT_PREVIEW_MESSAGE);
+                blocked.put(key, info);
+                continue;
+            }
             if (LIMIT_MODE_BLOCKED.equals(limitMode)) {
-                accessible.put(key, false);
-                Map<String, Object> info = new LinkedHashMap<>();
                 info.put("reason", "blocked");
                 info.put("required_level", normalizeLevel(userLevel));
                 info.put("reason_text", DEFAULT_BLOCKED_MESSAGE);
                 blocked.put(key, info);
                 continue;
             }
-            // 3. 等级开关判定
-            Map<String, Boolean> levelSwitches = resolveLevelSwitches(key, def, stored);
-
-            boolean userAllowed = boolOr(levelSwitches.get(normalizeLevel(userLevel)), true);
-            if (!userAllowed) {
-                accessible.put(key, false);
-                Map<String, Object> info = new LinkedHashMap<>();
-                String firstHigherOn = findFirstHigherEnabled(userLevel, levelSwitches);
-                if (firstHigherOn != null) {
-                    info.put("reason", "level");
-                    info.put("required_level", firstHigherOn);
-                } else {
-                    info.put("reason", "disabled");
-                    info.put("required_level", normalizeLevel(userLevel));
-                }
-                // 对于支持 reason 的功能（如 manual-slider-solve），返回管理员填写的关闭原因
-                // 没填写时返回系统默认文案，便于前端弹窗展示
-                if (REASON_SUPPORTED_KEYS.contains(key)) {
-                    String reasonText = resolveReasonText(key, def, stored);
-                    info.put("reason_text", reasonText);
-                }
-                blocked.put(key, info);
-                continue;
+            // 4. 等级不足且无限制模式：按等级开关关系判定引导升级或暂未开放
+            String firstHigherOn = findFirstHigherEnabled(userLevel, levelSwitches);
+            if (firstHigherOn != null) {
+                info.put("reason", "level");
+                info.put("required_level", firstHigherOn);
+            } else {
+                info.put("reason", "disabled");
+                info.put("required_level", normalizeLevel(userLevel));
             }
-            // 4. 用户等级允许访问
-            accessible.put(key, true);
-            // 限制模式=预览：可进入页面但不可执行业务操作
-            if (LIMIT_MODE_PREVIEW.equals(limitMode)) {
-                Map<String, Object> info = new LinkedHashMap<>();
-                info.put("reason", "preview");
-                info.put("reason_text", DEFAULT_PREVIEW_MESSAGE);
-                preview.put(key, info);
+            // 对于支持 reason 的功能（如 manual-slider-solve），返回管理员填写的关闭原因
+            // 没填写时返回系统默认文案，便于前端弹窗展示
+            if (REASON_SUPPORTED_KEYS.contains(key)) {
+                String reasonText = resolveReasonText(key, def, stored);
+                info.put("reason_text", reasonText);
             }
+            blocked.put(key, info);
         }
         status.put("accessible", accessible);
         status.put("blocked", blocked);
@@ -376,13 +373,13 @@ public class FeatureSwitchService {
     }
 
     /**
-     * 查询单个功能对当前用户的拦截信息。
+     * 查询单个功能对当前用户的拦截信息（用于后端网关强制校验）。
      * 返回：
      *   allowed=true, preview=false → 该功能对当前用户允许使用（正常模式）
-     *   allowed=true, preview=true  → 该功能对当前用户允许进入但预览模式（不可执行业务操作）
-     *   allowed=false → 该功能被拦截，附带 {reason, required_level, reason_text}
+     *   allowed=false → 该功能被拦截（不可执行业务操作），附带 {reason, required_level, reason_text}
      *
-     * 用于 Java 网关在 captcha/handle 入口校验 manual-slider-solve。
+     * 语义：限制模式（preview/blocked）只作用于等级开关未开启的用户；
+     * 等级开关开启的用户（如 svp）不受限制模式影响，始终 allowed=true。
      */
     public Map<String, Object> getFeatureStatusForUser(Long userId, String featureKey) {
         Map<String, Object> result = new LinkedHashMap<>();
@@ -422,41 +419,41 @@ public class FeatureSwitchService {
             result.put("reason_text", DEFAULT_MAINTENANCE_MESSAGE);
             return result;
         }
-        // 2. 限制模式=不可进入：对所有用户拦截
-        String limitMode = resolveLimitMode(featureKey, def, stored);
-        if (LIMIT_MODE_BLOCKED.equals(limitMode)) {
-            result.put("allowed", false);
+        // 2. 等级开关判定：等级开启的用户正常使用，不受限制模式（preview/blocked）影响
+        Map<String, Boolean> levelSwitches = resolveLevelSwitches(featureKey, def, stored);
+        boolean userAllowed = boolOr(levelSwitches.get(normalizeLevel(userLevel)), true);
+        if (userAllowed) {
+            result.put("allowed", true);
             result.put("preview", false);
+            return result;
+        }
+        // 3. 等级不足：按限制模式决定该用户的待遇（不可执行业务操作）
+        result.put("allowed", false);
+        result.put("preview", false);
+        String limitMode = resolveLimitMode(featureKey, def, stored);
+        if (LIMIT_MODE_PREVIEW.equals(limitMode)) {
+            result.put("reason", "preview");
+            result.put("required_level", normalizeLevel(userLevel));
+            result.put("reason_text", DEFAULT_PREVIEW_MESSAGE);
+            return result;
+        }
+        if (LIMIT_MODE_BLOCKED.equals(limitMode)) {
             result.put("reason", "blocked");
             result.put("required_level", normalizeLevel(userLevel));
             result.put("reason_text", DEFAULT_BLOCKED_MESSAGE);
             return result;
         }
-        // 3. 等级开关判定
-        Map<String, Boolean> levelSwitches = resolveLevelSwitches(featureKey, def, stored);
-        boolean userAllowed = boolOr(levelSwitches.get(normalizeLevel(userLevel)), true);
-        if (!userAllowed) {
-            result.put("allowed", false);
-            result.put("preview", false);
-            String firstHigherOn = findFirstHigherEnabled(userLevel, levelSwitches);
-            if (firstHigherOn != null) {
-                result.put("reason", "level");
-                result.put("required_level", firstHigherOn);
-            } else {
-                result.put("reason", "disabled");
-                result.put("required_level", normalizeLevel(userLevel));
-            }
-            if (REASON_SUPPORTED_KEYS.contains(featureKey)) {
-                result.put("reason_text", resolveReasonText(featureKey, def, stored));
-            }
-            return result;
+        // 4. 等级不足且无限制模式：按等级开关关系判定
+        String firstHigherOn = findFirstHigherEnabled(userLevel, levelSwitches);
+        if (firstHigherOn != null) {
+            result.put("reason", "level");
+            result.put("required_level", firstHigherOn);
+        } else {
+            result.put("reason", "disabled");
+            result.put("required_level", normalizeLevel(userLevel));
         }
-        // 4. 用户等级允许访问
-        result.put("allowed", true);
-        // 限制模式=预览：可进入但不可执行业务操作
-        result.put("preview", LIMIT_MODE_PREVIEW.equals(limitMode));
-        if (LIMIT_MODE_PREVIEW.equals(limitMode)) {
-            result.put("reason_text", DEFAULT_PREVIEW_MESSAGE);
+        if (REASON_SUPPORTED_KEYS.contains(featureKey)) {
+            result.put("reason_text", resolveReasonText(featureKey, def, stored));
         }
         return result;
     }
@@ -584,10 +581,10 @@ public class FeatureSwitchService {
 
     /**
      * 解析某功能的限制模式（合并默认值与存储覆盖）。
-     * 限制模式优先级：maintenance > limitMode=blocked > 等级开关 > limitMode=preview
-     * - none：无限制（默认，正常使用）
-     * - preview：预览模式（可进入页面查看，但不可执行业务操作/发送业务请求）
-     * - blocked：不可进入模式（直接无法访问该页面）
+     * 限制模式只作用于等级开关未开启的用户，等级开关开启的用户不受影响：
+     * - none：等级不足时按等级开关关系处理（level 引导升级 / disabled 暂未开放）
+     * - preview：等级不足时进入预览模式（可查看内容，不可执行业务操作）
+     * - blocked：等级不足时不可进入（直接无法访问该页面）
      */
     private String resolveLimitMode(String key, Map<String, Object> def, Map<String, Map<String, Object>> stored) {
         String val = normalizeLimitMode(def.get("limitMode"));

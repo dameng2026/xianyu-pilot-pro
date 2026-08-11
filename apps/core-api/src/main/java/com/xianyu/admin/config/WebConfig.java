@@ -1,5 +1,6 @@
 package com.xianyu.admin.config;
 
+import com.xianyu.admin.security.FeatureGuardFilter;
 import com.xianyu.admin.security.JwtAuthFilter;
 import com.xianyu.admin.security.UserJwtAuthFilter;
 import org.springframework.beans.factory.annotation.Value;
@@ -40,6 +41,18 @@ public class WebConfig implements WebMvcConfigurer {
         FilterRegistrationBean<UserJwtAuthFilter> bean = new FilterRegistrationBean<>(filter);
         bean.addUrlPatterns("/api/*");
         bean.setOrder(3);
+        return bean;
+    }
+
+    /**
+     * 功能开关强制校验（后端兜底，防绕过前端拦截）。
+     * 必须在用户鉴权（order=3）之后执行，确保 TenantContext 已填充 userId。
+     */
+    @Bean
+    public FilterRegistrationBean<FeatureGuardFilter> featureGuardFilter(FeatureGuardFilter filter) {
+        FilterRegistrationBean<FeatureGuardFilter> bean = new FilterRegistrationBean<>(filter);
+        bean.addUrlPatterns("/api/*");
+        bean.setOrder(4);
         return bean;
     }
 

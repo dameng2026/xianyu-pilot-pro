@@ -420,7 +420,8 @@ async function handleTokenPaid() {
 /**
  * 功能开关检查：判断目标页面是否对当前用户开放。
  * 返回 { allowed: true } 或 { allowed: false, reason, required }。
- * 当 allowed=true 且 preview=true 时，表示预览模式（可进入但不可执行业务操作）。
+ * 后端语义（FeatureSwitchService）：限制模式只作用于等级开关未开启的用户。
+ * reason=preview 表示等级不足且管理员配置了预览模式（可进入查看内容，不可执行业务操作）。
  * 失败降级：API 异常时默认放行，避免后端故障锁死所有页面。
  */
 async function checkFeatureSwitch(pageKey) {
@@ -461,9 +462,10 @@ async function checkFeatureSwitch(pageKey) {
 /**
  * 功能被开关拦截时，弹出提示弹窗（不跳转到占位页）。
  * - reason=maintenance：提示"正在维护升级中"（对所有用户生效，路由拦截）
- * - reason=blocked：提示"该功能当前不可访问"（管理员限制不可进入，路由拦截）
+ * - reason=blocked：提示"该功能当前不可访问"（等级不足且管理员配置不可进入，路由拦截）
  * - reason=disabled：提示"暂未开放"（路由拦截）
  * - reason=level：已改为浏览模式（路由放行），由 guardFeatureAction 在页面内拦截写操作
+ * - reason=preview：已改为预览模式（路由放行），由 guardFeatureAction / request.js 在页面内拦截写操作
  */
 async function showFeatureBlockedNotice(switchResult) {
   const reason = switchResult.reason || 'disabled'
@@ -496,13 +498,21 @@ async function navigate(key) {
   // 功能开关检查
   const switchResult = await checkFeatureSwitch(normalizedKey)
   if (!switchResult.allowed) {
-    // 等级不足：改为浏览模式，放行进入页面，由页面内 guardFeatureAction / request.js 拦截写操作
-    if (switchResult.reason === 'level') {
-      setBrowseMode({
-        featureKey: normalizedKey,
-        requiredLevel: switchResult.required,
-        reasonText: switchResult.reasonText
-      })
+    // 等级不足（reason=level）：浏览模式，放行进入，由 guardFeatureAction / request.js 拦截写操作
+    // 等级不足但管理员配置了预览（reason=preview）：预览模式，放行进入查看内容，写操作被拦截
+    if (switchResult.reason === 'level' || switchResult.reason === 'preview') {
+      if (switchResult.reason === 'preview') {
+        setPreviewMode({
+          featureKey: normalizedKey,
+          reasonText: switchResult.reasonText
+        })
+      } else {
+        setBrowseMode({
+          featureKey: normalizedKey,
+          requiredLevel: switchResult.required,
+          reasonText: switchResult.reasonText
+        })
+      }
       suppressHashGuard = true
       location.hash = `#/${requested}`
       active.value = requested
@@ -597,13 +607,21 @@ async function handleGuardedHashNavigation(raw) {
   // 功能开关检查
   const switchResult = await checkFeatureSwitch(normalizedKey)
   if (!switchResult.allowed) {
-    // 等级不足：改为浏览模式，放行进入页面
-    if (switchResult.reason === 'level') {
-      setBrowseMode({
-        featureKey: normalizedKey,
-        requiredLevel: switchResult.required,
-        reasonText: switchResult.reasonText
-      })
+    // 等级不足（reason=level）：改为浏览模式，放行进入页面
+    // 等级不足但管理员配置了预览（reason=preview）：预览模式，放行进入查看内容，写操作被拦截
+    if (switchResult.reason === 'level' || switchResult.reason === 'preview') {
+      if (switchResult.reason === 'preview') {
+        setPreviewMode({
+          featureKey: normalizedKey,
+          reasonText: switchResult.reasonText
+        })
+      } else {
+        setBrowseMode({
+          featureKey: normalizedKey,
+          requiredLevel: switchResult.required,
+          reasonText: switchResult.reasonText
+        })
+      }
       const previous = active.value
       active.value = raw
       if (authPages.includes(normalizedKey) && normalizedKey !== getNormalizedKey(previous)) authNotice.value = ''

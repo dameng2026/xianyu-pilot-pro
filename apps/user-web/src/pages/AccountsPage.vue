@@ -1074,9 +1074,12 @@ async function handleManualSolve(accountId) {
 async function showManualSolveBlockedDialog(status) {
   const levelText = { vip: 'VIP', svp: 'SVIP', normal: '普通用户' }[status.required_level] || 'VIP'
   const reasonText = status.reason_text || '您的会员等级未开启手动滑块求解功能'
+  const isPreview = status.reason === 'preview'
   const description = status.reason === 'disabled'
     ? `${reasonText}\n\n该功能目前对所有等级关闭，如有需要请联系管理员开启。`
-    : `${reasonText}\n\n请升级到 ${levelText} 会员后使用此功能。`
+    : isPreview
+      ? `${reasonText}\n\n当前为预览模式，该功能暂未向您的会员等级开放，升级会员后即可使用。`
+      : `${reasonText}\n\n请升级到 ${levelText} 会员后使用此功能。`
   const confirmed = await globalConfirm.confirm(
     '无法使用手动滑块求解',
     description,
