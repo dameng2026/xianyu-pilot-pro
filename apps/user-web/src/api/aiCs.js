@@ -191,3 +191,36 @@ function parseSseFrame(frame) {
   }
   return { event, data: data || {} }
 }
+
+// ==================== 主动消息（V1.75） ====================
+
+/**
+ * 触发主动消息：检测用户是否首次访问某功能。
+ * 首次访问时，小梦会主动发送一条教学消息到会话中。
+ * @param {string} featureKey 功能标识，如 'workflow_first_visit'
+ * @returns {Promise<{triggered: boolean, notification?: {id, title, content, actionText, sessionId}}>}
+ */
+export function triggerProactive(featureKey) {
+  return request({ url: `${BASE}/proactive/trigger`, method: 'post', data: { featureKey } })
+}
+
+/**
+ * 获取待展示的主动消息列表（status=pending）。
+ */
+export function getPendingProactive() {
+  return request({ url: `${BASE}/proactive/pending`, method: 'get' })
+}
+
+/**
+ * 标记主动消息为已读（用户点击查看）。
+ */
+export function markProactiveRead(id) {
+  return request({ url: `${BASE}/proactive/${id}/read`, method: 'post' })
+}
+
+/**
+ * 标记主动消息为已展示（避免重复弹出）。
+ */
+export function markProactiveShown(id) {
+  return request({ url: `${BASE}/proactive/${id}/shown`, method: 'post' })
+}

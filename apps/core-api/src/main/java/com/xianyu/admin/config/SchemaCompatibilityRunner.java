@@ -1910,6 +1910,8 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
         seedAiCsKnowledgeBaseFromMigrationV1_72();
         // V1.73：刷新 AI 客服计费描述（小梦对话免费）与上下文压缩条目（移除内部字段）
         seedAiCsKnowledgeBaseFromMigrationV1_73();
+        // V1.74：工作流教学知识库（覆盖所有节点能力、默认工作流说明、常见刁钻问题）
+        seedAiCsKnowledgeBaseFromMigrationV1_74();
         executeQuietly("INSERT INTO ai_cs_knowledge(tenant_id, category, title, content, keywords, priority, enabled, sort_order, created_time, updated_time) "
                 + "SELECT NULL, 'troubleshoot', '故障排查指南', '常见故障：1.Cookie 失效→重新登录账号 2.WS 掉线→检查网络或重启服务 3.滑块求解失败→切换求解方式或手动提取 Cookie 4.多账号同时掉线→检查 IP 是否被风控 5.消息不同步→检查 WS 连接状态。', '故障,排查,cookie,ws,滑块,掉线,风控', 100, 1, 11, NOW(), NOW() "
                 + "WHERE NOT EXISTS (SELECT 1 FROM ai_cs_knowledge WHERE tenant_id IS NULL AND category='troubleshoot' AND title='故障排查指南')");
@@ -1928,6 +1930,108 @@ public class SchemaCompatibilityRunner implements ApplicationRunner {
 
         // 10. KB 学习相关 5 张表（V1.43）：与 ensureAiCsTables 区分开，这些表服务于自主学习作业
         ensureLearnedKbTables();
+        // 11. V1.75：小梦主动消息相关表（用户功能首次访问记录 + 主动消息）
+        ensureProactiveMessageTables();
+    }
+
+    /**
+     * V1.75：创建小梦主动消息相关表。
+     *
+     * <p>1. user_feature_visit_log：用户功能首次访问记录表
+     * <p>2. ai_cs_proactive_message：小梦主动消息表
+     *
+     * <p>幂等：可重复执行，已存在的表会跳过。
+     */
+    private void ensureProactiveMessageTables() {
+        createTable("""
+                CREATE TABLE IF NOT EXISTS user_feature_visit_log (
+                    id                BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    user_id           BIGINT NOT NULL COMMENT '用户 ID',
+                    tenant_id         BIGINT NOT NULL COMMENT '租户 ID',
+                    feature_key       VARCHAR(64) NOT NULL COMMENT '功能标识(如 workflow_first_visit)',
+                    visit_count       INT NOT NULL DEFAULT 1 COMMENT '访问次数',
+                    first_visit_time  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '首次访问时间',
+                    last_visit_time   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '最近访问时间',
+                    created_time      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_time      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_user_feature (user_id, tenant_id, feature_key),
+                    INDEX idx_feature_visit (tenant_id, feature_key)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户功能首次访问记录表'
+                """, "user_feature_visit_log");
+        createTable("""
+                CREATE TABLE IF NOT EXISTS ai_cs_proactive_message (
+                    id             BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    user_id        BIGINT NOT NULL COMMENT '用户 ID',
+                    tenant_id      BIGINT NOT NULL COMMENT '租户 ID',
+                    feature_key    VARCHAR(64) NOT NULL COMMENT '触发功能标识(如 workflow_first_visit)',
+                    session_id     BIGINT NULL COMMENT '关联的 AI 客服会话 ID',
+                    message_id     BIGINT NULL COMMENT '关联的 ai_cs_message 消息 ID',
+                    title          VARCHAR(128) NOT NULL COMMENT '通知标题',
+                    content        MEDIUMTEXT NOT NULL COMMENT '通知内容(用于弹窗展示)',
+                    action_text    VARCHAR(64) NOT NULL DEFAULT '查看' COMMENT '操作按钮文案',
+                    status         VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'pending/shown/read/dismissed',
+                    created_time   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    shown_time     DATETIME NULL COMMENT '前端展示时间',
+                    read_time      DATETIME NULL COMMENT '用户点击查看时间',
+                    UNIQUE KEY uk_proactive_user_feature (user_id, tenant_id, feature_key),
+                    INDEX idx_proactive_status (tenant_id, user_id, status),
+                    INDEX idx_proactive_created (created_time)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='小梦主动消息表'
+                """, "ai_cs_proactive_message");
+    }
+
+    /**
+     * 从 V1.74 迁移文件加载工作流教学知识库条目。
+     *
+     * <p>SQL 文件位于 classpath:db/migration/V1.74__seed_workflow_teaching_kb.sql，
+     * 包含 INSERT ... WHERE NOT EXISTS 与 UPDATE 语句（幂等可重入）。
+     * 读取文件并按分号分割后逐条执行，单条失败不影响其他语句。
+     *
+     * <p>注：本迁移文件的所有 content 字段均不含 ASCII 分号（使用中文分号；），可安全按 ; 分割。
+     */
+    private void seedAiCsKnowledgeBaseFromMigrationV1_74() {
+        try {
+            var resource = new org.springframework.core.io.ClassPathResource(
+                    "db/migration/V1.74__seed_workflow_teaching_kb.sql"
+            );
+            if (!resource.exists()) {
+                log.debug("V1.74 migration file not found on classpath, skipping");
+                return;
+            }
+            String sql;
+            try (var is = resource.getInputStream()) {
+                sql = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+            if (sql == null || sql.isBlank()) {
+                return;
+            }
+            int executed = 0;
+            int skipped = 0;
+            for (String stmt : sql.split(";")) {
+                StringBuilder clean = new StringBuilder();
+                for (String line : stmt.split("\n")) {
+                    String trimmedLine = line.trim();
+                    if (trimmedLine.startsWith("--") || trimmedLine.isEmpty()) {
+                        continue;
+                    }
+                    clean.append(line).append("\n");
+                }
+                String finalStmt = clean.toString().trim();
+                if (finalStmt.isEmpty()) {
+                    continue;
+                }
+                try {
+                    jdbcTemplate.execute(finalStmt);
+                    executed++;
+                } catch (Exception e) {
+                    skipped++;
+                    log.debug("V1.74 seed statement skipped: {}", e.getMessage());
+                }
+            }
+            log.info("V1.74 seed: executed={}, skipped={}", executed, skipped);
+        } catch (Exception e) {
+            log.warn("V1.74 seed failed: {}", e.getMessage());
+        }
     }
 
     /**

@@ -319,6 +319,52 @@ public class AiCsController {
         return Result.ok(null);
     }
 
+    // ==================== 主动消息（V1.75） ====================
+
+    /**
+     * 触发主动消息：检测用户是否首次访问某功能。
+     * 首次访问时，小梦会主动向用户发送一条教学消息，并在 ai_cs_proactive_message 表中记录。
+     * 前端收到 triggered=true 后展示右侧弹窗通知，引导用户打开小梦面板查看。
+     *
+     * @param body {featureKey: "workflow_first_visit"}
+     */
+    @PostMapping("/api/ai-cs/proactive/trigger")
+    public Result<Map<String, Object>> triggerProactive(@RequestBody Map<String, Object> body) {
+        String featureKey = text(body.get("featureKey"));
+        if (featureKey == null || featureKey.isBlank()) {
+            return Result.ok(Map.of("triggered", false));
+        }
+        return Result.ok(aiCsService.triggerProactiveMessage(featureKey.trim()));
+    }
+
+    /**
+     * 获取当前用户待展示的主动消息列表（status=pending）。
+     * 前端可在页面加载时轮询此接口，展示未读的主动消息弹窗。
+     */
+    @GetMapping("/api/ai-cs/proactive/pending")
+    public Result<Object> pendingProactive() {
+        return Result.ok(aiCsService.getPendingProactiveMessages());
+    }
+
+    /**
+     * 标记主动消息为已读（用户点击"查看"按钮）。
+     * 标记后前端应打开小梦面板展示对应会话的消息。
+     */
+    @PostMapping("/api/ai-cs/proactive/{id}/read")
+    public Result<Void> markProactiveRead(@PathVariable("id") Long id) {
+        aiCsService.markProactiveMessageRead(id);
+        return Result.ok(null);
+    }
+
+    /**
+     * 标记主动消息为已展示（前端弹窗已展示给用户，避免重复弹出）。
+     */
+    @PostMapping("/api/ai-cs/proactive/{id}/shown")
+    public Result<Void> markProactiveShown(@PathVariable("id") Long id) {
+        aiCsService.markProactiveMessageShown(id);
+        return Result.ok(null);
+    }
+
     // ==================== 工具方法 ====================
 
     private static long parseLong(Object o) {

@@ -598,6 +598,22 @@
             "sha256": "1414b8f527434ce3feb042d4b964aa8ff8155e50c85d9656595d211e85a42d5e",
             "risk": "expand",
             "rollback": "restore"
+          },
+          {
+            "version": "1.74",
+            "description": "seed workflow teaching knowledge base for xiaomeng assistant (nodes, default workflow, FAQ, edge cases)",
+            "path": "apps/core-api/src/main/resources/db/migration/V1.74__seed_workflow_teaching_kb.sql",
+            "sha256": "4c7e510c34be60f6a23bbd10826feaabb6d33b4c25a8ac2f6ec21eebe47785bd",
+            "risk": "expand",
+            "rollback": "restore"
+          },
+          {
+            "version": "1.75",
+            "description": "add proactive message tables (user_feature_visit_log + ai_cs_proactive_message) for xiaomeng autonomous outreach on first workflow visit",
+            "path": "apps/core-api/src/main/resources/db/migration/V1.75__add_proactive_message_tables.sql",
+            "sha256": "ce2fc836b53b1720a65b21678fbc17886cd2145dfea8979206d0f9dd9013abd7",
+            "risk": "expand",
+            "rollback": "restore"
           }
         ],
       "quarantined": [

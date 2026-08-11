@@ -742,6 +742,35 @@
       @confirm="onWfAddressConfirm"
       @cancel="onWfAddressCancel"
     />
+
+    <!-- ★ 小梦主动消息提示卡片：用户首次进入工作流时，小梦主动发送教学消息并在此提示 -->
+    <Transition name="proactive-slide">
+      <div v-if="proactivePopup" class="proactive-popup">
+        <button class="proactive-close" aria-label="稍后查看" @click="dismissProactivePopup">×</button>
+        <div class="proactive-head">
+          <div class="proactive-avatar">
+            <span class="proactive-avatar-emoji">🌙</span>
+            <span class="proactive-avatar-dot"></span>
+          </div>
+          <div class="proactive-head-text">
+            <strong>小梦</strong>
+            <em>系统客服 · 刚刚给你发了一条消息</em>
+          </div>
+        </div>
+        <div class="proactive-body">
+          <h4 class="proactive-title">{{ proactivePopup.title }}</h4>
+          <p class="proactive-content">{{ proactivePopup.content }}</p>
+        </div>
+        <div class="proactive-actions">
+          <button class="proactive-btn secondary" @click="dismissProactivePopup">稍后看</button>
+          <button class="proactive-btn primary" @click="openProactiveAiCs">
+            {{ proactivePopup.actionText || '查看消息' }}
+            <span class="proactive-btn-arrow">→</span>
+          </button>
+        </div>
+        <span class="proactive-tail" aria-hidden="true"></span>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -777,6 +806,7 @@ import { formatArtifact, formatStateVariable } from '../utils/artifactFormat.js'
 import { accountAuthUsable, accountCookieLabel } from '../utils/accountAuth.js'
 import { guardFeatureAction } from '../composables/featureGuard.js'
 import { getPublishAddressMissingFields, isPublishAddressComplete, normalizePublishAddress } from '../utils/publishAddress.js'
+import { triggerProactive, getPendingProactive, markProactiveRead, markProactiveShown } from '../api/aiCs.js'
 
 // ===================== 状态 =====================
 const keywordInput = ref('')
@@ -2622,8 +2652,61 @@ function destroyResizeObserver() {
   if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null }
 }
 
-onMounted(() => { window.addEventListener('xya-header-action', onHeaderAction); loadAll(); initResizeObserver() })
-onBeforeUnmount(() => { stopDrag(); window.removeEventListener('xya-header-action', onHeaderAction); destroyResizeObserver(); stopExecPolling() })
+onMounted(() => { window.addEventListener('xya-header-action', onHeaderAction); loadAll(); initResizeObserver(); initProactiveMessage() })
+onBeforeUnmount(() => { stopDrag(); window.removeEventListener('xya-header-action', onHeaderAction); destroyResizeObserver(); stopExecPolling(); if (proactiveShownTimer) { clearTimeout(proactiveShownTimer); proactiveShownTimer = null } })
+
+// ===================== 主动消息（小梦自主沟通） =====================
+// 检测用户首次进入工作流页面时，小梦主动发送一条教学消息，
+// 并在页面右侧弹出美观提示卡片，引导用户查看小梦客服。
+const proactivePopup = ref(null) // { id, title, content, actionText, sessionId }
+let proactiveShownTimer = null
+
+async function initProactiveMessage() {
+  try {
+    // 1. 触发首次访问检测：后端校验是否首次访问，首次则写入主动消息并返回通知数据
+    const triggerRes = await triggerProactive('workflow_first_visit')
+    const triggerData = triggerRes?.data
+    if (triggerData?.triggered && triggerData?.notification) {
+      showProactivePopup(triggerData.notification)
+      return
+    }
+    // 2. 若本次未触发，但存在未展示的待处理消息（如用户上次离开前未查看），补充展示
+    const pendingRes = await getPendingProactive()
+    const pendingList = pendingRes?.data
+    if (Array.isArray(pendingList) && pendingList.length > 0) {
+      showProactivePopup(pendingList[0])
+    }
+  } catch (e) {
+    // 主动消息失败不应阻塞工作流页面正常使用，静默忽略
+  }
+}
+
+function showProactivePopup(notification) {
+  if (!notification || !notification.id) return
+  proactivePopup.value = notification
+  // 标记为已展示，避免下次进入页面重复弹出（同一用户同一 featureKey 仅展示一次）
+  markProactiveShown(notification.id).catch(() => {})
+  // 30 秒后自动收起（不标记已读，用户仍可在小梦会话中看到该消息）
+  if (proactiveShownTimer) clearTimeout(proactiveShownTimer)
+  proactiveShownTimer = setTimeout(() => { proactivePopup.value = null }, 30000)
+}
+
+async function openProactiveAiCs() {
+  const id = proactivePopup.value?.id
+  // 标记已读：用户主动点击查看，将消息在小梦会话中点亮
+  if (id) {
+    try { await markProactiveRead(id) } catch (_) {}
+  }
+  proactivePopup.value = null
+  if (proactiveShownTimer) { clearTimeout(proactiveShownTimer); proactiveShownTimer = null }
+  // 派发全局事件，由 App.vue 打开小梦面板
+  window.dispatchEvent(new CustomEvent('xya-open-ai-cs'))
+}
+
+function dismissProactivePopup() {
+  proactivePopup.value = null
+  if (proactiveShownTimer) { clearTimeout(proactiveShownTimer); proactiveShownTimer = null }
+}
 </script>
 
 <style scoped>
@@ -2933,4 +3016,71 @@ onBeforeUnmount(() => { stopDrag(); window.removeEventListener('xya-header-actio
 .recent-run-error{font-size:12px;color:#ef4444;margin-bottom:4px;display:flex;flex-direction:column;gap:2px}
 .recent-run-error-node{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .recent-run-error-msg{color:#dc2626;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ========== 小梦主动消息提示卡片（右侧弹窗） ========== */
+.proactive-popup{
+  position:fixed;right:24px;bottom:24px;width:340px;max-width:calc(100vw - 32px);
+  background:#fff;border-radius:18px;padding:18px 18px 16px;z-index:2000;
+  box-shadow:0 12px 40px rgba(13,107,255,.18),0 2px 8px rgba(16,24,40,.06);
+  border:1px solid rgba(13,107,255,.12);overflow:hidden;
+}
+.proactive-popup::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:4px;
+  background:linear-gradient(90deg,#0d6bff,#5b8cff,#0d6bff);
+}
+.proactive-close{
+  position:absolute;top:10px;right:12px;width:24px;height:24px;border:none;background:transparent;
+  color:#98a2b3;font-size:20px;line-height:1;cursor:pointer;border-radius:8px;transition:all .15s;
+}
+.proactive-close:hover{background:#f2f4f7;color:#475467}
+.proactive-head{display:flex;align-items:center;gap:12px;margin-bottom:12px;padding-right:28px}
+.proactive-avatar{
+  position:relative;width:46px;height:46px;border-radius:50%;flex-shrink:0;
+  background:linear-gradient(135deg,#eaf2ff,#dbe7ff);display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 10px rgba(13,107,255,.15);
+}
+.proactive-avatar-emoji{font-size:22px;line-height:1}
+.proactive-avatar-dot{
+  position:absolute;right:2px;bottom:2px;width:12px;height:12px;border-radius:50%;
+  background:#22c55e;border:2px solid #fff;
+}
+.proactive-head-text{display:flex;flex-direction:column;gap:2px;min-width:0}
+.proactive-head-text strong{font-size:15px;color:#16213e;line-height:1.2}
+.proactive-head-text em{font-style:normal;font-size:12px;color:#98a2b3;line-height:1.2}
+.proactive-body{margin-bottom:14px}
+.proactive-title{font-size:14px;color:#0d6bff;margin:0 0 6px;font-weight:600;line-height:1.4}
+.proactive-content{
+  font-size:13px;color:#475467;line-height:1.6;margin:0;max-height:88px;overflow-y:auto;
+  white-space:pre-wrap;word-break:break-word;
+}
+.proactive-content::-webkit-scrollbar{width:4px}
+.proactive-content::-webkit-scrollbar-thumb{background:#d0d5dd;border-radius:2px}
+.proactive-actions{display:flex;gap:8px}
+.proactive-btn{
+  flex:1;height:38px;border-radius:12px;font-size:13px;font-weight:600;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;gap:4px;transition:all .18s;border:none;
+}
+.proactive-btn.secondary{background:#fff;color:#475467;border:1px solid #e4ebf5}
+.proactive-btn.secondary:hover{background:#f7fbff;border-color:#bcd8ff;color:#0d6bff}
+.proactive-btn.primary{
+  flex:1.5;color:#fff;border:none;
+  background:linear-gradient(135deg,#0d6bff,#3b82f6);
+  box-shadow:0 6px 14px rgba(13,107,255,.28);
+}
+.proactive-btn.primary:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(13,107,255,.34)}
+.proactive-btn.primary:active{transform:translateY(0)}
+.proactive-btn-arrow{transition:transform .18s}
+.proactive-btn.primary:hover .proactive-btn-arrow{transform:translateX(2px)}
+
+/* 右下角气泡尾巴装饰 */
+.proactive-tail{
+  position:absolute;right:32px;bottom:-8px;width:16px;height:16px;background:#fff;
+  transform:rotate(45deg);border-right:1px solid rgba(13,107,255,.12);
+  border-bottom:1px solid rgba(13,107,255,.12);
+}
+
+/* 滑入/滑出动画 */
+.proactive-slide-enter-active,.proactive-slide-leave-active{transition:all .35s cubic-bezier(.22,1,.36,1)}
+.proactive-slide-enter-from{opacity:0;transform:translateX(60px) scale(.96)}
+.proactive-slide-leave-to{opacity:0;transform:translateX(60px) scale(.96)}
 </style>

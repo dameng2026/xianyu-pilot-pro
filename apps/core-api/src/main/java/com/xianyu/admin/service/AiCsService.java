@@ -1067,4 +1067,162 @@ public class AiCsService {
             log.warn("expire stale pending tool calls failed, errorType={}", e.getClass().getSimpleName(), e);
         }
     }
+
+    // ==================== 主动消息（V1.75） ====================
+
+    /** 工作流首次访问主动消息内容。 */
+    private static final String WORKFLOW_FIRST_VISIT_MESSAGE =
+            "您好！👋 看到您第一次使用工作流，需要我教教您如何使用吗？\n\n" +
+            "我已经为您准备好了一个【商品搜索工作流】，可以直接使用哦！\n\n" +
+            "📌 这个工作流的功能：\n" +
+            "• 根据您输入的关键词，自动采集闲鱼商品\n" +
+            "• 使用 image-2 模型为每个商品生成 AI 封面图\n" +
+            "• 自动发布到您选择的账号\n\n" +
+            "🔢 关键公式：\n" +
+            "商品数量配置 × 发布账号数 = 最终实际发布商品数量\n" +
+            "例如：配置 5 个商品 + 选择 2 个账号 = 实际发布 10 个商品\n\n" +
+            "有什么不明白的，随时问我哦！😊";
+
+    /** 工作流首次访问主动消息弹窗通知内容。 */
+    private static final String WORKFLOW_FIRST_VISIT_NOTIFICATION =
+            "您好！看到您第一次使用工作流，需要我教教您如何使用吗？我已经为您准备好了一个【商品搜索工作流】，点击查看详情～";
+
+    /**
+     * 触发主动消息：检测用户是否首次访问某功能，首次则创建主动消息并注入到小梦会话。
+     *
+     * @param featureKey 功能标识，如 "workflow_first_visit"
+     * @return {triggered: true/false, notification: {id, title, content, actionText, sessionId}}
+     */
+    @Transactional
+    public Map<String, Object> triggerProactiveMessage(String featureKey) {
+        Long userId = UserContext.userId();
+        Long tenantId = UserContext.getTenantId();
+        if (userId == null || tenantId == null) throw new BizException(401, "请先登录");
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("triggered", false);
+        // 检查是否已有该功能的主动消息记录（幂等：同一用户同一功能只触发一次）
+        List<Map<String, Object>> existing = jdbcTemplate.queryForList(
+                "SELECT id FROM ai_cs_proactive_message WHERE user_id=? AND tenant_id=? AND feature_key=? LIMIT 1",
+                userId, tenantId, featureKey);
+        if (!existing.isEmpty()) {
+            return result; // 已触发过
+        }
+        // 记录功能访问
+        jdbcTemplate.update(
+                "INSERT INTO user_feature_visit_log(user_id, tenant_id, feature_key, visit_count, first_visit_time, last_visit_time, created_time, updated_time) " +
+                        "VALUES(?,?,?,1,NOW(),NOW(),NOW(),NOW()) ON DUPLICATE KEY UPDATE visit_count=visit_count+1, last_visit_time=NOW()",
+                userId, tenantId, featureKey);
+        // 获取或创建活跃会话
+        List<Map<String, Object>> sessions = jdbcTemplate.queryForList(
+                "SELECT id FROM ai_cs_session WHERE user_id=? AND tenant_id=? AND status=1 ORDER BY id DESC LIMIT 1", userId, tenantId);
+        Long sessionId;
+        if (sessions.isEmpty()) {
+            // 创建新会话（会自动写入开场白）
+            Map<String, Object> session = createSession();
+            sessionId = ((Number) session.get("sessionId")).longValue();
+        } else {
+            sessionId = ((Number) sessions.get(0).get("id")).longValue();
+        }
+        // 根据功能标识选择消息内容
+        String messageContent;
+        String notificationTitle;
+        String notificationContent;
+        if ("workflow_first_visit".equals(featureKey)) {
+            messageContent = WORKFLOW_FIRST_VISIT_MESSAGE;
+            notificationTitle = "小梦给您发了一条新消息";
+            notificationContent = WORKFLOW_FIRST_VISIT_NOTIFICATION;
+        } else {
+            // 未知的 featureKey，不触发
+            return result;
+        }
+        // 注入 assistant 消息到会话
+        GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbcTemplate.update(connection -> {
+            var ps = connection.prepareStatement(
+                    "INSERT INTO ai_cs_message(session_id, user_id, tenant_id, role, content, tokens_charged, is_casual, created_time) " +
+                            "VALUES(?,?,?,'assistant',?,0,0,NOW())", java.sql.Statement.RETURN_GENERATED_KEYS);
+            ps.setLong(1, sessionId);
+            ps.setLong(2, userId);
+            ps.setLong(3, tenantId);
+            ps.setString(4, messageContent);
+            return ps;
+        }, keyHolder);
+        long messageId = keyHolder.getKey().longValue();
+        // 更新会话消息计数
+        jdbcTemplate.update("UPDATE ai_cs_session SET message_count=message_count+1, last_active_time=NOW() WHERE id=?", sessionId);
+        // 创建主动消息记录
+        GeneratedKeyHolder proactiveKh = new GeneratedKeyHolder();
+        jdbcTemplate.update(connection -> {
+            var ps = connection.prepareStatement(
+                    "INSERT INTO ai_cs_proactive_message(user_id, tenant_id, feature_key, session_id, message_id, title, content, action_text, status, created_time) " +
+                            "VALUES(?,?,?,?,?,?,?,'查看','pending',NOW())", java.sql.Statement.RETURN_GENERATED_KEYS);
+            ps.setLong(1, userId);
+            ps.setLong(2, tenantId);
+            ps.setString(3, featureKey);
+            ps.setLong(4, sessionId);
+            ps.setLong(5, messageId);
+            ps.setString(6, notificationTitle);
+            ps.setString(7, notificationContent);
+            return ps;
+        }, proactiveKh);
+        long proactiveId = proactiveKh.getKey().longValue();
+        // 每日统计
+        bumpDailyStat(userId, tenantId, "assistant_message", 1);
+        // 构造返回结果
+        result.put("triggered", true);
+        Map<String, Object> notification = new LinkedHashMap<>();
+        notification.put("id", proactiveId);
+        notification.put("title", notificationTitle);
+        notification.put("content", notificationContent);
+        notification.put("actionText", "查看");
+        notification.put("sessionId", sessionId);
+        result.put("notification", notification);
+        log.info("主动消息已触发 userId={}, tenantId={}, featureKey={}, sessionId={}", userId, tenantId, featureKey, sessionId);
+        return result;
+    }
+
+    /**
+     * 获取当前用户待展示的主动消息（status=pending）。
+     */
+    public List<Map<String, Object>> getPendingProactiveMessages() {
+        Long userId = UserContext.userId();
+        Long tenantId = UserContext.getTenantId();
+        if (userId == null || tenantId == null) throw new BizException(401, "请先登录");
+        return jdbcTemplate.queryForList(
+                "SELECT id, feature_key, session_id, title, content, action_text, status, created_time " +
+                        "FROM ai_cs_proactive_message WHERE user_id=? AND tenant_id=? AND status='pending' " +
+                        "ORDER BY created_time DESC LIMIT 10",
+                userId, tenantId);
+    }
+
+    /**
+     * 标记主动消息为已读（用户点击查看）。
+     */
+    @Transactional
+    public void markProactiveMessageRead(Long messageId) {
+        Long userId = UserContext.userId();
+        Long tenantId = UserContext.getTenantId();
+        if (userId == null || tenantId == null) throw new BizException(401, "请先登录");
+        int updated = jdbcTemplate.update(
+                "UPDATE ai_cs_proactive_message SET status='read', read_time=NOW() " +
+                        "WHERE id=? AND user_id=? AND tenant_id=? AND status='pending'",
+                messageId, userId, tenantId);
+        if (updated == 0) {
+            log.debug("主动消息标记已读失败或已读 messageId={}, userId={}", messageId, userId);
+        }
+    }
+
+    /**
+     * 标记主动消息为已展示（前端弹窗已展示给用户）。
+     */
+    @Transactional
+    public void markProactiveMessageShown(Long messageId) {
+        Long userId = UserContext.userId();
+        Long tenantId = UserContext.getTenantId();
+        if (userId == null || tenantId == null) return;
+        jdbcTemplate.update(
+                "UPDATE ai_cs_proactive_message SET status='shown', shown_time=NOW() " +
+                        "WHERE id=? AND user_id=? AND tenant_id=? AND status='pending'",
+                messageId, userId, tenantId);
+    }
 }

@@ -82,6 +82,8 @@ public class WorkflowService {
 
     public PageResult<Map<String, Object>> listDefinitions(String keyword, String status, int current, int size) {
         Long tenantId = tenantId();
+        // 懒初始化：如果当前租户没有任何工作流，自动创建默认工作流（商品搜索+image-2+不筛选）
+        ensureDefaultWorkflow(tenantId);
         int safeCurrent = PageUtils.normalizeCurrent(current);
         int safeSize = PageUtils.normalizeSize(size);
         int offset = (safeCurrent - 1) * safeSize;
@@ -838,6 +840,80 @@ public class WorkflowService {
                 INSERT INTO workflow_node_execution(tenant_id,execution_id,workflow_id,node_key,node_name,node_type,status,input_json,output_json,error_message,duration_ms,started_time,finished_time,created_time,deleted)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),NOW(),0)
                 """, tenantId, execId, workflowId, nodeKey, nodeName, nodeType, status, inputJson, outputJson, errorMessage, durationMs);
+    }
+
+    /**
+     * 懒初始化默认工作流：如果租户没有任何工作流，自动创建一条默认的"商品搜索工作流"。
+     *
+     * <p>默认配置：
+     * <ul>
+     *   <li>TRIGGER: selectedAccountIds=[], executeCount=1</li>
+     *   <li>PRODUCT_FETCH: sourceType=keyword, targetCount=5, fetchMode=random（商品搜索）</li>
+     *   <li>PRODUCT_FILTER: enabled=false（不开启筛选）</li>
+     *   <li>PRODUCT_POLISH: enabled=false（不开启润色）</li>
+     *   <li>IMAGE_GENERATE: modelKey=image-2, imageCount=1（image-2 生图）</li>
+     *   <li>PUBLISH: publishIntervalSeconds=30</li>
+     * </ul>
+     *
+     * <p>幂等：仅在租户 0 条工作流时创建，已有工作流则跳过。
+     */
+    @Transactional
+    public void ensureDefaultWorkflow(Long tenantId) {
+        Long count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM workflow_definition WHERE tenant_id=? AND deleted=0", Long.class, tenantId);
+        if (count != null && count > 0) return;
+        Long userId = UserContext.userId();
+        if (userId == null) userId = 0L;
+        final Long finalUserId = userId;
+        // 创建工作流定义（直接 published 状态，可立即执行）
+        KeyHolder kh = new GeneratedKeyHolder();
+        PreparedStatementCreator psc = con -> {
+            PreparedStatement ps = con.prepareStatement("""
+                    INSERT INTO workflow_definition(tenant_id,user_id,name,description,version,status,trigger_type,config_json,canvas_json,enabled,deleted,created_time,updated_time)
+                    VALUES(?,?,?,?,'1','published','manual','{}','{}',1,0,NOW(),NOW())
+                    """, Statement.RETURN_GENERATED_KEYS);
+            ps.setObject(1, tenantId);
+            ps.setObject(2, finalUserId);
+            ps.setString(3, "商品搜索工作流");
+            ps.setString(4, "根据关键词自动采集闲鱼商品，使用 image-2 生成 AI 封面图并发布。商品数量×账号数=最终发布数量。");
+            return ps;
+        };
+        jdbcTemplate.update(psc, kh);
+        Long workflowId = Objects.requireNonNull(kh.getKey()).longValue();
+        // 插入 6 个节点
+        List<Object[]> nodeRows = new ArrayList<>();
+        nodeRows.add(new Object[]{tenantId, workflowId, "trigger_1", "触发器", "TRIGGER", 80, 80, json(Map.of(
+                "selectedAccountIds", List.of(), "executeCount", 1)), 0});
+        nodeRows.add(new Object[]{tenantId, workflowId, "fetch_1", "商品获取", "PRODUCT_FETCH", 320, 80, json(Map.of(
+                "sourceType", "keyword", "keywords", List.of(), "shopUrl", "", "targetCount", 5,
+                "fetchMode", "random", "enabled", true)), 1});
+        nodeRows.add(new Object[]{tenantId, workflowId, "filter_1", "商品筛选", "PRODUCT_FILTER", 560, 80, json(Map.of(
+                "enabled", false, "screenPrompt", "", "onFilterFail", "retry", "maxRetries", 5)), 2});
+        nodeRows.add(new Object[]{tenantId, workflowId, "polish_1", "润色文案", "PRODUCT_POLISH", 800, 80, json(Map.of(
+                "enabled", false, "style", "", "customPrompt", "")), 3});
+        nodeRows.add(new Object[]{tenantId, workflowId, "image_1", "生图节点", "IMAGE_GENERATE", 1040, 80, json(Map.of(
+                "imageCount", 1, "imageSize", "1024x1024", "imagePrompt", "", "customImagePrompt", "",
+                "promptMode", "default", "modelKey", "image-2", "enabled", true,
+                "referenceImages", List.of(), "parallelCount", 3)), 4});
+        nodeRows.add(new Object[]{tenantId, workflowId, "publish_1", "发布节点", "PUBLISH", 1280, 80, json(Map.of(
+                "publishIntervalSeconds", 30, "category", "", "addressText", "", "address", Map.of(),
+                "priceStrategy", "keep", "enabled", true)), 5});
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO workflow_node(tenant_id,workflow_id,node_key,node_name,node_type,position_x,position_y,config_json,sort_order,deleted,created_time,updated_time)
+                VALUES(?,?,?,?,?,?,?,?,?,0,NOW(),NOW())
+                """, nodeRows);
+        // 插入 5 条连线
+        List<Object[]> edgeRows = new ArrayList<>();
+        edgeRows.add(new Object[]{tenantId, workflowId, "trigger_1", "fetch_1", "", 0});
+        edgeRows.add(new Object[]{tenantId, workflowId, "fetch_1", "filter_1", "", 1});
+        edgeRows.add(new Object[]{tenantId, workflowId, "filter_1", "polish_1", "", 2});
+        edgeRows.add(new Object[]{tenantId, workflowId, "polish_1", "image_1", "", 3});
+        edgeRows.add(new Object[]{tenantId, workflowId, "image_1", "publish_1", "", 4});
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO workflow_edge(tenant_id,workflow_id,source_node_key,target_node_key,condition_expr,sort_order,deleted,created_time,updated_time)
+                VALUES(?,?,?,?,?,?,0,NOW(),NOW())
+                """, edgeRows);
+        log.info("默认工作流已创建 tenantId={}, workflowId={}", tenantId, workflowId);
     }
 
     private void replaceNodesAndEdges(Long workflowId, List<Map<String, Object>> nodes, List<Map<String, Object>> edges) {
