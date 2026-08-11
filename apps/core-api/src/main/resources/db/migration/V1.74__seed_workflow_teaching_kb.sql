@@ -1,6 +1,6 @@
 -- V1.74 工作流教学知识库
 -- 为系统客服"小梦"配置完整的工作流教学知识库，覆盖所有节点能力、默认工作流说明、常见刁钻问题。
--- 注意：content 字段内不得使用 ASCII 分号(;)，统一使用中文分号(；)，因为 SchemaCompatibilityRunner 按 ; 分割语句。
+-- 注意：content 字段内不得使用 ASCII 分号（半角分号），统一使用中文分号（全角分号），因为 SchemaCompatibilityRunner 按半角分号分割语句。
 -- 本文件由 SchemaCompatibilityRunner.seedAiCsKnowledgeBaseFromMigrationV1_74() 幂等执行。
 
 -- 1. 工作流基础概念与默认工作流说明

@@ -603,7 +603,7 @@
             "version": "1.74",
             "description": "seed workflow teaching knowledge base for xiaomeng assistant (nodes, default workflow, FAQ, edge cases)",
             "path": "apps/core-api/src/main/resources/db/migration/V1.74__seed_workflow_teaching_kb.sql",
-            "sha256": "4c7e510c34be60f6a23bbd10826feaabb6d33b4c25a8ac2f6ec21eebe47785bd",
+            "sha256": "d6382cdeb6bb9aadb716099563fb937ae373bea26291cc5ecf46fa189824055d",
             "risk": "expand",
             "rollback": "restore"
           },
