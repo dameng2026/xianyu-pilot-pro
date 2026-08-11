@@ -47,9 +47,10 @@ public class WebConfig implements WebMvcConfigurer {
     /**
      * 功能开关强制校验（后端兜底，防绕过前端拦截）。
      * 必须在用户鉴权（order=3）之后执行，确保 TenantContext 已填充 userId。
+     * 注意：方法名不能与 FeatureGuardFilter 类默认 bean 名重复，否则触发 BeanDefinitionOverrideException。
      */
     @Bean
-    public FilterRegistrationBean<FeatureGuardFilter> featureGuardFilter(FeatureGuardFilter filter) {
+    public FilterRegistrationBean<FeatureGuardFilter> featureGuardFilterRegistration(FeatureGuardFilter filter) {
         FilterRegistrationBean<FeatureGuardFilter> bean = new FilterRegistrationBean<>(filter);
         bean.addUrlPatterns("/api/*");
         bean.setOrder(4);
