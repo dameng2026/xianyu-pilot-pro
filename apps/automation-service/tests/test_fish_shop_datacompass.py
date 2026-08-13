@@ -950,7 +950,7 @@ class TestConcurrencyControl:
 
     def test_concurrency_limit_constant(self):
         """并发上限常量存在且合理（不突破项目全局并发限制）。"""
-        assert SELLER_SUMMARY_CONCURRENCY == 8
+        assert SELLER_SUMMARY_CONCURRENCY == 16
         assert SELLER_SUMMARY_CONCURRENCY > 0
         assert SELLER_SUMMARY_CONCURRENCY <= 16  # 不无限并发
 
@@ -1111,3 +1111,25 @@ class TestConstants:
         """不可相加指标包含 ratio / showPvCmpPctl / payOrdCntCmpPctl。"""
         for key in ("showPvCmpPctl", "payOrdCntCmpPctl"):
             assert key in NON_ADDITIVE_METRICS
+
+
+def test_build_browse_summary_data_includes_date_range_for_custom():
+    from app.services.fish_shop_datacompass import _build_browse_summary_data
+    data = _build_browse_summary_data("customDate", "20260801|20260807")
+    assert data == {"dateType": "customDate", "dateRange": "20260801|20260807"}
+
+
+def test_build_browse_summary_data_omits_date_range_for_preset():
+    from app.services.fish_shop_datacompass import _build_browse_summary_data
+    data = _build_browse_summary_data("recent7d", "")
+    assert data == {"dateType": "recent7d"}
+
+
+def test_parse_browse_summary_response_returns_data_dict():
+    from app.services.fish_shop_datacompass import _parse_browse_summary_response
+    payload = {
+        "sceneSourceList": [{"profileVal": "搜索", "usrRatio": 0.5, "usrRatioFormat": "50%"}],
+        "itemCateList": [],
+    }
+    parsed = _parse_browse_summary_response({"data": payload})
+    assert parsed == payload

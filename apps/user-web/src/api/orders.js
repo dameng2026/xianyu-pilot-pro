@@ -60,6 +60,13 @@ export function syncOrders(data) {
   })
 }
 
+export function requestOrderRedFlower(id) {
+  return request({
+    url: `/orders/${id}/request-red-flower`,
+    method: 'post'
+  })
+}
+
 /**
  * 查询指定买家的近期订单（用于在线消息页客户订单板块）
  * @param {number} accountId 闲鱼账号 ID

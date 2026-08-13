@@ -16,6 +16,9 @@ public class AutoReplyRule extends BaseEntity {
     @Column(name = "account_id")
     private Long accountId;
 
+    @Column(name = "xy_goods_id")
+    private String xyGoodsId;
+
     @Column(name = "rule_name")
     private String ruleName;
 
@@ -30,6 +33,9 @@ public class AutoReplyRule extends BaseEntity {
 
     @Column(name = "reply_content", columnDefinition = "TEXT")
     private String replyContent;
+
+    @Column(name = "reply_image")
+    private String replyImage;
 
     /**
      * 回复模式：keyword/ai
@@ -74,6 +80,9 @@ public class AutoReplyRule extends BaseEntity {
         this.accountId = accountId;
     }
 
+    public String getXyGoodsId() { return xyGoodsId; }
+    public void setXyGoodsId(String xyGoodsId) { this.xyGoodsId = xyGoodsId; }
+
     public String getRuleName() {
         return ruleName;
     }
@@ -105,6 +114,9 @@ public class AutoReplyRule extends BaseEntity {
     public void setReplyContent(String replyContent) {
         this.replyContent = replyContent;
     }
+
+    public String getReplyImage() { return replyImage; }
+    public void setReplyImage(String replyImage) { this.replyImage = replyImage; }
 
     public String getReplyMode() {
         return replyMode;

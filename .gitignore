@@ -286,3 +286,5 @@ docs/superpowers/
 /.trae/
 /2026-08-03
 /insert_silent_*.py
+/_tmp_domdump.py
+/_tmp_dragtest.py

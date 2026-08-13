@@ -411,6 +411,35 @@ def _text(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+_REPLY_SPLIT_SEPARATOR = "######"
+
+
+def _split_reply_messages(content: str) -> list[str]:
+    """将回复内容按 ###### 拆分为多条消息，逐条发送（与同类项目体验一致）。"""
+    text_content = _text(content or "").strip()
+    if not text_content:
+        return []
+    parts = [part.strip() for part in text_content.split(_REPLY_SPLIT_SEPARATOR)]
+    return [part for part in parts if part]
+
+
+async def _send_reply_content_via_client(
+    client: Any,
+    ws_sid: str,
+    to_id: str,
+    content: str,
+) -> dict[str, Any]:
+    """通过 WS 客户端逐条发送回复内容（支持 ###### 多消息拆分）。"""
+    parts = _split_reply_messages(content)
+    if not parts:
+        return {"code": 400, "error": "回复内容为空"}
+    for part in parts:
+        result = await client.send_text_message(ws_sid, to_id, part, persist=False)
+        if not isinstance(result, dict) or result.get("code") != 200:
+            return result if isinstance(result, dict) else {"code": 500, "error": "发送失败"}
+    return {"code": 200}
+
+
 # ============================================================
 # ★ 敏感词过滤：商品获取节点提取完成后，调用 Java core-api 的敏感词策略
 #   过滤命中敏感词的商品，避免发布含敏感词的文案导致闲鱼账号封禁。
@@ -4699,6 +4728,7 @@ async def sync_sold_orders_for_account(
     refund_failed = 0
     refund_processed = 0
     refund_error = False
+    refund_order_nos: list[str] = []
     if not external_order_id:
         try:
             refund_orders = await _fetch_remote_refund_orders(account_id)
@@ -4714,12 +4744,24 @@ async def sync_sold_orders_for_account(
                     refund_inserted += 1
                 elif result == "updated":
                     refund_updated += 1
+                refund_no = _text(order.get("orderNo") or order.get("external_order_id") or "").strip()
+                if refund_no:
+                    refund_order_nos.append(refund_no)
         except Exception as exc:
             refund_error = True
             _log_runtime_failure("sync_remote_refund_orders", exc)
 
     await mark_account_synced(db, tenant_id, account_id)
     await db.commit()
+
+    # 退款关单：同步到退款订单后，按账号配置调用外部注销接口（fire-and-forget）
+    if refund_order_nos:
+        try:
+            from .refund_cancel_service import schedule_refund_unregister
+            for refund_order_no in refund_order_nos:
+                schedule_refund_unregister(tenant_id, account_id, refund_order_no)
+        except Exception as exc:
+            _log_runtime_failure("schedule_refund_unregister", exc)
 
     # 订单同步后自动补全缺失的商品记录，确保发货配置（delivery_goods_config）可命中。
     # 仅用订单中已有的商品信息（itemId/title/image/price）创建最小商品记录，不调用详情 API，避免风控。
@@ -5045,6 +5087,12 @@ async def _resolve_goods_level_rule(
         "card_group_id": timing_config.get("cardGroupId"),
         "auto_confirm_shipment": timing_config.get("autoConfirmShipment")
         or timing_config.get("auto_confirm_shipment")
+        or 0,
+        "confirm_before_send": timing_config.get("confirmBeforeSend")
+        or timing_config.get("confirm_before_send")
+        or 0,
+        "closed_order_still_send": timing_config.get("closedOrderStillSend")
+        or timing_config.get("closed_order_still_send")
         or 0,
     }
 
@@ -5886,12 +5934,43 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
     })
     trigger_message_id = (await db.execute(text("SELECT LAST_INSERT_ID()"))).scalar()
 
-    rule = await _match_auto_reply_rule(db, tenant_id, account_id, content)
+    # 消息过滤规则：命中 skip_reply 时跳过自动回复（仍保留消息入库与人工可见）
+    filter_hits = await _check_message_filter(db, tenant_id, account_id, content)
+    if "skip_reply" in filter_hits:
+        await db.commit()
+        return {
+            "ok": True,
+            "matched": False,
+            "autoSent": False,
+            "conversationId": conversation_db_id,
+            "messageId": trigger_message_id,
+            "platformMessageId": platform_message_id,
+            "filtered": True,
+            "filterTypes": filter_hits,
+            "message": "消息过滤规则命中，已跳过自动回复",
+        }
+
+    rule = await _match_auto_reply_rule(db, tenant_id, account_id, content, goods_id=goods_id)
     if not rule:
         # 未命中显式规则，回退到 AI 客服配置（24小时智能客服）
         # 查询账号所属用户的 ai-customer-service 业务配置，若启用则构造虚拟 rule 走 AI 回复
         rule = await _build_ai_customer_service_rule(db, tenant_id, account_id, content, payload=payload)
         if not rule:
+            default_reply_result = await _try_default_reply(
+                db=db,
+                tenant_id=tenant_id,
+                account_id=account_id,
+                conversation_db_id=conversation_db_id,
+                content=content,
+                buyer_id=buyer_id,
+                buyer_name=buyer_name,
+                ws_sid=ws_sid,
+                goods_id=goods_id,
+                trigger_message_id=trigger_message_id,
+                platform_message_id=platform_message_id,
+            )
+            if default_reply_result:
+                return default_reply_result
             await db.commit()
             return {
                 "ok": True,
@@ -6170,7 +6249,31 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
                 logger.warning("[AUTO_REPLY] WS 未连接，回复未发送 accountId=%d cid=%s", account_id, ws_sid)
             else:
                 to_id = buyer_id if "@" in buyer_id else f"{buyer_id}@goofish"
-                send_result = await client.send_text_message(ws_sid, to_id, reply_content, persist=False)
+                reply_image = _text(rule.get("reply_image") or "") if isinstance(rule, dict) else ""
+                image_send_ok = True
+                if reply_image and reply_mode != "ai":
+                    try:
+                        from .ws_delivery_handler import _send_delivery_image
+                        img_ok, _img_transient, img_err = await _send_delivery_image(
+                            db, tenant_id, account_id, ws_sid, to_id, reply_image,
+                        )
+                        image_send_ok = bool(img_ok)
+                        if not image_send_ok:
+                            send_error = _text(img_err) or "图片回复发送失败"
+                            logger.warning(
+                                "runtimeFailure operation=send_auto_reply_image errorType=ProviderRejected requestId=%s upstreamError=%s",
+                                get_request_id() or "-", send_error,
+                            )
+                    except Exception as img_exc:
+                        image_send_ok = False
+                        send_error = "图片回复发送异常，请稍后重试"
+                        _log_runtime_failure("send_auto_reply_image", img_exc)
+                if image_send_ok:
+                    send_result = await _send_reply_content_via_client(
+                        client, ws_sid, to_id, reply_content,
+                    )
+                else:
+                    send_result = {"code": 400, "error": send_error}
                 send_result_detail = send_result if isinstance(send_result, dict) else {}
                 if send_result.get("code") == 200:
                     send_status = "sent"
@@ -6977,6 +7080,173 @@ async def _resolve_ai_cs_pause_duration_seconds(
         return default_seconds
 
 
+async def _try_default_reply(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+    conversation_db_id: int,
+    content: str,
+    buyer_id: str,
+    buyer_name: str,
+    ws_sid: str,
+    goods_id: str,
+    trigger_message_id: Optional[int],
+    platform_message_id: str,
+) -> Optional[dict[str, Any]]:
+    """未命中关键词规则且 AI 客服关闭时的兜底回复。
+
+    支持 text（可附带图片）与 api（外部接口）两种类型；reply_once 时对同一买家只回复一次。
+    任何失败均静默降级（返回 None），不阻塞消息入库。
+    """
+    try:
+        row = (await db.execute(text("""
+            SELECT * FROM default_reply
+            WHERE tenant_id = :tenant_id AND account_id = :account_id
+              AND deleted = 0 AND enabled = 1
+            LIMIT 1
+        """), {
+            "tenant_id": tenant_id,
+            "account_id": account_id,
+        })).mappings().first()
+        if not row:
+            return None
+
+        buyer_key = _text(buyer_id or "").strip()
+        reply_once = _safe_int(row.get("reply_once"), 0)
+        if reply_once == 1 and buyer_key:
+            existing = (await db.execute(text("""
+                SELECT id FROM default_reply_record
+                WHERE tenant_id = :tenant_id AND account_id = :account_id
+                  AND buyer_user_id = :buyer_user_id
+                LIMIT 1
+            """), {
+                "tenant_id": tenant_id,
+                "account_id": account_id,
+                "buyer_user_id": buyer_key,
+            })).mappings().first()
+            if existing:
+                return None
+
+        reply_type = _text(row.get("reply_type") or "text").lower()
+        reply_content = _text(row.get("reply_content") or "")
+        reply_image = _text(row.get("reply_image") or "")
+        api_url = _text(row.get("api_url") or "")
+        api_timeout = _safe_int(row.get("api_timeout"), 30)
+
+        if reply_type == "api":
+            from .default_reply_api import call_reply_api
+            reply_content = await call_reply_api(
+                account_id=account_id,
+                message=content,
+                api_url=api_url,
+                timeout=api_timeout,
+                chat_id=str(conversation_db_id or ""),
+                item_id=goods_id or None,
+                send_user_id=buyer_key or None,
+                send_user_name=buyer_name or None,
+            ) or ""
+            if not reply_content:
+                return None
+
+        # 变量替换，与关键词规则体验保持一致
+        reply_content = reply_content.replace("{send_user_name}", buyer_name or "买家")
+        reply_content = reply_content.replace("{send_user_id}", buyer_key or "")
+        reply_content = reply_content.replace("{send_message}", content)
+
+        sent = False
+        fail_reason = ""
+        if reply_image and reply_type == "text":
+            from .ws_delivery_handler import _send_delivery_image
+            try:
+                ok, _is_transient, err = await _send_delivery_image(
+                    db, tenant_id, account_id, ws_sid or "", buyer_key, reply_image,
+                )
+                sent = bool(ok)
+                if not sent:
+                    fail_reason = _text(err) or "图片默认回复发送失败"
+            except Exception as exc:
+                logger.warning(
+                    "[DEFAULT_REPLY] 图片默认回复发送异常 tenantId=%d accountId=%d errorType=%s",
+                    tenant_id, account_id, type(exc).__name__,
+                )
+                fail_reason = "图片默认回复发送异常"
+        elif reply_content:
+            if ws_sid:
+                from .ws_client import ws_manager
+                client = ws_manager.get_client(account_id)
+                if client and client.is_connected:
+                    to_id = buyer_key if "@" in buyer_key else f"{buyer_key}@goofish"
+                    send_result = await _send_reply_content_via_client(
+                        client, ws_sid, to_id, reply_content,
+                    )
+                    sent = bool(send_result and send_result.get("code") == 200)
+                    if not sent:
+                        fail_reason = _text(send_result.get("error")) or "默认回复发送失败"
+                else:
+                    fail_reason = "WebSocket 未连接，默认回复未发送"
+            else:
+                fail_reason = "缺少会话ID，默认回复未发送"
+        else:
+            fail_reason = "默认回复内容为空"
+
+        # 记录自动回复日志（source=default_reply），便于用户在日志页追踪
+        await db.execute(text("""
+            INSERT INTO auto_reply_log(
+                tenant_id, account_id, conversation_id, rule_id, trigger_message, reply_content,
+                hit_type, status, fail_reason, action, safety_reasons, deleted, created_time, updated_time
+            ) VALUES(:tenant_id, :account_id, :conversation_id, NULL, :trigger_message, :reply_content,
+                'default_reply', :status, :fail_reason, 'auto_send_allowed', '', 0, NOW(), NOW())
+        """), {
+            "tenant_id": tenant_id,
+            "account_id": account_id,
+            "conversation_id": conversation_db_id,
+            "trigger_message": content,
+            "reply_content": reply_content[:500] if reply_content else "",
+            "status": 1 if sent else 0,
+            "fail_reason": fail_reason or "",
+        })
+
+        if reply_once == 1 and sent and buyer_key:
+            try:
+                await db.execute(text("""
+                    INSERT IGNORE INTO default_reply_record(tenant_id, account_id, buyer_user_id, created_time)
+                    VALUES(:tenant_id, :account_id, :buyer_user_id, NOW())
+                """), {
+                    "tenant_id": tenant_id,
+                    "account_id": account_id,
+                    "buyer_user_id": buyer_key,
+                })
+            except Exception as exc:
+                logger.warning(
+                    "[DEFAULT_REPLY] 写入默认回复记录失败 tenantId=%d accountId=%d errorType=%s",
+                    tenant_id, account_id, type(exc).__name__,
+                )
+
+        await db.commit()
+        return {
+            "ok": True,
+            "matched": True,
+            "autoSent": sent,
+            "conversationId": conversation_db_id,
+            "messageId": trigger_message_id,
+            "platformMessageId": platform_message_id,
+            "ruleId": None,
+            "replyContent": reply_content,
+            "source": "default_reply",
+            "message": "默认回复已发送" if sent else f"默认回复未发送：{fail_reason}",
+        }
+    except Exception as exc:
+        logger.warning(
+            "[DEFAULT_REPLY] 默认回复执行异常 tenantId=%d accountId=%d errorType=%s",
+            tenant_id, account_id, type(exc).__name__,
+        )
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        return None
+
+
 async def _build_ai_customer_service_rule(
     db: AsyncSession,
     tenant_id: int,
@@ -7223,15 +7493,74 @@ async def _build_ai_customer_service_rule(
     }
 
 
-async def _match_auto_reply_rule(db: AsyncSession, tenant_id: int, account_id: int, content: str) -> Optional[dict[str, Any]]:
+async def _check_message_filter(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+    content: str,
+) -> list[str]:
+    """检查消息过滤规则，返回命中的过滤类型列表（skip_reply / skip_notify）。
+
+    查询失败时按“不过滤”处理（fail-open 只影响过滤，不影响主链路收发消息），
+    避免过滤规则表异常导致买家消息无法接收或自动回复停摆。
+    """
+    try:
+        text_content = _text(content or "")
+        if not text_content:
+            return []
+        rows = (await db.execute(text("""
+            SELECT keyword, filter_type
+            FROM message_filter
+            WHERE tenant_id = :tenant_id
+              AND account_id = :account_id
+              AND deleted = 0
+              AND enabled = 1
+            ORDER BY id ASC
+        """), {
+            "tenant_id": tenant_id,
+            "account_id": account_id,
+        })).mappings().all()
+        lowered = text_content.lower()
+        hits: list[str] = []
+        for row in rows:
+            keyword = _text(row.get("keyword") or "").strip().lower()
+            if not keyword:
+                continue
+            if keyword in lowered:
+                filter_type = _text(row.get("filter_type") or "").strip()
+                if filter_type and filter_type not in hits:
+                    hits.append(filter_type)
+        return hits
+    except Exception as exc:
+        logger.warning(
+            "[MESSAGE_FILTER] 查询消息过滤规则失败 tenantId=%d accountId=%d errorType=%s error=%s",
+            tenant_id, account_id, type(exc).__name__, exc,
+        )
+        return []
+
+
+async def _match_auto_reply_rule(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+    content: str,
+    goods_id: str = "",
+) -> Optional[dict[str, Any]]:
     rows = (await db.execute(text("""
         SELECT * FROM auto_reply_rule
         WHERE tenant_id = :tenant_id
           AND deleted = 0
           AND status = 1
           AND (account_id IS NULL OR account_id = :account_id)
-        ORDER BY CASE WHEN account_id = :account_id THEN 0 ELSE 1 END, COALESCE(priority, 0) DESC, id DESC
-    """), {"tenant_id": tenant_id, "account_id": account_id})).mappings().all()
+          AND (xy_goods_id IS NULL OR xy_goods_id = '' OR xy_goods_id = :goods_id)
+        ORDER BY CASE WHEN account_id = :account_id THEN 0 ELSE 1 END,
+                 CASE WHEN xy_goods_id IS NULL OR xy_goods_id = '' THEN 1 ELSE 0 END,
+                 COALESCE(priority, 0) DESC, id DESC
+    """), {
+        "tenant_id": tenant_id,
+        "account_id": account_id,
+        "goods_id": goods_id or "",
+    })).mappings().all()
     lowered = content.lower()
     for r in rows:
         rule = dict(r)

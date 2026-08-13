@@ -406,10 +406,12 @@ class AutoReplyRule(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     tenant_id = Column(BigInteger, nullable=False)
     account_id = Column(BigInteger, nullable=True)
+    xy_goods_id = Column(String(64), nullable=True, comment="绑定的闲鱼商品ID，NULL表示通用")
     rule_name = Column(String(200), nullable=True)
     match_type = Column(String(50), default="keyword", comment="keyword/ai/all")
     match_keywords = Column(Text, nullable=True)
     reply_content = Column(Text, nullable=True)
+    reply_image = Column(String(500), default="", comment="图片关键词回复图片URL")
     reply_mode = Column(String(50), default="keyword", comment="keyword/ai")
     status = Column(SmallInteger, default=1, comment="1启用 0禁用")
     priority = Column(Integer, default=0)
@@ -428,6 +430,80 @@ class QuickReplyTemplate(Base):
     content = Column(Text, nullable=False, comment="模板内容")
     sort_order = Column(Integer, default=0, comment="排序，越小越靠前")
     status = Column(SmallInteger, default=1, comment="1启用 0禁用")
+    deleted = Column(SmallInteger, default=0)
+    created_time = Column(DateTime, default=func.now())
+    updated_time = Column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class MessageFilter(Base):
+    """消息过滤规则：按账号+关键词控制是否跳过自动回复/消息通知"""
+    __tablename__ = "message_filter"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id = Column(BigInteger, nullable=False)
+    account_id = Column(BigInteger, nullable=False, comment="闲鱼账号ID")
+    keyword = Column(String(200), nullable=False, comment="过滤关键词")
+    filter_type = Column(String(32), nullable=False, comment="skip_reply / skip_notify")
+    enabled = Column(SmallInteger, default=1)
+    deleted = Column(SmallInteger, default=0)
+    created_time = Column(DateTime, default=func.now())
+    updated_time = Column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class DefaultReply(Base):
+    """默认回复配置：未命中规则且 AI 关闭时的兜底回复"""
+    __tablename__ = "default_reply"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id = Column(BigInteger, nullable=False)
+    account_id = Column(BigInteger, nullable=False)
+    enabled = Column(SmallInteger, default=1)
+    reply_type = Column(String(16), default="text")
+    reply_content = Column(Text, nullable=True)
+    reply_image = Column(String(500), default="")
+    api_url = Column(String(500), default="")
+    api_timeout = Column(Integer, default=30)
+    reply_once = Column(SmallInteger, default=0)
+    deleted = Column(SmallInteger, default=0)
+    created_time = Column(DateTime, default=func.now())
+    updated_time = Column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class DefaultReplyRecord(Base):
+    """默认回复记录：reply_once 时记录已回复的买家"""
+    __tablename__ = "default_reply_record"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id = Column(BigInteger, nullable=False)
+    account_id = Column(BigInteger, nullable=False)
+    buyer_user_id = Column(String(128), nullable=False)
+    created_time = Column(DateTime, default=func.now())
+
+
+class PersonalBlacklist(Base):
+    """个人黑名单：命中买家在指定账号/商品下禁止自动发货"""
+    __tablename__ = "personal_blacklist"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id = Column(BigInteger, nullable=False)
+    account_id = Column(BigInteger, nullable=False)
+    buyer_user_id = Column(String(128), nullable=False)
+    buyer_nickname = Column(String(128), default="")
+    goods_id = Column(String(64), default="")
+    reason = Column(String(500), default="")
+    enabled = Column(SmallInteger, default=1)
+    deleted = Column(SmallInteger, default=0)
+    created_time = Column(DateTime, default=func.now())
+    updated_time = Column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class DeliveryBlockRule(Base):
+    """发货拦截规则：买家已有订单/未确认收货等场景禁止自动发货"""
+    __tablename__ = "delivery_block_rule"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id = Column(BigInteger, nullable=False)
+    account_id = Column(BigInteger, default=0)
+    rule_code = Column(String(50), nullable=False)
+    rule_name = Column(String(100), default="")
+    config_json = Column(Text, nullable=True)
+    enabled = Column(SmallInteger, default=0)
+    priority = Column(Integer, default=0)
     deleted = Column(SmallInteger, default=0)
     created_time = Column(DateTime, default=func.now())
     updated_time = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -1138,5 +1214,3 @@ class XianyuAutoRateLog(Base):
     deleted = Column(SmallInteger, default=0)
     created_time = Column(DateTime, default=func.now())
     updated_time = Column(DateTime, default=func.now(), onupdate=func.now())
-
-

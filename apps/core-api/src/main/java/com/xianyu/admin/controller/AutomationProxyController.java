@@ -432,6 +432,64 @@ public class AutomationProxyController {
     }
 
 
+    /**
+     * 鱼小铺流量分布（来源/商品/时间/地域）。
+     * Java 网关透传 Python /api/fish-shop-data/browse。
+     */
+    @GetMapping("/fish-shop-data/browse")
+    public Result<Object> fishShopDataBrowse(
+            @RequestParam(required = false) Long accountId,
+            @RequestParam(defaultValue = "recent7d") String dateType,
+            @RequestParam(defaultValue = "") String dateRange) {
+        Long tenantId = TenantContext.getCurrentTenantId();
+        if (tenantId == null) {
+            throw new BizException(401, "登录状态已失效");
+        }
+
+        String safeDateType = (dateType == null || dateType.isBlank()) ? "recent7d" : dateType.trim().toLowerCase();
+        if (!"recent1d".equals(safeDateType) && !"recent7d".equals(safeDateType)
+                && !"recent30d".equals(safeDateType) && !"customDate".equals(safeDateType)) {
+            safeDateType = "recent7d";
+        }
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("dateType", safeDateType);
+        if (accountId != null && accountId > 0) {
+            params.put("accountId", accountId);
+        }
+        if ("customDate".equals(safeDateType) && dateRange != null && !dateRange.isBlank()) {
+            params.put("dateRange", dateRange.trim());
+        }
+
+        try {
+            Map<String, Object> raw = automationClient.getInternal("/api/fish-shop-data/browse", params, 45);
+            Object code = raw.get("code");
+            if (code != null && ("200".equals(String.valueOf(code)) || "0".equals(String.valueOf(code)))) {
+                return Result.ok(raw.get("data"));
+            }
+            String message = String.valueOf(raw.getOrDefault("msg", raw.getOrDefault("message", "流量分布暂时不可用")));
+            Object rawData = raw.get("data");
+            String errorType = "unknown";
+            if (rawData instanceof Map) {
+                Object et = ((Map<?, ?>) rawData).get("errorType");
+                if (et != null) {
+                    errorType = String.valueOf(et);
+                }
+            }
+            if ("cookie_expired".equals(errorType)) {
+                throw new BizException(409, message);
+            }
+            throw new BizException(503, message);
+        } catch (BizException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            log.warn("Python 流量分布失败 accountId={}, dateType={}, errorType={}",
+                    accountId, safeDateType, ex.getClass().getSimpleName());
+            throw new BizException(503, "流量分布暂时不可用，请稍后重试");
+        }
+    }
+
+
     @PostMapping("/account/list")
     public Result<Object> accountList() {
         Long tenantId = TenantContext.getCurrentTenantId();

@@ -17,8 +17,10 @@ export const navCategories = [
       { key: 'accounts', label: '闲鱼账号', icon: 'users' },
       { key: 'orders', label: '订单管理', icon: 'record' },
       { key: 'refunds', label: '退款管理', icon: 'refund' },
+      { key: 'refund-cancel', label: '退款关单', icon: 'refund' },
       { key: 'rates', label: '评价管理', icon: 'circle' },
-      { key: 'fish-shop-data', label: '鱼小铺数据分析', icon: 'data' }
+      { key: 'fish-shop-data', label: '鱼小铺数据分析', icon: 'data' },
+      { key: 'fish-shop-browse', label: '流量分布', icon: 'data' }
     ]
   },
   {
@@ -39,6 +41,9 @@ export const navCategories = [
     items: [
       { key: 'messages', label: '在线消息', icon: 'chat' },
       { key: 'auto-reply', label: '自动回复', icon: 'reply' },
+      { key: 'auto-reply-rules', label: '回复规则', icon: 'rule' },
+      { key: 'message-filters', label: '消息过滤', icon: 'filter' },
+      { key: 'default-reply', label: '默认回复', icon: 'reply' },
       { key: 'settings-ai-cs', label: 'AI客服配置', icon: 'ai' },
       { key: 'settings-kb', label: '客服知识库', icon: 'library' }
     ]
@@ -49,8 +54,10 @@ export const navCategories = [
     icon: 'delivery',
     items: [
       { key: 'auto-delivery', label: '自动发货', icon: 'truck' },
+      { key: 'delivery-block-rules', label: '发货拦截规则', icon: 'shield' },
       { key: 'delivery-source-library', label: '货源库', icon: 'library' },
       { key: 'card-warehouse', label: '卡密仓库', icon: 'key' },
+      { key: 'blacklist', label: '买家黑名单', icon: 'block' },
       { key: 'delivery-statement', label: '发货声明', icon: 'document' },
       { key: 'delivery-records', label: '发货记录', icon: 'record' }
     ]
@@ -124,20 +131,27 @@ export const pageTitles = {
   products: ['商品管理', '管理商品信息、同步状态、自动发货与自动回复配置'],
   orders: ['订单管理', '集中查看订单状态、买家信息、发货情况与异常提醒'],
   refunds: ['退款管理', '查看与处理鱼小铺账号的买家退款申请（仅鱼小铺账号可用）'],
+  'refund-cancel': ['退款关单', '同步到退款订单时，按账号调用外部注销接口关闭订单/回收卡密'],
   rates: ['评价管理', '集中查看买家评价并对未评价订单进行卖家评价（仅鱼小铺账号可用）'],
   'product-publish': ['商品发布', '创建并发布闲鱼商品'],
   'goods-data': ['商品数据分析', '查看商品曝光/订单趋势，筛选低效商品并一键重发或删除'],
   opportunities: ['商机发掘', '发现高潜力商品与经营机会'],
   'fish-shop-data': ['鱼小铺数据分析', '查看鱼小铺账号的成交、曝光、浏览、访问等官方数据（仅鱼小铺账号）'],
+  'fish-shop-browse': ['流量分布', '查看流量来源、商品、时间与地域分布（仅鱼小铺账号）'],
   messages: ['在线消息', '集中处理买家咨询与消息会话'],
   'message-center': ['在线消息', '集中处理买家咨询与消息会话'],
   'auto-reply': ['自动回复', '配置买家消息自动回复规则'],
+  'auto-reply-rules': ['回复规则', '管理关键词/AI 自动回复规则与命中策略'],
+  'message-filters': ['消息过滤', '按关键词屏蔽骚扰消息：跳过自动回复或消息通知'],
+  'default-reply': ['默认回复', '未命中关键词且 AI 关闭时，按账号兜底回复买家'],
   workflow: ['工作流', '设计并运行自动化业务流程'],
   'workflow-tasks': ['工作流任务', '查看工作流任务执行状态与结果'],
   'workflow-drafts': ['商品草稿箱', '工作流生成的商品草稿与发布记录'],
   'workflow-image-records': ['图片生成记录', '所有生图模型调用产生的图片历史'],
   'card-warehouse': ['卡密仓库', '管理卡密库存、分组与使用记录'],
+  'blacklist': ['买家黑名单', '拉黑买家后自动发货直接拦截，不发送卡密/内容'],
   'auto-delivery': ['自动发货', '按商品配置自动发货规则、时机与发送方式'],
+  'delivery-block-rules': ['发货拦截规则', '买家已有订单/未确认收货时自动拦截发货'],
   'delivery-source-library': ['货源库', '统一管理文本货源，支持 AI 推荐适配商品并批量配置'],
   'delivery-statement': ['发货声明', '管理发货声明文案与生效范围'],
   'delivery-mall': ['货源商城', '海量优质虚拟商品资源，自动发货，即买即用'],

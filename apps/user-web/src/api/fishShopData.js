@@ -30,3 +30,25 @@ export function getFishShopDataSummary(params = {}, options = {}) {
     timeout: 60000,
   })
 }
+
+/**
+ * 拉取鱼小铺流量分布（来源/商品/时间/地域）。
+ *
+ * @param {Object} params
+ * @param {number} [params.accountId] 鱼小铺账号 ID
+ * @param {'recent1d'|'recent7d'|'recent30d'|'customDate'} [params.dateType]
+ * @param {string} [params.dateRange] 自定义日期，yyyyMMdd|yyyyMMdd
+ * @returns {Promise} 后端返回的 data 字段
+ */
+export function getFishShopBrowseSummary(params = {}, options = {}) {
+  const query = { dateType: params.dateType || 'recent7d' }
+  if (params.accountId && params.accountId > 0) query.accountId = params.accountId
+  if (params.dateRange) query.dateRange = params.dateRange
+  return request({
+    url: '/fish-shop-data/browse',
+    method: 'get',
+    params: query,
+    signal: options.signal,
+    timeout: 60000,
+  })
+}

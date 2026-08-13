@@ -824,3 +824,151 @@ def invalidate_cache(tenant_id: Optional[int] = None, account_id: Optional[int] 
         keys_to_remove.append(key)
     for key in keys_to_remove:
         _response_cache.pop(key, None)
+
+
+# ==================== 流量分布（浏览分布）====================
+FISH_SHOP_BROWSE_SUMMARY_API = "mtop.alibaba.idle.seller.pc.datacompass.singleuser.browse.summary"
+FISH_SHOP_BROWSE_SUMMARY_VERSION = "1.0"
+BROWSE_ALLOWED_DATE_TYPES = (*ALLOWED_DATE_TYPES, "customDate")
+BROWSE_TIMEOUT = 10
+BROWSE_CACHE_TTL_SECONDS = 60
+
+# 缓存：(tenant_id, account_id, dateType, dateRange) -> (timestamp, payload)
+_browse_cache: dict[tuple, tuple[float, dict]] = {}
+_browse_inflight: dict[tuple, asyncio.Future] = {}
+
+
+def _build_browse_summary_data(date_type: str, date_range: str = "") -> dict:
+    """构建流量分布接口请求体。"""
+    data: dict[str, str] = {"dateType": date_type}
+    if date_type == "customDate" and date_range:
+        data["dateRange"] = date_range
+    return data
+
+
+def _parse_browse_summary_response(response: dict) -> dict:
+    """流量分布接口直接返回 data 原始结构（sceneSourceList/itemCateList/...）。"""
+    data = response.get("data") or {}
+    return data if isinstance(data, dict) else {}
+
+
+async def _fetch_single_account_browse(
+    cookie_str: str,
+    date_type: str,
+    date_range: str = "",
+) -> dict:
+    """调用 singleuser.browse.summary 接口获取单个账号流量分布。"""
+    data = _build_browse_summary_data(date_type, date_range)
+    response = await asyncio.to_thread(
+        _make_fish_shop_request,
+        cookie_str,
+        FISH_SHOP_BROWSE_SUMMARY_API,
+        data,
+        version=FISH_SHOP_BROWSE_SUMMARY_VERSION,
+        extra_url_params=_build_seller_summary_url_params(),
+        timeout=BROWSE_TIMEOUT,
+    )
+    _check_fish_shop_biz_success(response, FISH_SHOP_BROWSE_SUMMARY_API)
+    return _parse_browse_summary_response(response)
+
+
+async def _fetch_account_browse_with_cache(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+    date_type: str,
+    date_range: str = "",
+) -> dict:
+    """单账号流量分布请求 + 短缓存 + 请求去重。"""
+    cache_key = (tenant_id, account_id, date_type, date_range)
+    cached = _browse_cache.get(cache_key)
+    if cached and (time.time() - cached[0]) < BROWSE_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    inflight = _browse_inflight.get(cache_key)
+    if inflight is not None:
+        return await inflight
+
+    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    _browse_inflight[cache_key] = future
+    try:
+        cookie_str, err = await _resolve_account_cookie_str(db, tenant_id, account_id)
+        if err:
+            raise XianyuAuthExpiredError(err)
+        payload = await _fetch_single_account_browse(cookie_str, date_type, date_range)
+        _browse_cache[cache_key] = (time.time(), payload)
+        future.set_result(payload)
+        return payload
+    except Exception as e:
+        if not future.done():
+            future.set_exception(e)
+        raise
+    finally:
+        _browse_inflight.pop(cache_key, None)
+
+
+async def fetch_browse_summary(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: Optional[int] = None,
+    date_type: str = DEFAULT_DATE_TYPE,
+    user_id: Optional[int] = None,
+    date_range: str = "",
+) -> dict:
+    """流量分布主入口。
+
+    - account_id=None：全部鱼小铺账号模式，逐账号请求并返回列表
+    - account_id=<id>：单账号模式
+    """
+    safe_date_type = date_type if date_type in BROWSE_ALLOWED_DATE_TYPES else DEFAULT_DATE_TYPE
+    fish_shop_accounts = await _resolve_fish_shop_accounts(db, tenant_id, user_id)
+
+    if not fish_shop_accounts:
+        return {
+            "mode": "all",
+            "dateType": safe_date_type,
+            "noFishShopAccount": True,
+            "accounts": [],
+        }
+
+    if account_id is not None:
+        target = next((a for a in fish_shop_accounts if a["id"] == account_id), None)
+        if target is None:
+            return {
+                "mode": "single",
+                "dateType": safe_date_type,
+                "invalidAccount": True,
+                "data": {},
+            }
+        payload = await _fetch_account_browse_with_cache(
+            db, tenant_id, account_id, safe_date_type, date_range,
+        )
+        return {
+            "mode": "single",
+            "dateType": safe_date_type,
+            "accountId": account_id,
+            "accountName": target.get("nickname") or "",
+            "data": payload,
+        }
+
+    results: list[dict] = []
+    for acc in fish_shop_accounts:
+        try:
+            payload = await _fetch_account_browse_with_cache(
+                db, tenant_id, acc["id"], safe_date_type, date_range,
+            )
+            results.append({
+                "accountId": acc["id"],
+                "accountName": acc.get("nickname") or "",
+                "data": payload,
+                "success": True,
+            })
+        except Exception as exc:
+            results.append({
+                "accountId": acc["id"],
+                "accountName": acc.get("nickname") or "",
+                "data": {},
+                "success": False,
+                "error": type(exc).__name__,
+            })
+    return {"mode": "all", "dateType": safe_date_type, "accounts": results}

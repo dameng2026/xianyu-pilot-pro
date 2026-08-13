@@ -18,6 +18,11 @@ from .routes import refunds as refunds_module
 from .routes import rates as rates_module
 from .routes import kb_learning as kb_learning_module
 from .routes import fish_shop_data as fish_shop_data_module
+from .routes import message_filter as message_filter_module
+from .routes import default_reply as default_reply_module
+from .routes import blacklist as blacklist_module
+from .routes import delivery_block_rule as delivery_block_rule_module
+from .routes import refund_cancel as refund_cancel_module
 
 from fastapi import APIRouter
 
@@ -71,3 +76,8 @@ api_router.include_router(refunds_module.router, tags=["refunds"])
 api_router.include_router(rates_module.router, tags=["rates"])
 api_router.include_router(kb_learning_module.router, tags=["kbLearning"])
 api_router.include_router(fish_shop_data_module.router, tags=["fishShopData"])
+api_router.include_router(message_filter_module.router, tags=["messageFilter"])
+api_router.include_router(default_reply_module.router, tags=["defaultReply"])
+api_router.include_router(blacklist_module.router, tags=["blacklist"])
+api_router.include_router(delivery_block_rule_module.router, tags=["deliveryBlockRule"])
+api_router.include_router(refund_cancel_module.router, tags=["refundCancel"])

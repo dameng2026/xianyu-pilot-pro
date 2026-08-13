@@ -8,8 +8,11 @@ import com.xianyu.admin.dto.OrderSyncRequest;
 import com.xianyu.admin.dto.XianyuTradeOrderDTO;
 import com.xianyu.admin.dto.XianyuTradeOrderVO;
 import com.xianyu.admin.security.TenantContext;
+import com.xianyu.admin.service.AutomationClient;
 import com.xianyu.admin.service.OrderDeliveryCommandService;
 import com.xianyu.admin.service.XianyuTradeOrderService;
+import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import jakarta.validation.Valid;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
@@ -24,11 +27,17 @@ import java.util.Map;
 public class XianyuTradeOrderController {
     private final XianyuTradeOrderService orderService;
     private final OrderDeliveryCommandService orderDeliveryCommandService;
+    private final AutomationClient automationClient;
+    private final JdbcTemplate jdbcTemplate;
 
     public XianyuTradeOrderController(XianyuTradeOrderService orderService,
-                                      OrderDeliveryCommandService orderDeliveryCommandService) {
+                                      OrderDeliveryCommandService orderDeliveryCommandService,
+                                      AutomationClient automationClient,
+                                      JdbcTemplate jdbcTemplate) {
         this.orderService = orderService;
         this.orderDeliveryCommandService = orderDeliveryCommandService;
+        this.automationClient = automationClient;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     /**
@@ -64,6 +73,74 @@ public class XianyuTradeOrderController {
         Long tenantId = TenantContext.getCurrentTenantId();
         XianyuTradeOrderVO result = orderService.detail(tenantId, id);
         return Result.ok(result);
+    }
+
+    /**
+     * 向买家发送“求小红花”消息并标记订单。
+     */
+    @PostMapping("/{id}/request-red-flower")
+    public Result<Void> requestRedFlower(@PathVariable Long id) {
+        Long tenantId = TenantContext.getCurrentTenantId();
+        if (tenantId == null) {
+            throw new BizException(401, "登录状态已失效");
+        }
+
+        Map<String, Object> order;
+        try {
+            order = jdbcTemplate.queryForMap(
+                    "SELECT account_id, buyer_id, external_order_id, is_red_flower " +
+                            "FROM xianyu_trade_order WHERE id=? AND tenant_id=? AND deleted=0",
+                    id, tenantId);
+        } catch (EmptyResultDataAccessException e) {
+            throw new BizException(404, "订单不存在");
+        }
+
+        Object redFlower = order.get("is_red_flower");
+        if (redFlower != null && "1".equals(String.valueOf(redFlower))) {
+            throw new BizException(400, "该订单已求过小红花");
+        }
+
+        Long accountId = ((Number) order.get("account_id")).longValue();
+        String buyerId = String.valueOf(order.get("buyer_id") == null ? "" : order.get("buyer_id"));
+        String orderNo = String.valueOf(order.get("external_order_id") == null ? "" : order.get("external_order_id"));
+        if (buyerId.isBlank()) {
+            throw new BizException(400, "订单缺少买家ID，无法发送求小红花消息");
+        }
+
+        String sid;
+        try {
+            sid = jdbcTemplate.queryForObject(
+                    "SELECT m.s_id FROM xianyu_message m " +
+                            "WHERE m.tenant_id=? AND m.account_id=? AND m.deleted=0 " +
+                            "AND m.s_id IS NOT NULL AND m.s_id <> '' " +
+                            "AND m.conversation_id = (" +
+                            "  SELECT c.id FROM xianyu_conversation c " +
+                            "  WHERE c.tenant_id=? AND c.account_id=? AND c.deleted=0 " +
+                            "    AND REPLACE(c.external_buyer_id, '@goofish', '') = REPLACE(?, '@goofish', '') " +
+                            "  ORDER BY COALESCE(c.last_message_time, c.updated_time, c.created_time) DESC, c.id DESC LIMIT 1" +
+                            ") ORDER BY COALESCE(m.message_time, 0) DESC, m.id DESC LIMIT 1",
+                    String.class, tenantId, accountId, tenantId, accountId, buyerId);
+        } catch (EmptyResultDataAccessException e) {
+            sid = null;
+        }
+        if (sid == null || sid.isBlank()) {
+            throw new BizException(400, "未找到与买家的会话，无法发送求小红花消息");
+        }
+
+        String peerId = buyerId.contains("@goofish") ? buyerId : buyerId + "@goofish";
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("accountId", accountId);
+        payload.put("cid", sid);
+        payload.put("toId", peerId);
+        payload.put("message", "亲，方便的话确认收货后帮忙点亮小红花哦，非常感谢您的支持！");
+
+        // Python 端会校验账号归属、会话有效性并真实发送；业务失败直接抛错
+        automationClient.postInternalForDataOrThrow("/api/websocket/sendMessage", payload);
+
+        jdbcTemplate.update(
+                "UPDATE xianyu_trade_order SET is_red_flower=1, updated_time=NOW() WHERE id=? AND tenant_id=?",
+                id, tenantId);
+        return Result.ok(null);
     }
 
     /**

@@ -17,13 +17,13 @@ public interface AutoReplyRuleMapper {
     @Select("SELECT * FROM auto_reply_rule WHERE tenant_id = #{tenantId} AND id = #{id} AND deleted = 0")
     AutoReplyRule findById(@Param("tenantId") Long tenantId, @Param("id") Long id);
 
-    @Insert("INSERT INTO auto_reply_rule(tenant_id, account_id, rule_name, match_type, match_keywords, reply_content, reply_mode, status, priority, safe_mode, handoff_keywords, price_floor, max_daily_replies, deleted, created_time, updated_time) " +
-            "VALUES(#{tenantId}, #{accountId}, #{ruleName}, #{matchType}, #{matchKeywords}, #{replyContent}, #{replyMode}, #{status}, #{priority}, #{safeMode}, #{handoffKeywords}, #{priceFloor}, #{maxDailyReplies}, 0, NOW(), NOW())")
+    @Insert("INSERT INTO auto_reply_rule(tenant_id, account_id, xy_goods_id, rule_name, match_type, match_keywords, reply_content, reply_image, reply_mode, status, priority, safe_mode, handoff_keywords, price_floor, max_daily_replies, deleted, created_time, updated_time) " +
+            "VALUES(#{tenantId}, #{accountId}, #{xyGoodsId}, #{ruleName}, #{matchType}, #{matchKeywords}, #{replyContent}, #{replyImage}, #{replyMode}, #{status}, #{priority}, #{safeMode}, #{handoffKeywords}, #{priceFloor}, #{maxDailyReplies}, 0, NOW(), NOW())")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(AutoReplyRule rule);
 
-    @Update("UPDATE auto_reply_rule SET account_id = #{accountId}, rule_name = #{ruleName}, match_type = #{matchType}, " +
-            "match_keywords = #{matchKeywords}, reply_content = #{replyContent}, reply_mode = #{replyMode}, " +
+    @Update("UPDATE auto_reply_rule SET account_id = #{accountId}, xy_goods_id = #{xyGoodsId}, rule_name = #{ruleName}, match_type = #{matchType}, " +
+            "match_keywords = #{matchKeywords}, reply_content = #{replyContent}, reply_image = #{replyImage}, reply_mode = #{replyMode}, " +
             "status = #{status}, priority = #{priority}, safe_mode = #{safeMode}, handoff_keywords = #{handoffKeywords}, " +
             "price_floor = #{priceFloor}, max_daily_replies = #{maxDailyReplies}, updated_time = NOW() " +
             "WHERE tenant_id = #{tenantId} AND id = #{id} AND deleted = 0")

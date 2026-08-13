@@ -17,8 +17,8 @@ CONFIG_PATH = REPO_ROOT / ".deploy.prod.json"
 
 # Files changed in this release
 CHANGED_FILES = [
-    "apps/crawler-service/Dockerfile",
     "apps/crawler-service/src/crawler/sliderSolver.ts",
+    "apps/crawler-service/sliderSolve.py",
 ]
 
 

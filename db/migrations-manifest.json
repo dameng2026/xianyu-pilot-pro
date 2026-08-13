@@ -857,6 +857,54 @@
           "sha256": "6899ab7b89484968e8c04cf7c91f6305ebfdbb8683b5dd20836b3a86de90c25e",
           "risk": "expand",
           "rollback": "restore"
+        },
+        {
+          "version": "1.29",
+          "description": "add message_filter table for keyword-based skip_reply / skip_notify rules",
+          "path": "apps/automation-service/migrations/V1.29__add_message_filter_table.sql",
+          "sha256": "5b85772d1ef5dd400dc56e83d089ac1ed4e40d1658009927236d9aae25a60074",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.30",
+          "description": "add default_reply and default_reply_record tables for account-level fallback replies",
+          "path": "apps/automation-service/migrations/V1.30__add_default_reply_tables.sql",
+          "sha256": "0957bb26f40158789cde723938e04928a2543d7765bfb2e19f8fa0c27edf46d8",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.31",
+          "description": "add xy_goods_id and reply_image columns to auto_reply_rule for goods-scoped and image keyword replies",
+          "path": "apps/automation-service/migrations/V1.31__add_auto_reply_rule_goods_and_image.sql",
+          "sha256": "9f63ee185db7f161165aa2717a569ba70f734e5ed517306b45cfdde3b40b6af8",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.32",
+          "description": "add personal_blacklist table for delivery interception by buyer",
+          "path": "apps/automation-service/migrations/V1.32__add_personal_blacklist_table.sql",
+          "sha256": "d44b8d6d32009042ce6a4d39c0d20a83c8cdf005e0ec8a68f1054d8c76d27823",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.33",
+          "description": "add delivery_block_rule table for buyer_has_order / buyer_unconfirmed delivery interception rules",
+          "path": "apps/automation-service/migrations/V1.33__add_delivery_block_rule_table.sql",
+          "sha256": "3e972b7aa6b00aae4921bba57259122c0250579d111644257a4bab07280c413c",
+          "risk": "expand",
+          "rollback": "restore"
+        },
+        {
+          "version": "1.34",
+          "description": "add refund cancel config columns to xianyu_account and unregister columns to xianyu_trade_order",
+          "path": "apps/automation-service/migrations/V1.34__add_refund_cancel_config.sql",
+          "sha256": "668a884ab04c6823cc3fe4dc181f3fffd16de8199727779c13c90427877c15ff",
+          "risk": "expand",
+          "rollback": "restore"
         }
       ],
       "quarantined": []

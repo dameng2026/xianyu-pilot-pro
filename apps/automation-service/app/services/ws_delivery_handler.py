@@ -1022,6 +1022,280 @@ async def _execute_segments_delivery(
     return (overall_success, fail_reason, record_content)
 
 
+async def _backfill_delivery_record_order_id(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+    order_id: str,
+    s_id: str,
+    buyer_user_id: str,
+    xy_goods_id: str,
+) -> None:
+    """将反查到的 order_id 回写到 delivery_record（原 order_id 为空时）。"""
+    if not order_id:
+        return
+    try:
+        await db.execute(
+            text("""
+                UPDATE delivery_record
+                SET order_id = :order_id, status = 2, updated_time = NOW()
+                WHERE tenant_id = :tenant_id
+                  AND account_id = :account_id
+                  AND deleted = 0
+                  AND (order_id IS NULL OR order_id = '')
+                  AND delivery_timing = :delivery_timing
+                  AND REPLACE(JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.sid')), '@goofish', '') = REPLACE(:sid, '@goofish', '')
+                  AND REPLACE(JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.buyerUserId')), '@goofish', '') = REPLACE(:buyer_user_id, '@goofish', '')
+                  AND JSON_UNQUOTE(JSON_EXTRACT(receiver_info, '$.xyGoodsId')) = :xy_goods_id
+            """),
+            {
+                "tenant_id": tenant_id,
+                "account_id": account_id,
+                "order_id": order_id,
+                "delivery_timing": DELIVERY_TIMING_AFTER_PAYMENT,
+                "sid": s_id,
+                "buyer_user_id": buyer_user_id,
+                "xy_goods_id": xy_goods_id,
+            }
+        )
+    except Exception as e:
+        logger.warning("回写 order_id 到 delivery_record 失败: %s", e)
+
+
+async def _check_personal_blacklist(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+    buyer_user_id: str,
+    xy_goods_id: str,
+) -> Optional[str]:
+    """检查买家是否在个人黑名单中，命中返回原因（否则 None）。
+
+    买家ID做 @goofish 后缀归一化；goods_id 为空串表示该账号全部商品。
+    查询失败时按未命中处理（fail-open），不阻塞正常发货。
+    """
+    try:
+        row = (await db.execute(
+            text("""
+                SELECT reason FROM personal_blacklist
+                WHERE tenant_id = :tenant_id
+                  AND (account_id = 0 OR account_id = :account_id)
+                  AND deleted = 0
+                  AND enabled = 1
+                  AND REPLACE(buyer_user_id, '@goofish', '') = REPLACE(:buyer_user_id, '@goofish', '')
+                  AND (goods_id = '' OR goods_id = :goods_id)
+                ORDER BY CASE WHEN account_id = :account_id THEN 0 ELSE 1 END,
+                         CASE WHEN goods_id = '' THEN 1 ELSE 0 END,
+                         id DESC
+                LIMIT 1
+            """),
+            {
+                "tenant_id": tenant_id,
+                "account_id": account_id,
+                "buyer_user_id": buyer_user_id or "",
+                "goods_id": xy_goods_id or "",
+            }
+        )).mappings().first()
+        if not row:
+            return None
+        reason = str(row.get("reason") or "").strip()
+        return reason or "买家在黑名单中"
+    except Exception as exc:
+        logger.warning(
+            "查询个人黑名单失败，按未命中处理 tenantId=%d accountId=%d errorType=%s",
+            tenant_id, account_id, type(exc).__name__,
+        )
+        return None
+
+
+async def _check_delivery_block_rules(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+    buyer_user_id: str,
+    xy_goods_id: str,
+    order_id: str = "",
+) -> Optional[str]:
+    """检查发货拦截规则（买家已有订单 / 未确认收货订单）。
+
+    返回拦截原因（否则 None）。查询失败按未命中处理（fail-open），不阻塞正常发货。
+    """
+    try:
+        rows = (await db.execute(
+            text("""
+                SELECT rule_code, rule_name FROM delivery_block_rule
+                WHERE tenant_id = :tenant_id
+                  AND deleted = 0
+                  AND enabled = 1
+                  AND (account_id = 0 OR account_id = :account_id)
+                ORDER BY priority ASC, id ASC
+            """),
+            {"tenant_id": tenant_id, "account_id": account_id},
+        )).mappings().all()
+        if not rows:
+            return None
+
+        normalized_buyer = str(buyer_user_id or "").replace("@goofish", "").strip()
+        if not normalized_buyer:
+            return None
+        current_order_id = str(order_id or "").strip()
+
+        for row in rows:
+            code = str(row.get("rule_code") or "")
+            if code == "buyer_has_order":
+                count = (await db.execute(
+                    text("""
+                        SELECT COUNT(*) FROM xianyu_trade_order
+                        WHERE tenant_id = :tenant_id
+                          AND account_id = :account_id
+                          AND deleted = 0
+                          AND REPLACE(buyer_id, '@goofish', '') = :buyer_id
+                          AND order_status <> 5
+                          AND (:current_order_id = '' OR external_order_id <> :current_order_id)
+                    """),
+                    {
+                        "tenant_id": tenant_id,
+                        "account_id": account_id,
+                        "buyer_id": normalized_buyer,
+                        "current_order_id": current_order_id,
+                    },
+                )).scalar() or 0
+                if count > 0:
+                    return "买家已有其他订单，已拦截发货"
+            elif code == "buyer_unconfirmed":
+                count = (await db.execute(
+                    text("""
+                        SELECT COUNT(*) FROM xianyu_trade_order
+                        WHERE tenant_id = :tenant_id
+                          AND account_id = :account_id
+                          AND deleted = 0
+                          AND REPLACE(buyer_id, '@goofish', '') = :buyer_id
+                          AND order_status = 3
+                          AND confirm_time IS NULL
+                          AND (:current_order_id = '' OR external_order_id <> :current_order_id)
+                    """),
+                    {
+                        "tenant_id": tenant_id,
+                        "account_id": account_id,
+                        "buyer_id": normalized_buyer,
+                        "current_order_id": current_order_id,
+                    },
+                )).scalar() or 0
+                if count > 0:
+                    return "买家存在未确认收货订单，已拦截发货"
+        return None
+    except Exception as exc:
+        logger.warning(
+            "查询发货拦截规则失败，按未命中处理 tenantId=%d accountId=%d errorType=%s",
+            tenant_id, account_id, type(exc).__name__,
+        )
+        return None
+
+
+def _is_order_closed_error(confirm_result: Optional[dict]) -> bool:
+    """判断确认发货失败是否因订单已关闭/取消（可触发 card_only 补发）。"""
+    if not confirm_result:
+        return False
+    error_code = str(confirm_result.get("error") or "").upper()
+    raw_message = str(confirm_result.get("message") or "")
+    closed_code_markers = ("ORDER_CLOSE", "ORDER_CANCEL", "ORDER_STATUS", "CLOSED", "CLOSE", "CANCEL")
+    if any(marker in error_code for marker in closed_code_markers):
+        return True
+    closed_text_markers = ("已关闭", "订单关闭", "关单", "已取消", "ORDER_ALREADY_CLOSED", "ORDER_CLOSED")
+    return any(marker in raw_message for marker in closed_text_markers)
+
+
+async def _pre_confirm_shipment_if_enabled(
+    db: AsyncSession,
+    tenant_id: int,
+    account_id: int,
+    order_id: str,
+    s_id: str,
+    pnm_id: str,
+    buyer_user_id: str,
+    buyer_user_name: str,
+    xy_goods_id: str,
+    buy_quantity: int,
+    rule: dict,
+    trigger_source: str,
+    delivery_type: str,
+) -> tuple[bool, Optional[str]]:
+    """“先确认发货再发内容”开关的预确认逻辑。
+
+    返回 (should_abort, pre_resolved_order_id)：
+    - (True, None)：确认发货失败，已写入失败记录并通知，调用方必须中止发送；
+    - (False, order_id)：确认发货成功，调用方应跳过发送后的重复确认；
+    - (False, None)：未开启开关或无法解析订单，调用方走原有“先发送后确认”路径。
+    """
+    if not rule or not bool(rule.get("confirm_before_send")):
+        return False, None
+
+    resolved_order_id = await _resolve_order_id_for_confirm(
+        db, tenant_id, account_id, order_id, xy_goods_id, buyer_user_id,
+    )
+    if not resolved_order_id:
+        return False, None
+
+    is_bargain = await _detect_bargain_from_message_or_db(
+        db, account_id, resolved_order_id, xy_goods_id, buyer_user_id, rule,
+    )
+    confirm_result = await _auto_confirm_shipment(
+        tenant_id, account_id, resolved_order_id,
+        is_bargain=is_bargain,
+        xy_goods_id=xy_goods_id,
+        buyer_user_id=buyer_user_id,
+    )
+    if confirm_result and confirm_result.get("success"):
+        try:
+            await db.execute(
+                text("""
+                    UPDATE xianyu_trade_order
+                    SET order_status = 3, ship_time = NOW(), updated_time = NOW()
+                    WHERE tenant_id = :tenant_id
+                      AND external_order_id = :external_order_id
+                      AND deleted = 0
+                """),
+                {
+                    "tenant_id": tenant_id,
+                    "external_order_id": resolved_order_id,
+                }
+            )
+        except Exception as e:
+            logger.warning(
+                "先确认发货成功后更新本地订单状态失败 tenantId=%d orderId=%s error=%s",
+                tenant_id, resolved_order_id, e,
+            )
+        return False, resolved_order_id
+
+    # “订单已关闭仍补发”配置：确认发货失败但订单已关闭/取消时，继续发送内容（不确认平台发货）
+    if _is_order_closed_error(confirm_result) and bool(rule.get("closed_order_still_send")):
+        logger.info(
+            "先确认发货失败但订单已关闭，按“关闭后仍补发”配置继续发送 tenantId=%d accountId=%d orderId=%s",
+            tenant_id, account_id, resolved_order_id,
+        )
+        return False, resolved_order_id
+
+    fail_reason = f"先确认发货失败，已中止发送：{_friendly_confirm_error(confirm_result)}"
+    await _safe_insert_delivery_record(
+        db, tenant_id, account_id, order_id, s_id, pnm_id,
+        buyer_user_id, buyer_user_name, xy_goods_id, buy_quantity,
+        rule_id=rule.get("id"), delivery_type=delivery_type,
+        content=None, status=3, fail_reason=fail_reason,
+        trigger_source=trigger_source,
+        delivery_mode=delivery_type,
+        delivery_timing=rule.get("delivery_timing") or DELIVERY_TIMING_AFTER_PAYMENT,
+    )
+    await _notify_realtime_delivery_failure(
+        db=db,
+        tenant_id=tenant_id,
+        account_id=account_id,
+        order_id=resolved_order_id or order_id,
+        xy_goods_id=xy_goods_id,
+        fail_reason=fail_reason,
+    )
+    return True, None
+
+
 async def _execute_text_delivery(
     db: AsyncSession,
     tenant_id: int,
@@ -1037,6 +1311,76 @@ async def _execute_text_delivery(
     delivery_content: str,
     trigger_source: str,
 ):
+    # 个人黑名单：命中直接拦截，不发送、不确认平台发货
+    blacklist_reason = await _check_personal_blacklist(
+        db, tenant_id, account_id, buyer_user_id, xy_goods_id,
+    )
+    if blacklist_reason:
+        fail_reason = f"买家在黑名单中，已拦截发货：{blacklist_reason}"
+        await _safe_insert_delivery_record(
+            db, tenant_id, account_id, order_id, s_id, pnm_id,
+            buyer_user_id, buyer_user_name, xy_goods_id, buy_quantity,
+            rule_id=rule.get("id"), delivery_type=MODE_TEXT,
+            content=None, status=3, fail_reason=fail_reason,
+            trigger_source=trigger_source,
+            delivery_mode=MODE_TEXT,
+            delivery_timing=rule.get("delivery_timing") or DELIVERY_TIMING_AFTER_PAYMENT,
+        )
+        await _notify_realtime_delivery_failure(
+            db=db,
+            tenant_id=tenant_id,
+            account_id=account_id,
+            order_id=order_id,
+            xy_goods_id=xy_goods_id,
+            fail_reason=fail_reason,
+        )
+        return
+
+    # 发货拦截规则（买家已有订单 / 未确认收货订单）
+    block_rule_reason = await _check_delivery_block_rules(
+        db, tenant_id, account_id, buyer_user_id, xy_goods_id, order_id,
+    )
+    if block_rule_reason:
+        fail_reason = f"{block_rule_reason}：已拦截发货"
+        await _safe_insert_delivery_record(
+            db, tenant_id, account_id, order_id, s_id, pnm_id,
+            buyer_user_id, buyer_user_name, xy_goods_id, buy_quantity,
+            rule_id=rule.get("id"), delivery_type=MODE_TEXT,
+            content=None, status=3, fail_reason=fail_reason,
+            trigger_source=trigger_source,
+            delivery_mode=MODE_TEXT,
+            delivery_timing=rule.get("delivery_timing") or DELIVERY_TIMING_AFTER_PAYMENT,
+        )
+        await _notify_realtime_delivery_failure(
+            db=db,
+            tenant_id=tenant_id,
+            account_id=account_id,
+            order_id=order_id,
+            xy_goods_id=xy_goods_id,
+            fail_reason=fail_reason,
+        )
+        return
+
+    # “先确认发货再发内容”开关：发送前先确认平台发货，失败则中止发送
+    should_abort, pre_resolved_order_id = await _pre_confirm_shipment_if_enabled(
+        db=db,
+        tenant_id=tenant_id,
+        account_id=account_id,
+        order_id=order_id,
+        s_id=s_id,
+        pnm_id=pnm_id,
+        buyer_user_id=buyer_user_id,
+        buyer_user_name=buyer_user_name,
+        xy_goods_id=xy_goods_id,
+        buy_quantity=buy_quantity,
+        rule=rule,
+        trigger_source=trigger_source,
+        delivery_type=MODE_TEXT,
+    )
+    if should_abort:
+        return
+    pre_confirmed = pre_resolved_order_id is not None
+
     # V1.66: 优先走 segments 多条发送（文本/图片逐条单独发送，不合并为一条消息）
     segments = rule.get("segments") or []
     if segments:
@@ -1072,7 +1416,7 @@ async def _execute_text_delivery(
         delivery_timing=rule.get("delivery_timing") or DELIVERY_TIMING_AFTER_PAYMENT,
     )
 
-    if send_ok:
+    if send_ok and not pre_confirmed:
         # 发送成功：尝试反查 order_id（付款消息常不含 orderId），再调用闲鱼确认发货 API
         # 只有平台真正标记为已发货后才更新本地 order_status=3
         # 避免本地标记 3 但闲鱼平台实际未发货的状态不一致问题
@@ -1154,6 +1498,13 @@ async def _execute_text_delivery(
                 "发货消息已发送但 order_id 为空且本地反查无果，跳过 confirm_shipment: tenantId=%d accountId=%d xyGoodsId=%s buyer=%s",
                 tenant_id, account_id, xy_goods_id, buyer_user_id,
             )
+    if send_ok and pre_confirmed:
+        if pre_resolved_order_id:
+            await _backfill_delivery_record_order_id(
+                db, tenant_id, account_id,
+                pre_resolved_order_id, s_id, buyer_user_id, xy_goods_id,
+            )
+
     elif not send_ok:
         await _notify_realtime_delivery_failure(
             db=db,
@@ -1161,7 +1512,8 @@ async def _execute_text_delivery(
             account_id=account_id,
             order_id=order_id,
             xy_goods_id=xy_goods_id,
-            fail_reason=fail_reason or "WebSocket 发送消息失败",
+            fail_reason=(fail_reason or "WebSocket 发送消息失败")
+            + ("（平台已确认发货，但内容未发送）" if pre_confirmed else ""),
         )
 
 
@@ -1433,6 +1785,12 @@ async def _load_goods_delivery_rule(
         "card_group_id": timing_config.get("cardGroupId"),
         "auto_confirm_shipment": timing_config.get("autoConfirmShipment")
         or timing_config.get("auto_confirm_shipment")
+        or 0,
+        "confirm_before_send": timing_config.get("confirmBeforeSend")
+        or timing_config.get("confirm_before_send")
+        or 0,
+        "closed_order_still_send": timing_config.get("closedOrderStillSend")
+        or timing_config.get("closed_order_still_send")
         or 0,
         "segment_send": timing_config.get("segmentSend"),
         "segments": segments,
@@ -1890,6 +2248,79 @@ async def _execute_kami_delivery(
         # 检查失败不阻断主流程（fail-open），由上层去重和卡密原子认领兜底
         logger.warning("卡密发货入口去重检查异常，继续执行: %s", check_err, exc_info=True)
 
+    # 个人黑名单：命中直接拦截，不发送、不认领卡密、不确认平台发货
+    blacklist_reason = await _check_personal_blacklist(
+        db, tenant_id, account_id, buyer_user_id, xy_goods_id,
+    )
+    if blacklist_reason:
+        fail_reason = f"买家在黑名单中，已拦截发货：{blacklist_reason}"
+        await _safe_insert_delivery_record(
+            db, tenant_id, account_id, order_id, s_id, pnm_id,
+            buyer_user_id, buyer_user_name, xy_goods_id, buy_quantity,
+            rule_id=rule_id, delivery_type=MODE_KAMI,
+            content=None, status=3, fail_reason=fail_reason,
+            trigger_source=trigger_source,
+            delivery_mode=MODE_KAMI,
+            delivery_timing=rule.get("delivery_timing") or DELIVERY_TIMING_AFTER_PAYMENT,
+        )
+        await _notify_realtime_delivery_failure(
+            db=db,
+            tenant_id=tenant_id,
+            account_id=account_id,
+            order_id=order_id,
+            xy_goods_id=xy_goods_id,
+            fail_reason=fail_reason,
+        )
+        _delivery_in_flight.discard(in_flight_key)
+        return
+
+    # 发货拦截规则（买家已有订单 / 未确认收货订单）
+    block_rule_reason = await _check_delivery_block_rules(
+        db, tenant_id, account_id, buyer_user_id, xy_goods_id, order_id,
+    )
+    if block_rule_reason:
+        fail_reason = f"{block_rule_reason}：已拦截发货"
+        await _safe_insert_delivery_record(
+            db, tenant_id, account_id, order_id, s_id, pnm_id,
+            buyer_user_id, buyer_user_name, xy_goods_id, buy_quantity,
+            rule_id=rule_id, delivery_type=MODE_KAMI,
+            content=None, status=3, fail_reason=fail_reason,
+            trigger_source=trigger_source,
+            delivery_mode=MODE_KAMI,
+            delivery_timing=rule.get("delivery_timing") or DELIVERY_TIMING_AFTER_PAYMENT,
+        )
+        await _notify_realtime_delivery_failure(
+            db=db,
+            tenant_id=tenant_id,
+            account_id=account_id,
+            order_id=order_id,
+            xy_goods_id=xy_goods_id,
+            fail_reason=fail_reason,
+        )
+        _delivery_in_flight.discard(in_flight_key)
+        return
+
+    # “先确认发货再发内容”开关：发送前先确认平台发货，失败则中止发送（不认领卡密）
+    should_abort, pre_resolved_order_id = await _pre_confirm_shipment_if_enabled(
+        db=db,
+        tenant_id=tenant_id,
+        account_id=account_id,
+        order_id=order_id,
+        s_id=s_id,
+        pnm_id=pnm_id,
+        buyer_user_id=buyer_user_id,
+        buyer_user_name=buyer_user_name,
+        xy_goods_id=xy_goods_id,
+        buy_quantity=buy_quantity,
+        rule=rule,
+        trigger_source=trigger_source,
+        delivery_type=MODE_KAMI,
+    )
+    if should_abort:
+        _delivery_in_flight.discard(in_flight_key)
+        return
+    pre_confirmed = pre_resolved_order_id is not None
+
     # Step 0: 自愈机制 - 回收历史遗留的孤儿卡密
     # 背景：旧版本 _execute_kami_delivery 在认领后（status=1）若发送/确认等步骤异常或容器重启，
     # 可能未触发 _safe_rollback_cards_by_ids，导致卡密永久卡在 status=1 状态。
@@ -2156,7 +2587,7 @@ async def _execute_kami_delivery(
 
     # Step 8: 确认发货（仅在发送成功时执行；order_id 为空时反查本地订单表）
     # 卡密已发送给买家，即使确认发货失败也不影响卡密状态（卡密已消费）
-    if send_ok:
+    if send_ok and not pre_confirmed:
         resolved_order_id = await _resolve_order_id_for_confirm(
             db, tenant_id, account_id, order_id, xy_goods_id, buyer_user_id,
         )
@@ -2237,6 +2668,13 @@ async def _execute_kami_delivery(
             except Exception as e:
                 logger.error("确认发货流程异常 tenantId=%d orderId=%s error=%s", tenant_id, resolved_order_id, e, exc_info=True)
                 # 确认发货异常不影响卡密已发送的事实，仅记录日志
+
+    if send_ok and pre_confirmed:
+        if pre_resolved_order_id:
+            await _backfill_delivery_record_order_id(
+                db, tenant_id, account_id,
+                pre_resolved_order_id, s_id, buyer_user_id, xy_goods_id,
+            )
 
     # 清理内存级去重标记
     _delivery_in_flight.discard(in_flight_key)
@@ -3089,5 +3527,3 @@ async def _insert_delivery_record(
         "发货记录已创建: accountId=%d orderId=%s type=%s status=%s",
         account_id, order_id, delivery_type, delivery_status
     )
-
-

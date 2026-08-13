@@ -16,6 +16,9 @@ public class AutoReplyRuleDTO {
     @NotNull(message = "请选择闲鱼账号")
     private Long accountId;
 
+    @Size(max = 64, message = "商品ID不能超过64个字符")
+    private String xyGoodsId;
+
     @NotBlank(message = "规则名称不能为空")
     @Size(max = 80, message = "规则名称不能超过80个字符")
     private String ruleName;
@@ -27,9 +30,11 @@ public class AutoReplyRuleDTO {
     @Size(max = 1000, message = "匹配关键词不能超过1000个字符")
     private String matchKeywords;
 
-    @NotBlank(message = "回复内容不能为空")
     @Size(max = 5000, message = "回复内容不能超过5000个字符")
     private String replyContent;
+
+    @Size(max = 500, message = "回复图片地址不能超过500个字符")
+    private String replyImage;
 
     @NotBlank(message = "回复模式不能为空")
     @Pattern(regexp = "text|ai", message = "回复模式不正确")
@@ -62,8 +67,19 @@ public class AutoReplyRuleDTO {
         return "ai".equalsIgnoreCase(matchType) || (matchKeywords != null && !matchKeywords.trim().isEmpty());
     }
 
+    @AssertTrue(message = "回复内容与回复图片不能同时为空")
+    public boolean isReplyPayloadValid() {
+        if ("ai".equalsIgnoreCase(replyMode)) {
+            return replyContent != null && !replyContent.trim().isEmpty();
+        }
+        return (replyContent != null && !replyContent.trim().isEmpty())
+            || (replyImage != null && !replyImage.trim().isEmpty());
+    }
+
     public Long getAccountId() { return accountId; }
     public void setAccountId(Long accountId) { this.accountId = accountId; }
+    public String getXyGoodsId() { return xyGoodsId; }
+    public void setXyGoodsId(String xyGoodsId) { this.xyGoodsId = xyGoodsId; }
     public String getRuleName() { return ruleName; }
     public void setRuleName(String ruleName) { this.ruleName = trimToNull(ruleName); }
     public String getMatchType() { return matchType; }
@@ -72,6 +88,8 @@ public class AutoReplyRuleDTO {
     public void setMatchKeywords(String matchKeywords) { this.matchKeywords = trimToNull(matchKeywords); }
     public String getReplyContent() { return replyContent; }
     public void setReplyContent(String replyContent) { this.replyContent = trimToNull(replyContent); }
+    public String getReplyImage() { return replyImage; }
+    public void setReplyImage(String replyImage) { this.replyImage = trimToNull(replyImage); }
     public String getReplyMode() { return replyMode; }
     public void setReplyMode(String replyMode) { this.replyMode = trimToNull(replyMode); }
     public Integer getStatus() { return status; }

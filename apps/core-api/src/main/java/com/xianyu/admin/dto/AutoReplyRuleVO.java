@@ -6,10 +6,12 @@ package com.xianyu.admin.dto;
 public class AutoReplyRuleVO {
     private Long id;
     private Long accountId;
+    private String xyGoodsId;
     private String ruleName;
     private String matchType;
     private String matchKeywords;
     private String replyContent;
+    private String replyImage;
     private String replyMode;
     private Integer status;
     private Integer priority;
@@ -22,6 +24,8 @@ public class AutoReplyRuleVO {
     public void setId(Long id) { this.id = id; }
     public Long getAccountId() { return accountId; }
     public void setAccountId(Long accountId) { this.accountId = accountId; }
+    public String getXyGoodsId() { return xyGoodsId; }
+    public void setXyGoodsId(String xyGoodsId) { this.xyGoodsId = xyGoodsId; }
     public String getRuleName() { return ruleName; }
     public void setRuleName(String ruleName) { this.ruleName = ruleName; }
     public String getMatchType() { return matchType; }
@@ -30,6 +34,8 @@ public class AutoReplyRuleVO {
     public void setMatchKeywords(String matchKeywords) { this.matchKeywords = matchKeywords; }
     public String getReplyContent() { return replyContent; }
     public void setReplyContent(String replyContent) { this.replyContent = replyContent; }
+    public String getReplyImage() { return replyImage; }
+    public void setReplyImage(String replyImage) { this.replyImage = replyImage; }
     public String getReplyMode() { return replyMode; }
     public void setReplyMode(String replyMode) { this.replyMode = replyMode; }
     public Integer getStatus() { return status; }

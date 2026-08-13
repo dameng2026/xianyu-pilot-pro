@@ -60,10 +60,12 @@ public class AutoReplyService {
         AutoReplyRule rule = new AutoReplyRule();
         rule.setTenantId(tenantId);
         rule.setAccountId(dto.getAccountId());
+        rule.setXyGoodsId(dto.getXyGoodsId());
         rule.setRuleName(dto.getRuleName());
         rule.setMatchType(dto.getMatchType());
         rule.setMatchKeywords(dto.getMatchKeywords());
         rule.setReplyContent(dto.getReplyContent());
+        rule.setReplyImage(dto.getReplyImage());
         rule.setReplyMode(dto.getReplyMode());
         rule.setStatus(dto.getStatus() != null ? dto.getStatus() : 1);
         rule.setPriority(dto.getPriority() != null ? dto.getPriority() : 0);
@@ -89,10 +91,12 @@ public class AutoReplyService {
         rule.setId(id);
         rule.setTenantId(tenantId);
         rule.setAccountId(dto.getAccountId() != null ? dto.getAccountId() : existing.getAccountId());
+        rule.setXyGoodsId(dto.getXyGoodsId() != null ? dto.getXyGoodsId() : existing.getXyGoodsId());
         rule.setRuleName(dto.getRuleName() != null ? dto.getRuleName() : existing.getRuleName());
         rule.setMatchType(dto.getMatchType() != null ? dto.getMatchType() : existing.getMatchType());
         rule.setMatchKeywords(dto.getMatchKeywords() != null ? dto.getMatchKeywords() : existing.getMatchKeywords());
         rule.setReplyContent(dto.getReplyContent() != null ? dto.getReplyContent() : existing.getReplyContent());
+        rule.setReplyImage(dto.getReplyImage() != null ? dto.getReplyImage() : existing.getReplyImage());
         rule.setReplyMode(dto.getReplyMode() != null ? dto.getReplyMode() : existing.getReplyMode());
         rule.setStatus(dto.getStatus() != null ? dto.getStatus() : existing.getStatus());
         rule.setPriority(dto.getPriority() != null ? dto.getPriority() : existing.getPriority());
@@ -121,10 +125,12 @@ public class AutoReplyService {
         AutoReplyRuleVO vo = new AutoReplyRuleVO();
         vo.setId(r.getId());
         vo.setAccountId(r.getAccountId());
+        vo.setXyGoodsId(r.getXyGoodsId());
         vo.setRuleName(r.getRuleName());
         vo.setMatchType(r.getMatchType());
         vo.setMatchKeywords(r.getMatchKeywords());
         vo.setReplyContent(r.getReplyContent());
+        vo.setReplyImage(r.getReplyImage());
         vo.setReplyMode(r.getReplyMode());
         vo.setStatus(r.getStatus());
         vo.setPriority(r.getPriority());

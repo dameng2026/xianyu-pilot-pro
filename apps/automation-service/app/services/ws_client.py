@@ -2062,28 +2062,47 @@ class XianyuWebSocketClient:
             peer_user_name = normalize_peer_name(raw_user_name)
             if not peer_user_name and peer_user_id.startswith("sid:"):
                 peer_user_name = "闲鱼买家"
-            await broadcaster.broadcast(self.tenant_id, "message", {
-                "accountId": self.account_id,
-                "sId": msg.get("sId", ""),
-                "sid": msg.get("sId", ""),
-                "pnmId": msg.get("pnmId", ""),
-                "senderUserId": sender_id,
-                "senderUserName": msg.get("senderUserName", ""),
-                "receiverUserId": receiver_id,
-                "peerUserId": peer_user_id,
-                "peerUserName": peer_user_name,
-                "peerNick": peer_user_name,
-                "msgContent": msg.get("msgContent", ""),
-                "message": msg.get("msgContent", ""),
-                "content": msg.get("msgContent", ""),
-                "contentType": msg.get("contentType", 1),
-                "messageTime": msg.get("messageTime", 0),
-                "direction": msg.get("direction", ""),
-                "reminderContent": msg.get("reminderContent", ""),
-                "reminderUrl": msg.get("reminderUrl", ""),
-                "xyGoodsId": msg.get("xyGoodsId", ""),
-                "readStatus": 1 if direction == "OUT" else 0,
-            })
+            # 消息过滤规则：命中 skip_notify 时跳过 SSE 广播（新消息仍正常入库）
+            should_broadcast = True
+            try:
+                async with async_session() as db:
+                    from .automation_runtime import _check_message_filter
+                    filter_hits = await _check_message_filter(
+                        db,
+                        self.tenant_id,
+                        self.account_id,
+                        str(msg.get("msgContent") or ""),
+                    )
+                    if "skip_notify" in filter_hits:
+                        should_broadcast = False
+            except Exception as filter_exc:
+                log_service_failure(
+                    logger, filter_exc, operation="check_message_filter_before_broadcast",
+                    tenant_id=self.tenant_id, account_id=self.account_id, level=logging.DEBUG,
+                )
+            if should_broadcast:
+                await broadcaster.broadcast(self.tenant_id, "message", {
+                    "accountId": self.account_id,
+                    "sId": msg.get("sId", ""),
+                    "sid": msg.get("sId", ""),
+                    "pnmId": msg.get("pnmId", ""),
+                    "senderUserId": sender_id,
+                    "senderUserName": msg.get("senderUserName", ""),
+                    "receiverUserId": receiver_id,
+                    "peerUserId": peer_user_id,
+                    "peerUserName": peer_user_name,
+                    "peerNick": peer_user_name,
+                    "msgContent": msg.get("msgContent", ""),
+                    "message": msg.get("msgContent", ""),
+                    "content": msg.get("msgContent", ""),
+                    "contentType": msg.get("contentType", 1),
+                    "messageTime": msg.get("messageTime", 0),
+                    "direction": msg.get("direction", ""),
+                    "reminderContent": msg.get("reminderContent", ""),
+                    "reminderUrl": msg.get("reminderUrl", ""),
+                    "xyGoodsId": msg.get("xyGoodsId", ""),
+                    "readStatus": 1 if direction == "OUT" else 0,
+                })
         except Exception as e:
             log_service_failure(
                 logger, e, operation="broadcast_ws_message",

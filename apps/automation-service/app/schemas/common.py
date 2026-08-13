@@ -104,6 +104,7 @@ class AutoReplyRuleReqDTO(CamelModel):
     match_type: Optional[str] = None
     match_keywords: Optional[str] = None
     reply_content: Optional[str] = None
+    reply_image: Optional[str] = None
 
 
 class AutoReplyRuleRespDTO(CamelModel):
@@ -114,6 +115,7 @@ class AutoReplyRuleRespDTO(CamelModel):
     match_type: Optional[str] = None
     match_keywords: Optional[str] = None
     reply_content: Optional[str] = None
+    reply_image: Optional[str] = None
     status: Optional[int] = None
 
 

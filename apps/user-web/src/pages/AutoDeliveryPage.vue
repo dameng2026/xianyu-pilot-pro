@@ -445,6 +445,22 @@
               </label>
             </div>
 
+            <div v-if="configTiming === 'payDelivery'" class="form-row">
+              <label>发货顺序</label>
+              <label class="checkbox-label">
+                <input v-model="configForm.confirmBeforeSend" type="checkbox" />
+                先确认发货再发送内容（平台确认失败则不发送，避免“发了卡却显示未发货”）
+              </label>
+            </div>
+
+            <div v-if="configTiming === 'payDelivery'" class="form-row">
+              <label>订单已关闭</label>
+              <label class="checkbox-label">
+                <input v-model="configForm.closedOrderStillSend" type="checkbox" />
+                订单已关闭仍补发卡券/内容（不确认平台发货，适合退款/关单后仍需交付虚拟商品）
+              </label>
+            </div>
+
             <div class="form-row">
               <label>失败重试次数</label>
               <input v-model.number="configForm.retryCount" type="number" min="0" max="10" class="input" style="max-width:120px" />
@@ -612,6 +628,8 @@ const configForm = reactive({
   content: '',
   footer: '',
   segmentSend: false,
+  confirmBeforeSend: false,
+  closedOrderStillSend: false,
   retryCount: 3,
   alertThreshold: 5,
   autoDisableOnLowStock: false
@@ -924,6 +942,8 @@ function fillConfigForm(config = {}) {
     content: config.content || '',
     footer: config.footer || '',
     segmentSend: !!config.segmentSend,
+    confirmBeforeSend: !!config.confirmBeforeSend,
+    closedOrderStillSend: !!config.closedOrderStillSend,
     retryCount: config.retryCount ?? 3,
     alertThreshold: config.alertThreshold ?? 5,
     autoDisableOnLowStock: !!config.autoDisableOnLowStock,
@@ -1161,6 +1181,8 @@ async function saveConfig() {
       content: configForm.content,
       footer: configForm.footer,
       segmentSend: configForm.segmentSend,
+      confirmBeforeSend: configForm.confirmBeforeSend,
+      closedOrderStillSend: configForm.closedOrderStillSend,
       retryCount: configForm.retryCount,
       alertThreshold: configForm.alertThreshold,
       autoDisableOnLowStock: configForm.autoDisableOnLowStock

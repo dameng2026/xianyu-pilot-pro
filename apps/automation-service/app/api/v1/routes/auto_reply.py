@@ -18,11 +18,12 @@ def rule_to_dto(rule: AutoReplyRule) -> AutoReplyRuleRespDTO:
     return AutoReplyRuleRespDTO(
         id=rule.id,
         xianyu_account_id=rule.account_id,
-        xy_goods_id=None,
         rule_name=rule.rule_name,
         match_type=rule.match_type,
         match_keywords=rule.match_keywords,
         reply_content=rule.reply_content,
+        xy_goods_id=rule.xy_goods_id,
+        reply_image=rule.reply_image,
         status=rule.status,
     )
 
@@ -59,10 +60,12 @@ async def save_auto_reply_rule(
         rule = AutoReplyRule(
             tenant_id=tenant_id,
             account_id=req.xianyu_account_id,
+            xy_goods_id=req.xy_goods_id,
             rule_name=req.rule_name,
             match_type=req.match_type,
             match_keywords=req.match_keywords,
             reply_content=req.reply_content,
+            reply_image=req.reply_image,
             status=1
         )
         db.add(rule)

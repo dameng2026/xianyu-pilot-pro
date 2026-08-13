@@ -386,6 +386,9 @@
                 {{ syncingOrderId === detailView.id ? '同步中...' : '同步当前订单' }}
               </AppButton>
               <AppButton @click="toggleManualDelivery(true)">手动发货</AppButton>
+              <AppButton v-if="!detailView.isRedFlower" :loading="redFlowerSubmitting" @click="requestRedFlower(detailView)">
+                {{ redFlowerSubmitting ? '发送中...' : '求小红花' }}
+              </AppButton>
             </div>
           </div>
         </section>
@@ -401,7 +404,7 @@ import AppButton from '../components/AppButton.vue'
 import Icon from '../components/Icon.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { getLiteAccounts } from '../api/accounts.js'
-import { getOrderDetail, getOrders, getTodayOrderAmount, manualDeliverOrder, syncOrder, syncOrders } from '../api/orders.js'
+import { getOrderDetail, getOrders, getTodayOrderAmount, manualDeliverOrder, requestOrderRedFlower, syncOrder, syncOrders } from '../api/orders.js'
 import { getDeliverySources } from '../api/autoDelivery.js'
 import { totalOf } from '../utils/apiData.js'
 import { accountName } from '../utils/format.js'
@@ -413,6 +416,7 @@ const selected = ref(null)
 const total = ref(0)
 const error = ref('')
 const success = ref('')
+const redFlowerSubmitting = ref(false)
 const accountsLoadError = ref('')
 const ordersLoadError = ref('')
 const detailLoadError = ref('')
@@ -817,6 +821,24 @@ async function syncCurrentOrder(row) {
     error.value = requestError.message || '提交订单同步失败'
   } finally {
     syncingOrderId.value = null
+  }
+}
+
+async function requestRedFlower(row) {
+  if (!window.confirm('确认向该买家发送“求小红花”消息吗？发送后订单将标记为已求小红花。')) return
+  clearNotice()
+  redFlowerSubmitting.value = true
+  try {
+    await requestOrderRedFlower(row.id)
+    success.value = '求小红花消息已发送'
+    if (detailView.value && String(detailView.value.id) === String(row.id)) {
+      detailView.value.isRedFlower = true
+    }
+    await loadOrders()
+  } catch (requestError) {
+    error.value = requestError.message || '发送求小红花消息失败'
+  } finally {
+    redFlowerSubmitting.value = false
   }
 }
 
