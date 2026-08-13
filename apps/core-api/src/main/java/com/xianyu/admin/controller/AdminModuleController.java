@@ -102,8 +102,8 @@ public class AdminModuleController {
                 cards.add(buildCard("todayOrderCount", "今日订单", queryCount(TODAY_ORDER_COUNT_SQL), "order", null, null));
                 cards.add(buildCard("todaySalesAmount", "今日销售额", querySum(TODAY_SALES_AMOUNT_SQL), "money", null, null));
                 cards.add(buildCard("autoReplyCount", "AI回复", queryCount("SELECT COUNT(*) FROM auto_reply_log WHERE created_time >= CURDATE() AND created_time < CURDATE() + INTERVAL 1 DAY"), "chat", null, null));
-                cards.add(buildCard("deliverySuccessCount", "发货成功", queryCount("SELECT COUNT(*) FROM delivery_record WHERE deleted=0 AND status=1"), "success", null, null));
-                cards.add(buildCard("deliveryFailCount", "发货失败", queryCount("SELECT COUNT(*) FROM delivery_record WHERE deleted=0 AND status=2"), "fail", null, null));
+                cards.add(buildCard("deliverySuccessCount", "发货成功", queryCount("SELECT COUNT(*) FROM delivery_record WHERE deleted=0 AND status=2"), "success", null, null));
+                cards.add(buildCard("deliveryFailCount", "发货失败", queryCount("SELECT COUNT(*) FROM delivery_record WHERE deleted=0 AND status=3"), "fail", null, null));
                 cards.add(buildCard("pendingDeliveryCount", "待发货", queryCount("SELECT COUNT(*) FROM xianyu_trade_order WHERE deleted=0 AND order_status='1'"), "pending", null, null));
             }
         } catch (Exception e) {

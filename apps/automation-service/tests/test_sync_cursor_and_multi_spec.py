@@ -1,0 +1,87 @@
+"""Regression tests for the production delivery incident fixes.
+
+1. WS sync cursor must advance from message times when the server omits maxPts
+   (previously the cursor stayed stale and the same 250 messages replayed forever,
+   so payment messages never reached auto-delivery / statement flows).
+2. Multi-spec (property + SKU) normalization must accept both detail-API and
+   publish-API shapes so local tables can be backfilled.
+"""
+
+import pytest
+
+from app.services.multi_spec_storage import (
+    normalize_detail_properties,
+    normalize_detail_sku_list,
+)
+from app.services.ws_client import XianyuWebSocketClient
+
+
+def _bare_client() -> XianyuWebSocketClient:
+    client = object.__new__(XianyuWebSocketClient)
+    client._sync_pts = 1000
+    client.account_id = 69
+    return client
+
+
+def test_sync_cursor_advances_from_message_time_when_max_pts_missing():
+    client = _bare_client()
+    client._advance_sync_pts_from_messages([
+        {"messageTime": 5},
+        {"messageTime": 10},
+        {"messageTime": 0},
+        {},
+    ])
+    # messageTime is ms; sync pts watermark is microseconds.
+    assert client._sync_pts == 10 * 1000
+
+
+def test_sync_cursor_never_moves_backwards():
+    client = _bare_client()
+    client._sync_pts = 20 * 1000
+    client._advance_sync_pts_from_messages([{"messageTime": 10}])
+    assert client._sync_pts == 20 * 1000
+
+
+def test_sync_cursor_ignores_missing_timestamps():
+    client = _bare_client()
+    client._advance_sync_pts_from_messages([{}, {"messageTime": 0}])
+    assert client._sync_pts == 1000
+
+
+def test_normalize_detail_sku_list_handles_both_shapes():
+    skus = normalize_detail_sku_list([
+        {
+            "skuId": "s1",
+            "priceInCent": "3000",
+            "quantity": "5",
+            "properties": [{"name": "size", "value": "L"}],
+        },
+        {
+            "skuId": "s2",
+            "price": "50",
+            "quantity": 2,
+            "propertyList": [{"propertyText": "color", "valueText": "red"}],
+        },
+    ])
+    assert skus[0]["propertyList"] == [{"propertyText": "size", "valueText": "L"}]
+    assert skus[0]["priceInCent"] == 3000
+    assert skus[1]["priceInCent"] == 5000
+    assert skus[1]["quantity"] == 2
+    assert skus[1]["propertyList"] == [{"propertyText": "color", "valueText": "red"}]
+
+
+def test_normalize_detail_properties_accepts_string_and_object_values():
+    groups = normalize_detail_properties([
+        {
+            "propertyName": "size",
+            "values": [
+                "L",
+                {"propertyValue": "M", "propertyValueImg": "img-m"},
+            ],
+        }
+    ])
+    assert len(groups) == 1
+    assert groups[0]["propertyValues"] == [
+        {"propertyValue": "L", "propertyValueImg": ""},
+        {"propertyValue": "M", "propertyValueImg": "img-m"},
+    ]

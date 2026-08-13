@@ -24,7 +24,7 @@ public class DeliveryStatementController {
     private static final Logger log = LoggerFactory.getLogger(DeliveryStatementController.class);
     private static final Set<String> ALLOWED_SCOPES = Set.of("all", "specific");
     private static final Set<String> ALLOWED_SESSION_STATUSES =
-            Set.of("", "declaring", "waiting", "confirmed", "cancelled");
+            Set.of("", "declaring", "waiting", "confirmed", "cancelled", "failed");
 
     private final JdbcTemplate jdbcTemplate;
     private final DeliveryStatementSessionService sessionService;

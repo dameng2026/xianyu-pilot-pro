@@ -51,7 +51,7 @@ public class DeliverySchedulerService {
     /**
      * 每 30 秒扫描一次待发货记录并执行发货
      */
-    @Scheduled(fixedRate = 30000)
+    @Scheduled(fixedRate = 10000)
     public void processPendingDeliveries() {
         try {
             int processed = executionService.processPendingDeliveries();
@@ -445,7 +445,7 @@ public class DeliverySchedulerService {
      * 每 60 秒扫描一次待发货订单，自动创建发货记录
      * 覆盖所有有自动发货配置的租户
      */
-    @Scheduled(fixedRate = 60000)
+    @Scheduled(fixedRate = 20000)
     public void autoScanPendingOrders() {
         try {
             // 获取所有有自动发货配置的租户

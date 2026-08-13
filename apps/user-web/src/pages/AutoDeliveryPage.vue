@@ -530,6 +530,7 @@ import { guardFeatureAction } from '../composables/featureGuard.js'
 import { getLiteAccounts } from '../api/accounts.js'
 import { getGoods } from '../api/goods.js'
 import { getCards } from '../api/cards.js'
+import { getFishShopDetail } from '../api/fishShop.js'
 import {
   batchDeleteDeliveryRules,
   batchGetGoodsDeliveryConfigs,
@@ -982,6 +983,13 @@ async function loadGoodsSkuData(goodsId) {
     const rules = rulesRes?.data || []
     skuList.value = Array.isArray(skus) ? skus : []
     skuRules.value = Array.isArray(rules) ? mergeSkuRules(skus, rules) : []
+
+    // 本地 xianyu_goods_sku 无数据时，尝试从闲鱼 editdetail 拉取多规格 SKU，
+    // 使自动发货页也能为多规格商品配置每个 SKU 的发货规则。
+    if (skuList.value.length === 0) {
+      await loadRemoteSkus(goodsId)
+      skuRules.value = mergeSkuRules(skuList.value, Array.isArray(rulesRes?.data) ? rulesRes.data : [])
+    }
   } catch (e) {
     // SKU 接口失败不影响主配置流程，仅记录告警
     skuError.value = e?.message || 'SKU 信息加载失败，多规格配置暂不可用'
@@ -989,6 +997,44 @@ async function loadGoodsSkuData(goodsId) {
     skuRules.value = []
   } finally {
     skuLoading.value = false
+  }
+}
+
+// 从闲鱼编辑详情接口拉取多规格 SKU（本地表为空时的兜底）
+async function loadRemoteSkus(goodsId) {
+  const goods = configTarget.value?.goods
+  if (!goods) return
+  const account = goods._account || {}
+  const looksMultiSpec =
+    Number(goods.skuCount) > 0 ||
+    String(goods.price || '').includes('~') ||
+    Boolean(account.fishShopUser)
+  if (!looksMultiSpec) return
+  try {
+    const res = await getFishShopDetail({
+      xianyuAccountId: Number(goods.accountId),
+      itemId: goods.externalGoodsId
+    })
+    const detail = res?.data
+    const list = Array.isArray(detail?.itemSkuList) ? detail.itemSkuList : []
+    if (!list.length) return
+    skuList.value = list.map(s => {
+      const propText = (Array.isArray(s.propertyList) ? s.propertyList : [])
+        .map(p => `${p.propertyText || ''}:${p.valueText || ''}`)
+        .join(' / ')
+      return {
+        skuId: s.skuId || '',
+        inventoryId: s.inventoryId || '',
+        propertyKey: propText,
+        propertyText: propText,
+        priceCent: Number(s.priceInCent) || 0,
+        quantity: Number(s.quantity) || 0
+      }
+    })
+    skuSuccess.value = '已从闲鱼加载多规格 SKU，可直接为每个 SKU 配置发货规则'
+    setTimeout(() => { skuSuccess.value = '' }, 4000)
+  } catch (e) {
+    skuError.value = '本地无规格数据且从闲鱼拉取失败：' + (e?.message || '请检查账号登录状态后重试')
   }
 }
 

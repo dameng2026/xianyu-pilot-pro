@@ -129,6 +129,42 @@ async def send_statement_and_create_session(
             "发送声明失败，跳过创建会话，按原流程发货 tenantId=%d accountId=%d orderId=%s",
             tenant_id, account_id, order_id,
         )
+        # 记录一条可见的 failed 会话，便于运营排查“声明已配置但未发出”的场景。
+        try:
+            await db.execute(
+                text("""
+                    INSERT INTO delivery_statement_session(
+                        tenant_id, account_id, order_id, buyer_id, buyer_nick,
+                        xy_goods_id, goods_title, s_id, pnm_id,
+                        statement_content, status, created_time, updated_time, deleted
+                    ) VALUES(
+                        :tid, :aid, :oid, :bid, :bnick,
+                        :gid, :gtitle, :sid, :pnm,
+                        :content, 'failed', NOW(), NOW(), 0
+                    )
+                """),
+                {
+                    "tid": tenant_id, "aid": account_id, "oid": order_id,
+                    "bid": buyer_user_id, "bnick": buyer_user_name,
+                    "gid": xy_goods_id, "gtitle": goods_title,
+                    "sid": s_id, "pnm": pnm_id,
+                    "content": content,
+                },
+            )
+            await db.commit()
+            logger.warning(
+                "发送声明失败，已记录 failed 会话 tenantId=%d accountId=%d orderId=%s",
+                tenant_id, account_id, order_id,
+            )
+        except Exception as persist_err:
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            logger.warning(
+                "记录 failed 声明会话失败 tenantId=%d accountId=%d orderId=%s error=%s",
+                tenant_id, account_id, order_id, str(persist_err)[:200],
+            )
         return False  # 发送失败，回退到原发货流程
 
     # 创建声明会话（status=waiting，已发送）

@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.List;
 
@@ -20,6 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -33,11 +36,14 @@ class XianyuGoodsServiceTest {
     @Mock
     private XianyuGoodsDeleteService deleteService;
 
+    @Mock
+    private JdbcTemplate jdbcTemplate;
+
     private XianyuGoodsService goodsService;
 
     @BeforeEach
     void setUp() {
-        goodsService = new XianyuGoodsService(goodsMapper, deleteService);
+        goodsService = new XianyuGoodsService(goodsMapper, deleteService, jdbcTemplate);
     }
 
     @Test
@@ -45,6 +51,7 @@ class XianyuGoodsServiceTest {
         XianyuGoods goods = buildGoods();
         when(goodsMapper.count(anyLong(), any(), any(), any(), any(), any())).thenReturn(1);
         when(goodsMapper.list(anyLong(), any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(List.of(goods));
+        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(List.of());
 
         PageResult<XianyuGoodsVO> result = goodsService.page(100L, 10L, null, null, null, 1, 10);
 
@@ -72,9 +79,11 @@ class XianyuGoodsServiceTest {
         goods.setTitle("商品详情");
         when(goodsMapper.findById(100L, 1L)).thenReturn(goods);
 
+        when(jdbcTemplate.queryForObject(anyString(), eq(Integer.class), any())).thenReturn(2);
         XianyuGoodsVO vo = goodsService.detail(100L, 1L);
 
         assertNotNull(vo);
+        assertEquals(2, vo.getSkuCount());
         assertEquals("商品详情", vo.getTitle());
     }
 

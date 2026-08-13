@@ -23,6 +23,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.entities import XianyuGoods, XianyuGoodsEditSnapshot
 from .xianyu_goods_sync import fetch_item_detail, XianyuRiskControlError
+from .multi_spec_storage import (
+    normalize_detail_properties,
+    normalize_detail_sku_list,
+    persist_skus_and_properties,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +108,20 @@ async def _build_snapshot_from_detail(
         prop_list = item_info.get("itemProperties") or item_info.get("properties") or []
         if isinstance(prop_list, list) and prop_list:
             snapshot_data["itemProperties"] = prop_list
+
+        # 同步 SKU / 规格到本地表（幂等），供商品编辑回显、商品管理 skuCount
+        # 与自动发货 SKU 配置面板复用。
+        normalized_skus = normalize_detail_sku_list(sku_list if isinstance(sku_list, list) else [])
+        normalized_props = normalize_detail_properties(prop_list if isinstance(prop_list, list) else [])
+        if normalized_skus or normalized_props:
+            await persist_skus_and_properties(
+                db,
+                tenant_id=tenant_id,
+                account_id=account_id,
+                external_goods_id=str(external_goods_id),
+                property_groups=normalized_props,
+                sku_list=normalized_skus,
+            )
 
     account_type = "fish_shop" if is_fish_shop else "normal"
     source = "detail_api"

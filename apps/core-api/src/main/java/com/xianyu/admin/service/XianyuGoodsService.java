@@ -8,6 +8,7 @@ import com.xianyu.admin.dto.XianyuGoodsVO;
 import com.xianyu.admin.dto.DeleteResultVO;
 import com.xianyu.admin.entity.XianyuGoods;
 import com.xianyu.admin.mapper.XianyuGoodsMapper;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -30,11 +31,14 @@ public class XianyuGoodsService {
 
     private final XianyuGoodsMapper goodsMapper;
     private final XianyuGoodsDeleteService deleteService;
+    private final JdbcTemplate jdbcTemplate;
 
     public XianyuGoodsService(XianyuGoodsMapper goodsMapper,
-                               XianyuGoodsDeleteService deleteService) {
+                               XianyuGoodsDeleteService deleteService,
+                               JdbcTemplate jdbcTemplate) {
         this.goodsMapper = goodsMapper;
         this.deleteService = deleteService;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     private static int feToDbStatus(int feStatus) {
@@ -110,6 +114,29 @@ public class XianyuGoodsService {
             deliveryRuleMap.putAll(latestRulePerGoods);
         }
 
+        Map<Long, Integer> skuCountByGoodsId = new HashMap<>();
+        if (!goodsIds.isEmpty()) {
+            try {
+                String placeholders = goodsIds.stream().map(ignored -> "?").collect(Collectors.joining(","));
+                List<Object> args = new ArrayList<>();
+                args.addAll(goodsIds);
+                List<Map<String, Object>> skuRows = jdbcTemplate.queryForList(
+                        "SELECT g.id AS goods_id, COUNT(s.id) AS sku_cnt "
+                        + "FROM xianyu_goods g LEFT JOIN xianyu_goods_sku s "
+                        + "  ON s.external_goods_id = g.external_goods_id AND s.deleted = 0 "
+                        + "WHERE g.deleted = 0 AND g.id IN (" + placeholders + ") GROUP BY g.id",
+                        args.toArray());
+                for (Map<String, Object> row : skuRows) {
+                    Object gidObj = row.get("goods_id");
+                    if (gidObj instanceof Number num) {
+                        skuCountByGoodsId.put(num.longValue(), ((Number) row.get("sku_cnt")).intValue());
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("查询商品 SKU 数量失败, errorType={}", e.getClass().getSimpleName());
+            }
+        }
+
         List<XianyuGoodsVO> records = new ArrayList<>();
         for (XianyuGoods g : list) {
             XianyuGoodsVO vo = toVO(g);
@@ -131,7 +158,7 @@ public class XianyuGoodsService {
             // 1-已开启，0-已关闭，null-未设置（继承账号级/全局）。
             vo.setXianyuAutoReplyOn(g.getAutoReplyEnabled());
 
-            vo.setSkuCount(0);
+            vo.setSkuCount(skuCountByGoodsId.getOrDefault(g.getId(), 0));
             records.add(vo);
         }
 
@@ -193,7 +220,15 @@ public class XianyuGoodsService {
             vo.setXianyuAutoReplyOn(0);
         }
 
-        vo.setSkuCount(0);
+        try {
+            Integer skuCnt = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM xianyu_goods_sku WHERE deleted = 0 AND external_goods_id = ?",
+                    Integer.class, goods.getExternalGoodsId());
+            vo.setSkuCount(skuCnt == null ? 0 : skuCnt);
+        } catch (Exception e) {
+            log.warn("查询商品 SKU 数量失败 goodsId={}, errorType={}", id, e.getClass().getSimpleName());
+            vo.setSkuCount(0);
+        }
         return vo;
     }
 

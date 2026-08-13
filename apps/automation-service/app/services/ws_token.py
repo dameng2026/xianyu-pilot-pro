@@ -18,6 +18,35 @@ from ..core.failure_logging import log_service_failure
 logger = logging.getLogger(__name__)
 
 
+# ============================================================
+# IP 级风控（RGV587_ERROR）熔断状态
+# 2026-08-11 事故：服务器 IP 被 Baxia 打入 IP 级禁令（RGV587_ERROR）
+# 时，所有账号的 Token API 全部返回 RGV587_ERROR。此时滑块求解
+# 必然失败（IP 级禁令下拖动被拒），持续启动求解器浪费资源且可能
+# 延长禁令。通过记录最近一次 RGV587 触发时间，captcha_queue.py
+# 在自动触发场景下跳过滑块求解入队，直到 IP 恢复。
+# 注意：仅 RGV587_ERROR / 被挤爆啦（IP 级）触发熔断，
+# FAIL_SYS_USER_VALIDATE（账号级）不触发。
+# 熔断不阻断 Token API 调用（WS 重连仍每 60 秒尝试），符合
+# cookie-valid-ws-persistence.md"不得长时间阻断 Cookie 有效账号 WS 重连"。
+# ============================================================
+_IP_RGV587_TRIPPED_AT = 0.0
+_IP_RGV587_BLOCK_WINDOW_SEC = 300  # 5 分钟窗口，窗口内无新触发自动解除
+
+
+def mark_ip_risk_tripped() -> None:
+    """记录 IP 级风控（RGV587_ERROR）触发时间。"""
+    global _IP_RGV587_TRIPPED_AT
+    _IP_RGV587_TRIPPED_AT = time.time()
+
+
+def ip_risk_active() -> bool:
+    """IP 级风控是否激活：5 分钟窗口内触发过 RGV587 即视为激活。"""
+    if _IP_RGV587_TRIPPED_AT <= 0:
+        return False
+    return (time.time() - _IP_RGV587_TRIPPED_AT) < _IP_RGV587_BLOCK_WINDOW_SEC
+
+
 def _try_x5sec_injection(cookie_str: str, m_h5_tk: str, proxies: Optional[dict] = None) -> Tuple[Optional[str], Optional[str]]:
     """x5sec 主方案：从 Redis 读取缓存的 x5sec，注入到 cookie 后重试 Token API。
 
@@ -333,6 +362,21 @@ def _try_silent_extract(cookie_str: str, m_h5_tk: str) -> Tuple[Optional[str], O
     """
     if not cookie_str or not m_h5_tk:
         return None, None
+
+    # 2026-08-11 修复：IP 级风控（RGV587）熔断期间跳过静默提取。
+    # 原因：IP 被 ban 时静默提取必然失败（浏览器导航 /im 跳转到 punish 页），
+    #       且 automation-service 每 8-12 秒一次的浏览器访问（40 账号轮询）
+    #       会持续刷新 Baxia 对 IP 的禁令标记，导致禁令迟迟不解除
+    #       （已超 08-07 的 3.2 小时先例）。熔断期间直接跳过，
+    #       把对 goofish 的高频浏览器访问降至零，加速禁令解除。
+    try:
+        if ip_risk_active():
+            logger.info(
+                "_try_silent_extract: IP 级风控（RGV587）熔断中，跳过静默提取（降低失败流量以加速禁令解除）"
+            )
+            return None, None
+    except Exception:
+        pass  # 熔断检查失败时放行（fail-open）
 
     # 2026-08-03 新增：静默提取冷却机制，避免同一账号短时间内重复请求耗尽并发槽位
     # 原因：crawler-service 的静默提取只有 4 个并发槽位（MAX_SILENT_EXTRACT_CONCURRENCY=4），
@@ -713,6 +757,10 @@ def _call_token_api(cookie_str: str, m_h5_tk: str, proxies: Optional[dict] = Non
                 "_call_token_api: 遇到 Baxia 风控 riskFlag=%s retCode=%s retLength=%d",
                 matched_kw, _ret_code, len(ret_str),
             )
+            # 2026-08-11：RGV587_ERROR / 被挤爆啦（IP 级风控）触发时记录全局熔断状态，
+            # captcha_queue 自动触发场景据此跳过滑块求解（IP 禁令下滑块必然失败）。
+            if "RGV587_ERROR" in ret_str or "被挤爆啦" in ret_str or "FAIL_SYS_RGV587_ERROR" in ret_str:
+                mark_ip_risk_tripped()
             # 2026-08-02 x5sec 主方案研究：记录完整响应，寻找不依赖滑块的 x5sec 获取方式
             try:
                 body_str = json.dumps(data, ensure_ascii=False)

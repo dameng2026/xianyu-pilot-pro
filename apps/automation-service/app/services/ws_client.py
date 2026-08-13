@@ -748,13 +748,33 @@ class XianyuWebSocketClient:
                     #       第 1 次 60s → 第 2 次 120s → 第 3 次 240s → 第 4 次 300s，
                     #       违反 60 秒规则，让 Cookie 有效账号长时间无法恢复 WS。
                     # 修复：Token 失败时固定 60 秒，不递增。
-                    reconnect_delay = RECONNECT_DELAY_ON_TOKEN_FAIL
-                    logger.warning(
-                        "WS Token 失败，将在 %d 秒后重连（固定 60 秒，符合 WS 持久化规则）accountId=%d",
-                        reconnect_delay, self.account_id,
-                    )
+                    # 2026-08-11 增强：IP 级风控（RGV587）熔断期间延长重试间隔至 5 分钟。
+                    # 原因：IP 被 ban 时所有账号 Token API 必然失败，85+ 账号每 60 秒重试
+                    #       产生约 200+ 次/分钟失败请求，持续刷新 Baxia 对 IP 的禁令标记，
+                    #       导致禁令迟迟不解除（已超 08-07 的 3.2 小时先例）。
+                    #       熔断期间 5 分钟重试一次，失败流量降为 1/5，加速禁令解除。
+                    #       熔断窗口由最后一次 RGV587 后 5 分钟决定，禁令解除后自动恢复 60 秒。
+                    ip_risk_blocked = False
+                    try:
+                        from .ws_token import ip_risk_active
+                        ip_risk_blocked = ip_risk_active()
+                    except Exception:
+                        pass  # 熔断检查失败时按 60 秒处理（fail-safe）
+                    if ip_risk_blocked:
+                        reconnect_delay = 300
+                        logger.warning(
+                            "WS Token 失败（IP 级风控熔断中），将在 %d 秒后重连 "
+                            "accountId=%d（降低失败流量以加速禁令解除）",
+                            reconnect_delay, self.account_id,
+                        )
+                    else:
+                        reconnect_delay = RECONNECT_DELAY_ON_TOKEN_FAIL
+                        logger.warning(
+                            "WS Token 失败，将在 %d 秒后重连（固定 60 秒，符合 WS 持久化规则）accountId=%d",
+                            reconnect_delay, self.account_id,
+                        )
                     await asyncio.sleep(reconnect_delay)
-                    # Token 失败时不做指数退避，保持 60 秒
+                    # Token 失败时不做指数退避，保持 60 秒（IP 熔断期间为 5 分钟）
                 else:
                     logger.info("WS 将在 %d 秒后重连 accountId=%d", reconnect_delay, self.account_id)
                     await asyncio.sleep(reconnect_delay)
@@ -1888,26 +1908,29 @@ class XianyuWebSocketClient:
         is_ack_diff = lwp == "/r/SyncStatus/ackDiff"
 
         # 提取同步响应中的高点水印
-        if is_ack_diff:
-            try:
-                body = data.get("body", {})
-                if isinstance(body, dict):
-                    sync_push = body.get("syncPushPackage") or body
-                    max_high_pts = sync_push.get("maxHighPts", 0)
-                    max_pts = sync_push.get("maxPts", 0)
-                    if max_high_pts:
-                        self._sync_high_pts = max_high_pts
-                    if max_pts:
-                        self._sync_pts = max_pts
+        # 读取同步响应中的高点水印（任何同步包类型都可能携带 maxPts/maxHighPts）。
+        # 之前只在 ackDiff 响应中读取，/s/sync 等响应无法推进游标，
+        # 导致 250 条积压消息反复重放，新消息永远到不了。
+        try:
+            body = data.get("body", {})
+            if isinstance(body, dict):
+                sync_push = body.get("syncPushPackage") or body
+                max_high_pts = sync_push.get("maxHighPts", 0)
+                max_pts = sync_push.get("maxPts", 0)
+                if max_high_pts:
+                    self._sync_high_pts = max_high_pts
+                if max_pts:
+                    self._sync_pts = max_pts
+                if max_pts or max_high_pts:
                     logger.info(
-                        "WS ackDiff 响应 accountId=%d maxHighPts=%s maxPts=%s",
-                        self.account_id, max_high_pts, max_pts
+                        "WS 同步响应 accountId=%d lwp=%s maxHighPts=%s maxPts=%s",
+                        self.account_id, lwp, max_high_pts, max_pts
                     )
-            except Exception as e:
-                log_service_failure(
-                    logger, e, operation="parse_ws_ack_diff",
-                    tenant_id=self.tenant_id, account_id=self.account_id, level=logging.WARNING,
-                )
+        except Exception as e:
+            log_service_failure(
+                logger, e, operation="parse_ws_sync_watermark",
+                tenant_id=self.tenant_id, account_id=self.account_id, level=logging.WARNING,
+            )
 
         result = parse_sync_package(data)
         if not result:
@@ -1928,6 +1951,10 @@ class XianyuWebSocketClient:
 
         messages = result.get("messages", [])
         ack_ids = result.get("ack_pnm_ids", [])
+
+        # 服务端在 /s/sync 等响应中往往不返回 maxPts，若不推进游标，
+        # 会永远重复回放同一批消息（通常 250 条封顶），新消息永远收不到。
+        self._advance_sync_pts_from_messages(messages)
 
         if not messages:
             body_keys = list((data.get("body") or {}).keys()) if isinstance(data.get("body"), dict) else []
@@ -2040,6 +2067,31 @@ class XianyuWebSocketClient:
             log_service_failure(
                 logger, e, operation="broadcast_ws_message",
                 tenant_id=self.tenant_id, account_id=self.account_id,
+            )
+
+    def _advance_sync_pts_from_messages(self, messages: list) -> None:
+        """以当前批次消息的最大 messageTime 推进同步游标。
+        messageTime 为毫秒，pts 水印为微秒，因此乘以 1000。"""
+        if not messages:
+            return
+        max_msg_pts = 0
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            ts = msg.get("messageTime") or 0
+            try:
+                ts = int(ts)
+            except (TypeError, ValueError):
+                continue
+            if ts > 0:
+                pts = ts * 1000
+                if pts > max_msg_pts:
+                    max_msg_pts = pts
+        if max_msg_pts > 0 and max_msg_pts > self._sync_pts:
+            self._sync_pts = max_msg_pts
+            logger.info(
+                "WS 同步游标前移 accountId=%d pts=%s（以当前批消息最大 messageTime 推进）",
+                self.account_id, max_msg_pts,
             )
 
     async def _handle_send_response(self, data: dict):

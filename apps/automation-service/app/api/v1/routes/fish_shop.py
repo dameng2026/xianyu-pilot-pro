@@ -57,6 +57,9 @@ from ....services.xianyu_goods_sync import (
     XianyuItemPublisher,
     extract_token_from_cookie,
 )
+from ....services.multi_spec_storage import (
+    persist_skus_and_properties as _persist_detail_skus,
+)
 from .internal import verify_internal_token
 
 logger = logging.getLogger(__name__)
@@ -804,6 +807,30 @@ async def get_fish_shop_detail(
                 "source": "local_fallback",
                 "warning": "未能从闲鱼获取最新编辑详情，当前展示为本地缓存数据",
             }
+
+        # 持久化 editdetail 返回的多规格数据到本地表，供商品编辑回显、
+        # 商品管理 skuCount 与自动发货 SKU 配置复用（幂等：先软删再插入）。
+        if edit_detail is not None:
+            edit_props = edit_detail.get("itemProperties") or []
+            edit_skus = edit_detail.get("itemSkuList") or []
+            if edit_props or edit_skus:
+                try:
+                    await _persist_detail_skus(
+                        db,
+                        tenant_id,
+                        account_id,
+                        str(item_id),
+                        edit_props,
+                        edit_skus,
+                    )
+                    await db.commit()
+                except Exception as persist_err:
+                    await db.rollback()
+                    logger.warning(
+                        "fish_shop_detail_persist_skus_failed item_id=%s err=%s",
+                        str(item_id)[:32],
+                        str(persist_err)[:200],
+                    )
 
         return ResultObject.success(detail)
     except Exception as exc:
