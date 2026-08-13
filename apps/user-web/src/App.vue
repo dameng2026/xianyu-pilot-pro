@@ -215,7 +215,7 @@ const allSettingKeys = [
 const authPages = ['login', 'register', 'forgot-password']
 const defaultPage = 'dashboard'
 const profileEntryStorageKey = 'xya_profile_initial_tab'
-const pagesWithEmbeddedTitle = new Set(['messages', 'message-center', 'delivery-statement', 'delivery-mall', 'feature-unavailable', 'card-warehouse', 'auto-delivery', 'refund-detail', 'settings-ai-cs', 'settings-kb', 'settings-notify', 'settings-sync', 'settings-about', 'growth-partner', 'supply-center', 'supply-center-products', 'supply-center-products-new', 'supply-center-products-edit'])
+const pagesWithEmbeddedTitle = new Set(['messages', 'message-center', 'delivery-statement', 'delivery-mall', 'feature-unavailable', 'card-warehouse', 'auto-delivery', 'refund-detail', 'settings-ai-cs', 'settings-kb', 'settings-notify', 'settings-sync', 'settings-about', 'growth-partner', 'supply-center', 'supply-center-products', 'supply-center-products-new', 'supply-center-products-edit', 'refund-cancel', 'fish-shop-browse', 'message-filters', 'default-reply'])
 // 功能开关检查跳过的页面：登录/注册/忘记密码/占位页/工作台（避免登录后卡死）/维护中页面
 const featureSwitchSkipPages = new Set(['login', 'register', 'forgot-password', 'feature-unavailable', 'dashboard', 'platform-connect', 'growth-partner', 'invite-poster'])
 const profileEntryTabs = new Set(['overview', 'security', 'token', 'recharge'])

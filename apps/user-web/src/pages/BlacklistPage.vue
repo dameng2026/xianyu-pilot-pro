@@ -7,6 +7,22 @@
           将反复退款、恶意骚扰或不想交易的买家加入黑名单后，系统会在自动发货前拦截，
           不发送卡密/内容，也不调用闲鱼确认发货接口，并在发货记录中写明拦截原因。
         </p>
+        <div class="bl-guide">
+          <div class="bl-guide-step">
+            <span class="bl-guide-num">1</span>
+            <span class="bl-guide-text">加入黑名单</span>
+          </div>
+          <span class="bl-guide-arrow">→</span>
+          <div class="bl-guide-step">
+            <span class="bl-guide-num">2</span>
+            <span class="bl-guide-text">自动发货前拦截</span>
+          </div>
+          <span class="bl-guide-arrow">→</span>
+          <div class="bl-guide-step">
+            <span class="bl-guide-num">3</span>
+            <span class="bl-guide-text">记录拦截原因</span>
+          </div>
+        </div>
       </div>
       <button type="button" class="bl-primary-btn" :disabled="!accounts.length" @click="openCreate">
         + 添加黑名单
@@ -37,7 +53,16 @@
         {{ loadError }}
         <button type="button" class="bl-link-btn" @click="loadList(true)">重试</button>
       </div>
-      <div v-else-if="!items.length" class="bl-state empty">暂无黑名单记录。</div>
+      <div v-else-if="!items.length" class="bl-state empty">
+        <div class="bl-empty-icon">🛡️</div>
+        <strong class="bl-empty-title">暂无黑名单记录</strong>
+        <p class="bl-empty-desc">
+          将反复退款、恶意骚扰的买家加入黑名单后，系统会在自动发货前拦截，不发送卡密/内容。
+        </p>
+        <button type="button" class="bl-primary-btn" :disabled="!accounts.length" @click="openCreate">
+          + 添加黑名单
+        </button>
+      </div>
       <div v-else class="bl-table-wrap">
         <table class="bl-table">
           <thead>
@@ -57,7 +82,10 @@
               <td>{{ accountLabel(item.accountId) }}</td>
               <td>{{ item.buyerUserId }}</td>
               <td>{{ item.buyerNickname || '—' }}</td>
-              <td>{{ item.goodsId ? goodsLabel(item.goodsId) : '全部商品' }}</td>
+              <td>
+                <span v-if="item.goodsId" class="bl-goods-badge">{{ goodsLabel(item.goodsId) }}</span>
+                <span v-else class="bl-goods-badge all">全部商品</span>
+              </td>
               <td class="bl-reason-cell" :title="item.reason">{{ item.reason || '—' }}</td>
               <td>
                 <button
@@ -361,6 +389,49 @@ onMounted(async () => {
   opacity: 0.94;
 }
 
+.bl-guide {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.bl-guide-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  padding: 5px 12px 5px 6px;
+}
+
+.bl-guide-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.bl-guide-text {
+  font-size: 12px;
+  line-height: 1.4;
+  opacity: 0.98;
+}
+
+.bl-guide-arrow {
+  font-size: 13px;
+  opacity: 0.7;
+}
+
 .card {
   background: #fff;
   border: 1px solid #e5e7eb;
@@ -473,6 +544,40 @@ onMounted(async () => {
   color: #dc2626;
 }
 
+.bl-state.empty {
+  color: #9ca3af;
+  padding: 56px 20px 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.bl-empty-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #fef2f2 0%, #f3e8ff 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  margin-bottom: 6px;
+}
+
+.bl-empty-title {
+  font-size: 16px;
+  color: #111827;
+}
+
+.bl-empty-desc {
+  margin: 0;
+  max-width: 460px;
+  font-size: 13px;
+  color: #6b7280;
+  line-height: 1.7;
+}
+
 .bl-table-wrap {
   overflow-x: auto;
 }
@@ -505,6 +610,24 @@ onMounted(async () => {
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.bl-goods-badge {
+  display: inline-block;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 12px;
+}
+
+.bl-goods-badge.all {
+  background: #f3f4f6;
+  color: #6b7280;
 }
 
 .bl-toggle {

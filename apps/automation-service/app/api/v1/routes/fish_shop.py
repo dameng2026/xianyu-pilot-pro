@@ -630,9 +630,12 @@ async def get_fish_shop_detail(
         # 3) 商品级编辑能力校验（V1.21，来自 itemExtendList.itemEdit / itemOperationInfo）
         #    can_edit=0 表示闲鱼标记此商品不可编辑，需返回 edit_note 提示
         #    can_edit 字段默认值为 1（旧数据或未同步时按可编辑处理，由后端再次校验）
+        #    allowNotEditable=true（自动发货页只读拉取规格用于配置发货规则）时跳过硬拒绝，
+        #    仍尝试从闲鱼读取 SKU 规格——读取规格不修改商品，不应受"可编辑"限制。
         can_edit = goods.can_edit if goods.can_edit is not None else 1
         edit_note = goods.edit_note or ""
-        if can_edit == 0:
+        allow_not_editable = bool(req.get("allowNotEditable") or req.get("allow_not_editable") or False)
+        if can_edit == 0 and not allow_not_editable:
             note_msg = edit_note or "当前商品暂不支持编辑"
             logger.info(
                 "fish_shop_detail_blocked item_id=%s reason=itemEdit_false note=%s",

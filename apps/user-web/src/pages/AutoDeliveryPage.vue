@@ -1021,6 +1021,7 @@ async function loadGoodsSkuData(goodsId) {
 }
 
 // 从闲鱼编辑详情接口拉取多规格 SKU（本地表为空时的兜底）
+// allowNotEditable=true：仅读取规格用于配置发货规则，不受商品"不可编辑"（can_edit=0）限制
 async function loadRemoteSkus(goodsId) {
   const goods = configTarget.value?.goods
   if (!goods) return
@@ -1033,28 +1034,49 @@ async function loadRemoteSkus(goodsId) {
   try {
     const res = await getFishShopDetail({
       xianyuAccountId: Number(goods.accountId),
-      itemId: goods.externalGoodsId
+      itemId: goods.externalGoodsId,
+      allowNotEditable: true
     })
     const detail = res?.data
     const list = Array.isArray(detail?.itemSkuList) ? detail.itemSkuList : []
-    if (!list.length) return
-    skuList.value = list.map(s => {
-      const propText = (Array.isArray(s.propertyList) ? s.propertyList : [])
-        .map(p => `${p.propertyText || ''}:${p.valueText || ''}`)
-        .join(' / ')
-      return {
-        skuId: s.skuId || '',
-        inventoryId: s.inventoryId || '',
-        propertyKey: propText,
-        propertyText: propText,
-        priceCent: Number(s.priceInCent) || 0,
-        quantity: Number(s.quantity) || 0
-      }
-    })
-    skuSuccess.value = '已从闲鱼加载多规格 SKU，可直接为每个 SKU 配置发货规则'
-    setTimeout(() => { skuSuccess.value = '' }, 4000)
+    if (list.length) {
+      skuList.value = list.map(s => {
+        const propText = (Array.isArray(s.propertyList) ? s.propertyList : [])
+          .map(p => `${p.propertyText || ''}:${p.valueText || ''}`)
+          .join(' / ')
+        return {
+          skuId: s.skuId || '',
+          inventoryId: s.inventoryId || '',
+          propertyKey: propText,
+          propertyText: propText,
+          priceCent: Number(s.priceInCent) || 0,
+          quantity: Number(s.quantity) || 0
+        }
+      })
+      skuSuccess.value = '已从闲鱼加载多规格 SKU，可直接为每个 SKU 配置发货规则'
+      setTimeout(() => { skuSuccess.value = '' }, 4000)
+      return
+    }
+    // 拉取成功但无 SKU 数据：按商品状态给出可读提示
+    if (detail?.canEdit === 0) {
+      const note = detail.editNote ? `（${detail.editNote}）` : ''
+      skuError.value = `该商品闲鱼暂不支持读取规格${note}，无法配置多规格发货规则`
+    } else if (detail?.simpleItem) {
+      // 单规格商品无需配置 SKU 发货规则，静默不提示
+    } else if (detail?.source === 'local_fallback') {
+      skuError.value = '未能从闲鱼获取该商品的多规格数据，请稍后在商品同步后重试'
+    } else {
+      skuError.value = '该商品没有可配置的多规格 SKU 数据'
+    }
   } catch (e) {
-    skuError.value = '本地无规格数据且从闲鱼拉取失败：' + (e?.message || '请检查账号登录状态后重试')
+    const rawMsg = e?.message || '请检查账号登录状态后重试'
+    if (rawMsg.includes('不是鱼小铺')) {
+      skuError.value = '当前账号非鱼小铺，无法从闲鱼拉取商品多规格数据'
+    } else if (rawMsg.includes('不支持当前商品') || rawMsg.includes('不支持当前类目')) {
+      skuError.value = '该商品闲鱼暂不支持读取规格，无法配置多规格发货规则'
+    } else {
+      skuError.value = '本地无规格数据且从闲鱼拉取失败：' + rawMsg
+    }
   }
 }
 

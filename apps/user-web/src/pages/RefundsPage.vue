@@ -1,5 +1,19 @@
 <template>
   <div class="refunds-page">
+    <!-- 页面级视图切换：退款申请 / 退款关单配置 -->
+    <div class="view-tabs">
+      <button
+        v-for="v in viewTabs"
+        :key="v.key"
+        type="button"
+        :class="['view-tab', { active: viewMode === v.key }]"
+        @click="switchView(v.key)"
+      >
+        {{ v.label }}
+      </button>
+    </div>
+
+    <template v-if="viewMode === 'refunds'">
     <div v-if="notice.text" class="global-notice" :class="notice.type">{{ notice.text }}</div>
 
     <!-- 顶部筛选区 -->
@@ -301,6 +315,11 @@
         </section>
       </div>
     </Teleport>
+    </template>
+
+    <template v-else>
+      <RefundCancelConfig />
+    </template>
   </div>
 </template>
 
@@ -309,6 +328,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 
 import AppButton from '../components/AppButton.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Pagination from '../components/Pagination.vue'
+import RefundCancelConfig from '../components/RefundCancelConfig.vue'
 import {
   getRefunds,
   getRefundSyncStatus,
@@ -324,6 +344,19 @@ import {
 
 // 路由跳转事件（App.vue 监听 navigate，调用 navigate() 切换 hash）
 const emit = defineEmits(['navigate'])
+
+// ============================================================
+// 页面级视图切换：退款申请 / 退款关单配置
+// ============================================================
+const viewMode = ref('refunds')
+const viewTabs = [
+  { key: 'refunds', label: '退款申请' },
+  { key: 'cancel', label: '退款关单' },
+]
+
+function switchView(key) {
+  viewMode.value = key
+}
 
 // ============================================================
 // 分类标签定义
@@ -949,6 +982,35 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .refunds-page { padding: 0 0 24px; }
+
+/* 页面级视图切换 */
+.view-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+  background: #eef1f7;
+  border-radius: 12px;
+  padding: 4px;
+  width: fit-content;
+}
+.view-tab {
+  padding: 8px 22px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: #526079;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.view-tab:hover { color: #16213e; }
+.view-tab.active {
+  background: #fff;
+  color: var(--primary, #2563eb);
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+}
 
 .global-notice {
   padding: 10px 14px;

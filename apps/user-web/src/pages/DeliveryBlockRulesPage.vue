@@ -8,6 +8,22 @@
           系统将拦截本次发货（不发送、不确认平台发货、不认领卡密），并在发货记录中写明原因。
           可针对全部账号或单个账号启用。
         </p>
+        <div class="dbr-guide">
+          <div class="dbr-guide-step">
+            <span class="dbr-guide-num">1</span>
+            <span class="dbr-guide-text">启用规则</span>
+          </div>
+          <span class="dbr-guide-arrow">→</span>
+          <div class="dbr-guide-step">
+            <span class="dbr-guide-num">2</span>
+            <span class="dbr-guide-text">自动发货前检查</span>
+          </div>
+          <span class="dbr-guide-arrow">→</span>
+          <div class="dbr-guide-step">
+            <span class="dbr-guide-num">3</span>
+            <span class="dbr-guide-text">命中即拦截</span>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -24,8 +40,10 @@
 
       <div v-if="loadError" class="dbr-error">{{ loadError }}</div>
 
-      <div class="dbr-rule-list">
+      <div v-if="loading" class="dbr-loading">规则加载中…</div>
+      <div v-else class="dbr-rule-list">
         <div class="dbr-rule-card">
+          <span class="dbr-rule-icon">🚫</span>
           <div class="dbr-rule-copy">
             <strong>买家已有其他订单</strong>
             <p>买家在当前账号下已有其他未关闭订单时，禁止本次自动发货，防止多单异常交易。</p>
@@ -42,6 +60,7 @@
         </div>
 
         <div class="dbr-rule-card">
+          <span class="dbr-rule-icon">⏳</span>
           <div class="dbr-rule-copy">
             <strong>买家存在未确认收货订单</strong>
             <p>买家在当前账号下存在已发货但未确认收货的订单时，禁止本次自动发货。</p>
@@ -175,6 +194,49 @@ onMounted(async () => {
   opacity: 0.94;
 }
 
+.dbr-guide {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.dbr-guide-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  padding: 5px 12px 5px 6px;
+}
+
+.dbr-guide-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  color: #d97706;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.dbr-guide-text {
+  font-size: 12px;
+  line-height: 1.4;
+  opacity: 0.98;
+}
+
+.dbr-guide-arrow {
+  font-size: 13px;
+  opacity: 0.7;
+}
+
 .card {
   background: #fff;
   border: 1px solid #e5e7eb;
@@ -223,15 +285,38 @@ onMounted(async () => {
   gap: 12px;
 }
 
+.dbr-loading {
+  padding: 28px 16px;
+  text-align: center;
+  color: #6b7280;
+  font-size: 13px;
+}
+
 .dbr-rule-card {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 14px;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
   padding: 14px 16px;
   background: #fafafa;
+}
+
+.dbr-rule-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: #fff7ed;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.dbr-rule-copy {
+  flex: 1;
+  min-width: 0;
 }
 
 .dbr-rule-copy strong {

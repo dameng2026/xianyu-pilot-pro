@@ -4,40 +4,69 @@
       <div class="arr-hero-copy">
         <h2>自动回复规则</h2>
         <p>
-          管理关键词/AI 自动回复规则：支持任意/全部/正则/AI 意图四种匹配模式，可配置安全模式、人工接管关键词、
-          议价底线与每日回复上限。规则按账号生效，同账号下优先级越高越先命中。
+          当买家发送的消息命中你设置的规则时，系统会自动回复对应内容；未命中时可按规则交给 AI 生成或转人工处理。
         </p>
+        <div class="arr-guide">
+          <div class="arr-guide-step">
+            <span class="arr-guide-num">1</span>
+            <span class="arr-guide-text">选择适用账号与商品</span>
+          </div>
+          <span class="arr-guide-arrow">→</span>
+          <div class="arr-guide-step">
+            <span class="arr-guide-num">2</span>
+            <span class="arr-guide-text">设置匹配关键词与回复内容</span>
+          </div>
+          <span class="arr-guide-arrow">→</span>
+          <div class="arr-guide-step">
+            <span class="arr-guide-num">3</span>
+            <span class="arr-guide-text">保存并开启规则即生效</span>
+          </div>
+        </div>
       </div>
-      <button type="button" class="arr-primary-btn" :disabled="!accounts.length" @click="openCreate">
-        + 新增规则
-      </button>
-      <div class="arr-hero-actions">
-        <button type="button" class="arr-hero-btn" :disabled="!filteredRules.length" @click="exportRulesCsv">
-          导出 CSV
+      <div class="arr-hero-right">
+        <button type="button" class="arr-primary-btn" :disabled="!accounts.length" @click="openCreate">
+          + 新增规则
         </button>
-        <button type="button" class="arr-hero-btn" :disabled="!accounts.length" @click="importInputRef?.click()">
-          导入 CSV
-        </button>
-        <input ref="importInputRef" type="file" accept=".csv,text/csv" class="hidden" @change="handleImportCsv" />
+        <div class="arr-hero-actions">
+          <button type="button" class="arr-hero-btn" :disabled="!filteredRules.length" @click="exportRulesCsv">
+            导出 CSV
+          </button>
+          <button type="button" class="arr-hero-btn" :disabled="!accounts.length" @click="importInputRef?.click()">
+            导入 CSV
+          </button>
+          <input ref="importInputRef" type="file" accept=".csv,text/csv" class="hidden" @change="handleImportCsv" />
+        </div>
       </div>
     </section>
 
     <section v-if="stats" class="arr-stats card">
       <div class="arr-stat">
-        <span>今日命中</span>
-        <strong>{{ stats.todayCount ?? 0 }}</strong>
+        <span class="arr-stat-icon">⚡</span>
+        <div class="arr-stat-body">
+          <span>今日命中</span>
+          <strong>{{ stats.todayCount ?? 0 }}</strong>
+        </div>
       </div>
       <div class="arr-stat">
-        <span>统计天数</span>
-        <strong>{{ stats.days ?? 0 }}</strong>
+        <span class="arr-stat-icon">📅</span>
+        <div class="arr-stat-body">
+          <span>统计天数</span>
+          <strong>{{ stats.days ?? 0 }}</strong>
+        </div>
       </div>
       <div class="arr-stat">
-        <span>自动发送</span>
-        <strong>{{ stats.actions?.auto_send_allowed ?? 0 }}</strong>
+        <span class="arr-stat-icon">📤</span>
+        <div class="arr-stat-body">
+          <span>自动发送</span>
+          <strong>{{ stats.actions?.auto_send_allowed ?? 0 }}</strong>
+        </div>
       </div>
       <div class="arr-stat">
-        <span>建议人工</span>
-        <strong>{{ stats.actions?.suggest_only ?? 0 }}</strong>
+        <span class="arr-stat-icon">👤</span>
+        <div class="arr-stat-body">
+          <span>建议人工</span>
+          <strong>{{ stats.actions?.suggest_only ?? 0 }}</strong>
+        </div>
       </div>
       <button type="button" class="arr-ghost-btn" @click="openPreview">命中预览</button>
     </section>
@@ -91,8 +120,26 @@
         {{ loadError }}
         <button type="button" class="arr-link-btn" @click="loadRules(current)">重试</button>
       </div>
-      <div v-else-if="!filteredRules.length" class="arr-state empty">
-        暂无自动回复规则，点击右上角「新增规则」开始配置。
+      <div v-else-if="!rules.length" class="arr-empty">
+        <div class="arr-empty-icon">⚡</div>
+        <strong class="arr-empty-title">还没有自动回复规则</strong>
+        <p class="arr-empty-desc">
+          设置规则后，买家消息命中关键词即自动回复，第一时间响应咨询、避免漏单。
+        </p>
+        <div class="arr-empty-steps">
+          <span><b>1</b> 选择账号与商品</span>
+          <span><b>2</b> 设置关键词与回复</span>
+          <span><b>3</b> 保存并开启</span>
+        </div>
+        <button type="button" class="arr-primary-btn" :disabled="!accounts.length" @click="openCreate">
+          + 创建第一条规则
+        </button>
+        <button v-if="!accounts.length" type="button" class="arr-link-btn" @click="loadAccounts">重新加载账号</button>
+      </div>
+      <div v-else-if="!filteredRules.length" class="arr-empty">
+        <div class="arr-empty-icon">🔍</div>
+        <strong class="arr-empty-title">未找到匹配的规则</strong>
+        <p class="arr-empty-desc">当前本地搜索没有命中任何规则，试试其他关键词。</p>
       </div>
       <div v-else class="arr-table-wrap">
         <table class="arr-table">
@@ -118,8 +165,12 @@
                 <span class="arr-type-badge">{{ matchTypeLabel(rule.matchType) }}</span>
               </td>
               <td class="arr-keyword-cell" :title="rule.matchKeywords">{{ rule.matchKeywords || '—' }}</td>
-              <td>{{ rule.replyMode === 'ai' ? 'AI 生成' : '固定文本' }}</td>
-              <td>{{ rule.priority ?? 0 }}</td>
+              <td>
+                <span class="arr-mode-badge" :class="rule.replyMode === 'ai' ? 'ai' : 'text'">
+                  {{ rule.replyMode === 'ai' ? 'AI 生成' : '固定文本' }}
+                </span>
+              </td>
+              <td><span class="arr-priority-pill">{{ rule.priority ?? 0 }}</span></td>
               <td>
                 <button
                   type="button"
@@ -193,98 +244,122 @@
           <button type="button" class="arr-icon-btn" aria-label="关闭" @click="closeForm">×</button>
         </div>
         <div class="arr-modal-body">
-          <label class="arr-field">
-            <span>规则名称 <em>*</em></span>
-            <input v-model="form.ruleName" type="text" placeholder="例如：常见咨询自动应答" maxlength="80" />
-          </label>
-          <label class="arr-field">
-            <span>适用账号 <em>*</em></span>
-            <select v-model="form.accountId" :disabled="!!editing">
-              <option v-for="acc in accounts" :key="acc.id" :value="acc.id">
-                {{ acc.nickname || acc.accountName || `账号 ${acc.id}` }}
-              </option>
-            </select>
-          </label>
-          <label class="arr-field">
-            <span>绑定商品（可选）</span>
-            <select v-model="form.xyGoodsId">
-              <option value="">通用（所有商品）</option>
-              <option v-for="p in products" :key="p.goodsId" :value="p.goodsId">
-                {{ p.title || p.goodsId }}（{{ p.goodsId }}）
-              </option>
-            </select>
-            <small>绑定后仅该商品会话命中此规则；优先级高于通用规则。</small>
-          </label>
-          <div class="arr-grid">
+          <div class="arr-form-section">
+            <div class="arr-form-section-title">
+              <span>基础信息</span>
+              <small>确定规则作用在哪个账号与商品</small>
+            </div>
             <label class="arr-field">
-              <span>匹配模式 <em>*</em></span>
-              <select v-model="form.matchType">
-                <option value="any">任意关键词（默认）</option>
-                <option value="all">全部关键词</option>
-                <option value="regex">正则表达式</option>
-                <option value="ai">AI 意图（全部消息）</option>
+              <span>规则名称 <em>*</em></span>
+              <input v-model="form.ruleName" type="text" placeholder="例如：常见咨询自动应答" maxlength="80" />
+            </label>
+            <label class="arr-field">
+              <span>适用账号 <em>*</em></span>
+              <select v-model="form.accountId" :disabled="!!editing">
+                <option v-for="acc in accounts" :key="acc.id" :value="acc.id">
+                  {{ acc.nickname || acc.accountName || `账号 ${acc.id}` }}
+                </option>
               </select>
             </label>
             <label class="arr-field">
-              <span>回复模式 <em>*</em></span>
-              <select v-model="form.replyMode">
-                <option value="text">固定文本</option>
-                <option value="ai">AI 生成</option>
+              <span>绑定商品（可选）</span>
+              <select v-model="form.xyGoodsId">
+                <option value="">通用（所有商品）</option>
+                <option v-for="p in products" :key="p.goodsId" :value="p.goodsId">
+                  {{ p.title || p.goodsId }}（{{ p.goodsId }}）
+                </option>
               </select>
+              <small>绑定后仅该商品会话命中此规则；优先级高于通用规则。</small>
             </label>
           </div>
-          <label v-if="form.matchType !== 'ai'" class="arr-field">
-            <span>匹配关键词 <em>*</em></span>
-            <textarea
-              v-model="form.matchKeywords"
-              rows="3"
-              placeholder="多个关键词用逗号或换行分隔；all 模式需全部命中，regex 模式每行一个正则"
-            />
-          </label>
-          <label class="arr-field">
-            <span>回复内容 <em>*</em></span>
-            <textarea
-              v-model="form.replyContent"
-              rows="4"
-              placeholder="支持变量：{send_user_name} 买家昵称、{send_user_id} 买家ID、{send_message} 买家消息；用 ###### 分隔可拆分为多条消息；图片关键词可留空"
-            />
-          </label>
-          <label class="arr-field">
-            <span>回复图片（图片关键词，可选）</span>
-            <div class="arr-image-row">
-              <input v-model="form.replyImage" type="text" placeholder="本地图片地址或闲鱼CDN图片URL" />
-              <label class="arr-file-btn">
-                上传图片
-                <input type="file" accept="image/*" :disabled="uploading" @change="handleImageUpload" />
+
+          <div class="arr-form-section">
+            <div class="arr-form-section-title">
+              <span>匹配与回复</span>
+              <small>设置买家消息如何命中、回复什么内容</small>
+            </div>
+            <div class="arr-grid">
+              <label class="arr-field">
+                <span>匹配模式 <em>*</em></span>
+                <select v-model="form.matchType">
+                  <option value="any">任意关键词（默认）</option>
+                  <option value="all">全部关键词</option>
+                  <option value="regex">正则表达式</option>
+                  <option value="ai">AI 意图（全部消息）</option>
+                </select>
+              </label>
+              <label class="arr-field">
+                <span>回复模式 <em>*</em></span>
+                <select v-model="form.replyMode">
+                  <option value="text">固定文本</option>
+                  <option value="ai">AI 生成</option>
+                </select>
               </label>
             </div>
-            <img v-if="form.replyImage" :src="form.replyImage" alt="回复图片预览" class="arr-image-preview" />
-            <small>文本模式且填写图片时，命中关键词会先发图片再发文本；AI 模式忽略图片。</small>
-          </label>
-          <div class="arr-grid">
-            <label class="arr-field">
-              <span>优先级</span>
-              <input v-model.number="form.priority" type="number" min="0" max="9999" />
+            <label v-if="form.matchType !== 'ai'" class="arr-field">
+              <span>匹配关键词 <em>*</em></span>
+              <textarea
+                v-model="form.matchKeywords"
+                rows="3"
+                placeholder="多个关键词用逗号或换行分隔；all 模式需全部命中，regex 模式每行一个正则"
+              />
             </label>
             <label class="arr-field">
-              <span>每日回复上限（0 不限）</span>
-              <input v-model.number="form.maxDailyReplies" type="number" min="0" max="10000" />
+              <span>回复内容 <em>*</em></span>
+              <textarea
+                v-model="form.replyContent"
+                rows="4"
+                placeholder="支持变量：{send_user_name} 买家昵称、{send_user_id} 买家ID、{send_message} 买家消息；用 ###### 分隔可拆分为多条消息；图片关键词可留空"
+              />
+            </label>
+            <label class="arr-field">
+              <span>回复图片（图片关键词，可选）</span>
+              <div class="arr-image-row">
+                <input v-model="form.replyImage" type="text" placeholder="本地图片地址或闲鱼CDN图片URL" />
+                <label class="arr-file-btn">
+                  上传图片
+                  <input type="file" accept="image/*" :disabled="uploading" @change="handleImageUpload" />
+                </label>
+              </div>
+              <img v-if="form.replyImage" :src="form.replyImage" alt="回复图片预览" class="arr-image-preview" />
+              <small>文本模式且填写图片时，命中关键词会先发图片再发文本；AI 模式忽略图片。</small>
             </label>
           </div>
-          <div class="arr-grid">
-            <label class="arr-field">
-              <span>人工接管关键词</span>
-              <input v-model="form.handoffKeywords" type="text" placeholder="例如：退款,投诉,平台介入" />
-            </label>
-            <label class="arr-field">
-              <span>议价底线（选填）</span>
-              <input v-model.number="form.priceFloor" type="number" min="0" step="0.01" />
+
+          <div class="arr-form-section">
+            <div class="arr-form-section-title">
+              <span>高级选项（可选）</span>
+              <small>控制优先级、每日上限与安全策略</small>
+            </div>
+            <div class="arr-grid">
+              <label class="arr-field">
+                <span>优先级</span>
+                <input v-model.number="form.priority" type="number" min="0" max="9999" />
+                <small>数字越大越先命中</small>
+              </label>
+              <label class="arr-field">
+                <span>每日回复上限（0 不限）</span>
+                <input v-model.number="form.maxDailyReplies" type="number" min="0" max="10000" />
+              </label>
+            </div>
+            <div class="arr-grid">
+              <label class="arr-field">
+                <span>人工接管关键词</span>
+                <input v-model="form.handoffKeywords" type="text" placeholder="例如：退款,投诉,平台介入" />
+                <small>命中后不再自动回复，转人工处理</small>
+              </label>
+              <label class="arr-field">
+                <span>议价底线（选填）</span>
+                <input v-model.number="form.priceFloor" type="number" min="0" step="0.01" />
+                <small>低于此价的议价消息自动建议人工</small>
+              </label>
+            </div>
+            <label class="arr-switch">
+              <input v-model="form.safeMode" type="checkbox" :true-value="1" :false-value="0" />
+              <span>安全模式：命中人工接管关键词或高风险消息时仅建议不自动发送</span>
             </label>
           </div>
-          <label class="arr-switch">
-            <input v-model="form.safeMode" type="checkbox" :true-value="1" :false-value="0" />
-            <span>安全模式：命中人工接管关键词或高风险消息时仅建议不自动发送</span>
-          </label>
+
           <p v-if="formError" class="arr-error">{{ formError }}</p>
         </div>
         <div class="arr-modal-foot">
@@ -897,6 +972,57 @@ onMounted(async () => {
   opacity: 0.94;
 }
 
+.arr-hero-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.arr-guide {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.arr-guide-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  padding: 5px 12px 5px 6px;
+}
+
+.arr-guide-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  color: #1f6feb;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.arr-guide-text {
+  font-size: 12px;
+  line-height: 1.4;
+  opacity: 0.98;
+}
+
+.arr-guide-arrow {
+  font-size: 13px;
+  opacity: 0.7;
+}
+
 .arr-hero-actions {
   display: flex;
   gap: 10px;
@@ -937,25 +1063,48 @@ onMounted(async () => {
 .arr-stats {
   display: flex;
   align-items: center;
-  gap: 28px;
+  gap: 24px;
   padding: 14px 18px;
   flex-wrap: wrap;
 }
 
 .arr-stat {
   display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.arr-stat-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: #eef5ff;
+  font-size: 17px;
+  flex-shrink: 0;
+}
+
+.arr-stat-body {
+  display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-.arr-stat span {
+.arr-stat-body > span {
   font-size: 12px;
   color: #6b7280;
 }
 
-.arr-stat strong {
+.arr-stat-body strong {
   font-size: 20px;
   color: #111827;
+  line-height: 1.1;
+}
+
+.arr-stats .arr-ghost-btn {
+  margin-left: auto;
 }
 
 .arr-toolbar {
@@ -1004,6 +1153,12 @@ onMounted(async () => {
 
 .arr-field textarea {
   resize: vertical;
+}
+
+.arr-field small {
+  font-size: 12px;
+  color: #8a94a6;
+  line-height: 1.5;
 }
 
 .arr-field input:focus,
@@ -1161,6 +1316,72 @@ onMounted(async () => {
   color: #dc2626;
 }
 
+.arr-empty {
+  padding: 56px 20px 48px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.arr-empty-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #eef5ff 0%, #f3e8ff 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  margin-bottom: 6px;
+}
+
+.arr-empty-title {
+  font-size: 16px;
+  color: #111827;
+}
+
+.arr-empty-desc {
+  margin: 0;
+  max-width: 460px;
+  font-size: 13px;
+  color: #6b7280;
+  line-height: 1.7;
+}
+
+.arr-empty-steps {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin: 8px 0 14px;
+}
+
+.arr-empty-steps span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  background: #fafafa;
+  font-size: 12px;
+  color: #4b5563;
+}
+
+.arr-empty-steps b {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #1f6feb;
+  color: #fff;
+  font-size: 11px;
+}
+
 .arr-table-wrap {
   overflow-x: auto;
 }
@@ -1202,6 +1423,34 @@ onMounted(async () => {
   background: #f3f4f6;
   color: #374151;
   font-size: 12px;
+}
+
+.arr-mode-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.arr-mode-badge.text {
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.arr-mode-badge.ai {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.arr-priority-pill {
+  display: inline-block;
+  min-width: 32px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f3f4f6;
+  color: #6b7280;
+  font-size: 12px;
+  text-align: center;
 }
 
 .arr-toggle {
@@ -1287,6 +1536,39 @@ onMounted(async () => {
   line-height: 1;
   color: #9ca3af;
   cursor: pointer;
+}
+
+.arr-form-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #eceff3;
+  border-radius: 12px;
+  background: #fcfcfd;
+}
+
+.arr-form-section + .arr-form-section {
+  margin-top: 2px;
+}
+
+.arr-form-section-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.arr-form-section-title span {
+  font-size: 14px;
+  font-weight: 600;
+  color: #16213e;
+}
+
+.arr-form-section-title small {
+  font-size: 12px;
+  color: #8a94a6;
 }
 
 .arr-modal-body {

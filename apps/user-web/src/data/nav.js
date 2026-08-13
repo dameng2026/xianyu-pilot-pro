@@ -17,10 +17,8 @@ export const navCategories = [
       { key: 'accounts', label: '闲鱼账号', icon: 'users' },
       { key: 'orders', label: '订单管理', icon: 'record' },
       { key: 'refunds', label: '退款管理', icon: 'refund' },
-      { key: 'refund-cancel', label: '退款关单', icon: 'refund' },
       { key: 'rates', label: '评价管理', icon: 'circle' },
-      { key: 'fish-shop-data', label: '鱼小铺数据分析', icon: 'data' },
-      { key: 'fish-shop-browse', label: '流量分布', icon: 'data' }
+      { key: 'fish-shop-data', label: '鱼小铺数据分析', icon: 'data' }
     ]
   },
   {
@@ -42,8 +40,6 @@ export const navCategories = [
       { key: 'messages', label: '在线消息', icon: 'chat' },
       { key: 'auto-reply', label: '自动回复', icon: 'reply' },
       { key: 'auto-reply-rules', label: '回复规则', icon: 'rule' },
-      { key: 'message-filters', label: '消息过滤', icon: 'filter' },
-      { key: 'default-reply', label: '默认回复', icon: 'reply' },
       { key: 'settings-ai-cs', label: 'AI客服配置', icon: 'ai' },
       { key: 'settings-kb', label: '客服知识库', icon: 'library' }
     ]
@@ -54,12 +50,12 @@ export const navCategories = [
     icon: 'delivery',
     items: [
       { key: 'auto-delivery', label: '自动发货', icon: 'truck' },
-      { key: 'delivery-block-rules', label: '发货拦截规则', icon: 'shield' },
       { key: 'delivery-source-library', label: '货源库', icon: 'library' },
       { key: 'card-warehouse', label: '卡密仓库', icon: 'key' },
-      { key: 'blacklist', label: '买家黑名单', icon: 'block' },
       { key: 'delivery-statement', label: '发货声明', icon: 'document' },
-      { key: 'delivery-records', label: '发货记录', icon: 'record' }
+      { key: 'delivery-records', label: '发货记录', icon: 'record' },
+      { key: 'blacklist', label: '买家黑名单', icon: 'block' },
+      { key: 'delivery-block-rules', label: '发货拦截规则', icon: 'shield' }
     ]
   },
   {

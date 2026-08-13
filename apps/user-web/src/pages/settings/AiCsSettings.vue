@@ -232,6 +232,16 @@
           </div>
         </CardPanel>
 
+        <!-- 默认回复 -->
+        <CardPanel title="默认回复" desc="未命中关键词且 AI 未回复时，按账号发送兜底回复，避免买家消息无人响应" style="margin-top:16px">
+          <DefaultReplySection />
+        </CardPanel>
+
+        <!-- 消息过滤 -->
+        <CardPanel title="消息过滤" desc="按账号和关键词屏蔽骚扰、广告或系统提示类消息，命中后不触发自动回复或消息提醒" style="margin-top:16px">
+          <MessageFiltersSection />
+        </CardPanel>
+
         <div class="aics-actions">
           <button type="button" class="aics-save-btn" :disabled="saving || !settingsAvailable" @click="save">{{ saving ? '保存中...' : '保存配置' }}</button>
           <button type="button" class="aics-test-btn" :disabled="testing || !settingsAvailable" @click="openTestPanel">{{ testing ? '测试中...' : '测试 AI 回复' }}</button>
@@ -300,6 +310,8 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import CardPanel from '../../components/CardPanel.vue'
+import DefaultReplySection from '../../components/DefaultReplySection.vue'
+import MessageFiltersSection from '../../components/MessageFiltersSection.vue'
 import { getBusinessSettings, saveBusinessSettings, testAiCustomerService, getAiCsDefaults, uploadKnowledgeBase } from '../../api/businessSettings.js'
 import { ensureAiTokenBalance } from '../../utils/aiTokenGuard.js'
 import { confirmAction } from '../../utils/confirmAction.js'
