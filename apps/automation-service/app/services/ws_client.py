@@ -1911,26 +1911,32 @@ class XianyuWebSocketClient:
         # 读取同步响应中的高点水印（任何同步包类型都可能携带 maxPts/maxHighPts）。
         # 之前只在 ackDiff 响应中读取，/s/sync 等响应无法推进游标，
         # 导致 250 条积压消息反复重放，新消息永远到不了。
-        try:
-            body = data.get("body", {})
-            if isinstance(body, dict):
-                sync_push = body.get("syncPushPackage") or body
-                max_high_pts = sync_push.get("maxHighPts", 0)
-                max_pts = sync_push.get("maxPts", 0)
-                if max_high_pts:
-                    self._sync_high_pts = max_high_pts
-                if max_pts:
-                    self._sync_pts = max_pts
-                if max_pts or max_high_pts:
-                    logger.info(
-                        "WS 同步响应 accountId=%d lwp=%s maxHighPts=%s maxPts=%s",
-                        self.account_id, lwp, max_high_pts, max_pts
-                    )
-        except Exception as e:
-            log_service_failure(
-                logger, e, operation="parse_ws_sync_watermark",
-                tenant_id=self.tenant_id, account_id=self.account_id, level=logging.WARNING,
-            )
+        # 仅 ackDiff 和 /s/sync 属于同一同步域，信任它们的 maxPts/maxHighPts；
+        # /s/vulcan 等响应的 maxPts 是另一个水印域，可能比当前游标更旧，
+        # 用它覆盖会把同步游标往回拉，导致新消息在该域内得不到推送。
+        sync_domain = lwp in ("/r/SyncStatus/ackDiff", "/s/sync")
+        if sync_domain:
+            try:
+                body = data.get("body", {})
+                if isinstance(body, dict):
+                    sync_push = body.get("syncPushPackage") or body
+                    max_high_pts = sync_push.get("maxHighPts", 0)
+                    max_pts = sync_push.get("maxPts", 0)
+                    if max_high_pts and max_high_pts > self._sync_high_pts:
+                        self._sync_high_pts = max_high_pts
+                    if max_pts and max_pts > self._sync_pts:
+                        self._sync_pts = max_pts
+                    if max_pts or max_high_pts:
+                        logger.info(
+                            "WS 同步响应 accountId=%d lwp=%s maxHighPts=%s maxPts=%s",
+                            self.account_id, lwp, max_high_pts, max_pts
+                        )
+            except Exception as e:
+                log_service_failure(
+                    logger, e, operation="parse_ws_sync_watermark",
+                    tenant_id=self.tenant_id, account_id=self.account_id, level=logging.WARNING,
+                )
+
 
         result = parse_sync_package(data)
         if not result:
