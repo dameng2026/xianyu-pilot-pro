@@ -137,6 +137,36 @@ def normalize_detail_properties(property_groups: Iterable[Any]) -> list[dict]:
     return result
 
 
+def derive_properties_from_skus(sku_list: Iterable[dict]) -> list[dict]:
+    """Derive property groups from SKU propertyList when the detail API omits
+    itemProperties (a common editdetail quirk)."""
+    groups: dict[str, list[str]] = {}
+    for sku in sku_list:
+        if not isinstance(sku, dict):
+            continue
+        for prop in sku.get("propertyList") or []:
+            if not isinstance(prop, dict):
+                continue
+            name = _safe_str(prop.get("propertyText"))
+            value = _safe_str(prop.get("valueText"))
+            if not name or not value:
+                continue
+            values = groups.setdefault(name, [])
+            if value not in values:
+                values.append(value)
+    return [
+        {
+            "propertyName": name,
+            "supportImage": False,
+            "propertyValues": [
+                {"propertyValue": value, "propertyValueImg": ""}
+                for value in values
+            ],
+        }
+        for name, values in groups.items()
+    ]
+
+
 def build_property_key(prop_list: list) -> str:
     """Build the deterministic property key used for SKU matching."""
     from .fish_shop_publish import build_property_key as _build

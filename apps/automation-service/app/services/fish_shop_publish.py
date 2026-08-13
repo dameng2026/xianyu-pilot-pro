@@ -1099,6 +1099,32 @@ def _parse_item_sku_list(item_sku_list: Any) -> List[dict]:
     return parsed
 
 
+def _derive_properties_from_skus(sku_list: list) -> list:
+    """从 SKU 的 propertyList 推导规格组（propertyName + 唯一值）。"""
+    groups: dict[str, list] = {}
+    for sku in sku_list:
+        if not isinstance(sku, dict):
+            continue
+        for prop in sku.get("propertyList", []) or []:
+            if not isinstance(prop, dict):
+                continue
+            name = _safe_str(prop.get("propertyText"))
+            value = _safe_str(prop.get("valueText"))
+            if not name or not value:
+                continue
+            values = groups.setdefault(name, [])
+            if value not in values:
+                values.append(value)
+    return [
+        {
+            "propertyName": name,
+            "supportImage": False,
+            "propertyValues": [{"propertyValue": value, "propertyValueImg": ""} for value in values],
+        }
+        for name, values in groups.items()
+    ]
+
+
 def parse_edit_detail_response(result: dict) -> dict:
     """
     将 editdetail 接口响应映射为项目统一商品编辑模型。
@@ -1166,6 +1192,11 @@ def parse_edit_detail_response(result: dict) -> dict:
     item_properties = _parse_item_properties(data.get("itemProperties"))
     property_image_list = _parse_property_image_list(data.get("propertyImageList"))
     item_sku_list = _parse_item_sku_list(data.get("itemSkuList"))
+
+    # 部分 editdetail 响应只返回 SKU 的 propertyList，不返回 itemProperties，
+    # 导致编辑页/多规格配置页拿不到规格类型。从 SKU propertyList 推导规格组。
+    if not item_properties and item_sku_list:
+        item_properties = _derive_properties_from_skus(item_sku_list)
 
     # 是否多规格商品
     is_multi_spec = bool(item_properties) and bool(item_sku_list)

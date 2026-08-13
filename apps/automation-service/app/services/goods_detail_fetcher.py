@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.entities import XianyuGoods, XianyuGoodsEditSnapshot
 from .xianyu_goods_sync import fetch_item_detail, XianyuRiskControlError
 from .multi_spec_storage import (
+    derive_properties_from_skus,
     normalize_detail_properties,
     normalize_detail_sku_list,
     persist_skus_and_properties,
@@ -113,6 +114,8 @@ async def _build_snapshot_from_detail(
         # 与自动发货 SKU 配置面板复用。
         normalized_skus = normalize_detail_sku_list(sku_list if isinstance(sku_list, list) else [])
         normalized_props = normalize_detail_properties(prop_list if isinstance(prop_list, list) else [])
+        if not normalized_props and normalized_skus:
+            normalized_props = derive_properties_from_skus(normalized_skus)
         if normalized_skus or normalized_props:
             await persist_skus_and_properties(
                 db,

@@ -10,6 +10,7 @@
 import pytest
 
 from app.services.multi_spec_storage import (
+    derive_properties_from_skus,
     normalize_detail_properties,
     normalize_detail_sku_list,
 )
@@ -84,4 +85,32 @@ def test_normalize_detail_properties_accepts_string_and_object_values():
     assert groups[0]["propertyValues"] == [
         {"propertyValue": "L", "propertyValueImg": ""},
         {"propertyValue": "M", "propertyValueImg": "img-m"},
+    ]
+
+
+def test_derive_properties_from_skus_when_item_properties_missing():
+    skus = normalize_detail_sku_list([
+        {
+            "skuId": "s1",
+            "priceInCent": 150,
+            "quantity": 100,
+            "propertyList": [{"propertyText": "版本", "valueText": "标准版"}],
+        },
+        {
+            "skuId": "s2",
+            "priceInCent": 250,
+            "quantity": 50,
+            "propertyList": [{"propertyText": "版本", "valueText": "高级版"}],
+        },
+    ])
+    groups = derive_properties_from_skus(skus)
+    assert groups == [
+        {
+            "propertyName": "版本",
+            "supportImage": False,
+            "propertyValues": [
+                {"propertyValue": "标准版", "propertyValueImg": ""},
+                {"propertyValue": "高级版", "propertyValueImg": ""},
+            ],
+        }
     ]
