@@ -114,3 +114,39 @@ def test_derive_properties_from_skus_when_item_properties_missing():
             ],
         }
     ]
+
+
+class _FakeRedis:
+    def __init__(self):
+        self.data = {}
+
+    def set(self, key, value, ex=None):
+        self.data[key] = value
+
+    def get(self, key):
+        return self.data.get(key)
+
+
+def test_ip_risk_breaker_survives_restart_via_redis(monkeypatch):
+    import time
+
+    from app.services import ws_token
+
+    fake = _FakeRedis()
+    monkeypatch.setattr(
+        "app.services.x5sec_cache_client._get_redis_client",
+        lambda: fake,
+    )
+    ws_token._IP_RGV587_TRIPPED_AT = 0.0
+
+    ws_token.mark_ip_risk_tripped()
+    assert ws_token.ip_risk_active()
+
+    # Simulate a process restart: in-memory state is gone, Redis still holds it.
+    ws_token._IP_RGV587_TRIPPED_AT = 0.0
+    assert ws_token.ip_risk_active()
+
+    # Once the window expires, the breaker is inactive again.
+    fake.data[ws_token._IP_RGV587_REDIS_KEY] = str(int(time.time()) - 1000)
+    ws_token._IP_RGV587_TRIPPED_AT = 0.0
+    assert not ws_token.ip_risk_active()

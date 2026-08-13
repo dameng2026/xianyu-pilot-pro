@@ -2810,6 +2810,20 @@ export async function solveGoofishSlider(options: SlideSolveOptions = {}): Promi
         {
           // 2026-08-03 修复：提取 x5sec + 缓存 + 确保 cookies 包含 x5sec
           const { cookies, x5sec } = await exportCookiesAndX5sec(context, options.cookieStr);
+          // 2026-08-11 修复"假成功"：拖动后 checkSolved 判定通过但未获得 x5sec 时，
+          // 视为 Baxia 验证被拒（拒绝后滑块弹窗被移除），不得判定成功——
+          // 无 x5sec 的 cookies 无法通过 Token API 验证，WS 重连必然失败。
+          if (!x5sec) {
+            console.warn('[SliderSolver] ⚠ checkSolved 判定通过但未获得 x5sec（假成功），继续重试');
+            attemptsDetail.push({
+              attemptNo: attempt, solveScheme: 'playwright', dragMethod, speedStrategy,
+              success: false, durationMs: Date.now() - attemptStartTime,
+              errorMessage: '滑块通过但无 x5sec（Baxia 验证被拒）',
+            });
+            needReloadForRefresh = true;
+            attempt--;
+            continue;
+          }
           return {
             ok: true,
             solved: true,

@@ -32,16 +32,43 @@ logger = logging.getLogger(__name__)
 # ============================================================
 _IP_RGV587_TRIPPED_AT = 0.0
 _IP_RGV587_BLOCK_WINDOW_SEC = 300  # 5 分钟窗口，窗口内无新触发自动解除
+_IP_RGV587_REDIS_KEY = "ip_risk:rgv587_tripped_at"  # Redis 持久化，避免重启后熔断状态丢失导致爆发重连
+
+
+def _redis_client_or_none():
+    """延迟引入 x5sec Redis 客戗端，失败时返回 None。"""
+    try:
+        from .x5sec_cache_client import _get_redis_client
+        return _get_redis_client()
+    except Exception:
+        return None
 
 
 def mark_ip_risk_tripped() -> None:
-    """记录 IP 级风控（RGV587_ERROR）触发时间。"""
+    """记录 IP 级风控（RGV587_ERROR）触发时间，并持久化到 Redis。"""
     global _IP_RGV587_TRIPPED_AT
     _IP_RGV587_TRIPPED_AT = time.time()
+    try:
+        client = _redis_client_or_none()
+        if client is not None:
+            client.set(_IP_RGV587_REDIS_KEY, str(int(time.time())), ex=_IP_RGV587_BLOCK_WINDOW_SEC + 30)
+    except Exception as e:
+        logger.debug("mark_ip_risk_tripped: Redis 持久化失败: %s", e)
 
 
 def ip_risk_active() -> bool:
-    """IP 级风控是否激活：5 分钟窗口内触发过 RGV587 即视为激活。"""
+    """IP 级风控是否激活：5 分钟窗口内触发过 RGV587 即视为激活。
+    优先读 Redis（重启后熔断状态不丢失），再回落内存。"""
+    global _IP_RGV587_TRIPPED_AT
+    if _IP_RGV587_TRIPPED_AT <= 0:
+        try:
+            client = _redis_client_or_none()
+            if client is not None:
+                raw = client.get(_IP_RGV587_REDIS_KEY)
+                if raw:
+                    _IP_RGV587_TRIPPED_AT = float(raw)
+        except Exception:
+            pass
     if _IP_RGV587_TRIPPED_AT <= 0:
         return False
     return (time.time() - _IP_RGV587_TRIPPED_AT) < _IP_RGV587_BLOCK_WINDOW_SEC
@@ -543,6 +570,8 @@ H_API = {
 # 代理缓存：{ "proxy_url": "http://ip:port", "ip": "1.2.3.4", "fetched_at": timestamp }
 _proxy_cache: dict = {}
 _PROXY_CACHE_TTL = 120  # 2 分钟
+_proxy_fetch_failure_at = 0.0
+_PROXY_FETCH_FAILURE_COOLDOWN = 30  # 源缺乏/过期时的拉取冷却（秒）
 
 
 def _get_residential_proxy() -> Optional[dict]:
@@ -564,6 +593,11 @@ def _get_residential_proxy() -> Optional[dict]:
         else:
             logger.debug("_get_residential_proxy: 缓存代理已过期，重新获取")
 
+    # 源缺乏/过期时避免每次都拉取（降低无效请求和日志噪音）
+    global _proxy_fetch_failure_at
+    if _proxy_fetch_failure_at > 0 and now - _proxy_fetch_failure_at < _PROXY_FETCH_FAILURE_COOLDOWN:
+        return None
+
     crawler_base = os.environ.get("CRAWLER_SERVICE_URL", "http://localhost:3001").rstrip("/")
     proxy_url = f"{crawler_base}/api/proxy/get"
     internal_token = os.environ.get("INTERNAL_API_TOKEN", "dev-only-internal-api-token-change-me-32-chars")
@@ -575,11 +609,19 @@ def _get_residential_proxy() -> Optional[dict]:
             timeout=5,
         )
         if resp.status_code != 200:
-            logger.debug("_get_residential_proxy: crawler-service 返回 %d", resp.status_code)
+            _proxy_fetch_failure_at = now
+            logger.warning(
+                "_get_residential_proxy: crawler-service 返回 %d，住宅IP代理暂无法使用，Token 请求将直连服务器 IP（有被 RGV587 风控的风险）",
+                resp.status_code,
+            )
             return None
         data = resp.json()
         if not data.get("ok") or not data.get("proxy"):
-            logger.debug("_get_residential_proxy: 无可用代理 reason=%s", data.get("reason", "unknown"))
+            _proxy_fetch_failure_at = now
+            logger.warning(
+                "_get_residential_proxy: 无可用代理 reason=%s（源配额耗尽/套餐过期），Token 请求将直连服务器 IP（有被 RGV587 风控的风险）",
+                data.get("reason", "unknown"),
+            )
             return None
         proxy_info = data["proxy"]
         proxy_entry = {

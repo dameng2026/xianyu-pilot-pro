@@ -3528,10 +3528,17 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
             result["error"] = "Cookie Session 已过期，页面被重定向到登录页，请重新扫码登录闲鱼账号获取新 Cookie"
             return result
         if slider_info and slider_info.get("already_solved"):
-            log("✓ 用户已手动完成滑块验证 / 无需验证")
-            result.update({"ok": True, "solved": True, "captchaDetected": True})
+            # 2026-08-11 修复假成功：already_solved 但未获得 x5sec 且无会话恢复信号时，
+            # 视为滑块弹窗被拒后消失，不得判定成功。
+            result.pop("x5sec", None)
+            result.pop("cookies", None)
             await _collect_cookies_and_x5sec(ctx, page, result, captured_x5sec.get("value", ""))
-            return result
+            if result.get("x5sec") or net_success.get("flag"):
+                log("✓ 用户已手动完成滑块验证 / 无需验证")
+                net_success["flag"] = False
+                result.update({"ok": True, "solved": True, "captchaDetected": True})
+                return result
+            log("⚠ already_solved 但无 x5sec（假成功），继续等待新滑块")
 
         if not slider_info:
             last_error = "未找到滑块按钮"
@@ -3557,9 +3564,16 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
         if await check_solved(page):
             detected2, _ = await detect_captcha_container(page)
             if not detected2:
-                result.update({"ok": True, "solved": True, "captchaDetected": True})
+                # 2026-08-11 修复"假成功"：滑块弹窗消失但未获得 x5sec 且无会话恢复信号时，
+                # 视为 Baxia 验证被拒（拒绝后弹窗被移除），不得判定成功。
+                result.pop("x5sec", None)
+                result.pop("cookies", None)
                 await _collect_cookies_and_x5sec(ctx, page, result, captured_x5sec.get("value", ""))
-                return result
+                if result.get("x5sec") or net_success.get("flag"):
+                    net_success["flag"] = False
+                    result.update({"ok": True, "solved": True, "captchaDetected": True})
+                    return result
+                log("⚠ 拖动前 check_solved 判定通过但无 x5sec（假成功），继续执行拖动流程")
 
         pre_path = os.path.join(screenshot_dir, f"slider-pre-{attempt}-{int(time.time())}.png")
         try:
@@ -3673,9 +3687,28 @@ async def solve_in_context(ctx, target_url: str, max_retries: int) -> dict:
                     continue
             except Exception:
                 pass
-            log("✓✓✓ 滑块验证通过！")
-            result.update({"ok": True, "solved": True, "captchaDetected": True})
+            # 2026-08-11 修复"假成功"：check_solved 判定通过但未获得 x5sec
+            # 且无会话恢复信号时，视为假成功（拖动被 Baxia 拒绝后滑块弹窗消失
+            # 会触发此路径），不得判定成功——无 x5sec 的 cookies 无法通过
+            # Token API 验证，WS 重连必然失败。
+            result.pop("x5sec", None)
+            result.pop("cookies", None)
             await _collect_cookies_and_x5sec(ctx, page, result, captured_x5sec.get("value", ""))
+            if not (result.get("x5sec") or net_success.get("flag")):
+                log("⚠ check_solved 判定通过但未获得 x5sec 且无会话恢复信号（假成功），继续重试")
+                net_success["flag"] = False
+                last_error = "假成功：滑块弹窗消失但未下发 x5sec（Baxia 验证被拒）"
+                clicked = await click_retry_if_needed(page)
+                if clicked:
+                    log("假成功判定后已点击重试，等待新滑块...")
+                    await asyncio.sleep(2.0 + random.random() * 1.5)
+                    new_info = await wait_for_slider_ready(page, max_wait_ms=8000)
+                    if new_info and not new_info.get("is_login_page") and not new_info.get("already_solved"):
+                        await asyncio.sleep(0.5 + random.random() * 0.8)
+                continue
+            log("✓✓✓ 滑块验证通过！")
+            net_success["flag"] = False
+            result.update({"ok": True, "solved": True, "captchaDetected": True})
             return result
 
         last_error = f"第 {attempt} 次拖动未通过"
@@ -4002,15 +4035,6 @@ async def _semi_auto_human_fallback(
             # 检测当前页面是否已通过验证
             solved = await check_solved(page)
             if solved:
-                elapsed = int(timeout_sec - (deadline - time.time()))
-                log(f"✓ 人工拖拽成功！耗时 {elapsed}s")
-                solve_result.update({
-                    "solved": True,
-                    "ok": True,
-                    "engine": "Playwright+Human",
-                    "humanFallback": True,
-                    "humanSolveDurationSec": elapsed,
-                })
                 # 导出最新 cookie
                 try:
                     fresh = await export_cookies(ctx)
@@ -4033,6 +4057,24 @@ async def _semi_auto_human_fallback(
                     if m and m.group(1):
                         solve_result["x5sec"] = m.group(1)
                         log(f"🔑 [x5sec] 半自动兜底从 cookies 字符串提取成功! value长度={len(m.group(1))}")
+                # 2026-08-11 修复假成功：人工拖拽判定通过但无 x5sec 时
+                # 不得判定成功（无 x5sec 的 cookies 无法通过 Token API 验证），
+                # 继续等待直到超时返回原失败结果。
+                if not solve_result.get("x5sec"):
+                    log("⚠ 半自动兜底 check_solved 判定通过但无 x5sec（假成功），继续等待")
+                    solve_result.pop("x5sec", None)
+                    solve_result.pop("cookies", None)
+                    await asyncio.sleep(2.0)
+                    continue
+                elapsed = int(timeout_sec - (deadline - time.time()))
+                log(f"✓ 人工拖拽成功！耗时 {elapsed}s")
+                solve_result.update({
+                    "solved": True,
+                    "ok": True,
+                    "engine": "Playwright+Human",
+                    "humanFallback": True,
+                    "humanSolveDurationSec": elapsed,
+                })
                 return solve_result
         except Exception as e:
             log(f"半自动检测异常（继续等待）: {e}")

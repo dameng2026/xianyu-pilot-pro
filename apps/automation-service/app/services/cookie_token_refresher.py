@@ -686,9 +686,19 @@ async def _do_mh5tk_refresh(state: AccountRefreshState, cookie_str: str) -> bool
 
 
 async def _do_ws_token_refresh(state: AccountRefreshState, cookie_str: str, m_h5_tk: str) -> bool:
-    """websocket_token 刷新：10-14 小时随机"""
-    from .ws_token import get_ws_token_with_refreshed_m_h5_tk
-
+    """刷新 WS Token；IP 级风控熔断期间跳过，避免刷新禁令。"""
+    try:
+        from .ws_token import ip_risk_active
+        if ip_risk_active():
+            logger.warning(
+                "WS Token 刷新跳过：IP 级风控（RGV587）熔断中 accountId=%d",
+                state.account_id,
+            )
+            state.last_ws_token_refresh_ok = False
+            state.last_error = "IP 级风控熔断，暂停 WS Token 刷新"
+            return False
+    except Exception:
+        pass
     try:
         access_token, effective_m_h5_tk, error_type, refreshed_cookie = await asyncio.wait_for(
             asyncio.to_thread(get_ws_token_with_refreshed_m_h5_tk, cookie_str, m_h5_tk),

@@ -824,6 +824,11 @@ async def auto_start_all() -> None:
     ws_manager.set_message_callback(on_message_callback)
 
     try:
+        from .ws_token import ip_risk_active
+    except Exception:
+        ip_risk_active = lambda: False
+
+    try:
         async with async_session() as db:
             # 仅重置无有效 auth 记录但 ws_status=1 的残留账号（auth 被删除或 Cookie 被清空）
             await db.execute(
@@ -879,6 +884,20 @@ async def auto_start_all() -> None:
 
             logger.info("自动启动 %d 个账号的 WebSocket 连接", len(accounts))
 
+            # === IP 级风控（RGV587）熔断等待 ===
+            # 重启后若服务器 IP 仍在禁令期，立即批量连接会触发 Token API 爆发，
+            # 必然再次 RGV587 并延长禁令。先等熔断窗口结束，再开始连接。
+            try:
+                from .ws_token import ip_risk_active, _IP_RGV587_BLOCK_WINDOW_SEC
+                if ip_risk_active():
+                    wait_sec = int(_IP_RGV587_BLOCK_WINDOW_SEC) + 5
+                    logger.warning(
+                        "检测到 IP 级风控（RGV587）熔断，自动启动延迟 %d 秒后再连接账号", wait_sec,
+                    )
+                    await asyncio.sleep(wait_sec)
+            except Exception:
+                pass
+
             for acct in accounts:
                 account_id = acct["account_id"]
                 tenant_id = acct["tenant_id"]
@@ -916,7 +935,15 @@ async def auto_start_all() -> None:
                     )
                     await db.commit()
 
-                await asyncio.sleep(1)
+                # 分散启动：每个账号随机间隔 2-5 秒，避免 50 个账号在短时间内爆发调用 Token API
+                # 引发闲鱼 IP 级风控（RGV587）。若连接过程中熔断触发，加倍等待。
+                if ip_risk_active():
+                    logger.warning(
+                        "自动启动中碰到 IP 级风控熔断 accountId=%d，等待 60 秒后继续", account_id,
+                    )
+                    await asyncio.sleep(60)
+                else:
+                    await asyncio.sleep(random.uniform(2.0, 5.0))
     except Exception as exc:
         logger.error("自动启动 WebSocket 异常: %s", exc, exc_info=True)
 

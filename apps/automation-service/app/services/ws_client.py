@@ -761,7 +761,7 @@ class XianyuWebSocketClient:
                     except Exception:
                         pass  # 熔断检查失败时按 60 秒处理（fail-safe）
                     if ip_risk_blocked:
-                        reconnect_delay = 300
+                        reconnect_delay = 600
                         logger.warning(
                             "WS Token 失败（IP 级风控熔断中），将在 %d 秒后重连 "
                             "accountId=%d（降低失败流量以加速禁令解除）",
@@ -1341,6 +1341,21 @@ class XianyuWebSocketClient:
         - 如果注入 x5sec 后 Token API 成功，跳过滑块求解，直接恢复 WS 连接
         - 如果注入 x5sec 后 Token API 仍返回 captcha，清除失效的 x5sec 缓存，再触发滑块求解
         """
+        # === IP 级风控（RGV587）熔断检查 ===
+        # 服务器 IP 被 Baxia 打入 RGV587 禁令时，所有 Token API 调用必然失败，
+        # 持续调用只会刷新禁令标记、延长封禁。熔断窗口内完全跳过 Token API，
+        # 由 _connect_loop 等待窗口结束后再重试，让禁令自然解除。
+        try:
+            from .ws_token import ip_risk_active
+            if ip_risk_active():
+                logger.warning(
+                    "WS Token 获取跳过：IP 级风控（RGV587）熔断中 accountId=%d（停止调用以加速禁令解除）",
+                    self.account_id,
+                )
+                return False
+        except Exception:
+            pass  # 熔断检查失败时放行（fail-open）
+
         # === x5sec 缓存免滑块恢复 ===
         # 场景：WS 掉线后，如果之前求解过滑块，x5sec 已缓存（TTL 6 小时），
         #       直接注入 x5sec 到 cookie 调用 Token API，跳过滑块求解。

@@ -448,6 +448,24 @@ class CaptchaQueueManager:
                     tenant_id=tenant_id, account_id=account_id, level=logging.DEBUG,
                 )
 
+        # === 0.6 IP 级风控熔断检查（自动触发场景） ===
+        # 2026-08-11：服务器 IP 被 Baxia 打入 RGV587_ERROR 禁令时，
+        # 所有账号的滑块求解必然失败（IP 级禁令下拖动被拒）。熔断期间
+        # 跳过自动入队、不创建记录，避免无效求解消耗资源/加剧风控。
+        # 熔断不阻断 Token API 调用（WS 重连仍每 60 秒尝试），IP 恢复后
+        # 窗口自动过期立即恢复自动求解，符合 WS 持久化规则。
+        if trigger_scene not in ("manual", "manual_retry"):
+            try:
+                from .ws_token import ip_risk_active
+                if ip_risk_active():
+                    logger.info(
+                        "滑块求解入队跳过：IP 级风控（RGV587）熔断中 accountId=%d scene=%s",
+                        account_id, trigger_scene,
+                    )
+                    return (None, 0, 0)
+            except Exception:
+                pass  # 熔断检查失败时降级为放行（fail-open）
+
         # === 1. 排除表检查（所有场景，硬阻断，静默跳过不创建记录） ===
         # 3 天未登录前台用户的闲鱼账号已被定时扫描录入排除表，直接拒绝入队
         # 避免脏数据占用排队序列（排除表本身即为记录，不额外创建 solve_record）
