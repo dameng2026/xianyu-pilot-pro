@@ -31,17 +31,30 @@ logger = logging.getLogger(__name__)
 # cookie-valid-ws-persistence.md"不得长时间阻断 Cookie 有效账号 WS 重连"。
 # ============================================================
 _IP_RGV587_TRIPPED_AT = 0.0
-_IP_RGV587_BLOCK_WINDOW_SEC = 300  # 5 分钟窗口，窗口内无新触发自动解除
-_IP_RGV587_REDIS_KEY = "ip_risk:rgv587_tripped_at"  # Redis 持久化，避免重启后熔断状态丢失导致爆发重连
+_IP_RGV587_BLOCK_WINDOW_SEC = 300  # 基础窗口 5 分钟（通过自适应机制可伸长）
+_IP_RGV587_REDIS_KEY = "ip_risk:rgv587_tripped_at"  # 最近一次 RGV587 触发时间戳
+_IP_RGV587_COUNT_KEY = "ip_risk:rgv587_trip_count"  # 1 小时内触发次数，用于自适应窗口
+_IP_RGV587_WINDOW_KEY = "ip_risk:rgv587_window_sec"  # 当前生效的熔断窗口（秒）
+_IP_RGV587_COUNT_TTL = 3600  # 触发次数统计窗口 1 小时
 
 
 def _redis_client_or_none():
-    """延迟引入 x5sec Redis 客戗端，失败时返回 None。"""
+    """延迟引入 x5sec Redis 客户端，失败时返回 None。"""
     try:
         from .x5sec_cache_client import _get_redis_client
         return _get_redis_client()
     except Exception:
         return None
+
+
+def _adaptive_window(trip_count: int) -> int:
+    """根据 1 小时内 RGV587 触发次数自适应伸长熔断窗口。
+    触发 1 次→5 分钟；2 次→30 分钟；3+ 次→60 分钟（正常禁令可达 3 小时）。"""
+    if trip_count >= 3:
+        return 3600
+    if trip_count == 2:
+        return 1800
+    return 300
 
 
 def mark_ip_risk_tripped() -> None:
@@ -51,27 +64,47 @@ def mark_ip_risk_tripped() -> None:
     try:
         client = _redis_client_or_none()
         if client is not None:
-            client.set(_IP_RGV587_REDIS_KEY, str(int(time.time())), ex=_IP_RGV587_BLOCK_WINDOW_SEC + 30)
+            pipe = client.pipeline()
+            pipe.set(_IP_RGV587_REDIS_KEY, str(int(time.time())))
+            pipe.incr(_IP_RGV587_COUNT_KEY)
+            pipe.expire(_IP_RGV587_COUNT_KEY, _IP_RGV587_COUNT_TTL)
+            pipe.execute()
+            count = int(client.get(_IP_RGV587_COUNT_KEY) or 1)
+            window = _adaptive_window(count)
+            client.set(_IP_RGV587_WINDOW_KEY, str(window), ex=window + 60)
     except Exception as e:
         logger.debug("mark_ip_risk_tripped: Redis 持久化失败: %s", e)
 
 
-def ip_risk_active() -> bool:
-    """IP 级风控是否激活：5 分钟窗口内触发过 RGV587 即视为激活。
-    优先读 Redis（重启后熔断状态不丢失），再回落内存。"""
+def _load_ip_risk_state() -> tuple[float, int]:
+    """读取熔断状态（优先 Redis，内存作为补充），返回 (last_trip_ts, window_sec)。"""
     global _IP_RGV587_TRIPPED_AT
-    if _IP_RGV587_TRIPPED_AT <= 0:
-        try:
-            client = _redis_client_or_none()
-            if client is not None:
-                raw = client.get(_IP_RGV587_REDIS_KEY)
-                if raw:
-                    _IP_RGV587_TRIPPED_AT = float(raw)
-        except Exception:
-            pass
-    if _IP_RGV587_TRIPPED_AT <= 0:
-        return False
-    return (time.time() - _IP_RGV587_TRIPPED_AT) < _IP_RGV587_BLOCK_WINDOW_SEC
+    window = _IP_RGV587_BLOCK_WINDOW_SEC
+    try:
+        client = _redis_client_or_none()
+        if client is not None:
+            raw_ts = client.get(_IP_RGV587_REDIS_KEY)
+            if raw_ts:
+                _IP_RGV587_TRIPPED_AT = float(raw_ts)
+            raw_window = client.get(_IP_RGV587_WINDOW_KEY)
+            if raw_window:
+                window = int(raw_window)
+    except Exception:
+        pass
+    return _IP_RGV587_TRIPPED_AT, window
+
+
+def ip_risk_remaining_seconds() -> float:
+    """返回熔断窗口剩余秒数（未触发或已过期返回 0）。"""
+    ts, window = _load_ip_risk_state()
+    if ts <= 0:
+        return 0.0
+    return max(0.0, window - (time.time() - ts))
+
+
+def ip_risk_active() -> bool:
+    """IP 级风控是否激活。"""
+    return ip_risk_remaining_seconds() > 0
 
 
 def _try_x5sec_injection(cookie_str: str, m_h5_tk: str, proxies: Optional[dict] = None) -> Tuple[Optional[str], Optional[str]]:

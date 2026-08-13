@@ -889,9 +889,9 @@ async def auto_start_all() -> None:
             # 重启后若服务器 IP 仍在禁令期，立即批量连接会触发 Token API 爆发，
             # 必然再次 RGV587 并延长禁令。先等熔断窗口结束，再开始连接。
             try:
-                from .ws_token import ip_risk_active, _IP_RGV587_BLOCK_WINDOW_SEC
+                from .ws_token import ip_risk_active, ip_risk_remaining_seconds
                 if ip_risk_active():
-                    wait_sec = int(_IP_RGV587_BLOCK_WINDOW_SEC) + 5
+                    wait_sec = int(ip_risk_remaining_seconds()) + 5
                     logger.warning(
                         "检测到 IP 级风控（RGV587）熔断，自动启动延迟 %d 秒后再连接账号", wait_sec,
                     )

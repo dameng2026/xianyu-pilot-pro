@@ -126,6 +126,36 @@ class _FakeRedis:
     def get(self, key):
         return self.data.get(key)
 
+    def pipeline(self):
+        return _FakePipeline(self)
+
+
+class _FakePipeline:
+    def __init__(self, fake):
+        self.fake = fake
+        self.ops = []
+
+    def set(self, key, value, ex=None):
+        self.ops.append(("set", key, value, ex))
+        return self
+
+    def incr(self, key):
+        self.ops.append(("incr", key))
+        return self
+
+    def expire(self, key, ttl):
+        self.ops.append(("expire", key, ttl))
+        return self
+
+    def execute(self):
+        for op in self.ops:
+            if op[0] == "set":
+                self.fake.set(op[1], op[2], op[3])
+            elif op[0] == "incr":
+                self.fake.data[op[1]] = str(int(self.fake.get(op[1]) or 0) + 1)
+            elif op[0] == "expire":
+                pass
+
 
 def test_ip_risk_breaker_survives_restart_via_redis(monkeypatch):
     import time
@@ -150,3 +180,33 @@ def test_ip_risk_breaker_survives_restart_via_redis(monkeypatch):
     fake.data[ws_token._IP_RGV587_REDIS_KEY] = str(int(time.time()) - 1000)
     ws_token._IP_RGV587_TRIPPED_AT = 0.0
     assert not ws_token.ip_risk_active()
+
+
+def test_ip_risk_breaker_adapts_window_to_repeated_trips(monkeypatch):
+    import time
+
+    from app.services import ws_token
+
+    fake = _FakeRedis()
+    monkeypatch.setattr(
+        "app.services.x5sec_cache_client._get_redis_client",
+        lambda: fake,
+    )
+    ws_token._IP_RGV587_TRIPPED_AT = 0.0
+
+    # Simulate a persistent ban: three trips in quick succession.
+    for _ in range(3):
+        ws_token.mark_ip_risk_tripped()
+
+    # A 10-minute-old trip must still be inside the adaptive 60-minute window.
+    fake.data[ws_token._IP_RGV587_REDIS_KEY] = str(int(time.time()) - 600)
+    fake.data[ws_token._IP_RGV587_WINDOW_KEY] = str(3600)
+    ws_token._IP_RGV587_TRIPPED_AT = 0.0
+    assert ws_token.ip_risk_active()
+    assert ws_token.ip_risk_remaining_seconds() > 0
+
+    # A 2-hour-old trip is outside even the 60-minute window.
+    fake.data[ws_token._IP_RGV587_REDIS_KEY] = str(int(time.time()) - 7200)
+    ws_token._IP_RGV587_TRIPPED_AT = 0.0
+    assert not ws_token.ip_risk_active()
+    assert ws_token.ip_risk_remaining_seconds() == 0.0
