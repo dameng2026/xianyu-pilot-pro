@@ -5846,7 +5846,7 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
     # 仅在 conv_paused == 0 时触发，作为状态字段机制的兜底；不替换现有暂停时长自动恢复逻辑。
     if conv_paused == 0 and conv_manual_disabled == 0:
         last_manual_msg = (await db.execute(text("""
-            SELECT message_time
+            SELECT UNIX_TIMESTAMP(msg_time) * 1000 AS message_time
             FROM xianyu_message
             WHERE tenant_id = :tenant_id
               AND account_id = :account_id
@@ -5854,7 +5854,7 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
               AND deleted = 0
               AND direction = 1
               AND is_auto_reply = 0
-            ORDER BY message_time DESC, id DESC
+            ORDER BY msg_time DESC, id DESC
             LIMIT 1
         """), {
             "tenant_id": tenant_id,

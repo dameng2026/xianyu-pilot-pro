@@ -764,7 +764,8 @@ async def _infer_missing_session_info(
             inferred_goods_id = str(row.get("xy_goods_id") or "").strip()
             inferred_reminder_url = str(row.get("reminder_url") or "").strip()
             inferred_is_auto_reply = int(row.get("is_auto_reply") or 0)
-            inferred_direction = int(row.get("direction") or 0)
+            raw_direction = str(row.get("direction") or "").strip().upper()
+            inferred_direction = 0 if raw_direction in ("", "IN", "0") else 1
 
             # 判断推断源消息的 sender 是否是卖家自己
             seller_normalized = seller_external_uid.replace("@goofish", "").strip() if seller_external_uid else ""
