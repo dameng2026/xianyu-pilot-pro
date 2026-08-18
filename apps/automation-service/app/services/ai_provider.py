@@ -338,12 +338,14 @@ async def enforce_polish_restriction(title: str, body: str) -> tuple[str, str, l
 async def generate_text(scene: str, system_prompt: str, user_prompt: str, temperature: float = 0.7,
                         messages: list[Dict[str, Any]] | None = None,
                         request_id: str | None = None,
-                        timeout: int = 60) -> Dict[str, Any]:
+                        timeout: int = 60,
+                        max_attempts: int = 3) -> Dict[str, Any]:
     """OpenAI-compatible chat completion wrapper.
 
     支持传入 messages（多轮对话上下文），若未传则用 system_prompt+user_prompt 构造单轮。
     返回统一结构；Provider 未配置或调用失败时不抛异常，交由业务层兜底。
     timeout 参数控制 HTTP 请求超时（秒），默认 60 秒。
+    max_attempts 控制失败重试次数（默认 3 次）；实时交互场景（如自动回复）可调低以缩短最坏延迟。
     """
     request_id = str(request_id or uuid.uuid4())[:128]
     normalized_messages, input_error = _normalize_messages(system_prompt, user_prompt, messages)
@@ -392,7 +394,7 @@ async def generate_text(scene: str, system_prompt: str, user_prompt: str, temper
         "temperature": temperature,
         "messages": normalized_messages,
     }
-    max_attempts = 3
+    max_attempts = max(1, min(int(max_attempts), 5))
     try:
         async with httpx.AsyncClient(
             timeout=max(timeout, 5),

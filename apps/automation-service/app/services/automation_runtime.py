@@ -6140,6 +6140,11 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
             0.3,
             messages=context_messages,
             request_id=billing_request_id,
+            # 实时互动场景：收紧超时与重试，避免模型响应慢时买家长时间等待。
+            # 20 秒未返回即放弃本次回复（最坏约 40s 两个重试窗口），
+            # 与默认 60s×3 次（最坏 180s+）相比显著降低自动回复延迟。
+            timeout=20,
+            max_attempts=2,
         )
         raw_usage = None
         request_id = None
@@ -6450,8 +6455,10 @@ async def _auto_reply_safety_reasons(db: AsyncSession, tenant_id: int, rule: dic
     for keyword in _parse_keywords(rule.get("handoff_keywords") or ""):
         if keyword and keyword in text_content:
             reasons.append(f"命中人工接管关键词：{keyword}")
-    if re.search(r"(退款|退货|投诉|赔偿|平台介入|账号|支付异常|被骗|假货|违规)", text_content):
-        reasons.append("涉及售后/支付/平台规则等高风险场景")
+    # 仅对脱离平台交易/索要敏感信息等真正高风险行为禁止自动回复；
+    # 常规售后（退款/退货/投诉/赔偿等）交由 AI 依据商品信息正常回答，不再默认拦截转人工
+    if re.search(r"(线下交易|加微信|加我微信|私下付款|绕过平台|脱离平台|验证码|银行卡密码|身份证号(码)?|银行卡号|支付密码|先(交|付|转)(款|钱|押金)|输入账号密码|扫(码|脸)|登录我的账号)", text_content):
+        reasons.append("涉及脱离平台交易或索要敏感信息等高风险场景")
     if rule.get("price_floor") is not None and re.search(r"(便宜|最低|少点|砍价|刀|包邮)", text_content):
         reasons.append(f"涉及议价，需人工确认最低价底线 {rule.get('price_floor')}")
     max_daily = _safe_int(rule.get("max_daily_replies"), 0)
