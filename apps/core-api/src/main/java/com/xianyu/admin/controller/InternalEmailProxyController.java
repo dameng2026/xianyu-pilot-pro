@@ -22,7 +22,7 @@ import java.util.regex.Pattern;
  * 内部邮件代理接口：供 automation-service 通过 X-Internal-Token 调用，
  * 用于用户级业务通知走腾讯云 SES 链路。
  *
- * 设计约束（参见 docs/2026-07-27-腾讯云SES邮件推送接入设计.md §7）：
+ * 设计约束：
  *  - 不接受客户端传入的云凭据（SecretId/SecretKey/Region/TemplateID）
  *  - 后端强制使用 sys_config.email_config 的全局 SES 配置
  *  - provider 不是 tencent_ses 时拒绝发送

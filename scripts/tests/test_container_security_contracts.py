@@ -87,7 +87,6 @@ def test_every_upload_writer_uses_one_writable_volume_and_production_limits_are_
     compose = read("docker-compose.yml")
     production = read("docker-compose.prod.yml")
     core_dockerfile = read("apps/core-api/Dockerfile")
-    operations = read("docs/operations/upload-storage-governance.md")
 
     assert compose.count("uploads_data:/app/uploads") == 3
     assert "uploads_data:" in compose
@@ -99,11 +98,6 @@ def test_every_upload_writer_uses_one_writable_volume_and_production_limits_are_
     assert production.count('UPLOAD_GOVERNANCE_ENABLED: "true"') == 3
     assert len(re.findall(r"^\s+UPLOAD_MAX_CONCURRENT_GLOBAL:", production, re.MULTILINE)) == 3
     assert "MEDIA_COOKIE_SECURE: \"true\"" in production
-    assert "Path=/uploads" in operations
-    assert "SameSite=Strict" in operations
-    assert "host-only" in operations
-    assert "`uploads_data` and retain a restore report" in operations
-    assert "application-consistent" in operations
 
 
 def test_production_services_have_fail_closed_resource_and_shutdown_ceiling_contracts():
@@ -433,23 +427,3 @@ def test_automation_image_installs_hash_locked_audited_dependencies():
     ):
         assert dependency.lower() in direct.lower()
     assert "starlette==1.3.1" in locked
-
-
-def test_operations_docs_define_the_database_backed_content_and_media_boundary():
-    operations = read("docs/operations/upload-storage-governance.md")
-
-    assert "`admin_module_record`" in operations
-    assert "`commercial-home`" in operations
-    assert "`open-source-home`" in operations
-    assert "`/api/content/*`" in operations
-    assert "`/api/internal/content/public-images/upload`" in operations
-    assert "`owner_type=service`" in operations
-    assert "`carousel`" in operations
-    assert "`open-source-content`" in operations
-    assert "allowlist" in operations
-    assert "Nginx" in operations and "core-api" in operations
-    assert "`/uploads/logos/**`" in operations
-    assert "`/uploads/public/logos/YYYYMMDD/<uuid32>`" in operations
-    assert "404" in operations
-    assert "re-upload" in operations
-    assert "static compatibility" in operations

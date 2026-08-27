@@ -15,8 +15,7 @@
     "test": "tsx --test tests/*.test.ts",
     "start": "node dist/server.js",
     "start:worker": "node dist/worker.js",
-    "migrate:maintenance": "node dist/migrate.js",
-    "test:store-crawl": "tsx scripts/test-store-crawl.ts"
+    "migrate:maintenance": "node dist/migrate.js"
   },
   "allowScripts": {
     "esbuild@0.28.1": true,

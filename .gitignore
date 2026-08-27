@@ -145,12 +145,6 @@ apps/core-api/META-INF/
 /admin-backend-analysis-report.md
 /admin-analysis-report.txt
 /next-phase-backend-optimization.md
-/docs/2026-*.md
-/docs/上传前验证快照.md
-/docs/同类项目功能对比与强化分析报告.md
-/docs/统一上传发布清单.md
-/docs/superpowers/
-/docs/ai_cs_test_questions.md
 
 # Generated icon bundle (rebuilt by icons:generate during admin-web build)
 apps/admin-web/src/assets/generated/iconify-bundle.json
@@ -208,7 +202,6 @@ scripts/reset_kb_test_data.py
 apps/crawler-service/leaveMsgTest*
 apps/user-web/mobile-390.png
 apps/user-web/tmp-mobile-verify/
-docs/superpowers/
 .trae/rules/mobile-pc-isolation.md
 
 # 2026-07-30 上线前清理：临时调试脚本、截图、输出文件、临时 SQL/文档

@@ -103,11 +103,9 @@ docker compose up -d --build
 
 ## 🔐 生产部署
 
-完整的生产发布流程（预检、数据库备份/迁移、发布门控、回滚、监控）参见：
+> ⚠️ **部署声明**：本项目文档中的部署方式由 AI 生成，仅供参考。如在部署中遇到困难，均属正常现象，需自行克服问题；本项目不提供任何技术服务。建议使用 AI 一键部署推荐平台：**traework**。
 
-- [docs/production-deploy.md](docs/production-deploy.md)（发布流程与部署拓扑）
-- `docker-compose.prod.yml` / `scripts/prod_deploy.py`（生产 compose 与发布脚本）
-- [docs/database-migrations.md](docs/database-migrations.md)（数据库迁移纪律）
+生产 compose 与发布脚本：`docker-compose.prod.yml` / `scripts/prod_deploy.py`。
 
 生产环境必须满足：
 
@@ -126,7 +124,6 @@ apps/
   crawler-service/     # 爬虫服务（Node/Playwright，滑块求解、店铺爬取、搜索）
 scripts/               # 发布、预检与契约测试脚本
 deploy/                # Nginx / systemd 部署模板
-docs/                  # 部署与开发文档
 db/                    # 迁移清单与发布凭证模板（migrations-manifest.json）
 ```
 

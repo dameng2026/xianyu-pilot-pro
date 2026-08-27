@@ -1,6 +1,0 @@
-@echo off
-chcp 65001 >nul
-echo 正在触发 Spring Boot DevTools 重启...
-powershell -Command "(Get-Item 'src\main\resources\.trigger').LastWriteTime = Get-Date"
-echo 已触发重启，请等待 core-api 窗口自动重启...
-echo （约 5-10 秒后完成）

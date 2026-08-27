@@ -528,79 +528,7 @@ def test_local_login_smoke_requires_operator_supplied_test_credentials():
     assert "password: '123456'" not in text
 
 
-def test_production_deploy_docs_define_transport_and_release_truth():
-    text = (REPO_ROOT / "docs" / "production-deploy.md").read_text(encoding="utf-8")
-    lowered = text.lower()
 
-    assert "--preflight-only" in text
-    assert "proxy_ssl_verify on" in text
-    assert "mtls" in lowered
-    assert "vpn" in lowered
-    assert "client-facing tls" in lowered
-    assert "not blue/green" in lowered
-    assert "short interruption" in lowered
-    assert "allowlist" in lowered
-    assert "must not be bypassed" in lowered
-
-
-def test_commercial_operations_docs_separate_procedures_from_external_evidence():
-    readiness = (REPO_ROOT / "docs/production-readiness.md").read_text(encoding="utf-8")
-    backup = (REPO_ROOT / "docs/operations/backup-restore.md").read_text(encoding="utf-8")
-    monitoring = (REPO_ROOT / "docs/operations/monitoring.md").read_text(encoding="utf-8")
-    runbook = (REPO_ROOT / "docs/operations/production-runbook.md").read_text(encoding="utf-8")
-    supply_chain = (REPO_ROOT / "docs/operations/supply-chain-release.md").read_text(encoding="utf-8")
-
-    for relative in (
-        "operations/backup-restore.md",
-        "operations/monitoring.md",
-        "operations/production-runbook.md",
-        "operations/supply-chain-release.md",
-    ):
-        assert relative in readiness
-
-    assert "procedure is not restore evidence" in backup.lower()
-    for required in (
-        "uploads_data",
-        "admin_module_record",
-        "tenant_storage_asset",
-        "application-consistent",
-        "isolated",
-        "RPO",
-        "RTO",
-    ):
-        assert required in backup
-
-    for required in (
-        "public-availability",
-        "XianyuWatchdog",
-        "PublicTlsCertificateExpiresSoon",
-        "PROMETHEUS_RETENTION_SIZE",
-        "external acceptance",
-    ):
-        assert required in monitoring
-
-    for required in (
-        "Incident Commander",
-        "SEV-1",
-        "security incident",
-        "rollback",
-        "never paste",
-        "security_version",
-        "服务端撤销未确认",
-        "Path=/uploads",
-    ):
-        assert required in runbook
-
-    for required in (
-        "release-provenance-gate",
-        "repository@sha256:",
-        "SBOM",
-        "SLSA",
-        "license",
-        "30 days",
-    ):
-        assert required in supply_chain
-    assert "does not prove" in supply_chain.lower()
 
 
 def test_legacy_production_preflight_runs_shared_transport_gate_before_loading_env():
