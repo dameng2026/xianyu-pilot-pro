@@ -1,0 +1,51 @@
+{
+  "china_backend": {
+    "host": "CHINA_SERVER_IP",
+    "port": 22,
+    "username": "ubuntu",
+    "key_filename": "C:/secure/xianyupilot-deploy/id_ed25519",
+    "known_hosts_file": "C:/secure/xianyupilot-deploy/known_hosts",
+    "project_dir": "/home/ubuntu/project",
+    "compose_env_file": ".env.production",
+    "backend_container_name": "xianyu-admin-backend",
+    "services": [
+      "mysql",
+      "redis",
+      "crawler-postgres",
+      "automation",
+      "automation-worker",
+      "crawler-service",
+      "crawler-worker",
+      "backend"
+    ]
+  },
+  "us_frontend": {
+    "host": "US_SERVER_IP",
+    "port": 22,
+    "username": "root",
+    "key_filename": "C:/secure/xianyupilot-deploy/id_ed25519",
+    "known_hosts_file": "C:/secure/xianyupilot-deploy/known_hosts",
+    "user_web_root": "/var/www/user-web",
+    "admin_web_root": "/var/www/admin-web",
+    "backup_root": "/var/www/backups",
+    "release_root": "/var/www/.releases",
+    "nginx_site_path": "/etc/nginx/sites-enabled/nginx-full.conf",
+    "nginx_config_source": "deploy/nginx/us-nginx-full.conf",
+    "origin_tunnel_service": "xianyupilot-origin-tunnel.service",
+    "origin_tunnel_health_url": "http://127.0.0.1:18081/api/health",
+    "nginx_test_command": "nginx -t",
+    "nginx_reload_command": "systemctl reload nginx"
+  },
+  "smoke": {
+    "user_frontend_base": "https://www.xianyupilot.com",
+    "admin_frontend_base": "https://admin.xianyupilot.com",
+    "user_credentials": {
+      "username": "USER_TEST_ACCOUNT",
+      "password": "USER_TEST_PASSWORD"
+    },
+    "admin_credentials": {
+      "userName": "ADMIN_TEST_ACCOUNT",
+      "password": "ADMIN_TEST_PASSWORD"
+    }
+  }
+}

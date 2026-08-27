@@ -1,9 +1,0 @@
-{
-  "resources": {
-    "includes": [
-      {
-        "pattern": "\\QMETA-INF/hk2-locator/default\\E"
-      }
-    ]
-  }
-}
