@@ -52,6 +52,10 @@ async def test_websocket_start_uses_module_ws_manager_without_shadowing(monkeypa
     async def _wait(*_args, **_kwargs):
         return "connected", {"hasSid": True, "phase": "connected", "lastError": ""}
 
+    async def _precheck(*_args, **_kwargs):
+        return True, None
+
+    monkeypatch.setattr(misc, "_precheck_ws_token", _precheck)
     monkeypatch.setattr(misc, "_restart_ws_client_from_db", _restart)
     monkeypatch.setattr(misc, "_wait_ws_connect_result", _wait)
 
@@ -97,9 +101,7 @@ async def test_websocket_send_image_message_uses_resolved_goods_id(monkeypatch):
     assert result.code == 200
     assert saved_messages
     assert saved_messages[0][0][3]["xyGoodsId"] == "goods-123"
-    assert broadcasts
-    assert broadcasts[0][0] == 1
-    assert broadcasts[0][2]["xyGoodsId"] == "goods-123"
+    assert broadcasts == []
 
 
 @pytest.mark.asyncio

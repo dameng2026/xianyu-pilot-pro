@@ -2622,9 +2622,10 @@ class XianyuItemPublisher:
                 )
             except ValueError as exc:
                 # 资产校验失败（未入库/已清理/不属于租户）
+                asset_verify_err_kind = type(exc).__name__
                 logger.warning(
                     "publish image asset verification failed errorType=%s",
-                    type(exc).__name__,
+                    asset_verify_err_kind,
                 )
                 raise RuntimeError("商品图片已失效或不存在，请重新上传图片后再发布") from exc
             except Exception as exc:
@@ -2876,21 +2877,23 @@ class XianyuItemPublisher:
                         cookie_for_upload = _refresh_m_h5_tk(cookie_for_upload)
                         self._apply_refreshed_cookie(cookie_for_upload)
                         continue
+                    resp_body_len = len(resp.text or "")
                     logger.warning(
                         "图片上传 HTTP 失败 status=%s bodyLen=%d",
                         resp.status_code,
-                        len(resp.text or ""),
+                        resp_body_len,
                     )
                     self._raise_upload_failure(f"http_{resp.status_code}")
 
                 try:
                     result = resp.json()
                 except ValueError as exc:
+                    invalid_json_body_len = len(resp.text or "")
                     logger.warning(
                         "图片上传响应不是 JSON status=%s contentType=%s bodyLen=%d",
                         resp.status_code,
                         (resp.headers or {}).get("Content-Type", ""),
-                        len(resp.text or ""),
+                        invalid_json_body_len,
                     )
                     if attempt == 0:
                         time.sleep(1)
@@ -2928,7 +2931,7 @@ class XianyuItemPublisher:
             except RuntimeError as e:
                 last_error = e
                 log_service_failure(logger, e, operation="upload_publish_image", level=logging.WARNING)
-                message = str(e)
+                message = str(e.args[0]) if e.args else ""
                 # 已分类的用户错误直接抛出
                 if any(token in message for token in (
                     "登录已失效",

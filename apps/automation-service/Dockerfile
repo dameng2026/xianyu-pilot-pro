@@ -5,9 +5,8 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
 COPY requirements.lock ./
-RUN pip install --no-cache-dir --require-hashes \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    -r requirements.lock
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple
 # 2026-08-02 添加 redis 包（x5sec_cache_client.py 需要，用于从 Redis 读取缓存的 x5sec）
 # 单独安装以避免重新生成整个 lock 文件
 RUN pip install --no-cache-dir \

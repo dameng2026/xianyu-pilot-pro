@@ -128,6 +128,10 @@ function copyCode(text, evt) {
 const steps = ['提交密钥与 Cookie', '预检测', '执行求解', '返回结果']
 const flow = ['识别滑块场景', '预检测是否可求解', '调用滑块求解能力', '返回求解结果与日志', '成功后计费']
 
+// 对接示例基于当前部署地址生成，任何环境部署后示例即为正确端点
+const apiBase = (typeof window !== 'undefined' ? window.location.origin : 'https://your-domain.com')
+const apiSolveUrl = `${apiBase}/api/v1/slider/solve`
+
 const responseParams = [
   { name: 'ok', desc: 'boolean 是否成功' },
   { name: 'status', desc: 'success/fail/timeout/precheck_rejected/service_unavailable' },
@@ -141,7 +145,7 @@ const responseParams = [
   { name: 'tokenCharged', desc: 'number 实际扣费 Token 数，以接口返回为准' },
 ]
 
-const requestExample = `curl -X POST https://api.xianyupilot.com/api/v1/slider/solve \\
+const requestExample = `curl -X POST ${apiSolveUrl} \\
   -H "X-Api-Key: YOUR_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -164,7 +168,7 @@ const pythonCode = `# Python 对接示例
 # 依赖：pip install requests
 import requests
 
-API_URL = "https://api.xianyupilot.com/api/v1/slider/solve"
+API_URL = "${apiSolveUrl}"
 API_KEY = "YOUR_API_KEY"  # 替换为本页获取的对接密钥
 
 def solve_slider(cookie: str) -> dict:
@@ -198,7 +202,7 @@ const phpCode = `<?php
 // PHP 对接示例
 // 依赖：PHP 7.4+，需启用 cURL 扩展
 
-$API_URL = 'https://api.xianyupilot.com/api/v1/slider/solve';
+$API_URL = '${apiSolveUrl}';
 $API_KEY = 'YOUR_API_KEY'; // 替换为本页获取的对接密钥
 
 /**
@@ -259,7 +263,7 @@ print_r($result);`
 const jsCode = `// JavaScript / Node.js 对接示例
 // 依赖：Node 18+ 内置 fetch，或安装 node-fetch
 
-const API_URL = 'https://api.xianyupilot.com/api/v1/slider/solve';
+const API_URL = '${apiSolveUrl}';
 const API_KEY = 'YOUR_API_KEY'; // 替换为本页获取的对接密钥
 
 /**

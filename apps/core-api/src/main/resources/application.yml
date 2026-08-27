@@ -190,9 +190,8 @@ xianyu:
       allowed-hosts: ${AI_PROVIDER_ALLOWED_HOSTS:}
   sync:
     # 数据同步接收端鉴权 token（线上接收端必须配置，本地发送端可留空）
-    # 默认值与 BusinessSettingsService 中预配置的 targetToken 保持一致，便于本地联调
-    # 线上生产环境应通过 DATA_SYNC_API_TOKEN 环境变量覆盖为独立值
-    token: ${DATA_SYNC_API_TOKEN:HIDpsuvrKSlWfczLiFTJa0Ydhqm8gx7Q}
+    # 生产环境必须通过 DATA_SYNC_API_TOKEN 环境变量设置独立强随机值（>=32 字符）
+    token: ${DATA_SYNC_API_TOKEN:}
     # 发送端 HTTP 读取超时秒数
     read-timeout-seconds: ${DATA_SYNC_READ_TIMEOUT_SECONDS:120}
   retention:

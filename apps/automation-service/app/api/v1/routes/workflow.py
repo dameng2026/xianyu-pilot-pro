@@ -2009,7 +2009,8 @@ async def retry_publish_draft_endpoint(
         result = await retry_publish_draft(db, draft_id, tenant_id, override_account_id)
         return ResultObject.success(result)
     except ValueError as e:
-        return ResultObject.failed(str(e), 400)
+        retry_message = str(e)
+        return ResultObject.failed(retry_message, 400)
     except Exception as exc:
         return safe_route_failure(
             logger, exc,

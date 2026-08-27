@@ -217,6 +217,7 @@ def test_remote_run_drains_output_before_waiting_for_exit_status(capsys):
     assert "warn-1" in captured.err
 
 
+@pytest.mark.skipif(prod_deploy.paramiko is None, reason="paramiko is required for SSH host key contract")
 def test_remote_host_rejects_unknown_ssh_host_keys(monkeypatch):
     client = _HostKeyCheckingClient()
     monkeypatch.setattr(prod_deploy.paramiko, "SSHClient", lambda: client)
@@ -234,6 +235,7 @@ def test_remote_host_rejects_unknown_ssh_host_keys(monkeypatch):
     assert client.closed is True
 
 
+@pytest.mark.skipif(prod_deploy.paramiko is None, reason="paramiko is required for SSH credential contract")
 def test_remote_host_rejects_ambiguous_key_and_password_before_opening_client(monkeypatch):
     monkeypatch.setattr(
         prod_deploy.paramiko,
@@ -2069,7 +2071,12 @@ def test_release_preflight_rejects_embedded_private_key_marker(monkeypatch, tmp_
     repo_root = tmp_path / "repo"
     app_root = repo_root / "apps" / "core-api"
     app_root.mkdir(parents=True)
-    private_material = "-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----\n"
+    # Split so the literal PEM markers do not appear verbatim in this source
+    # file (which would self-trigger the embedded-secret preflight).
+    private_material = (
+        "-----BEGIN" + " PRIVATE KEY" + "-----\nnot-a-real-key\n"
+        "-----END" + " PRIVATE KEY" + "-----\n"
+    )
     (app_root / "notes.txt").write_text(private_material, encoding="utf-8")
 
     monkeypatch.setattr(prod_deploy, "REPO_ROOT", repo_root)

@@ -160,7 +160,9 @@ def test_sanitizer_handles_escaped_quotes_multiline_blobs_and_truncated_private_
         "payload=first line\nprivate second line\nthird line",
     )
     private_key = sanitize_log_text(
-        "-----BEGIN " + "PRIVATE KEY-----\n" + ("A" * 10_000),
+        # Split so the literal PEM markers do not appear verbatim in this
+        # source file (which would self-trigger the embedded-secret preflight).
+        "-----BEGIN" + " PRIVATE KEY" + "-----\n" + ("A" * 10_000),
         max_chars=512,
     )
 

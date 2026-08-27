@@ -498,13 +498,13 @@ async def internal_confirm_shipment(
         )
     except Exception as exc:
         logger.error(
-            "内部确认发货异常: accountId=%s orderId=%s error=%s",
-            account_id, external_order_id, exc,
+            "内部确认发货异常: accountId=%s orderId=%s errorType=%s",
+            account_id, external_order_id, type(exc).__name__,
         )
         return ResultObject.success({
             "success": False,
             "error": "CONFIRM_SHIPMENT_EXCEPTION",
-            "message": f"确认发货异常: {exc}",
+            "message": "确认发货异常，请稍后重试",
         })
 
     if result and result.get("success"):

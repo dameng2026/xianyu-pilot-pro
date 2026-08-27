@@ -73,7 +73,8 @@ def mark_ip_risk_tripped() -> None:
             window = _adaptive_window(count)
             client.set(_IP_RGV587_WINDOW_KEY, str(window), ex=window + 60)
     except Exception as e:
-        logger.debug("mark_ip_risk_tripped: Redis 持久化失败: %s", e)
+        redis_persist_err = type(e).__name__
+        logger.debug("mark_ip_risk_tripped: Redis 持久化失败: %s", redis_persist_err)
 
 
 def _load_ip_risk_state() -> tuple[float, int]:
@@ -391,7 +392,8 @@ def _try_http_x5sec_extract(cookie_str: str, m_h5_tk: str, proxies: Optional[dic
             cache_x5sec(cookie_str, x5sec_value)
             logger.info("_try_http_x5sec_extract: 已缓存 x5sec 到 Redis (长度=%d)", len(x5sec_value))
         except Exception as cache_err:
-            logger.debug("_try_http_x5sec_extract: 缓存 x5sec 失败（不影响本次）: %s", cache_err)
+            x5sec_cache_err_kind = type(cache_err).__name__
+            logger.debug("_try_http_x5sec_extract: 缓存 x5sec 失败（不影响本次）: %s", x5sec_cache_err_kind)
         # 方案 K：记录 HTTP 提取的 x5sec 样本（用于离线逆向分析）
         try:
             from .mtop_sign_research import log_x5sec_sample
@@ -482,13 +484,15 @@ def _try_silent_extract(cookie_str: str, m_h5_tk: str) -> Tuple[Optional[str], O
                 headers={"X-Internal-Token": internal_token, "Content-Type": "application/json"},
             )
             if resp.status_code != 200:
-                logger.warning("_try_silent_extract: crawler-service 返回 %d: %s", resp.status_code, resp.text[:200])
+                silent_extract_resp_preview = resp.text[:200]
+                logger.warning("_try_silent_extract: crawler-service 返回 %d: %s", resp.status_code, silent_extract_resp_preview)
                 return None, None
             data = resp.json()
             # 2026-08-03 新增：记录 proxySource，便于追踪静默提取是否真的使用住址IP
             silent_proxy_source = data.get("proxySource", "unknown")
             if not data.get("ok"):
-                logger.info("_try_silent_extract: 静默提取失败（source=%s, proxy=%s）: %s", data.get("x5secSource", "unknown"), silent_proxy_source, data.get("error", "")[:150])
+                silent_extract_fail_preview = data.get("error", "")[:150]
+                logger.info("_try_silent_extract: 静默提取失败（source=%s, proxy=%s）: %s", data.get("x5secSource", "unknown"), silent_proxy_source, silent_extract_fail_preview)
                 return None, None
             x5sec = data.get("x5sec", "")
             if not x5sec:
@@ -523,7 +527,8 @@ def _try_silent_extract(cookie_str: str, m_h5_tk: str) -> Tuple[Optional[str], O
             cache_x5sec(cookie_str, x5sec)
             logger.info("_try_silent_extract: 已缓存 x5sec 到 Redis (长度=%d)", len(x5sec))
         except Exception as cache_err:
-            logger.debug("_try_silent_extract: 缓存 x5sec 失败（不影响本次）: %s", cache_err)
+            silent_x5sec_cache_err_kind = type(cache_err).__name__
+            logger.debug("_try_silent_extract: 缓存 x5sec 失败（不影响本次）: %s", silent_x5sec_cache_err_kind)
         # 方案 K：记录静默提取的 x5sec 样本（用于离线逆向分析）
         try:
             from .mtop_sign_research import log_x5sec_sample
@@ -651,9 +656,10 @@ def _get_residential_proxy() -> Optional[dict]:
         data = resp.json()
         if not data.get("ok") or not data.get("proxy"):
             _proxy_fetch_failure_at = now
+            no_proxy_hint = data.get("reason", "unknown")
             logger.warning(
                 "_get_residential_proxy: 无可用代理 reason=%s（源配额耗尽/套餐过期），Token 请求将直连服务器 IP（有被 RGV587 风控的风险）",
-                data.get("reason", "unknown"),
+                no_proxy_hint,
             )
             return None
         proxy_info = data["proxy"]
@@ -673,7 +679,8 @@ def _get_residential_proxy() -> Optional[dict]:
         )
         return proxy_entry
     except Exception as e:
-        logger.debug("_get_residential_proxy: 获取代理失败: %s", e)
+        residential_proxy_err_kind = type(e).__name__
+        logger.debug("_get_residential_proxy: 获取代理失败: %s", residential_proxy_err_kind)
         return None
 
 
@@ -836,22 +843,12 @@ def _call_token_api(cookie_str: str, m_h5_tk: str, proxies: Optional[dict] = Non
             # captcha_queue 自动触发场景据此跳过滑块求解（IP 禁令下滑块必然失败）。
             if "RGV587_ERROR" in ret_str or "被挤爆啦" in ret_str or "FAIL_SYS_RGV587_ERROR" in ret_str:
                 mark_ip_risk_tripped()
-            # 2026-08-02 x5sec 主方案研究：记录完整响应，寻找不依赖滑块的 x5sec 获取方式
+            # 2026-08-02 纯 HTTP x5sec 提取：从 Set-Cookie 头提取 x5sec（无需浏览器）
+            # 关键发现：CAPTCHA 响应的 Set-Cookie 可能包含 x5sec（服务器静默验证通过时设置）
+            # 这是最快的 x5sec 获取方式（零额外请求，复用已发出的 Token API 请求）
             try:
-                body_str = json.dumps(data, ensure_ascii=False)
-                logger.warning(
-                    "_call_token_api CAPTCHA 响应完整内容(前1500字符): %s",
-                    body_str[:1500],
-                )
-                # 2026-08-02 纯 HTTP x5sec 提取：从 Set-Cookie 头提取 x5sec（无需浏览器）
-                # 关键发现：CAPTCHA 响应的 Set-Cookie 可能包含 x5sec（服务器静默验证通过时设置）
-                # 这是最快的 x5sec 获取方式（零额外请求，复用已发出的 Token API 请求）
                 set_cookie = resp.headers.get("set-cookie", "")
                 if set_cookie:
-                    logger.info(
-                        "_call_token_api CAPTCHA 响应 Set-Cookie(前500字符): %s",
-                        set_cookie[:500],
-                    )
                     # 精确匹配 x5sec= （不匹配 x5secdata= / x5sectag=）
                     x5sec_match = re.search(r"x5sec=([^;]+)", set_cookie)
                     if x5sec_match and x5sec_match.group(1):
@@ -867,12 +864,12 @@ def _call_token_api(cookie_str: str, m_h5_tk: str, proxies: Optional[dict] = Non
                             log_x5sec_sample(cookie_str, _last_captcha_x5sec, source="captcha_response")
                         except Exception:
                             pass
-                # 记录响应 URL（可能有重定向到 punish 页面）
-                logger.info(
-                    "_call_token_api CAPTCHA 响应 URL: %s status=%d",
-                    resp.url[:200],
-                    resp.status_code,
-                )
+                    # 记录响应 URL（可能有重定向到 punish 页面）
+                    logger.info(
+                        "_call_token_api CAPTCHA 响应 URL: %s status=%d",
+                        resp.url[:200],
+                        resp.status_code,
+                    )
             except Exception:
                 pass
             return CAPTCHA_NEEDED
@@ -1009,7 +1006,8 @@ def _warmup_session(cookie_str: str, proxy_entry: Optional[dict] = None) -> str:
             return cookie_str
 
     except Exception as e:
-        logger.debug("_warmup_session: 预热失败（不影响主流程, proxy=%s）: %s", proxy_label, e)
+        warmup_err_kind = type(e).__name__
+        logger.debug("_warmup_session: 预热失败（不影响主流程, proxy=%s）: %s", proxy_label, warmup_err_kind)
         # 代理失败时报告给 crawler-service
         if proxy_entry:
             _report_proxy_failure(proxy_entry, f"warmup_session_error: {type(e).__name__}")
@@ -1279,7 +1277,8 @@ def get_ws_token_with_refreshed_m_h5_tk(
                     logger.info("[方案K] 本地生成 x5sec 成功：使用 Cookie _m_h5_tk + 本地生成 x5sec 获取到 Token")
                     return plan_k_token, cookie_m_h5_tk, None, plan_k_cookie
             except Exception as plan_k_err:
-                logger.debug("[方案K] try_plan_k_x5sec 调用失败: %s", plan_k_err)
+                plan_k_call_err_kind = type(plan_k_err).__name__
+                logger.debug("[方案K] try_plan_k_x5sec 调用失败: %s", plan_k_call_err_kind)
             # [优先级 2] x5sec 缓存注入：尝试从 Redis 读取缓存的 x5sec 注入到 cookie
             x5sec_token, injected_cookie = _try_x5sec_injection(cookie_str, cookie_m_h5_tk, proxies=proxies)
             if x5sec_token and injected_cookie:

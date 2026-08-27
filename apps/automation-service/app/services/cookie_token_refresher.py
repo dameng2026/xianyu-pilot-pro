@@ -763,7 +763,8 @@ async def _do_ws_token_refresh(state: AccountRefreshState, cookie_str: str, m_h5
                         trigger_scene="token_refresh",
                     )
                 except Exception as exc:
-                    logger.warning("WS Token 刷新触发滑块后入队求解失败 accountId=%d: %s", state.account_id, exc)
+                    enqueue_fail_kind = type(exc).__name__
+                    logger.warning("WS Token 刷新触发滑块后入队求解失败 accountId=%d: %s", state.account_id, enqueue_fail_kind)
             elif error_type == "expired":
                 await _update_cookie_status(
                     state.account_id, state.tenant_id, 0,

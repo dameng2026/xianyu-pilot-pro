@@ -40,39 +40,39 @@ class WebConfigTest {
     @Test
     void apiCorsFilterAllowsConfiguredUserOrigin() throws ServletException, IOException {
         CorsFilter filter = webConfig.corsFilter(
-                "http://localhost:3006,http://154.9.254.86:82",
+                "http://localhost:3006,http://192.0.2.10:82",
                 "",
-                "http://localhost:5173,http://154.9.254.86:81",
+                "http://localhost:5173,http://192.0.2.10:81",
                 ""
         );
 
-        MockHttpServletResponse response = applyFilter(filter, "/api/login/login", "http://154.9.254.86:81");
+        MockHttpServletResponse response = applyFilter(filter, "/api/login/login", "http://192.0.2.10:81");
 
-        assertEquals("http://154.9.254.86:81", response.getHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
+        assertEquals("http://192.0.2.10:81", response.getHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
         assertEquals(HttpServletResponse.SC_OK, response.getStatus());
     }
 
     @Test
     void adminCorsFilterAllowsConfiguredAdminOrigin() throws ServletException, IOException {
         CorsFilter filter = webConfig.corsFilter(
-                "http://localhost:3006,http://154.9.254.86:82",
+                "http://localhost:3006,http://192.0.2.10:82",
                 "",
-                "http://localhost:5173,http://154.9.254.86:81",
+                "http://localhost:5173,http://192.0.2.10:81",
                 ""
         );
 
-        MockHttpServletResponse response = applyFilter(filter, "/admin-api/auth/login", "http://154.9.254.86:82");
+        MockHttpServletResponse response = applyFilter(filter, "/admin-api/auth/login", "http://192.0.2.10:82");
 
-        assertEquals("http://154.9.254.86:82", response.getHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
+        assertEquals("http://192.0.2.10:82", response.getHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
         assertEquals(HttpServletResponse.SC_OK, response.getStatus());
     }
 
     @Test
     void apiCorsFilterRejectsUnconfiguredOrigin() throws ServletException, IOException {
         CorsFilter filter = webConfig.corsFilter(
-                "http://localhost:3006,http://154.9.254.86:82",
+                "http://localhost:3006,http://192.0.2.10:82",
                 "",
-                "http://localhost:5173,http://154.9.254.86:81",
+                "http://localhost:5173,http://192.0.2.10:81",
                 ""
         );
 

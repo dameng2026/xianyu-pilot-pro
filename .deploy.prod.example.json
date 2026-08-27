@@ -37,15 +37,15 @@
     "nginx_reload_command": "systemctl reload nginx"
   },
   "smoke": {
-    "user_frontend_base": "https://www.xianyupilot.com",
-    "admin_frontend_base": "https://admin.xianyupilot.com",
+    "user_frontend_base": "https://www.example.com",
+    "admin_frontend_base": "https://admin.example.com",
     "user_credentials": {
       "username": "USER_TEST_ACCOUNT",
-      "password": "USER_TEST_PASSWORD"
+      "password": "change-me-user-test-password"
     },
     "admin_credentials": {
       "userName": "ADMIN_TEST_ACCOUNT",
-      "password": "ADMIN_TEST_PASSWORD"
+      "password": "change-me-admin-test-password"
     }
   }
 }

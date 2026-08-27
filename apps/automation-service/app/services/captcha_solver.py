@@ -232,9 +232,10 @@ async def try_auto_solve(
 
     blocked = await assert_auto_solve_allowed(account_id, tenant_id, force=force)
     if blocked:
+        backoff_block_detail = blocked.get("error") or ""
         logger.warning(
             "滑块求解被指数退避拦截 accountId=%d error=%s",
-            account_id, blocked.get("error"),
+            account_id, backoff_block_detail,
         )
         return blocked
 
@@ -1551,9 +1552,10 @@ async def handle_captcha_for_account(
                 # 修复：归为 timeout（可重试 1 次 + 不累加退避），让队列自动重试一次。
                 # 注意：httpx 超时 180s 是项目硬约束，不得缩短（见 project_memory.md）。
                 failure_reason = "timeout"
+                timeout_err_preview = error_msg[:200]
                 logger.warning(
                     "账号 %d 滑块求解失败：HTTP 超时，归类为 timeout（可重试1次，不累加退避）error=%s",
-                    account_id, error_msg[:200],
+                    account_id, timeout_err_preview,
                 )
             elif error_code == "CAPTCHA_SOLVER_UNAVAILABLE":
                 failure_reason = "service_unavailable"
@@ -1579,9 +1581,10 @@ async def handle_captcha_for_account(
                 #   不累加退避避免账号被冷却 60s 导致 WS 重连触发求解被拦截。
                 #   仅重试 1 次（而非 slider_fail 的 3 次）避免记录数爆炸。
                 failure_reason = "browser_crashed"
+                browser_crash_err_preview = error_msg[:200]
                 logger.warning(
                     "账号 %d 滑块求解失败：浏览器启动/崩溃错误，归类为 browser_crashed（可重试1次，不累加退避）error=%s",
-                    account_id, error_msg[:200],
+                    account_id, browser_crash_err_preview,
                 )
 
             # Cookie 状态更新策略：

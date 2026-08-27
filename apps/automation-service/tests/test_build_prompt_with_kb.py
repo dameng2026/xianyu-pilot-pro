@@ -16,7 +16,7 @@ def test_prompt_with_learned_kb():
         cfg, None, [], [], [], [],
         learned_kb_hits=hits
     )
-    assert "学习知识库（用户启用）" in prompt
+    assert "学习知识库（按问题匹配，含分类标签）" in prompt
     assert "Q1" in prompt
     assert "A1" in prompt
     assert "电子" in prompt
@@ -29,6 +29,6 @@ def test_prompt_with_user_private_kb():
         cfg, None, [], [], [], [],
         user_private_kb_hits=hits
     )
-    assert "我的知识库" in prompt
+    assert "我的私有知识库（最高优先级）" in prompt
     assert "发货话术" in prompt
     assert "亲爱的，已发货" in prompt

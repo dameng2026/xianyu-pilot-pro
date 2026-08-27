@@ -52,9 +52,9 @@ async def solve(
         )
         return ResultObject.success(data=result)
     except Exception as e:
-        logger.exception("slider_api solve failed req=%s: %s", body.requestId, e)
+        logger.error("slider_api solve failed req=%s errorType=%s", body.requestId, type(e).__name__)
         return ResultObject.failed(
-            message=f"求解服务异常: {e}",
+            message="求解服务异常，请稍后重试",
             code=500,
             data={
                 "status": "service_unavailable",
@@ -63,6 +63,6 @@ async def solve(
                 "attempts": 0,
                 "durationMs": 0,
                 "cookies": None,
-                "error": str(e),
+                "error": "求解服务异常，请稍后重试",
             },
         )

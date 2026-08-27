@@ -98,7 +98,7 @@ async def test_remote_delete_reports_partial_success_and_records_reconciliation(
 @pytest.mark.asyncio
 async def test_remote_price_update_reports_partial_success_and_records_reconciliation():
     goods = SimpleNamespace(id=12)
-    account = SimpleNamespace(id=73, fish_shop=True)
+    account = SimpleNamespace(id=73, fish_shop_user=True)
     db = _FailAfterReadsDb([goods, account])
     operator = MagicMock()
 

@@ -200,6 +200,18 @@ SECRET_ASSIGNMENT_SUFFIXES = {
     ".yaml",
     ".yml",
 }
+# Generated lockfiles key entries by package name (e.g. "js-tokens": "^9.0.0")
+# and UI translation catalogs key entries by display label (e.g.
+# "password": "请输入密码"); neither carries literal secret material, so the
+# assignment scan skips them. Path-pattern and embedded-key checks still
+# apply to these files.
+LITERAL_SECRET_SCAN_EXEMPT_NAMES = {
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+}
+LITERAL_SECRET_SCAN_EXEMPT_DIR_PARTS = {"i18n", "langs", "locales"}
 SECRET_ASSIGNMENT_RE = re.compile(
     r"^\s*[\"']?([A-Za-z0-9_.-]*"
     r"(?:password|secret|token|api[-_]?key|private[-_]?key)"
@@ -320,6 +332,10 @@ def _secret_path_reason(rel_path: Path):
 
 def _literal_secret_assignment_reason(path: Path):
     if path.suffix.lower() not in SECRET_ASSIGNMENT_SUFFIXES:
+        return None
+    if path.name.lower() in LITERAL_SECRET_SCAN_EXEMPT_NAMES:
+        return None
+    if {part.lower() for part in path.parts} & LITERAL_SECRET_SCAN_EXEMPT_DIR_PARTS:
         return None
     try:
         if path.stat().st_size > 2 * 1024 * 1024:
@@ -587,6 +603,42 @@ def _effective_nginx_directive(block, name: str):
     return None
 
 
+def _nginx_upstream_server_hosts(blocks):
+    """Map nginx upstream block names to the host addresses of member servers."""
+    upstreams = {}
+    for block in blocks:
+        header = block.get("header") or ""
+        parts = header.split()
+        if len(parts) < 2 or parts[0].lower() != "upstream":
+            continue
+        name = parts[1].strip("\"'")
+        hosts = []
+        for directive_name, arguments, _line in block["directives"]:
+            if directive_name != "server" or not arguments:
+                continue
+            target = arguments.split()[0].strip("\"'")
+            if target.startswith("["):
+                closing = target.find("]")
+                hosts.append(target[1:closing] if closing > 0 else target)
+                continue
+            hosts.append(target.rsplit(":", 1)[0] if ":" in target else target)
+        upstreams[name] = hosts
+    return upstreams
+
+
+def _host_routes_privately(host: str, upstream_servers: dict) -> bool:
+    lowered = host.lower().rstrip(".")
+    if not _is_private_upstream_host(lowered):
+        return False
+    # A dotless name usually references an nginx upstream block; trusting the
+    # label alone would let a public origin hide behind it, so every member
+    # server must also route privately.
+    member_hosts = upstream_servers.get(lowered)
+    if member_hosts is None:
+        return True
+    return all(_is_private_upstream_host(member) for member in member_hosts)
+
+
 def validate_nginx_transport_security(path: Path):
     ensure_file(path)
     try:
@@ -595,6 +647,7 @@ def validate_nginx_transport_security(path: Path):
         raise ProductionPreflightError(f"Nginx config is not valid UTF-8: {path}") from exc
 
     blocks = _parse_nginx_blocks(text)
+    upstream_servers = _nginx_upstream_server_hosts(blocks)
     unverifiable_findings = []
     plaintext_findings = []
     https_findings = []
@@ -625,7 +678,9 @@ def validate_nginx_transport_security(path: Path):
                         (line_number, host or "<invalid-host>", missing)
                     )
                 continue
-            if host and "$" not in host and _is_private_upstream_host(host):
+            if host and "$" not in host and _host_routes_privately(
+                host, upstream_servers
+            ):
                 continue
             plaintext_findings.append(
                 f"line {line_number} host {host or '<invalid-host>'}"
@@ -2412,6 +2467,10 @@ def main():
     if not args.dry_run and args.skip_frontend_build:
         raise ProductionPreflightError(
             "--skip-frontend-build is permitted only with --dry-run"
+        )
+    if not args.dry_run and args.skip_smoke:
+        raise ProductionPreflightError(
+            "--skip-smoke is permitted only with --dry-run"
         )
     if args.preflight_only:
         nginx_config = resolve_repo_path(args.nginx_config or DEFAULT_US_NGINX_CONFIG)

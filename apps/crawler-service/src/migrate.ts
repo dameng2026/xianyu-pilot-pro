@@ -4,7 +4,7 @@ import { isProductionLike, safeErrorType } from './policy.js';
 // 生产迁移门控：此值必须与 db/migrations-manifest.json 的 manifestSha256 一致。
 // 新增/修改迁移脚本后，必须重新计算 manifest sha256 并更新此处，否则生产迁移会拒绝执行。
 // CI 建议添加校验：node -e "const m=require('./db/migrations-manifest.json');if(m.manifestSha256!==require('./src/migrate.ts'.replace('.ts','.js')))process.exit(1)"
-const REVIEWED_MANIFEST_SHA256 = '1e4d7368a3c6353479f42997097f55db1945cebba3b20a335ed774e4408de4c0';
+const REVIEWED_MANIFEST_SHA256 = 'fcf560641f97ea21b5162e6aef0487caf196ee68774475e4b6b8424a0d2586c9';
 
 function assertMaintenanceApproval(): void {
   const environment = process.env.NODE_ENV || process.env.APP_ENV || 'development';

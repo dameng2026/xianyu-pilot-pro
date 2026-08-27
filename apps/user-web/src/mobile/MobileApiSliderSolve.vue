@@ -115,7 +115,7 @@ const docExpanded = ref(false)
 
 const apiUrl = computed(() => {
   if (typeof window !== 'undefined') return `${window.location.origin}/api/v1/slider/solve`
-  return 'https://api.xianyupilot.com/api/v1/slider/solve'
+  return '/api/v1/slider/solve'
 })
 const fullKey = computed(() => credential.value?.api_key_plain || '')
 

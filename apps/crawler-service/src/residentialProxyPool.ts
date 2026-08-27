@@ -6,7 +6,7 @@
  * 2026-08-03 供应商切换：从 xkdaili 切换到 shenlongip（神龙代理），适配新 API 格式。
  *
  * 业务背景：
- * - 服务器 IP（211.161.232.54 数据中心 IP）被 Baxia 风控系统标记为高风险
+ * - 服务器（数据中心）IP 被 Baxia 风控系统标记为高风险
  * - Baxia 多维度检测包括 IP 信誉，数据中心 IP 比住址 IP 风险更高
  * - 住宅IP 可用时滑块求解成功率 60%+，服务器 IP 下 0% 成功
  *
@@ -765,10 +765,10 @@ export function closeResidentialProxyPool(): void {
 // 4. 失败仅告警不阻塞（用户可后续手动配置）
 //
 // 白名单 API 参数（key/sign 与提取 API 不同，可用环境变量覆盖）：
-// - SHENLONGIP_WHITE_KEY（默认 18074594914，用户账号）
+// - SHENLONGIP_WHITE_KEY（shenlongip 账号，必须通过环境变量配置，无默认值）
 // - SHENLONGIP_WHITE_SIGN（默认取自提取 URL 的 sign 参数，或环境变量覆盖）
 const SHENLONGIP_WHITE_BASE = process.env.SHENLONGIP_WHITE_API_URL || 'http://api.shenlongip.com/white';
-const SHENLONGIP_WHITE_KEY = process.env.SHENLONGIP_WHITE_KEY || '18074594914';
+const SHENLONGIP_WHITE_KEY = process.env.SHENLONGIP_WHITE_KEY || '';
 const WHITELIST_FETCH_TIMEOUT_MS = 6000;
 // 每次启动最多自动添加 1 次（避免反复请求导致频率限制）
 let whitelistAutoChecked = false;
@@ -846,6 +846,9 @@ export async function ensureShenlongipWhitelist(): Promise<{
     const sign = process.env.SHENLONGIP_WHITE_SIGN || extractSignFromSourceUrl(shenlongipSource) || '';
     if (!sign) {
       return { ...result, error: 'white_sign_missing' };
+    }
+    if (!SHENLONGIP_WHITE_KEY) {
+      return { ...result, error: 'white_key_missing' };
     }
 
     // 1. 查询白名单

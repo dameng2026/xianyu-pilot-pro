@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ....core.database import get_db
+from ....core.http_failures import safe_route_failure
 from ....core.response import ResultObject
 from ....services.rate_service import (
     SUPPORTED_CATEGORIES,
@@ -76,8 +77,11 @@ async def list_rates(
         )
         return ResultObject.success(result)
     except Exception as exc:
-        logger.exception("查询评价列表失败 tenantId=%s", tenant_id)
-        return ResultObject.failed(f"查询评价列表失败: {type(exc).__name__}")
+        return safe_route_failure(
+            logger, exc,
+            operation="query rates list",
+            user_message="查询评价列表失败，请稍后重试",
+        )
 
 
 @router.post("/sync")
@@ -125,8 +129,11 @@ async def trigger_sync(
         else:
             result = await sync_all_rates(db, tenant_id, force_full=force_full)
     except Exception as exc:
-        logger.exception("触发评价同步失败 tenantId=%s accountId=%s", tenant_id, account_id)
-        return ResultObject.failed(f"触发同步失败: {type(exc).__name__}")
+        return safe_route_failure(
+            logger, exc,
+            operation="trigger rates sync",
+            user_message="触发同步失败，请稍后重试",
+        )
 
     if not result.get("ok"):
         if result.get("error") == "TASK_ALREADY_RUNNING":
@@ -151,8 +158,11 @@ async def get_sync_status_endpoint(
         result = await get_sync_status(db, tenant_id, account_id=accountId)
         return ResultObject.success(result)
     except Exception as exc:
-        logger.exception("查询评价同步状态失败 tenantId=%s", tenant_id)
-        return ResultObject.failed(f"查询同步状态失败: {type(exc).__name__}")
+        return safe_route_failure(
+            logger, exc,
+            operation="query rates sync status",
+            user_message="查询同步状态失败，请稍后重试",
+        )
 
 
 @router.get("/overview")
@@ -170,8 +180,11 @@ async def get_overview_endpoint(
         result = await get_rate_overview(db, tenant_id, account_id=accountId)
         return ResultObject.success(result)
     except Exception as exc:
-        logger.exception("查询评价概览失败 tenantId=%s", tenant_id)
-        return ResultObject.failed(f"查询评价概览失败: {type(exc).__name__}")
+        return safe_route_failure(
+            logger, exc,
+            operation="query rates overview",
+            user_message="查询评价概览失败，请稍后重试",
+        )
 
 
 @router.post("/create")
@@ -235,11 +248,11 @@ async def create_rate_endpoint(
             db, account_id, order_id, rate, feedback, anonymous, tenant_id
         )
     except Exception as exc:
-        logger.exception(
-            "创建评价异常 tenantId=%s accountId=%s orderId=%s",
-            tenant_id, account_id, order_id,
+        return safe_route_failure(
+            logger, exc,
+            operation="create rate",
+            user_message="创建评价异常，请稍后重试",
         )
-        return ResultObject.failed(f"创建评价异常: {type(exc).__name__}")
 
     if not result.get("ok"):
         if result.get("error") == "CREATE_RATE_IN_PROGRESS":
@@ -266,8 +279,11 @@ async def list_fish_shop_accounts_endpoint(
         accounts = await list_fish_shop_accounts(db, tenant_id)
         return ResultObject.success({"accounts": accounts})
     except Exception as exc:
-        logger.exception("查询鱼小铺账号列表失败 tenantId=%s", tenant_id)
-        return ResultObject.failed(f"查询鱼小铺账号列表失败: {type(exc).__name__}")
+        return safe_route_failure(
+            logger, exc,
+            operation="query fish shop accounts",
+            user_message="查询鱼小铺账号列表失败，请稍后重试",
+        )
 
 
 # ============================================================
@@ -297,8 +313,11 @@ async def list_auto_rate_logs_endpoint(
         )
         return ResultObject.success(result)
     except Exception as exc:
-        logger.exception("查询自动评价日志失败 tenantId=%s", tenant_id)
-        return ResultObject.failed(f"查询自动评价日志失败: {type(exc).__name__}")
+        return safe_route_failure(
+            logger, exc,
+            operation="query auto rate logs",
+            user_message="查询自动评价日志失败，请稍后重试",
+        )
 
 
 @router.get("/auto-rate/scheduler-status")
@@ -309,8 +328,11 @@ async def get_auto_rate_scheduler_status_endpoint(
     try:
         return ResultObject.success(get_auto_rate_scheduler_status())
     except Exception as exc:
-        logger.exception("查询自动评价调度器状态失败")
-        return ResultObject.failed(f"查询调度器状态失败: {type(exc).__name__}")
+        return safe_route_failure(
+            logger, exc,
+            operation="query auto rate scheduler status",
+            user_message="查询调度器状态失败，请稍后重试",
+        )
 
 
 @router.post("/auto-rate/run")
@@ -345,10 +367,11 @@ async def trigger_auto_rate_run_endpoint(
     try:
         result = await run_auto_rate_for_account(account_id, tenant_id, trigger_type="manual")
     except Exception as exc:
-        logger.exception(
-            "手动触发自动评价异常 tenantId=%s accountId=%s", tenant_id, account_id
+        return safe_route_failure(
+            logger, exc,
+            operation="trigger auto rate run",
+            user_message="手动触发自动评价异常，请稍后重试",
         )
-        return ResultObject.failed(f"手动触发自动评价异常: {type(exc).__name__}")
 
     if not result.get("ok"):
         err = result.get("error") or "触发失败"

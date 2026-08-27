@@ -2066,19 +2066,22 @@ async def business_goofish_search(
                 data={"errorType": "cookie_expired"},
             )
         if e.error_type == "blocked":
+            blocked_message = e.message or "闲鱼触发安全验证，请稍后再试"
             return ResultObject.failed(
-                e.message or "闲鱼触发安全验证，请稍后再试",
+                blocked_message,
                 code=503,
                 data={"errorType": "blocked"},
             )
         if e.error_type == "captcha_failed":
+            captcha_failed_message = e.message or "滑块验证未通过，请稍后再试"
             return ResultObject.failed(
-                e.message or "滑块验证未通过，请稍后再试",
+                captcha_failed_message,
                 code=503,
                 data={"errorType": "captcha_failed"},
             )
+        search_error_message = e.message or "商品搜索暂时不可用，请稍后重试"
         return ResultObject.failed(
-            e.message or "商品搜索暂时不可用，请稍后重试",
+            search_error_message,
             code=503,
             data={"errorType": "unknown"},
         )

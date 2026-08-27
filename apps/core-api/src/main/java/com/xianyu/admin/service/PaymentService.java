@@ -1069,7 +1069,7 @@ public class PaymentService {
         }
         if (base.isEmpty()) {
             log.warn("支付回调地址解析失败：notifyUrl={}, externalBaseUrl={}, 推断失败。请配置环境变量 PAYMENT_EXTERNAL_BASE_URL", notifyUrl, externalBaseUrl);
-            throw new BizException(503, "支付回调地址为相对路径，但系统未配置 payment.external-base-url，且无法从当前请求推断外部访问地址。请在环境变量 PAYMENT_EXTERNAL_BASE_URL 中设置外部可访问地址（例如：http://1.12.66.249:18080 或 https://your-domain.com），重启服务后生效");
+            throw new BizException(503, "支付回调地址为相对路径，但系统未配置 payment.external-base-url，且无法从当前请求推断外部访问地址。请在环境变量 PAYMENT_EXTERNAL_BASE_URL 中设置外部可访问地址（例如：http://your-server-ip:18080 或 https://your-domain.com），重启服务后生效");
         }
         if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
         return base + notifyUrl;
@@ -1115,7 +1115,7 @@ public class PaymentService {
         }
         // 拒绝本机回环地址：手机扫码无法访问本机的 localhost/127.0.0.1
         if (isLoopbackHost(hostPart)) {
-            log.warn("支付回调地址推断失败：推断出的 host 是本机回环地址（{}），手机扫码无法访问。请配置环境变量 PAYMENT_EXTERNAL_BASE_URL 为服务器外网地址（例如 http://1.12.66.249:18080 或 https://your-domain.com）", hostPart);
+            log.warn("支付回调地址推断失败：推断出的 host 是本机回环地址（{}），手机扫码无法访问。请配置环境变量 PAYMENT_EXTERNAL_BASE_URL 为服务器外网地址（例如 http://your-server-ip:18080 或 https://your-domain.com）", hostPart);
             return "";
         }
         // 构建 base URL：支持 HTTPS 和 HTTP（HTTP 时记录警告，仍允许使用）

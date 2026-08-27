@@ -3,7 +3,7 @@
 This project has one supported **single-stack** deploy flow for the current production layout:
 
 - China server: backend stack only (`/home/ubuntu/project`, Docker Compose)
-- Hong Kong server (`64.90.31.68`): user/admin frontends only (`/var/www/user-web`, `/var/www/admin-web`, Nginx)
+- Hong Kong server (`<FRONTEND_SERVER_IP>`): user/admin frontends only (`/var/www/user-web`, `/var/www/admin-web`, Nginx)
 
 ## Files
 

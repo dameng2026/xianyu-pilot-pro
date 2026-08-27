@@ -452,19 +452,27 @@ def test_legacy_public_http_origin_config_is_explicitly_blocked():
     assert "VPN" in text
 
 
-def test_tracked_us_origin_uses_the_validated_loopback_ssh_tunnel():
+def test_tracked_us_origin_routes_only_over_private_or_verified_paths():
     path = REPO_ROOT / "deploy/nginx/us-nginx-full.conf"
     text = path.read_text(encoding="utf-8")
 
+    # No public plaintext HTTP and no unverified HTTPS origin anywhere.
     prod_deploy.validate_nginx_transport_security(path)
-    assert prod_deploy.nginx_uses_managed_origin_tunnel(path) is True
+    # The managed loopback SSH tunnel service template stays valid for
+    # deployments that prefer it over the WireGuard private path.
     prod_deploy.validate_origin_tunnel_service_template()
 
-    assert "SECURITY REQUIREMENT" in text
-    assert "127.0.0.1:18081" in text
-    assert "public plaintext HTTP" in text
-    assert text.count("proxy_set_header X-Request-ID") == text.count(
-        "proxy_pass http://127.0.0.1:18081"
+    assert "upstream xianyu_backend" in text
+    assert "server 10.0.0.1:18080;" in text
+    # Internal frontend listeners must stay loopback-only.
+    assert "listen 127.0.0.1:81;" in text
+    assert "listen 127.0.0.1:82;" in text
+    assert "\n    listen 81;" not in text
+    assert "\n    listen 82;" not in text
+    # Every proxied location must forward a trace id.
+    assert text.count("proxy_set_header X-Request-ID") == (
+        text.count("proxy_pass http://xianyu_backend")
+        + text.count("proxy_pass https://backend.example.com")
     )
 
 
@@ -472,10 +480,10 @@ def test_tls_terminated_public_vhosts_forward_the_real_client_scheme():
     text = (REPO_ROOT / "deploy" / "nginx" / "us-nginx-full.conf").read_text(
         encoding="utf-8"
     )
-    user_public = text.split("server_name www.xianyupilot.com;", 1)[1].split(
-        "server_name admin.xianyupilot.com;", 1
+    user_public = text.split("server_name www.example.com;", 1)[1].split(
+        "server_name admin.example.com;", 1
     )[0]
-    admin_public = text.split("server_name admin.xianyupilot.com;", 1)[1].split(
+    admin_public = text.split("server_name admin.example.com;", 1)[1].split(
         "listen 127.0.0.1:81;", 1
     )[0]
 
@@ -486,8 +494,10 @@ def test_tls_terminated_public_vhosts_forward_the_real_client_scheme():
     assert "geo $from_local_tls_terminator" in text
     assert "127.0.0.1 1;" in text
     assert "::1 1;" in text
-    assert "~^0:/\\.well-known/acme-challenge/ 0;" in text
-    assert text.count("return 308 https://$host$request_uri;") == 2
+    # Public plaintext HTTP stays reachable for ACME challenges only.
+    assert "~^0:http:/\\.well-known/acme-challenge/ 0;" in text
+    # www, admin and api vhosts all force-redirect plaintext to HTTPS.
+    assert text.count("return 308 https://$host$request_uri;") == 3
 
 
 def test_frontend_deploy_fails_closed_until_managed_origin_tunnel_is_healthy():
@@ -495,7 +505,7 @@ def test_frontend_deploy_fails_closed_until_managed_origin_tunnel_is_healthy():
 
     active_check = "systemctl is-active --quiet"
     health_check = "origin_tunnel_health_url"
-    first_upload = "remote.upload(user_bundle"
+    first_upload = "remote.upload(nginx_config_path"
     assert active_check in text
     assert health_check in text
     assert text.index(active_check) < text.index(first_upload)

@@ -158,10 +158,12 @@ async def test_direct_status_requires_exact_authenticated_owner(monkeypatch):
 
 
 def test_browser_facing_automation_api_has_no_cookie_export_route():
+    schema = app.openapi()
     routes = {
-        (route.path, method)
-        for route in app.routes
-        for method in getattr(route, "methods", set())
+        (path, method.upper())
+        for path, operations in schema.get("paths", {}).items()
+        for method in operations.keys()
+        if method in {"get", "post", "put", "delete", "patch", "head", "options"}
     }
 
     assert ("/api/qrlogin/cookies/{session_id}", "POST") not in routes

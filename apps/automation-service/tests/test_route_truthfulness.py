@@ -720,16 +720,16 @@ async def test_internal_scheduled_task_runs_asynchronously_after_claim(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_unimplemented_republish_capability_is_fail_closed():
+async def test_republish_without_account_parameter_is_fail_closed():
     result = await items.republish_item(
         {"goodsId": "goods-1"},
         db=None,
         _=None,
     )
 
-    assert result.code == 503
+    assert result.code == 500
     assert result.data is None
-    assert "未重新发布" in result.msg
+    assert "缺少参数 xianyuAccountId" in result.msg
 
 
 @pytest.mark.asyncio

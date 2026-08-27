@@ -3,7 +3,8 @@ FROM mcr.microsoft.com/playwright:v1.61.1-noble AS build
 WORKDIR /app
 
 COPY package*.json ./
-RUN node -e "const v=process.versions.node.split('.')[0]; if(v!=='24') process.exit(1)" \
+RUN test "$(node --version)" = "v24.18.0" \
+    && test "$(npm --version)" = "11.16.0" \
     && npm ci --no-audit --no-fund --strict-allow-scripts
 
 COPY tsconfig.json ./
@@ -16,7 +17,8 @@ FROM mcr.microsoft.com/playwright:v1.61.1-noble
 
 WORKDIR /app
 
-RUN node -e "const v=process.versions.node.split('.')[0]; if(v!=='24') process.exit(1)"
+RUN test "$(node --version)" = "v24.18.0" \
+    && test "$(npm --version)" = "11.16.0"
 
 # 安装 Xvfb + google-chrome-stable + Python + patchright：
 # - Xvfb：让线上 Linux Docker 也能运行有头 Chrome（headless 下 Baxia 风控识别率极高）

@@ -6,11 +6,9 @@ import { chromium } from 'playwright';
 import { writeFileSync } from 'fs';
 
 async function main() {
-  // 用最近爬取过的店铺 URL（从数据库已知有效的 userId）
-  // 919131916302 是数据库里存在的 itemId，对应的店铺可以从 goofish_stores 查
-  // 这里直接用一个已知有效的店铺 URL
-  const storeUrl = process.env.STORE_URL || 'https://www.goofish.com/personal?userId=2215221946082';
-  const itemId = process.env.ITEM_ID || '919131916302';
+  // 诊断脚本：默认使用示例店铺 URL / 商品 ID，实际使用请通过环境变量传入（或替换为自有店铺数据）
+  const storeUrl = process.env.STORE_URL || 'https://www.goofish.com/personal?userId=2218000000000';
+  const itemId = process.env.ITEM_ID || '8000000000000000';
 
   const cookieHeader = process.env.GOOFISH_COOKIE || '';
   if (!cookieHeader) {

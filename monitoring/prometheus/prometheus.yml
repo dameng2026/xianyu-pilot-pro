@@ -45,20 +45,21 @@ scrape_configs:
         replacement: blackbox-exporter:9115
 
   # Probe the customer-visible TLS path, not only the container network. This
-  # covers DNS, certificate validation, the US edge, the origin tunnel and the
-  # public health route as one observable commercial path.
+  # covers DNS, certificate validation, the public edge and the public health
+  # route as one observable path. Replace the placeholder targets below with
+  # your own deployed domains before enabling this job.
   - job_name: public-availability
     metrics_path: /probe
     params:
       module: [public_https]
     static_configs:
-      - targets: ['https://www.xianyupilot.com/']
+      - targets: ['https://www.example.com/']
         labels:
           endpoint: user-web
-      - targets: ['https://www.xianyupilot.com/api/health']
+      - targets: ['https://www.example.com/api/health']
         labels:
           endpoint: user-api
-      - targets: ['https://admin.xianyupilot.com/']
+      - targets: ['https://admin.example.com/']
         labels:
           endpoint: admin-web
     relabel_configs:

@@ -10,7 +10,7 @@ Type=simple
 User=xianyupilot-tunnel
 Group=xianyupilot-tunnel
 UMask=0077
-ExecStart=/usr/bin/ssh -N -i /etc/xianyupilot-origin-tunnel/id_ed25519 -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o TCPKeepAlive=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/xianyupilot-origin-tunnel/known_hosts -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o GSSAPIAuthentication=no -o GatewayPorts=no -o Compression=no -o LogLevel=ERROR -L 127.0.0.1:18081:127.0.0.1:18080 __ORIGIN_USER__@1.12.66.249
+ExecStart=/usr/bin/ssh -N -i /etc/xianyupilot-origin-tunnel/id_ed25519 -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o TCPKeepAlive=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/xianyupilot-origin-tunnel/known_hosts -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o GSSAPIAuthentication=no -o GatewayPorts=no -o Compression=no -o LogLevel=ERROR -L 127.0.0.1:18081:127.0.0.1:18080 __ORIGIN_USER__@__ORIGIN_HOST__
 Restart=always
 RestartSec=5
 NoNewPrivileges=yes

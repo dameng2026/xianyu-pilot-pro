@@ -1173,9 +1173,10 @@ class XianyuWebSocketClient:
                     {"aid": self.account_id, "tid": self.tenant_id},
                 )
                 await db.commit()
+            offline_state_reason = reason or "unknown"
             logger.info(
                 "已持久化 WS 离线状态: accountId=%d reason=%s",
-                self.account_id, reason,
+                self.account_id, offline_state_reason,
             )
         except Exception as e:
             log_service_failure(

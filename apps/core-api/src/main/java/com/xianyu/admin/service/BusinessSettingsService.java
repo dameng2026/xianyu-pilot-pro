@@ -249,14 +249,12 @@ public class BusinessSettingsService {
             }
             case "data-sync-config" -> {
                 // 数据同步配置（本地 → 线上）
-                // 预配置连接信息：用户无需手动填写即可直接执行同步
-                // targetBaseUrl 必须是能从公网访问到线上 core-api 的地址
-                //   - 1.12.66.249:18080 端口对外不开放，不能用
-                //   - www.xianyupilot.com 已配置 Nginx 反代 /api/ 到后端
-                //   - /open-api/internal/sync/* 需要线上 Nginx 同步配置反代规则
-                config.put("targetBaseUrl", "http://www.xianyupilot.com");
-                config.put("targetUsername", "slfasd");
-                config.put("targetToken", "HIDpsuvrKSlWfczLiFTJa0Ydhqm8gx7Q");
+                // 连接信息由用户在页面上自行填写：目标地址、用户名与 token
+                // targetBaseUrl 需要是能从公网访问到目标 core-api 的地址，
+                // 且目标端 Nginx 需将 /open-api/internal/sync/* 反代到后端
+                config.put("targetBaseUrl", "");
+                config.put("targetUsername", "");
+                config.put("targetToken", "");
                 config.put("sourceAccountId", null);
                 config.put("lastSyncAt", null);
                 config.put("lastSyncStatus", null);

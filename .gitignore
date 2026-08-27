@@ -100,19 +100,57 @@ Thumbs.db
 
 apps/core-api/.mvn/apache-maven-*/
 apps/core-api/.mvn/apache-maven-*-bin.tar.gz
+apps/core-api/.mvn/bootstrap/
 
 # Local pytest temp directories (permission-restricted)
 .pytest-tmp-*/
 
-# Files false-flagged by sensitive-content preflight; kept local but untracked
-.deploy.prod.example.json
-.github/workflows/ci.yml
-apps/admin-web/package-lock.json
-apps/admin-web/src/locales/langs/en.json
-apps/admin-web/src/locales/langs/zh.json
-apps/automation-service/tests/test_safe_logging.py
-scripts/prod_deploy.py
-scripts/tests/test_prod_deploy.py
+# AI assistant tooling and IDE rules (internal, not part of the project)
+/.agents/
+/.trae/
+/.maven/
+/skills-lock.json
+
+# JAR build residue accidentally committed at repo root
+/META-INF/
+/BOOT-INF/
+apps/core-api/BOOT-INF/
+apps/core-api/META-INF/
+
+# Temporary test scratch directories
+/tmp_test/
+
+# Root-level debug screenshots and ad-hoc JSON captures
+/*.png
+/xianyu_chat_message.json
+/summary.json
+/create_workflow.json
+/exec_workflow.json
+/category-api-response.json
+/_auto_solve.json
+/_force_refresh.json
+/_polish.json
+/cp_args.txt
+/javac_out*.txt
+/wf_*.txt
+
+# Internal process reports (never publish)
+/2026-*.md
+/小梦客服*.md
+/用户体验与粘合度提升分析报告.md
+/自动发货.md
+/商品获取日志.md
+/闲鱼搜索接口.md
+/闲鱼商品详情接口.md
+/admin-backend-analysis-report.md
+/admin-analysis-report.txt
+/next-phase-backend-optimization.md
+/docs/2026-*.md
+/docs/上传前验证快照.md
+/docs/同类项目功能对比与强化分析报告.md
+/docs/统一上传发布清单.md
+/docs/superpowers/
+/docs/ai_cs_test_questions.md
 
 # Generated icon bundle (rebuilt by icons:generate during admin-web build)
 apps/admin-web/src/assets/generated/iconify-bundle.json
@@ -210,8 +248,16 @@ docs/superpowers/
 /用户体验与粘合度提升分析报告.md
 /重测*.json
 # automation-service 根目录临时测试脚本（非 tests/ 目录下的正式测试）
-/apps/automation-service/test_ai_cs*.py
-/apps/automation-service/test_dashboard_diag.py
+/apps/automation-service/_*.py
+/apps/automation-service/test_*.py
+/apps/automation-service/debug_*.py
+/apps/automation-service/check_*.py
+/apps/automation-service/clear_*.py
+/apps/automation-service/diagnose*.py
+/apps/automation-service/fix_*.py
+/apps/automation-service/restore_*.py
+/apps/automation-service/scan_*.py
+/apps/automation-service/update_*.py
 /apps/automation-service/重测写操作类问题结果.json
 # scripts 目录临时调试/诊断/热修脚本
 /scripts/_*.py
@@ -282,6 +328,9 @@ docs/superpowers/
 /scripts/patches/
 /scripts/scripts/
 /scripts/observe.py
+/scripts/page-scans/
+/apps/core-api/test-apis.ps1
+/apps/crawler-service/_*.py
 *.tsbuildinfo
 /.trae/
 /2026-08-03

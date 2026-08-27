@@ -303,13 +303,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          secret_file="$RUNNER_TEMP/alertmanager-webhook-url"
-          printf '%s\n' 'https://incident-receiver.invalid/xianyupilot' > "$secret_file"
-          chmod 0644 "$secret_file"
+          webhook_url_file="$RUNNER_TEMP/alertmanager-webhook-url"
+          printf '%s\n' 'https://incident-receiver.invalid/xianyupilot' > "$webhook_url_file"
+          chmod 0644 "$webhook_url_file"
           docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges \
             --mount type=bind,src="$PWD/monitoring/alertmanager",dst=/etc/alertmanager,readonly \
-            --mount type=bind,src="$secret_file",dst=/run/secrets/alertmanager_webhook_url,readonly \
+            --mount type=bind,src="$webhook_url_file",dst=/run/secrets/alertmanager_webhook_url,readonly \
             --entrypoint /bin/amtool \
             prom/alertmanager:v0.32.1 \
             check-config /etc/alertmanager/alertmanager.yml

@@ -62,7 +62,9 @@ def test_compose_uses_least_privilege_database_account_and_container_guards():
     assert compose.count("init: true") >= 7
     assert compose.count("read_only: true") >= 7
     assert compose.count("cap_drop:") >= 7
-    assert compose.count("/home/pwuser:rw,noexec,nosuid,size=64m") == 2
+    # /home/pwuser tmpfs is sized 128m (raised from 64m alongside /tmp 4g:
+    # Chrome needs writable HOME space for crashpad + profile spillover).
+    assert compose.count("/home/pwuser:rw,noexec,nosuid,size=128m") == 2
     assert "internal: true" in compose
     assert "condition: service_healthy" in compose
     assert "http://127.0.0.1:3001/api/ready" in compose
@@ -188,8 +190,13 @@ def test_host_published_service_data_and_monitoring_ports_are_loopback_only():
     monitoring = read("docker-compose.monitoring.yml")
     nginx = read("deploy/nginx/us-nginx-full.conf")
 
+    # Backend 18080 stays reachable on all interfaces: the cross-region edge
+    # (deploy/nginx/us-nginx-full.conf) proxies to this host over the WireGuard
+    # private path 10.0.0.1:18080, and iptables restricts the port to
+    # 10.0.0.0/24 + the edge server IP only. The web frontends, databases and
+    # monitoring ports must remain loopback-only.
+    assert "${BACKEND_PORT:-18080}:18080" in compose
     for binding in (
-        "127.0.0.1:${BACKEND_PORT:-18080}:18080",
         "127.0.0.1:${ADMIN_WEB_PORT:-3006}:8080",
         "127.0.0.1:${USER_WEB_PORT:-5174}:8080",
     ):
@@ -253,10 +260,13 @@ def test_monitoring_scrape_is_authenticated_and_services_are_hardened():
     assert "CriticalServiceProbeMissing" in alerts
     assert "BlackboxExporterDown" in alerts
     assert "job_name: public-availability" in prometheus
+    # The public-availability probe ships with placeholder domains
+    # (example.com) so the open-source tree stays deployment-neutral;
+    # operators replace them with their own domains.
     for target in (
-        "https://www.xianyupilot.com/",
-        "https://www.xianyupilot.com/api/health",
-        "https://admin.xianyupilot.com/",
+        "https://www.example.com/",
+        "https://www.example.com/api/health",
+        "https://admin.example.com/",
     ):
         assert target in prometheus
     assert "PublicEndpointDown" in alerts
@@ -332,11 +342,15 @@ def test_frontend_nginx_configs_emit_browser_security_headers():
 
 
 def test_uploaded_assets_always_use_the_backend_and_fail_closed_cache_policy():
+    # The container frontends proxy uploads through their keepalive upstream
+    # pool (backend_pool -> backend:18080); xianyupilot-ssl.conf proxies to
+    # its origin pool. The US edge serves uploads from its local mirror
+    # behind a media-session cookie check and relays misses to the verified
+    # HTTPS origin instead of the plaintext tunnel.
     configs = {
-        "apps/admin-web/nginx.conf": (1, "http://backend:18080/uploads/"),
-        "apps/user-web/nginx.conf": (1, "http://backend:18080/uploads/"),
-        "deploy/nginx/us-nginx-full.conf": (4, "http://127.0.0.1:18081/uploads/"),
-        "deploy/nginx/xianyupilot-ssl.conf": (2, "http://1.12.66.249:18080/uploads/"),
+        "apps/admin-web/nginx.conf": (1, "http://backend_pool/uploads/"),
+        "apps/user-web/nginx.conf": (1, "http://backend_pool/uploads/"),
+        "deploy/nginx/xianyupilot-ssl.conf": (2, "http://backend_pool/uploads/"),
     }
 
     for relative, (expected_count, upstream) in configs.items():
@@ -364,6 +378,33 @@ def test_uploaded_assets_always_use_the_backend_and_fail_closed_cache_policy():
             assert 'add_header Referrer-Policy "no-referrer" always;' in block, relative
             assert 'add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;' in block, relative
             assert 'add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;' in block, relative
+
+    # US edge: every vhost serves /uploads/ from the local mirror behind a
+    # media-session cookie check (user and admin variants) and relays misses
+    # to the verified HTTPS origin with SNI + request-id propagation.
+    edge = read("deploy/nginx/us-nginx-full.conf")
+    edge_uploads = re.findall(
+        r"location \^~ /uploads/ \{.*?\n    \}", edge, re.DOTALL
+    )
+    edge_relays = re.findall(
+        r"location @uploads_relay \{.*?\n    \}", edge, re.DOTALL
+    )
+    assert len(edge_uploads) == 4
+    assert len(edge_relays) == 4
+    assert "location /uploads/ {" not in edge
+    assert "proxy_cookie_domain" not in edge
+    assert "proxy_cookie_path" not in edge
+    assert "http://127.0.0.1:18081/uploads/" not in edge
+    for block in edge_uploads:
+        assert "alias /var/www/uploads-data/;" in block
+        assert "$cookie_xianyu_media_" in block
+        assert "return 403;" in block
+        assert "error_page 404 = @uploads_relay;" in block
+    for block in edge_relays:
+        assert "proxy_pass https://backend.example.com;" in block
+        assert "proxy_ssl_server_name on;" in block
+        assert "proxy_ssl_name backend.example.com;" in block
+        assert "proxy_set_header X-Request-ID $request_id;" in block
 
 
 def test_automation_image_installs_hash_locked_audited_dependencies():

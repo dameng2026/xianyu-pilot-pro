@@ -53,13 +53,14 @@ async def test_on_message_callback_offloads_heavy_followups(monkeypatch):
     def _session_factory():
         return session
 
-    async def _fake_save_chat_message(db, tenant_id, account_id, msg, seller_external_uid=""):
+    async def _fake_save_chat_message(db, tenant_id, account_id, msg, seller_external_uid="", is_auto_reply=0):
         saved_messages.append({
             "db": db,
             "tenant_id": tenant_id,
             "account_id": account_id,
             "msg": dict(msg),
             "seller_external_uid": seller_external_uid,
+            "is_auto_reply": is_auto_reply,
         })
         await asyncio.sleep(0)
         return 1
@@ -107,7 +108,7 @@ async def test_on_message_callback_skips_followups_for_duplicate_message(monkeyp
     def _session_factory():
         return session
 
-    async def _fake_save_chat_message(db, tenant_id, account_id, msg, seller_external_uid=""):
+    async def _fake_save_chat_message(db, tenant_id, account_id, msg, seller_external_uid="", is_auto_reply=0):
         return None
 
     monkeypatch.setattr(ws_startup, "async_session", _session_factory)

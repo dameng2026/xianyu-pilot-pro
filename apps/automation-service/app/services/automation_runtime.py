@@ -17,7 +17,9 @@ import math
 import os
 import random
 import re
+import sys
 import time
+import traceback
 import uuid
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
@@ -78,19 +80,25 @@ class PublicRuntimeError(RuntimeError):
         super().__init__(public_message)
 
 
+def _exc_type_name(exc: BaseException) -> str:
+    """Return the exception type name without serialising the exception value."""
+    return type(exc).__name__
+
+
 def _log_runtime_failure(operation: str, exc: BaseException) -> None:
     """Log diagnostic metadata without serialising the exception value.
 
-    对 NameError/AttributeError/TypeError 等编程错误，额外记录完整 traceback，
-    便于定位 send_auto_reply 等操作中的代码级 bug（这些异常不应在生产环境出现，
-    默认 log_service_failure 仅记录 metadata 而不记录 traceback，无法定位根因）。
+    对 NameError/AttributeError/TypeError 等编程错误，额外记录异常发生位置（文件/行号，
+    不含异常值），便于定位 send_auto_reply 等操作中的代码级 bug。
     """
     log_service_failure(logger, exc, operation=operation)
-    # 编程错误（NameError 等）属于代码 bug，不应在生产环境出现，记录 traceback 便于定位
+    # 编程错误（NameError 等）属于代码 bug，不应在生产环境出现，记录栈帧位置便于定位
     if isinstance(exc, (NameError, AttributeError, TypeError, ImportError, SyntaxError, KeyError)):
+        tb_frames = "".join(traceback.format_list(traceback.extract_tb(exc.__traceback__) or []))
+        trace_error_kind = _exc_type_name(exc)
         logger.error(
-            "traceback operation=%s exc_type=%s",
-            operation, type(exc).__name__, exc_info=exc,
+            "traceback operation=%s exc_type=%s tb=%s",
+            operation, trace_error_kind, tb_frames,
         )
 
 
@@ -1635,7 +1643,7 @@ def _workflow_search_with_fallback(
             logger.warning("[PRODUCT_FETCH] keyword=%s fast 触发风控且 slow 也失败，向上抛出风控信号", keyword)
             raise PublicRuntimeError(
                 "PRODUCT_SEARCH_RATE_LIMITED",
-                f"快速搜索触发平台验证，慢速搜索也失败：{slow_err}",
+                "快速搜索触发平台验证，慢速搜索也失败",
             )
         raise
 
@@ -3569,7 +3577,7 @@ async def _run_scheduled_task_in_background(
                     "id": task_id,
                     "tenant_id": t_id,
                     "lease_token": lease_token,
-                    "last_result": json.dumps({"ok": False, "message": f"后台执行异常: {exc}"}, ensure_ascii=False)[:4000],
+                    "last_result": json.dumps({"ok": False, "message": f"后台执行异常: {type(exc).__name__}"}, ensure_ascii=False)[:4000],
                 })
                 await cleanup_db.commit()
         except Exception:
@@ -3696,7 +3704,7 @@ async def _run_redelivery_task(db: AsyncSession, tenant_id: int, task: dict[str,
                     account_id, external_order_id_for_confirm, confirm_error_msg,
                 )
         except Exception as e:
-            confirm_error_msg = f"确认发货异常: {e}"
+            confirm_error_msg = f"确认发货异常: {type(e).__name__}"
             _log_runtime_failure("redelivery_confirm", e)
 
         await db.execute(text("""
@@ -4262,7 +4270,7 @@ async def _run_sync_orders_task(db: AsyncSession, tenant_id: int, task: dict[str
             _log_runtime_failure("sync_orders_scheduled_multi", exc)
             aggregated["ok"] = False
             aggregated["failed"] += 1
-            aggregated["details"].append({"accountId": aid, "ok": False, "message": str(exc)})
+            aggregated["details"].append({"accountId": aid, "ok": False, "message": f"同步失败: {type(exc).__name__}"})
             continue
         aggregated["processed"] += _safe_int(single.get("processed"))
         aggregated["inserted"] += _safe_int(single.get("inserted"))
@@ -4310,16 +4318,16 @@ async def _run_sync_orders_for_single_account(
                 "failed": delivery_result.get("failed", 0),
             }
             logger.info(
-                "订单同步后立即触发自动发货 tenantId=%d accountId=%d inserted=%d delivery=%s",
-                tenant_id, account_id, inserted, delivery_result.get("message", ""),
+                "订单同步后立即触发自动发货 tenantId=%d accountId=%d inserted=%d deliverySuccess=%s deliverySkipped=%s deliveryFailed=%s",
+                tenant_id, account_id, inserted,
+                delivery_result.get("success", 0),
+                delivery_result.get("skipped", 0),
+                delivery_result.get("failed", 0),
             )
         except Exception as exc:
-            logger.error(
-                "订单同步后触发自动发货失败 tenantId=%d accountId=%d: %s",
-                tenant_id, account_id, exc,
-            )
+            _log_runtime_failure("sync_auto_delivery_after_orders", exc)
             result["autoDeliveryTriggered"] = False
-            result["autoDeliveryError"] = str(exc)
+            result["autoDeliveryError"] = f"自动发货失败: {type(exc).__name__}"
 
     return result
 
@@ -4423,7 +4431,7 @@ async def _run_sync_goods_task(db: AsyncSession, tenant_id: int, task: dict[str,
         except Exception as exc:
             failed += 1
             _log_runtime_failure("sync_goods_scheduled", exc)
-            details.append({"accountId": account_id, "ok": False, "message": str(exc)})
+            details.append({"accountId": account_id, "ok": False, "message": f"同步失败: {type(exc).__name__}"})
 
     return {
         "ok": failed == 0,
@@ -4477,7 +4485,7 @@ async def _run_auto_redelivery_task(db: AsyncSession, tenant_id: int, task: dict
         return {
             "ok": False,
             "errorCode": "AUTO_REDELIVERY_PROCESS_FAILED",
-            "message": f"自动补发任务处理失败：{exc}",
+            "message": f"自动补发任务处理失败：{type(exc).__name__}",
             "processed": 0,
             "success": 0,
             "skipped": 0,
@@ -4551,7 +4559,7 @@ async def _run_one_click_polish_task(db: AsyncSession, tenant_id: int, task: dic
         except Exception as exc:
             failed += 1
             _log_runtime_failure("one_click_polish_scheduled", exc)
-            details.append({"accountId": account_id, "ok": False, "message": str(exc)})
+            details.append({"accountId": account_id, "ok": False, "message": f"擦亮失败: {type(exc).__name__}"})
 
     return {
         "ok": failed == 0,
@@ -4640,7 +4648,7 @@ async def _run_workflow_scheduled_task(db: AsyncSession, tenant_id: int, task: d
         return {
             "ok": False,
             "errorCode": "WORKFLOW_TRIGGER_EXCEPTION",
-            "message": f"触发工作流异常：{exc}",
+            "message": f"触发工作流异常：{type(exc).__name__}",
             "processed": 0,
             "workflowId": workflow_id,
             "taskType": task.get("task_type"),
@@ -5304,7 +5312,7 @@ async def execute_delivery_for_order(db: AsyncSession, order: dict[str, Any]) ->
                     get_request_id() or "-", confirm_error_msg,
                 )
         except Exception as e:
-            confirm_error_msg = f"确认发货异常: {e}"
+            confirm_error_msg = f"确认发货异常: {type(e).__name__}"
             _log_runtime_failure("confirm_delivery", e)
 
         if confirm_success:
@@ -5889,9 +5897,10 @@ async def process_incoming_message(db: AsyncSession, payload: dict[str, Any]) ->
                         "message": "检测到卖家最近有人工回复，AI 回复已临时挂起",
                     }
             except (ValueError, TypeError) as exc:
+                parse_error_kind = _exc_type_name(exc)
                 logger.warning(
-                    "[AUTO_REPLY] 兜底判定解析 message_time 失败 convId=%d value=%s error=%s",
-                    conversation_db_id, last_manual_msg.get("message_time"), exc
+                    "[AUTO_REPLY] 兜底判定解析 message_time 失败 convId=%d value=%s errorType=%s",
+                    conversation_db_id, last_manual_msg.get("message_time"), parse_error_kind
                 )
 
     if platform_message_id:
@@ -6837,7 +6846,8 @@ async def _fallback_db_search_learned_kb(
             for r in rows[:top_k]
         ]
     except Exception as exc:
-        logger.warning("[AI_CS] db fallback search failed errorType=%s", type(exc).__name__)
+        search_error_kind = _exc_type_name(exc)
+        logger.warning("[AI_CS] db fallback search failed errorType=%s", search_error_kind)
         return []
 
 
@@ -7022,7 +7032,7 @@ async def _enqueue_pending_auto_reply_billing(
             scene=billing_pending["scene"],
             request_id=billing_pending["request_id"],
             payload=pending_payload,
-            error=str(exc),
+            error=f"计费暂存失败: {type(exc).__name__}",
         )
     except Exception as enqueue_exc:
         _log_runtime_failure("enqueue_pending_auto_reply_billing", enqueue_exc)
@@ -7080,9 +7090,10 @@ async def _resolve_ai_cs_pause_duration_seconds(
             return default_seconds
         return val
     except Exception as exc:
+        pause_cfg_kind = _exc_type_name(exc)
         logger.warning(
             "[AUTO_REPLY] 读取 pauseDurationSeconds 失败，回退默认 60s tenantId=%d accountId=%d errorType=%s",
-            tenant_id, account_id, type(exc).__name__,
+            tenant_id, account_id, pause_cfg_kind,
         )
         return default_seconds
 
@@ -7172,9 +7183,10 @@ async def _try_default_reply(
                 if not sent:
                     fail_reason = _text(err) or "图片默认回复发送失败"
             except Exception as exc:
+                image_send_kind = _exc_type_name(exc)
                 logger.warning(
                     "[DEFAULT_REPLY] 图片默认回复发送异常 tenantId=%d accountId=%d errorType=%s",
-                    tenant_id, account_id, type(exc).__name__,
+                    tenant_id, account_id, image_send_kind,
                 )
                 fail_reason = "图片默认回复发送异常"
         elif reply_content:
@@ -7224,9 +7236,10 @@ async def _try_default_reply(
                     "buyer_user_id": buyer_key,
                 })
             except Exception as exc:
+                def_reply_record_err = _exc_type_name(exc)
                 logger.warning(
                     "[DEFAULT_REPLY] 写入默认回复记录失败 tenantId=%d accountId=%d errorType=%s",
-                    tenant_id, account_id, type(exc).__name__,
+                    tenant_id, account_id, def_reply_record_err,
                 )
 
         await db.commit()
@@ -7243,9 +7256,10 @@ async def _try_default_reply(
             "message": "默认回复已发送" if sent else f"默认回复未发送：{fail_reason}",
         }
     except Exception as exc:
+        def_reply_run_err = _exc_type_name(exc)
         logger.warning(
             "[DEFAULT_REPLY] 默认回复执行异常 tenantId=%d accountId=%d errorType=%s",
-            tenant_id, account_id, type(exc).__name__,
+            tenant_id, account_id, def_reply_run_err,
         )
         try:
             await db.rollback()
@@ -7431,7 +7445,8 @@ async def _build_ai_customer_service_rule(
                         query=content, kb_ids=learned_ids, top_k=3
                     )
                 except Exception as exc:
-                    logger.warning("[AI_CS] vector search failed, fallback to DB search errorType=%s", type(exc).__name__)
+                    vector_search_kind = _exc_type_name(exc)
+                    logger.warning("[AI_CS] vector search failed, fallback to DB search errorType=%s", vector_search_kind)
                     learned_kb_hits = []
                 # 向量检索失败或返回空时，回退到 DB 关键词 LIKE 检索
                 # 兜底场景：线上未配置 embedding 模型，所有条目 vector_indexed=0
@@ -7451,7 +7466,8 @@ async def _build_ai_customer_service_rule(
                     for r in user_kb_rows.mappings()
                 ]
     except Exception as exc:
-        logger.warning("[AI_CS] kb binding/rag lookup failed errorType=%s", type(exc).__name__)
+        kb_lookup_err = _exc_type_name(exc)
+        logger.warning("[AI_CS] kb binding/rag lookup failed errorType=%s", kb_lookup_err)
 
     system_prompt = _build_ai_cs_system_prompt(
         cfg,
@@ -7539,9 +7555,10 @@ async def _check_message_filter(
                     hits.append(filter_type)
         return hits
     except Exception as exc:
+        msg_filter_err = _exc_type_name(exc)
         logger.warning(
-            "[MESSAGE_FILTER] 查询消息过滤规则失败 tenantId=%d accountId=%d errorType=%s error=%s",
-            tenant_id, account_id, type(exc).__name__, exc,
+            "[MESSAGE_FILTER] 查询消息过滤规则失败 tenantId=%d accountId=%d errorType=%s",
+            tenant_id, account_id, msg_filter_err,
         )
         return []
 
@@ -8678,7 +8695,8 @@ async def _prepare_account_publishers(
                 ), {"aid": acct_id, "tid": tenant_id})).first()
                 is_fish_shop = bool(_fs_row and _fs_row[0])
             except Exception as _fs_err:
-                logger.warning("[PREPARE-PUB] acct_id=%d 查询鱼小铺标识失败，按普通账号处理: %s", acct_id, _fs_err)
+                fs_flag_lookup_err = _exc_type_name(_fs_err)
+                logger.warning("[PREPARE-PUB] acct_id=%d 查询鱼小铺标识失败，按普通账号处理 errorType=%s", acct_id, fs_flag_lookup_err)
                 is_fish_shop = False
             result[acct_id] = {"cookie_str": cookie_str, "token": token, "publisher": publisher, "is_fish_shop": is_fish_shop, "error": ""}
         except Exception as e:
@@ -9173,9 +9191,9 @@ async def _publish_single_item_impl(
             }
     except Exception as e:
         _log_runtime_failure("publish_single_item", e)
-        # 保留真实异常类型与消息，便于排障（账号 token 失效、图片上传失败、风控等）
+        # 仅保留异常类型便于排障，异常值不得写入结果（防泄露）
         err_type = type(e).__name__
-        err_msg = str(e) or err_type
+        err_msg = err_type
         return {
             "goods_id": "",
             "title": title,
@@ -11421,7 +11439,8 @@ async def _execute_workflow_node(
                     ), {"aid": acct_id, "tid": tenant_id})).first()
                     acct_is_fish_shop = bool(_fs_row and _fs_row[0])
                 except Exception as _fs_err:
-                    logger.warning("[PUBLISH] 账号%d 查询鱼小铺标识失败，按普通账号处理: %s", acct_id, _fs_err)
+                    fs_flag_pub_err = _exc_type_name(_fs_err)
+                    logger.warning("[PUBLISH] 账号%d 查询鱼小铺标识失败，按普通账号处理 errorType=%s", acct_id, fs_flag_pub_err)
                     acct_is_fish_shop = False
 
             for idx, p in enumerate(polished):

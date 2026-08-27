@@ -128,8 +128,9 @@ async def get_browse_summary(
             "fish_shop_data_browse cookie_expired tenant_id=%s accountId=%s dateType=%s",
             tenant_id, safe_account_id, safe_date_type,
         )
+        expired_message = str(e) or "闲鱼账号登录状态已失效，请重新登录后再查看"
         return ResultObject.failed(
-            str(e) or "闲鱼账号登录状态已失效，请重新登录后再查看",
+            expired_message,
             code=409,
             data={"errorType": "cookie_expired"},
         )
@@ -138,8 +139,9 @@ async def get_browse_summary(
             "fish_shop_data_browse biz_fail tenant_id=%s accountId=%s dateType=%s errorType=%s",
             tenant_id, safe_account_id, safe_date_type, type(e).__name__,
         )
+        biz_fail_message = str(e) or "流量分布获取失败，请稍后重试"
         return ResultObject.failed(
-            str(e) or "流量分布获取失败，请稍后重试",
+            biz_fail_message,
             code=503,
             data={"errorType": "biz_failed"},
         )

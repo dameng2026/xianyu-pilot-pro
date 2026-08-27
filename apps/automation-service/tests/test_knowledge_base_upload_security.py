@@ -21,7 +21,7 @@ def _ooxml_bytes(*names: str, repeated_payload: bytes | None = None) -> bytes:
 def test_binary_office_formats_are_not_advertised_as_supported():
     assert ".xls" not in knowledge_base.ALLOWED_EXTENSIONS
     assert ".ppt" not in knowledge_base.ALLOWED_EXTENSIONS
-    assert {".md", ".txt", ".csv", ".xlsx", ".pptx"} == knowledge_base.ALLOWED_EXTENSIONS
+    assert {".md", ".txt", ".csv", ".xlsx", ".pptx", ".docx", ".pdf"} == knowledge_base.ALLOWED_EXTENSIONS
 
 
 def test_ooxml_preflight_accepts_matching_minimal_packages():

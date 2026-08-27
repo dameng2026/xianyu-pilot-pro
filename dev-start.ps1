@@ -23,10 +23,10 @@ function Test-Cmd($cmd) {
     }
 }
 
-$MinimumNodeVersion = [Version]'22.0.0'
-$MaximumNodeVersion = [Version]'27.0.0'
-$MinimumNpmVersion = [Version]'10.9.0'
-$MaximumNpmVersion = [Version]'12.0.0'
+# Fail-closed pinned toolchain: must match CI (.github/workflows/ci.yml),
+# the frontend Dockerfiles and .node-version exactly.
+$RequiredNodeVersion = [Version]'24.18.0'
+$RequiredNpmVersion = [Version]'11.16.0'
 
 function Get-SemanticToolVersion($cmd) {
     try {
@@ -40,8 +40,8 @@ function Get-SemanticToolVersion($cmd) {
     }
 }
 
-function Test-VersionRange($version, [Version]$minimum, [Version]$maximum) {
-    return $null -ne $version -and $version -ge $minimum -and $version -lt $maximum
+function Test-ExactVersion($version, [Version]$required) {
+    return $null -ne $version -and $version -eq $required
 }
 
 function Import-DotEnv($path) {
@@ -226,8 +226,8 @@ $hasNpm      = Test-Cmd "npm.cmd"
 $hasPython   = Test-Cmd "python"
 $nodeVersion = if ($hasNode) { Get-SemanticToolVersion 'node' } else { $null }
 $npmVersion = if ($hasNpm) { Get-SemanticToolVersion 'npm.cmd' } else { $null }
-$nodeToolchainReady = (Test-VersionRange $nodeVersion $MinimumNodeVersion $MaximumNodeVersion) -and
-    (Test-VersionRange $npmVersion $MinimumNpmVersion $MaximumNpmVersion)
+$nodeToolchainReady = (Test-ExactVersion $nodeVersion $RequiredNodeVersion) -and
+    (Test-ExactVersion $npmVersion $RequiredNpmVersion)
 
 if ($hasDocker)   { Write-OK "Docker" }   else { Write-Warn "Docker (skipped)" }
 if ($hasJava)     { Write-OK "Java" }     else { Write-Warn "Java (skipped)" }
@@ -236,7 +236,7 @@ if ($nodeToolchainReady) {
     Write-OK "Node.js $nodeVersion / npm $npmVersion"
 }
 elseif ($hasNode -or $hasNpm) {
-    Write-Warn "Node toolchain incompatible; require Node >=24.14.0 <27 and npm >=11.11.0 <12 (Node services skipped)"
+    Write-Warn "Node toolchain incompatible; require Node 24.18.0 and npm 11.16.0 exactly (see .node-version; Node services skipped)"
 }
 else {
     Write-Warn "Node.js/npm not found (Node services skipped)"
