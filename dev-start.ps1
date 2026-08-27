@@ -277,7 +277,7 @@ $ServiceSpecs = @(
         Name = 'user-web'; Port = 5174
         WorkDir = (Join-Path $RootDir 'apps\user-web')
         HealthUrl = 'http://127.0.0.1:5174/'
-        HealthMarkers = @('XianYuAssistant')
+        HealthMarkers = @('xianyu-pilot-pro')
         Enabled = ($ValidateOnly -or $nodeToolchainReady)
     }
 )

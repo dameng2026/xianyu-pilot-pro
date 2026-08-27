@@ -4,8 +4,8 @@
     page-key="register"
     title-lead="快速注册，"
     title-accent="开启智能运营"
-    description="XianYuAssistant 闲鱼助手，专为闲鱼商家打造的智能化运营平台，助力商品管理、数据分析与自动化运营，提升效率，增长业绩。"
-    legal-description="该页面用于说明 XianYuAssistant 注册、邮箱校验与账号创建相关规则。"
+    description="xianyu-pilot-pro 闲鱼助手，专为闲鱼商家打造的智能化运营平台，助力商品管理、数据分析与自动化运营，提升效率，增长业绩。"
+    legal-description="该页面用于说明 xianyu-pilot-pro 注册、邮箱校验与账号创建相关规则。"
     @navigate="emit('navigate', $event)"
   >
     <div class="auth-panel-heading auth-panel-heading-tabs">

@@ -473,7 +473,7 @@ async def _do_cookie_keepalive(state: AccountRefreshState) -> bool:
 async def _call_has_login(account_id: int, tenant_id: int) -> dict:
     """直接调用 passport.goofish.com 的 hasLogin 接口保活 Cookie。
 
-    表单字段参考借鉴项目 XianYuAssistant 的 CookieRefreshServiceImpl.java。
+    表单字段参考借鉴项目 xianyu-pilot-pro 的 CookieRefreshServiceImpl.java。
     成功后从响应 Set-Cookie 提取新 Cookie 持久化到数据库。
     """
     import re

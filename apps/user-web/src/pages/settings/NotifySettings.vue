@@ -1280,7 +1280,7 @@ function createChannelSeed(meta, overrides = {}) {
     secretLast4: '',
     timeoutSeconds: 10,
     retryCount: 3,
-    template: '【{title}】\n{{content}}\n\n事件：{event}\n账号：{account}\n时间：{time}\n\n来自 XianYuAssistant 通知中心',
+    template: '【{title}】\n{{content}}\n\n事件：{event}\n账号：{account}\n时间：{time}\n\n来自 xianyu-pilot-pro 通知中心',
     failurePolicy: 'retry',
     dedupeWindow: 10,
     smtpHost: '',
@@ -1485,7 +1485,7 @@ function maskValue(value, start = 4, end = 4) {
 function normalizeChannelTemplate(value) {
   const text = String(value || '').trim()
   if (!text || text.includes('{title}') || text.includes('{event}') || text.includes('{{content}}')) {
-    return '【{{title}}】 {{content}}\n事件：{{event}} 账号：{{account}} 时间：{{time}}\n来自 XianYuAssistant 通知中心'
+    return '【{{title}}】 {{content}}\n事件：{{event}} 账号：{{account}} 时间：{{time}}\n来自 xianyu-pilot-pro 通知中心'
   }
   return text
 }

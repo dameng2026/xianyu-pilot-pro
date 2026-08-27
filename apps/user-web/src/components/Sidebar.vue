@@ -1,7 +1,7 @@
 <template>
   <aside class="sidebar">
     <div class="brand brand-image" @click="$emit('navigate', 'dashboard')">
-      <img src="/xya/brand/brand_004.png" alt="XianYuAssistant 闲鱼助手" class="brand-logo" />
+      <img src="/xya/brand/brand_004.png" alt="xianyu-pilot-pro 闲鱼助手" class="brand-logo" />
     </div>
     <div class="nav-scroll">
       <div v-for="cat in categories" :key="cat.key" class="nav-group">
@@ -38,7 +38,7 @@
         <span class="user-plan">{{ levelLabel }}</span>
       </div>
     </button>
-    <div class="version">© {{ copyrightYear }} XianYuAssistant<br />v{{ APP_VERSION }}</div>
+    <div class="version">© {{ copyrightYear }} xianyu-pilot-pro<br />v{{ APP_VERSION }}</div>
   </aside>
 </template>
 

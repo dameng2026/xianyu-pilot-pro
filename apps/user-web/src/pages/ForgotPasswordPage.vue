@@ -6,7 +6,7 @@
     title-accent="快速恢复登录"
     description="通过已绑定邮箱完成后台身份校验后重置密码；步骤结果会在页面中明确反馈。"
     visual-kind="security"
-    legal-description="该页面用于说明 XianYuAssistant 账号找回、身份校验与密码重置相关规则。"
+    legal-description="该页面用于说明 xianyu-pilot-pro 账号找回、身份校验与密码重置相关规则。"
     @navigate="emit('navigate', $event)"
   >
     <div class="auth-panel-heading auth-panel-heading-center">

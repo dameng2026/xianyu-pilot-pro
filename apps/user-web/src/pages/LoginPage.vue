@@ -5,8 +5,8 @@
     title-lead="让闲鱼运营"
     title-accent="更简单、"
     title-tail="更智能"
-    description="XianYuAssistant 闲鱼助手，专为闲鱼商家打造的智能化运营平台，助力商品管理、数据分析与自动化运营，提升效率，增长业绩。"
-    legal-description="该页面用于说明 XianYuAssistant 登录、身份验证与账号安全相关规则。"
+    description="xianyu-pilot-pro 闲鱼助手，专为闲鱼商家打造的智能化运营平台，助力商品管理、数据分析与自动化运营，提升效率，增长业绩。"
+    legal-description="该页面用于说明 xianyu-pilot-pro 登录、身份验证与账号安全相关规则。"
     @navigate="emit('navigate', $event)"
   >
     <nav class="auth-tabs auth-tabs-split" aria-label="登录方式">

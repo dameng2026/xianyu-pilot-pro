@@ -13,7 +13,7 @@
             </div>
             <div class="hero-text">
               <div class="hero-title-row">
-                <h1>XianYuAssistant 闲鱼助手</h1>
+                <h1>xianyu-pilot-pro 闲鱼助手</h1>
                 <Badge>v{{ APP_VERSION }}</Badge>
                 <Badge type="blue">当前构建</Badge>
               </div>

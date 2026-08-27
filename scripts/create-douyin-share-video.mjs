@@ -25,7 +25,7 @@ const inputs = [
   },
 ]
 
-const scriptMarkdown = `# 抖音短视频脚本：XianYuAssistant 项目分享
+const scriptMarkdown = `# 抖音短视频脚本：xianyu-pilot-pro 项目分享
 
 定位：项目分享种草，不做硬广，不承诺收益。
 风格：芒格式反向思考，少形容词，多判断。
@@ -85,7 +85,7 @@ async function main() {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>XianYuAssistant Douyin Share Video</title>
+  <title>xianyu-pilot-pro Douyin Share Video</title>
   <style>
     html, body {
       margin: 0;
@@ -142,7 +142,7 @@ async function main() {
         cropB: { x: 610, y: 120, w: 1240, h: 720 },
         accent: '#1674ff',
         warm: '#18a873',
-        label: '项目分享 / XianYuAssistant',
+        label: '项目分享 / xianyu-pilot-pro',
         eyebrow: '芒格式反过来想',
         title: ['闲鱼运营', '先少犯三个错'],
         body: '不是工具少，是重复动作太多，判断被打断。',

@@ -1,7 +1,7 @@
 <template>
   <div v-if="booting" class="boot-screen">
     <div class="boot-card">
-      <img src="/xya/brand/brand_004.png" alt="XianYuAssistant" />
+      <img src="/xya/brand/brand_004.png" alt="xianyu-pilot-pro" />
       <b>正在连接后端服务...</b>
       <span>{{ bootMessage }}</span>
     </div>

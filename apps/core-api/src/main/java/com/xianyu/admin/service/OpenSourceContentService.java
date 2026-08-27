@@ -341,7 +341,7 @@ public class OpenSourceContentService {
 
     private Map<String, Object> defaultAboutContent() {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("heroTitle", "XianYuAssistant 闲鱼助手");
+        result.put("heroTitle", "xianyu-pilot-pro 闲鱼助手");
         result.put("heroBadgeText", "智能运营版");
         result.put("heroDescription", "让闲鱼生意更简单，智能化运营更稳定。");
         result.put("serviceStatusText", "服务状态待检测");

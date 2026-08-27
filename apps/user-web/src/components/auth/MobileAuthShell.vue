@@ -16,7 +16,7 @@
 
         <header class="mobile-auth-brand">
           <button type="button" class="mobile-auth-brand-btn" @click="emit('navigate', 'dashboard')">
-            <img src="/xya/brand/brand_004.png" class="mobile-auth-brand-mark" alt="XianYuAssistant" />
+            <img src="/xya/brand/brand_004.png" class="mobile-auth-brand-mark" alt="xianyu-pilot-pro" />
           </button>
         </header>
 

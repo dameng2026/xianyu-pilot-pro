@@ -2,7 +2,7 @@
   <div :class="['auth-shell', `auth-shell-${pageKey}`, { 'motion-complete': motionReady, 'motion-running': motionRunning }]">
     <header class="auth-topbar">
       <button type="button" class="auth-brand" @click="emit('navigate', 'dashboard')">
-        <img src="/xya/brand/brand_004.png" class="auth-brand-mark" alt="XianYuAssistant" />
+        <img src="/xya/brand/brand_004.png" class="auth-brand-mark" alt="xianyu-pilot-pro" />
       </button>
     </header>
 
@@ -61,7 +61,7 @@
     </main>
 
     <footer class="auth-footer">
-      <span>© {{ resolvedCopyrightYear }} XianYuAssistant 闲鱼助手 版权所有</span>
+      <span>© {{ resolvedCopyrightYear }} xianyu-pilot-pro 闲鱼助手 版权所有</span>
       <span v-if="legalConfig.icpLicense">{{ legalConfig.icpLicense }}</span>
       <button type="button" class="auth-footer-link" :disabled="!legalConfig.privacyUrl" @click="openDoc('隐私政策')">
         {{ legalConfig.privacyUrl ? '隐私政策' : '隐私政策（未配置）' }}
